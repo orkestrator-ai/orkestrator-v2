@@ -2408,34 +2408,158 @@ describe("NativeAgentService", () => {
           claudeNativeBackend: "tmux",
         },
       ],
-    ] as const)("leaves %s pending for the terminal coordinator", async (_label, agentConfig) => {
-      const { provider, createSession, send } = createProviderStub("codex");
+    ] as const)(
+      "starts %s through the backend terminal coordinator",
+      async (_label, agentConfig) => {
+        const { provider, createSession, send } = createProviderStub("codex");
+        const invokeMock = mock(async (command: string, args?: Record<string, unknown>) => {
+          expect(command).toBe("launch_terminal_job");
+          expect(args).toMatchObject({
+            environmentId: "env-1",
+            tabId: "startup-agent",
+            activateTab: true,
+          });
+          if (args?.tabType === "claude-tmux") {
+            expect(args.initialPrompt).toBe("Start working");
+          } else {
+            expect(args?.data).toEqual(expect.stringContaining("Start working"));
+          }
+          return { status: "started" };
+        });
+        const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+          (await invokeMock(command, args)) as T;
+        await withService(
+          {
+            prefix: "orkestrator-native-launch-skip-",
+            environment: {
+              ...agentConfig,
+              pendingAgentLaunch: true,
+              initialPrompt: "Start working",
+            },
+            provider: async () => provider,
+            invoke,
+          },
+          async ({ storage, service }) => {
+            await service.reconcileInitialLaunch("env-1");
+
+            expect(await storage.getEnvironment("env-1")).toMatchObject({
+              pendingAgentLaunch: false,
+            });
+            expect((await storage.getEnvironment("env-1"))?.startupAgentSession).toBeUndefined();
+            expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).toContain(
+              "startup-agent",
+            );
+            expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+              kind: "leaf",
+              tabs: [
+                { id: "default", type: "plain", isSetupTab: true },
+                { id: "startup-agent", backendManagedTerminal: true },
+              ],
+            });
+            expect(invokeMock).toHaveBeenCalledTimes(1);
+            expect(createSession).not.toHaveBeenCalled();
+            expect(send).not.toHaveBeenCalled();
+            expect(
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
+              ),
+            ).toBeNull();
+          },
+        );
+      },
+    );
+
+    test("reuses staged terminal attachments after a launch retry", async () => {
+      const { provider } = createProviderStub("codex");
+      let launchAttempts = 0;
+      const writeAttachments = mock(async () => [
+        {
+          name: "requirements.md",
+          path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+        },
+      ]);
+      const invokeMock = mock(async (command: string, args?: Record<string, unknown>) => {
+        if (command === "write_initial_prompt_attachments") return writeAttachments();
+        expect(command).toBe("launch_terminal_job");
+        launchAttempts += 1;
+        expect(args?.data).toEqual(
+          expect.stringContaining("/workspace/.orkestrator/initial-prompt"),
+        );
+        if (launchAttempts === 1) throw new Error("PTY temporarily unavailable");
+        return { status: "started" };
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        (await invokeMock(command, args)) as T;
+
       await withService(
         {
-          prefix: "orkestrator-native-launch-skip-",
+          prefix: "orkestrator-terminal-attachment-retry-",
           environment: {
-            ...agentConfig,
             pendingAgentLaunch: true,
-            initialPrompt: "Start working",
+            defaultAgent: "codex",
+            codexMode: "terminal",
+            initialPrompt: "Read the requirements",
+            initialPromptAttachments: [
+              {
+                id: "file-1",
+                name: "requirements.md",
+                type: "file",
+                base64Data: "IyBSZXF1aXJlbWVudHM=",
+              },
+            ],
           },
           provider: async () => provider,
+          invoke,
+        },
+        async ({ storage, service }) => {
+          await expect(service.reconcileInitialLaunch("env-1")).rejects.toThrow(
+            "PTY temporarily unavailable",
+          );
+          const staged = await storage.getEnvironment("env-1");
+          expect(staged?.initialPromptAttachments).toBeUndefined();
+          expect(staged?.initialPrompt).toContain("/workspace/.orkestrator/initial-prompt");
+
+          internals(service).launchRetryAt.delete("env-1");
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(writeAttachments).toHaveBeenCalledTimes(1);
+          expect(launchAttempts).toBe(2);
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+          });
+        },
+      );
+    });
+
+    test("prefers the one-shot restart agent over the configured default", async () => {
+      const { provider } = createProviderStub("codex");
+      const invokeMock = mock(async (command: string, args?: Record<string, unknown>) => {
+        expect(command).toBe("launch_terminal_job");
+        expect(args).toMatchObject({ tabType: "codex" });
+        return { status: "started" };
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        (await invokeMock(command, args)) as T;
+      await withService(
+        {
+          prefix: "orkestrator-restart-agent-override-",
+          environment: {
+            pendingAgentLaunch: true,
+            initialAgentPlatform: "codex",
+            defaultAgent: "claude",
+            codexMode: "terminal",
+            initialPrompt: "Create the script",
+          },
+          provider: async () => provider,
+          invoke,
         },
         async ({ storage, service }) => {
           await service.reconcileInitialLaunch("env-1");
-
-          // Marking the launch consumed here would lose the user's prompt: only
-          // the terminal coordinator can project a PTY/tmux session.
+          expect(invokeMock).toHaveBeenCalledTimes(1);
           expect(await storage.getEnvironment("env-1")).toMatchObject({
-            pendingAgentLaunch: true,
+            pendingAgentLaunch: false,
           });
-          expect((await storage.getEnvironment("env-1"))?.startupAgentSession).toBeUndefined();
-          expect(createSession).not.toHaveBeenCalled();
-          expect(send).not.toHaveBeenCalled();
-          expect(
-            await storage.getNativeAgentSession(
-              nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
-            ),
-          ).toBeNull();
+          expect((await storage.getEnvironment("env-1"))?.initialAgentPlatform).toBeUndefined();
         },
       );
     });
@@ -2872,8 +2996,20 @@ describe("NativeAgentService", () => {
       );
     });
 
-    test("leaves a tmux-backed native Claude launch to the terminal coordinator", async () => {
+    test("starts a tmux-backed native Claude launch in the backend", async () => {
       const { provider, send, createSession } = createProviderStub("claude");
+      const invokeMock = mock(async (command: string, args?: Record<string, unknown>) => {
+        expect(command).toBe("launch_terminal_job");
+        expect(args).toMatchObject({
+          environmentId: "env-1",
+          tabId: "startup-agent",
+          tabType: "claude-tmux",
+          initialPrompt: "Inspect this screenshot",
+        });
+        return { status: "started" };
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        (await invokeMock(command, args)) as T;
       await withService(
         {
           prefix: "orkestrator-native-launch-tmux-",
@@ -2885,17 +3021,17 @@ describe("NativeAgentService", () => {
             initialPrompt: "Inspect this screenshot",
           },
           provider: async () => provider,
+          invoke,
         },
         async ({ storage, service }) => {
           await service.reconcileInitialLaunch("env-1");
 
           expect(send).not.toHaveBeenCalled();
           expect(createSession).not.toHaveBeenCalled();
-          // Still pending: the terminal coordinator owns this launch and the
-          // renderer is the side that will deliver its attachments.
           expect(await storage.getEnvironment("env-1")).toMatchObject({
-            pendingAgentLaunch: true,
+            pendingAgentLaunch: false,
           });
+          expect(invokeMock).toHaveBeenCalledTimes(1);
         },
       );
     });

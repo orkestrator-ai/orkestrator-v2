@@ -109,6 +109,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     initialExecutionProfileId: nonEmptyString(value.initialExecutionProfileId) ?? undefined,
     agentHandoffId: nonEmptyString(value.agentHandoffId) ?? undefined,
     consumedAgentHandoffId: nonEmptyString(value.consumedAgentHandoffId) ?? undefined,
+    backendManagedTerminal: optionalBoolean(value.backendManagedTerminal),
   };
 
   if (value.isSetupTab === true) {
@@ -126,6 +127,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     type === "codex" ||
     type === "cursor" ||
     type === "grok" ||
+    type === "pi" ||
     type === "root"
   ) {
     return { ...common, type };

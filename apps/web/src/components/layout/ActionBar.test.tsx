@@ -21,7 +21,6 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
@@ -32,6 +31,7 @@ import {
   mockToastError as toastErrorMock,
   mockToastInfo as toastInfoMock,
   mockToastSuccess as toastSuccessMock,
+  mockToastWarning as toastWarningMock,
 } from "../../../../../tests/mocks/sonner";
 
 const realAlertDialogSnapshot = { ...realAlertDialog };
@@ -98,6 +98,30 @@ const setEnvironmentPrBackendMock = mock(
 );
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
+const launchNativeAgentJobMock = mock(
+  async (
+    _input: Record<string, unknown>,
+  ): Promise<Awaited<ReturnType<typeof realBackend.launchNativeAgentJob>>> => ({
+    jobId: "resolve-job",
+    environmentId: "env-1",
+    tabId: "agent-job-resolve",
+    agent: "codex",
+    logicalSessionKey: "env-env-1:agent-job-resolve",
+    status: "accepted",
+  }),
+);
+const launchTerminalJobMock = mock(
+  async (
+    _input: Record<string, unknown>,
+  ): Promise<Awaited<ReturnType<typeof realBackend.launchTerminalJob>>> => ({
+    jobId: "terminal-job",
+    environmentId: "env-1",
+    tabId: "terminal-job-run",
+    tabType: "plain",
+    sessionId: "terminal-session",
+    status: "started",
+  }),
+);
 // The controller reaches the pane layout store imperatively, so the real store
 // action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
 // stays real for every other suite.
@@ -658,6 +682,8 @@ mock.module("@/contexts", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  launchNativeAgentJob: launchNativeAgentJobMock,
+  launchTerminalJob: launchTerminalJobMock,
   mergeEnvironmentPr: mergeEnvironmentPrMock,
   mergePr: mergePrMock,
   mergePrLocal: mergePrLocalMock,
@@ -735,6 +761,24 @@ beforeEach(() => {
   setEnvironmentPRStoreMock.mockReset();
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
+  launchNativeAgentJobMock.mockReset();
+  launchNativeAgentJobMock.mockImplementation(async () => ({
+    jobId: "resolve-job",
+    environmentId: "env-1",
+    tabId: "agent-job-resolve",
+    agent: "codex" as const,
+    logicalSessionKey: "env-env-1:agent-job-resolve",
+    status: "accepted" as const,
+  }));
+  launchTerminalJobMock.mockReset();
+  launchTerminalJobMock.mockImplementation(async () => ({
+    jobId: "terminal-job",
+    environmentId: "env-1",
+    tabId: "terminal-job-run",
+    tabType: "plain",
+    sessionId: "terminal-session",
+    status: "started" as const,
+  }));
   enqueuePromptQueueMessageMock.mockReset();
   enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
   clearTabInitialPromptMock.mockReset();
@@ -767,6 +811,7 @@ beforeEach(() => {
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
   toastInfoMock.mockReset();
+  toastWarningMock.mockReset();
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
   toggleFilesPanelMock.mockReset();
@@ -967,7 +1012,7 @@ describe("ActionBar grid presentation", () => {
     expect(kanban.getAttribute("data-variant")).toBe("ghost");
   });
 
-  test("shows Push Changes as soon as a PR is detected, without waiting for file changes", () => {
+  test("shows Push Changes as soon as a PR is detected, without waiting for file changes", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: null,
@@ -978,9 +1023,10 @@ describe("ActionBar grid presentation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Git Push" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "codex", title: "Git Push" }),
+      ),
     );
   });
 
@@ -1372,9 +1418,15 @@ describe("ActionBar editor and run commands", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
 
-    expect(createTabMock).toHaveBeenCalledWith("plain", {
-      initialCommands: ["bun test", "bun run build"],
-    });
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          tabType: "plain",
+          data: "bun test && bun run build\n",
+        }),
+      ),
+    );
   });
 
   test("loads run commands from a local worktree", async () => {
@@ -1438,7 +1490,7 @@ describe("ActionBar editor and run commands", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("configures an agent-authored run script in a modal", () => {
+  test("configures an agent-authored run script in a modal", async () => {
     currentActionDefaults = {
       createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
@@ -1454,15 +1506,16 @@ describe("ActionBar editor and run commands", () => {
     expect(picker.textContent).toContain("High");
 
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({
-        agentLaunchMode: "native",
-        displayTitle: "Run Script",
-        initialPrompt: expect.any(String),
-        initialAgentModel: "sonnet",
-        initialReasoningEffort: "high",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          title: "Run Script",
+          prompt: expect.any(String),
+          modelId: "sonnet",
+          reasoningId: "high",
+        }),
+      ),
     );
   });
 
@@ -1503,10 +1556,10 @@ describe("ActionBar editor and run commands", () => {
     currentTabCount = 0;
     currentCreateTabRegistered = false;
     view.rerender(<ActionBar />);
-    const alert = screen.getByRole("alert").textContent ?? "";
-    expect(alert).toContain("not ready to open a new tab");
-    expect(alert).not.toContain("maximum number of tabs");
-    expect(createTabMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create run script" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("disables a script launch when the selected environment changes", () => {
@@ -1524,13 +1577,23 @@ describe("ActionBar editor and run commands", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("clears script launch errors on cancel and succeeds when retried", () => {
-    createTabMock.mockReturnValueOnce(false);
+  test("clears script launch errors on cancel and succeeds when retried", async () => {
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "script-job",
+      environmentId: "env-1",
+      tabId: "agent-job-script",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-script",
+      status: "rejected",
+      error: "script rejected",
+    });
     render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
-    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("could not be created"),
+    );
     expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -1540,8 +1603,10 @@ describe("ActionBar editor and run commands", () => {
     expect(screen.queryByRole("alert") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
 
-    expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true);
-    expect(createTabMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true),
+    );
   });
 
   test("opens script configuration on long press without also running commands", async () => {
@@ -1572,13 +1637,13 @@ describe("ActionBar editor and run commands", () => {
       { timeout: 10_000 },
     );
     fireEvent.click(runButton);
-    expect(createTabMock).not.toHaveBeenCalled();
+    expect(launchTerminalJobMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
-    expect(createTabMock).toHaveBeenCalledTimes(1);
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({ agentLaunchMode: "native", displayTitle: "Run Script" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "codex", title: "Run Script" }),
+      ),
     );
   }, 20_000);
 });
@@ -1892,7 +1957,11 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
 
-    expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] });
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
+      ),
+    );
     await waitFor(() => {
       expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode");
     });
@@ -2205,31 +2274,35 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    // Hold persistence open across the switch. Letting it resolve first would
-    // let this pass without ever leaving env-1, which is the behaviour the test
-    // exists to pin.
-    let settleEnqueue: (() => void) | undefined;
-    enqueuePromptQueueMessageMock.mockImplementationOnce(
+    let settleLaunch: (() => void) | undefined;
+    launchNativeAgentJobMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          settleEnqueue = () => resolve({});
+          settleLaunch = () =>
+            resolve({
+              jobId: "pr-job",
+              environmentId: "env-1",
+              tabId: "agent-job-pr",
+              agent: "cursor",
+              logicalSessionKey: "env-env-1:agent-job-pr",
+              status: "accepted",
+            });
         }),
     );
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
-    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as {
-      tabId?: string;
-      initialPrompt?: string;
-    };
-    const tabId = tabOptions.tabId;
-    expect(tabId).toMatch(/^tab-/);
-    expect(tabOptions).toMatchObject({
-      displayTitle: "PR",
-      initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
-    });
-    expect(settleEnqueue).toBeDefined();
-    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          agent: "cursor",
+          title: "PR",
+          prompt: expect.stringContaining("gh pr create --base main --fill"),
+        }),
+      ),
+    );
+    expect(settleLaunch).toBeDefined();
 
     currentSelectedEnvironmentId = "env-2";
     currentOtherEnvironments = [
@@ -2240,32 +2313,15 @@ describe("ActionBar workflow tabs", () => {
       },
     ];
     view.rerender(<ActionBar />);
-    // Only now, with env-1 deselected and its ActionBar re-rendered against
-    // another environment, does the durable hand-off acknowledge.
     await act(async () => {
-      settleEnqueue!();
+      settleLaunch!();
       await Promise.resolve();
     });
-
-    await waitFor(() =>
-      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-        `cursor\u0000env-env-1:${tabId}`,
-        "env-1",
-        expect.objectContaining({
-          id: `initial-prompt:env-1:${tabId}`,
-          requestId: `initial-prompt:env-1:${tabId}`,
-          text: expect.stringContaining("gh pr create --base main --fill"),
-          mode: "build",
-        }),
-      ),
-    );
-    // The renderer fallback is dropped against the originating environment, not
-    // whichever one happens to be selected when persistence acknowledges.
-    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(tabId, "env-1"));
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("keeps a one-click PR renderer-owned for a non-ACP default agent", async () => {
+  test("keeps a one-click PR backend-owned for a non-ACP default agent", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: "codex" },
@@ -2277,18 +2333,17 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
-    expect(tabOptions).toMatchObject({
-      displayTitle: "PR",
-      initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
-    });
-    // A default-mode Codex launch may still open a CLI tab, which owns no
-    // backend session. Pre-allocating an id and queueing against it would
-    // dispatch a turn with no tab to render it.
-    expect(tabOptions.tabId).toBeUndefined();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
-    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          agent: "codex",
+          title: "PR",
+          prompt: expect.stringContaining("gh pr create --base main --fill"),
+        }),
+      ),
+    );
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
   test("durably queues a configured Claude PR with an explicit Normal default", async () => {
@@ -2308,30 +2363,15 @@ describe("ActionBar workflow tabs", () => {
     chooseReviewProvider("claude");
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
 
-    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
-    expect(tabOptions).toMatchObject({
-      agentLaunchMode: "native",
-      displayTitle: "PR",
-      initialFastMode: false,
-    });
-    expect(tabOptions.tabId).toMatch(/^tab-/);
     await waitFor(() =>
-      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-        promptQueueKey("claude", `env-env-1:${tabOptions.tabId}`),
-        "env-1",
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: `initial-prompt:env-1:${tabOptions.tabId}`,
-          requestId: `initial-prompt:env-1:${tabOptions.tabId}`,
-          text: expect.stringContaining("gh pr create --base main --fill"),
-          // Claude reads `planModeEnabled` for its execution mode and treats an
-          // absent field as build, so a PR launch must never arrive in plan mode.
-          mode: "build",
+          agent: "claude",
+          prompt: expect.stringContaining("gh pr create --base main --fill"),
+          conversationMode: "build",
           fastMode: false,
         }),
       ),
-    );
-    await waitFor(() =>
-      expect(clearTabInitialPromptMock).toHaveBeenCalledWith(tabOptions.tabId, "env-1"),
     );
   });
 
@@ -2352,16 +2392,11 @@ describe("ActionBar workflow tabs", () => {
     chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
 
-    const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
-    expect(tabOptions.tabId).toMatch(/^tab-/);
-    expect(tabOptions).toMatchObject({ initialFastMode: true });
     await waitFor(() =>
-      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-        promptQueueKey("codex", `env-env-1:${tabOptions.tabId}`),
-        "env-1",
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          id: `initial-prompt:env-1:${tabOptions.tabId}`,
-          mode: "build",
+          agent: "codex",
+          conversationMode: "build",
           fastMode: true,
         }),
       ),
@@ -2377,7 +2412,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    enqueuePromptQueueMessageMock.mockRejectedValueOnce(new Error("backend unavailable"));
+    launchNativeAgentJobMock.mockRejectedValueOnce(new Error("backend unavailable"));
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
@@ -2388,15 +2423,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ description: "backend unavailable" }),
       ),
     );
-    // Persistence never became authoritative, so the tab keeps the prompt it was
-    // created with and can still launch the PR itself.
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "cursor",
-      expect.objectContaining({
-        initialPrompt: expect.stringContaining("gh pr create --base main --fill"),
-      }),
-    );
-    expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
+    expect(createTabMock).not.toHaveBeenCalled();
   });
 
   test("retains the launch prompt when durable review enqueue fails", async () => {
@@ -2437,9 +2464,10 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "PR" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "codex", title: "PR" }),
+      ),
     );
 
     currentEnvironment = {
@@ -2452,10 +2480,8 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     await waitFor(() => {
-      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        "codex",
-        expect.objectContaining({ displayTitle: "Resolve" }),
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "codex", title: "Resolve" }),
       );
     });
 
@@ -2469,29 +2495,34 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Git Push" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "codex", title: "Git Push" }),
+      ),
     );
   });
 
-  test("arms before launching Resolve and suppresses duplicate launches while arming", async () => {
+  test("starts one backend-owned Resolve job and suppresses duplicate launches", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
     const events: string[] = [];
-    let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => {
-      events.push("arm");
+    let finishLaunch!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(() => {
+      events.push("backend");
       return new Promise((resolve) => {
-        resolveArm = resolve;
+        finishLaunch = () =>
+          resolve({
+            jobId: "resolve-job",
+            environmentId: "env-1",
+            tabId: "agent-job-resolve",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:agent-job-resolve",
+            status: "accepted",
+          });
       });
-    });
-    createTabMock.mockImplementationOnce(() => {
-      events.push("create");
-      return true;
     });
     render(<ActionBar />);
 
@@ -2499,28 +2530,34 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(resolveButton);
     fireEvent.click(resolveButton);
 
-    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
-    expect(createTabMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
     expect((resolveButton as HTMLButtonElement).disabled).toBe(true);
 
-    resolveArm("armed-at-deferred");
+    finishLaunch();
 
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
-    expect(events).toEqual(["arm", "create"]);
-    expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect((resolveButton as HTMLButtonElement).disabled).toBe(false));
+    expect(events).toEqual(["backend"]);
   });
 
-  test("disables the configured Resolve launch while it is being armed", async () => {
+  test("disables the configured Resolve launch while the backend request is in flight", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
+    let finishLaunch!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveArm = resolve;
+          finishLaunch = () =>
+            resolve({
+              jobId: "resolve-job",
+              environmentId: "env-1",
+              tabId: "agent-job-resolve",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:agent-job-resolve",
+              status: "accepted",
+            });
         }),
     );
     render(<ActionBar />);
@@ -2532,7 +2569,7 @@ describe("ActionBar workflow tabs", () => {
 
     expect(confirm.disabled).toBe(true);
     fireEvent.click(confirm);
-    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
 
     // The launch the user just submitted is in flight. Presenting that as an
     // eligibility error would report their own successful submission as a
@@ -2540,8 +2577,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("status").textContent).toContain("Launching");
     expect(screen.queryByRole("alert") === null).toBe(true);
 
-    resolveArm("armed-after-menu-check");
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    finishLaunch();
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null).toBe(
         true,
@@ -2549,20 +2585,28 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("keeps the Resolve dialog open through dismissals while the launch is arming", async () => {
+  test("keeps the Resolve dialog open through dismissals while the backend launch is pending", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
+    let rejectLaunch!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveArm = resolve;
+          rejectLaunch = () =>
+            resolve({
+              jobId: "resolve-job",
+              environmentId: "env-1",
+              tabId: "agent-job-resolve",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:agent-job-resolve",
+              status: "rejected",
+              error: "The maximum tab count was reached.",
+            });
         }),
     );
-    createTabMock.mockReturnValueOnce(false);
     render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
@@ -2578,27 +2622,31 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
-    expect(createTabMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
 
-    resolveArm("armed-during-dismiss-attempt");
+    rejectLaunch();
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain("maximum tab count"),
     );
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith(
-      "armed-during-dismiss-attempt",
-    );
   });
 
-  test("reports a refused Resolve tab in the dialog without a duplicate toast", async () => {
+  test("reports a rejected backend Resolve job in the dialog without a duplicate toast", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-modal-refusal");
-    createTabMock.mockReturnValueOnce(false);
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "rejected",
+      error: "The maximum tab count was reached.",
+    });
     render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
@@ -2611,7 +2659,6 @@ describe("ActionBar workflow tabs", () => {
     // The dialog is the reporting surface here; a toast would repeat the same
     // failure in different words behind a modal the user is already reading.
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-modal-refusal");
 
     // The dialog stays usable: a retry that succeeds clears it.
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -2620,132 +2667,105 @@ describe("ActionBar workflow tabs", () => {
         true,
       ),
     );
-    expect(createTabMock).toHaveBeenCalledTimes(2);
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2);
   });
 
-  test("reports an arm failure but still launches the requested Resolve agent", async () => {
+  test("reports a backend Resolve launch failure and unlocks the action", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    armRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("backend offline"));
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not schedule the PR refresh",
-      expect.objectContaining({ description: expect.stringContaining("still open") }),
-    );
-    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
-  });
-
-  test("rolls back the exact refresh arm when Resolve tab creation is refused", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prState: "open",
-      hasMergeConflicts: true,
-    };
-    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-refused");
-    createTabMock.mockReturnValueOnce(false);
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    await waitFor(() => {
-      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-refused");
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open conflict resolution",
-      expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
-    );
-  });
-
-  test("does not roll back an earlier request when the current Resolve arm is refused", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prState: "open",
-      hasMergeConflicts: true,
-    };
-    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce(null);
-    createTabMock.mockReturnValueOnce(false);
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith(
-        "Could not open conflict resolution",
-        expect.any(Object),
-      ),
-    );
-    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
-  });
-
-  test("rolls back the exact refresh arm when Resolve tab creation throws", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prState: "open",
-      hasMergeConflicts: true,
-    };
-    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-thrown");
-    createTabMock.mockImplementationOnce(() => {
-      throw new Error("pane rejected the tab");
-    });
-    render(<ActionBar />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
-
-    await waitFor(() => {
-      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-thrown");
-    });
-    expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
-      description: "pane rejected the tab",
-    });
-  });
-
-  test("reports tab refusal and unlocks Resolve when arm rollback rejects", async () => {
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prState: "open",
-      hasMergeConflicts: true,
-    };
-    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-rollback-failure");
-    createTabMock.mockReturnValueOnce(false);
-    disarmRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("disarm rejected"));
+    launchNativeAgentJobMock.mockRejectedValueOnce(new Error("backend offline"));
     render(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.click(resolveButton);
 
     await waitFor(() =>
-      expect(toastErrorMock).toHaveBeenCalledWith(
-        "Could not open conflict resolution",
-        expect.any(Object),
-      ),
-    );
-    expect(console.warn).toHaveBeenCalledWith(
-      "[ActionBar] Failed to roll back the PR refresh arm:",
-      expect.any(Error),
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
+        description: "backend offline",
+      }),
     );
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
   });
 
-  test("cancels an armed Resolve launch when the selected environment changes", async () => {
+  test("keeps an unknown backend dispatch visible and lets reconciliation continue", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
       hasMergeConflicts: true,
     };
-    let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveArm = resolve;
-        }),
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "unknown",
+      error: "Dispatch is being reconciled.",
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() =>
+      expect(toastInfoMock).toHaveBeenCalledWith(
+        "Conflict resolution is reconciling",
+        expect.objectContaining({ description: expect.stringContaining("backend owns") }),
+      ),
     );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  test("warns when Resolve launches without automatic PR refresh", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "accepted",
+      completionActionArmed: false,
+      warning: "PR status may need a manual refresh.",
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() =>
+      expect(toastWarningMock).toHaveBeenCalledWith("Automatic PR refresh was not scheduled", {
+        description: "PR status may need a manual refresh.",
+      }),
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  test("continues the pinned backend Resolve launch after the selected environment changes", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let finishLaunch!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce((_input) => {
+      return new Promise((resolve) => {
+        finishLaunch = () =>
+          resolve({
+            jobId: "resolve-job",
+            environmentId: "env-1",
+            tabId: "agent-job-resolve",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:agent-job-resolve",
+            status: "accepted",
+          });
+      });
+    });
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
@@ -2760,20 +2780,17 @@ describe("ActionBar workflow tabs", () => {
       },
     ];
     view.rerender(<ActionBar />);
-    resolveArm("armed-before-selection-change");
+    finishLaunch();
 
-    await waitFor(() => {
-      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith(
-        "armed-before-selection-change",
-      );
-    });
-    expect(createTabMock).not.toHaveBeenCalled();
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open conflict resolution",
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        description: expect.stringContaining("selected environment changed"),
+        environmentId: "env-1",
+        completionAction: "refresh-pr-after-agent-completion",
+        activateTab: true,
       }),
     );
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", async () => {
@@ -2788,23 +2805,17 @@ describe("ActionBar workflow tabs", () => {
     const { rerender } = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
-    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "opencode",
-      expect.objectContaining({ displayTitle: "PR" }),
+    await waitFor(() => expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1));
+    expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agent: "opencode", title: "PR" }),
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
-    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(2);
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "opencode",
-      expect.objectContaining({
-        agentLaunchMode: "native",
-        displayTitle: "PR",
-        initialAgentModel: expect.any(String),
-      }),
+    await waitFor(() => expect(setModeCreatePendingMock).toHaveBeenCalledTimes(2));
+    expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agent: "opencode", title: "PR" }),
     );
 
     currentEnvironment = {
@@ -2819,13 +2830,11 @@ describe("ActionBar workflow tabs", () => {
     chooseReviewProvider("codex");
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
     await waitFor(() => {
-      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        "codex",
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          agentLaunchMode: "native",
-          displayTitle: "Resolve",
-          initialAgentModel: expect.any(String),
+          agent: "codex",
+          title: "Resolve",
+          modelId: expect.any(String),
         }),
       );
     });
@@ -2838,9 +2847,10 @@ describe("ActionBar workflow tabs", () => {
     rerender(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
     fireEvent.click(screen.getByRole("button", { name: "Push with Claude" }));
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({ displayTitle: "Git Push" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "claude", title: "Git Push" }),
+      ),
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
@@ -2935,48 +2945,67 @@ describe("ActionBar workflow tabs", () => {
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
   });
 
-  test("keeps the PR modal open and monitoring idle when tab creation is rejected", () => {
+  test("keeps the PR modal open and monitoring idle when backend launch is rejected", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
-    createTabMock.mockReturnValueOnce(false);
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "pr-job",
+      environmentId: "env-1",
+      tabId: "agent-job-pr",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-pr",
+      status: "rejected",
+      error: "PR launch rejected",
+    });
     render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
 
-    expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
+    );
     expect(screen.getByRole("alert").textContent).toContain("could not be created");
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
-    expect(screen.queryByRole("dialog", { name: "Configure pull request" }) === null).toBe(true);
-    expect(createTabMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure pull request" }) === null).toBe(true),
+    );
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
   });
 
-  test("leaves PR monitoring idle when a plain-click launch is rejected", () => {
+  test("leaves PR monitoring idle when a plain-click launch is rejected", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
-    createTabMock.mockReturnValueOnce(false);
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "pr-job",
+      environmentId: "env-1",
+      tabId: "agent-job-pr",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-pr",
+      status: "rejected",
+    });
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
     // Arming create-pending here would leave the backend polling every five
     // seconds for a PR that no agent was ever launched to create.
-    expect(createTabMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
   });
 
-  test("falls back to main when the repository stores an empty PR base branch", () => {
+  test("falls back to main when the repository stores an empty PR base branch", async () => {
     // Repository settings persist a cleared "PR Base Branch" field verbatim,
     // so an empty string has to be treated as unset rather than as a branch.
     currentRepositoryConfig = { "project-1": { prBaseBranch: "" } };
@@ -2990,13 +3019,14 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
-    expect(options.initialPrompt).toContain("gh pr create --base main --fill");
-    expect(options.initialPrompt).not.toContain("--base  ");
-    expect(options.initialPrompt).not.toContain("git diff origin/...HEAD");
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    const input = launchNativeAgentJobMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(input.prompt).toContain("gh pr create --base main --fill");
+    expect(input.prompt).not.toContain("--base  ");
+    expect(input.prompt).not.toContain("git diff origin/...HEAD");
   });
 
-  test("launches against the base branch pinned when the modal opened", () => {
+  test("launches against the base branch pinned when the modal opened", async () => {
     currentRepositoryConfig = { "project-1": { prBaseBranch: "release" } };
     currentEnvironment = {
       ...selectedEnvironment,
@@ -3017,9 +3047,10 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
 
-    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
-    expect(options.initialPrompt).toContain("gh pr create --base release --fill");
-    expect(options.initialPrompt).not.toContain("develop");
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    const input = launchNativeAgentJobMock.mock.calls[0]?.[0] as { prompt: string };
+    expect(input.prompt).toContain("gh pr create --base release --fill");
+    expect(input.prompt).not.toContain("develop");
   });
 
   test("disables a pinned PR launch when the environment stops running", () => {
@@ -3063,7 +3094,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("distinguishes an unready terminal from the tab limit", () => {
+  test("does not make PR launch depend on a mounted terminal tab factory", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -3073,17 +3104,13 @@ describe("ActionBar workflow tabs", () => {
     const view = render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
-    // No terminal container has registered a tab factory. Reporting the tab
-    // limit here would be false and would send the user looking for tabs to close.
     currentCreateTabRegistered = false;
     view.rerender(<ActionBar />);
 
-    const alert = screen.getByRole("alert").textContent ?? "";
-    expect(alert).toContain("not ready to open a new tab");
-    expect(alert).not.toContain("maximum number of tabs");
+    expect(screen.queryByRole("alert") === null).toBe(true);
     expect(
       (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3126,12 +3153,10 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({
-        agentLaunchMode: "native",
-        displayTitle: "PR",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "codex", title: "PR" }),
+      ),
     );
   }, 20_000);
 
@@ -3182,16 +3207,12 @@ describe("ActionBar workflow tabs", () => {
     // The click mobile browsers synthesize after the gesture must be consumed,
     // or the long press would also launch an unconfigured default-agent resolve.
     fireEvent.click(resolveButton);
-    expect(createTabMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
     await waitFor(() =>
-      expect(createTabMock).toHaveBeenCalledWith(
-        "codex",
-        expect.objectContaining({
-          agentLaunchMode: "native",
-          displayTitle: "Resolve",
-        }),
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "codex", title: "Resolve" }),
       ),
     );
   }, 20_000);
@@ -3216,10 +3237,10 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
 
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
-    const [, options] = createTabMock.mock.calls[0] as [string, { initialPrompt: string }];
-    expect(options.initialPrompt).toContain("git merge origin/release");
-    expect(options.initialPrompt).not.toContain("develop");
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    const [options] = launchNativeAgentJobMock.mock.calls[0] as [Record<string, unknown>];
+    expect(options.prompt).toContain("git merge origin/release");
+    expect(options.prompt).not.toContain("develop");
   });
 
   test("disables a pinned Resolve launch when the conflicts are already gone", () => {
@@ -3280,7 +3301,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("distinguishes an unready terminal from the tab limit for Resolve", () => {
+  test("does not make Resolve depend on a mounted terminal tab factory", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -3289,17 +3310,15 @@ describe("ActionBar workflow tabs", () => {
     const view = render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
-    // No terminal container has registered a tab factory. Reporting the tab
-    // limit here would be false and would send the user looking for tabs to close.
+    // The backend owns the job, so a missing renderer tab factory is irrelevant.
     currentCreateTabRegistered = false;
     view.rerender(<ActionBar />);
 
-    const alert = screen.getByRole("alert").textContent ?? "";
-    expect(alert).toContain("not ready to open a new tab");
-    expect(alert).not.toContain("maximum number of tabs");
     expect(
       (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3331,7 +3350,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("routes every Push Changes context-menu provider", () => {
+  test("routes every Push Changes context-menu provider", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -3349,9 +3368,10 @@ describe("ActionBar workflow tabs", () => {
     ] as const) {
       fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
       fireEvent.click(screen.getByRole("button", { name: `Push with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        agent,
-        expect.objectContaining({ displayTitle: "Git Push" }),
+      await waitFor(() =>
+        expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agent, title: "Git Push" }),
+        ),
       );
     }
   });
@@ -4291,7 +4311,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("falls back from an absent environment and global workflow default to Claude", () => {
+  test("falls back from an absent environment and global workflow default to Claude", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: undefined },
@@ -4304,9 +4324,10 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    expect(createTabMock).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ displayTitle: "PR" }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "claude", title: "PR" }),
+      ),
     );
   });
 });
@@ -4421,7 +4442,7 @@ describe("ActionBar configured action defaults", () => {
     );
   });
 
-  test("applies a default whose platform matches the environment's own agent", () => {
+  test("applies a default whose platform matches the environment's own agent", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -4438,13 +4459,15 @@ describe("ActionBar configured action defaults", () => {
 
     // Same platform, so nothing is being retargeted and the configured model
     // and reasoning level still apply.
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({
-        displayTitle: "PR",
-        initialAgentModel: "haiku",
-        initialReasoningEffort: "low",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          title: "PR",
+          modelId: "haiku",
+          reasoningId: "low",
+        }),
+      ),
     );
   });
 
@@ -4519,7 +4542,7 @@ describe("ActionBar configured action defaults", () => {
     expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
   });
 
-  test("applies the configured PR default to a plain Create PR click", () => {
+  test("applies the configured PR default to a plain Create PR click", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: "codex" },
@@ -4534,13 +4557,15 @@ describe("ActionBar configured action defaults", () => {
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({
-        displayTitle: "PR",
-        initialAgentModel: "haiku",
-        initialReasoningEffort: "low",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          title: "PR",
+          modelId: "haiku",
+          reasoningId: "low",
+        }),
+      ),
     );
   });
 
@@ -4560,12 +4585,8 @@ describe("ActionBar configured action defaults", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     await waitFor(() =>
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        "claude",
-        expect.objectContaining({
-          displayTitle: "Resolve",
-          initialAgentModel: "sonnet",
-        }),
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent: "claude", title: "Resolve", modelId: "sonnet" }),
       ),
     );
 
@@ -4580,17 +4601,19 @@ describe("ActionBar configured action defaults", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "opencode",
-      expect.objectContaining({
-        displayTitle: "Git Push",
-        initialAgentModel: "openai/gpt-push",
-        initialReasoningEffort: "high",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent: "opencode",
+          title: "Git Push",
+          modelId: "openai/gpt-push",
+          reasoningId: "high",
+        }),
+      ),
     );
   });
 
-  test("keeps a context-menu agent choice ahead of the Push default", () => {
+  test("keeps a context-menu agent choice ahead of the Push default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prState: "open",
@@ -4606,11 +4629,11 @@ describe("ActionBar configured action defaults", () => {
     fireEvent.click(screen.getByText("Push with Claude"));
 
     // The menu picks a platform, so OpenCode's model cannot travel with it.
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({ displayTitle: "Git Push" }),
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
+    expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agent: "claude", title: "Git Push" }),
     );
-    expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
+    expect(launchNativeAgentJobMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("modelId");
   });
 
   test("keeps a plain Create PR click aligned with the configured PR default", async () => {
@@ -4640,13 +4663,15 @@ describe("ActionBar configured action defaults", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     fireEvent.click(createPrButton);
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({
-        displayTitle: "PR",
-        initialAgentModel: "sonnet",
-        initialReasoningEffort: "high",
-      }),
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          title: "PR",
+          modelId: "sonnet",
+          reasoningId: "high",
+        }),
+      ),
     );
   });
 
@@ -4698,12 +4723,12 @@ describe("ActionBar configured action defaults", () => {
 
     fireEvent.click(resolveButton);
     await waitFor(() =>
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        "claude",
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          displayTitle: "Resolve",
-          initialAgentModel: "sonnet",
-          initialReasoningEffort: "high",
+          agent: "claude",
+          title: "Resolve",
+          modelId: "sonnet",
+          reasoningId: "high",
         }),
       ),
     );
@@ -4992,9 +5017,16 @@ describe("ActionBar run commands", () => {
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
     fireEvent.click(runButton);
 
-    expect(createTabMock).toHaveBeenCalledWith("plain", {
-      initialCommands: ["bun run dev", "bun test"],
-    });
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          tabType: "plain",
+          data: "bun run dev && bun test\n",
+          title: "Run Commands",
+        }),
+      ),
+    );
   });
 
   test("loads local run commands from the worktree", async () => {
@@ -5016,9 +5048,33 @@ describe("ActionBar run commands", () => {
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
     fireEvent.click(runButton);
 
-    expect(createTabMock).toHaveBeenCalledWith("plain", {
-      initialCommands: ["bun run dev"],
-    });
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          tabType: "plain",
+          data: "bun run dev\n",
+          title: "Run Commands",
+        }),
+      ),
+    );
+  });
+
+  test("reports a backend terminal launch failure", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    launchTerminalJobMock.mockRejectedValueOnce(new Error("PTY unavailable"));
+    render(<ActionBar />);
+
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+    fireEvent.click(runButton);
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not run commands", {
+        description: "PTY unavailable",
+      }),
+    );
   });
 
   test("keeps run disabled for malformed files, read failures, and setup scripts", async () => {
@@ -5466,7 +5522,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       "codex",
       expect.objectContaining({ displayTitle: "Review" }),
     );
-    expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] });
+    await waitFor(() =>
+      expect(launchTerminalJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
+      ),
+    );
     await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);

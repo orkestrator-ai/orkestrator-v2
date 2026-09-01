@@ -69,6 +69,40 @@ import type { KanbanTask } from "./kanban";
  */
 type NativeAgentClientPlatform = AgentPlatform;
 
+export interface NativeAgentJobLaunchResult {
+  jobId: string;
+  environmentId: string;
+  tabId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  status: "accepted" | "unknown" | "rejected";
+  error?: string;
+  completionActionArmed?: boolean;
+  warning?: string;
+}
+
+/**
+ * Launch work whose tab is a projection of a backend-owned native session.
+ *
+ * The command persists the tab and dispatch intent before it returns, so the
+ * job never waits for that tab (or even its environment) to be mounted.
+ */
+export async function launchNativeAgentJob(input: {
+  requestId: string;
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  prompt: string;
+  title?: string;
+  modelId?: string;
+  reasoningId?: string;
+  fastMode?: boolean;
+  conversationMode?: "plan" | "build";
+  completionAction?: "refresh-pr-after-agent-completion";
+  activateTab?: boolean;
+}): Promise<NativeAgentJobLaunchResult> {
+  return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
+}
+
 export async function getCursorAccountUsage(): Promise<CursorUsageResult> {
   return invoke<CursorUsageResult>("get_cursor_account_usage");
 }

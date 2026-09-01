@@ -305,6 +305,8 @@ export interface Environment {
   hasUnreadWork?: boolean;
   /** Durable intent to open the configured agent once setup is ready. */
   pendingAgentLaunch?: boolean;
+  /** One-shot agent selected for pendingAgentLaunch. */
+  initialAgentPlatform?: AgentPlatform;
   /** One-shot model for the agent tab created from pendingAgentLaunch. */
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */

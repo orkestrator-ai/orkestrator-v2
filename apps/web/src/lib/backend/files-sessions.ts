@@ -1,4 +1,5 @@
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
@@ -369,6 +370,30 @@ export async function updateEnvironmentAgentSettings(
     ...(initialAgentModel ? { initialAgentModel } : {}),
     ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
     ...(initialPromptAttachments ? { initialPromptAttachments } : {}),
+  });
+}
+
+/** Atomically persist every input needed for a backend-owned startup launch. */
+export async function prepareEnvironmentAgentLaunch(
+  environmentId: string,
+  input: {
+    agent: AgentPlatform;
+    initialPrompt?: string;
+    model?: string;
+    reasoningEffort?: string;
+    conversationMode?: "plan" | "build";
+    attachments?: InitialPromptImageAttachment[];
+  },
+): Promise<Environment> {
+  return invoke<Environment>("update_environment_agent_settings", {
+    environmentId,
+    pendingAgentLaunch: true,
+    initialAgentPlatform: input.agent,
+    ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
+    ...(input.model ? { initialAgentModel: input.model } : {}),
+    ...(input.reasoningEffort ? { initialReasoningEffort: input.reasoningEffort } : {}),
+    ...(input.conversationMode ? { initialConversationMode: input.conversationMode } : {}),
+    ...(input.attachments ? { initialPromptAttachments: input.attachments } : {}),
   });
 }
 

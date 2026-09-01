@@ -202,15 +202,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (!dockerAvailable) setDockerStatsOpen(false);
   }, [dockerAvailable]);
 
-  const {
-    prUrl,
-    prState,
-    hasMergeConflicts,
-    viewPR,
-    setModeCreatePending,
-    armRefreshAfterAgentCompletion,
-    disarmRefreshAfterAgentCompletion,
-  } = usePullRequest({ environmentId: selectedEnvironmentId });
+  const { prUrl, prState, hasMergeConflicts, viewPR, setModeCreatePending } = usePullRequest({
+    environmentId: selectedEnvironmentId,
+  });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
     listenForRenameEvents: false,
@@ -228,6 +222,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironment.deletionRequestedAt),
   );
   const canCreateTab = !!createTab && tabCount < MAX_TABS;
+  // Workflow launches publish their own durable tab and start in the backend.
+  // They must not depend on the active environment's renderer tab factory.
+  const canLaunchBackendJob = Boolean(selectedEnvironmentId && tabCount < MAX_TABS);
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
     isRunning &&
@@ -895,11 +892,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   ]);
 
   // Handler for run commands
-  const handleRun = useCallback(() => {
-    if (!createTab || !canCreateTab || !runCommands || runCommands.length === 0) return;
-
-    createTab("plain", { initialCommands: runCommands });
-  }, [createTab, canCreateTab, runCommands]);
+  const handleRun = useCallback(async () => {
+    const environmentId = selectedEnvironmentId;
+    if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
+    try {
+      await backend.launchTerminalJob({
+        requestId: `run-commands-${createUuid()}`,
+        environmentId,
+        tabType: "plain",
+        data: `${runCommands.join(" && ")}\n`,
+        title: "Run Commands",
+        activateTab: true,
+      });
+    } catch (error) {
+      toast.error("Could not run commands", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [runCommands, selectedEnvironmentId, tabCount]);
 
   const handleCreateScript = useCallback(
     (
@@ -910,8 +920,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         initialReasoningEffort?: string;
         initialFastMode?: boolean;
       },
-    ): boolean => {
-      if (!createTab || !canCreateTab || !isRunning) return false;
+    ): Promise<boolean> => {
+      const environmentId = selectedEnvironmentId;
+      if (!environmentId || tabCount >= MAX_TABS || !isRunning) return Promise.resolve(false);
 
       const actionDefault = actionDefaultFor("createScript");
       const agent = agentOverride || actionDefault.agent;
@@ -928,25 +939,42 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ? configuredFastMode
           : undefined;
       const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
-      return createTab(agent, {
-        initialPrompt,
-        displayTitle: "Run Script",
-        agentLaunchMode: "native",
-        ...launchOptions,
-        ...(initialAgentModel ? { initialAgentModel } : {}),
-        ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
-        initialFastMode,
-      });
+      return backend
+        .launchNativeAgentJob({
+          requestId: `run-script-${createUuid()}`,
+          environmentId,
+          agent,
+          prompt: initialPrompt,
+          title: "Run Script",
+          conversationMode: "build",
+          activateTab: true,
+          ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
+          ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
+          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+        })
+        .then((result) => {
+          if (result.status !== "rejected") return true;
+          toast.error("Could not start script creation", {
+            description: result.error || "The agent rejected the request.",
+          });
+          return false;
+        })
+        .catch((error) => {
+          toast.error("Could not start script creation", {
+            description: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        });
     },
     [
       actionDefaultFor,
-      createTab,
-      canCreateTab,
       isRunning,
       isLocalEnvironment,
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
       reviewModelCatalog,
+      selectedEnvironmentId,
+      tabCount,
     ],
   );
 
@@ -966,14 +994,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         ? "The environment is no longer running."
         : tabCount >= MAX_TABS
           ? "The maximum number of tabs has been reached."
-          : !canCreateTab
-            ? "This environment is not ready to open a new tab yet."
-            : null;
+          : null;
 
   const handleConfiguredCreateScript = useCallback(
-    (selection: AgentLaunchSelection) => {
+    async (selection: AgentLaunchSelection) => {
       if (!scriptDialogEnvironmentId || scriptEligibilityError) return;
-      const created = handleCreateScript(selection.agent, {
+      const created = await handleCreateScript(selection.agent, {
         agentLaunchMode: "native",
         initialAgentModel: selection.model,
         initialReasoningEffort: selection.reasoningEffort,
@@ -1010,13 +1036,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [canCreateTab, createTab, environmentBrowserUrl]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
-  const canRunCommands = canCreateTab && !isLoadingRunCommands && !!hasRunCommands && !setupRunning;
+  const canRunCommands =
+    !!selectedEnvironmentId &&
+    tabCount < MAX_TABS &&
+    isRunning &&
+    !isLoadingRunCommands &&
+    !!hasRunCommands &&
+    !setupRunning;
 
   const handleRunButtonClick = useCallback(() => {
     if (!canRunCommands) {
       return;
     }
-    handleRun();
+    void handleRun();
   }, [canRunCommands, handleRun]);
 
   // Drag-to-scroll handlers for toolbar
@@ -1176,6 +1208,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectTab,
     tabCount,
     canCreateTab,
+    canLaunchBackendJob,
     canOpenEditor,
     handleOpenInEditor,
     canCopyEnvironmentUrl,
@@ -1201,16 +1234,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         initialFastMode?: boolean;
       },
       targetBranchOverride?: string,
-    ): boolean => {
+    ): Promise<boolean> => {
       if (
-        !createTab ||
         !selectedEnvironmentId ||
         !selectedProjectId ||
-        !canCreateTab ||
+        tabCount >= MAX_TABS ||
         !isRunning ||
         hasPR
       )
-        return false;
+        return Promise.resolve(false);
 
       const repoConfig = config.repositories[selectedProjectId];
       // Falsy, not nullish: repository settings persist a cleared PR base branch
@@ -1233,71 +1265,40 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
           ? configuredFastMode
           : undefined;
-      // Cursor is SDK-only. Grok is native unless explicitly opened as a CLI.
-      // Give backend-owned launches a stable identity before the tab mounts so
-      // the queue can own the turn immediately.
-      const backendOwnsPrompt =
-        agent === "cursor" ||
-        launchOptions?.agentLaunchMode === "native" ||
-        (agent === "grok" && launchOptions?.agentLaunchMode !== "cli");
-      const tabId = backendOwnsPrompt ? `tab-${createUuid()}` : undefined;
-
-      const created = createTab(agent, {
-        ...(tabId ? { tabId } : {}),
-        initialPrompt: prPrompt,
-        displayTitle: "PR",
-        ...launchOptions,
-        ...(initialAgentModel ? { initialAgentModel } : {}),
-        ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
-        initialFastMode,
-      });
-      if (!created) return false;
-
-      if (tabId) {
-        const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
-        const model = requestedModel === "default" ? undefined : requestedModel;
-        const reasoningEffort = initialReasoningEffort;
-        const queuedPrompt = {
-          id: requestId,
-          requestId,
-          text: prPrompt,
-          attachments: [],
-          ...(model ? { model } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-          mode: "build" as const,
+      return backend
+        .launchNativeAgentJob({
+          requestId: `create-pr-${createUuid()}`,
+          environmentId: selectedEnvironmentId,
+          agent,
+          prompt: prPrompt,
+          title: "PR",
+          conversationMode: "build",
+          activateTab: true,
+          ...(requestedModel && requestedModel !== "default" ? { modelId: requestedModel } : {}),
+          ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
-        };
-        const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
-
-        // The durable queue wakes the backend dispatcher independently of the
-        // active environment. Keep the tab's initial prompt as an idempotent
-        // renderer fallback until persistence succeeds.
-        void backend
-          .enqueuePromptQueueMessage(
-            promptQueueKey(agent, logicalSessionKey),
-            selectedEnvironmentId,
-            queuedPrompt,
-          )
-          .then(() => {
-            usePaneLayoutStore.getState().clearTabInitialPrompt(tabId, selectedEnvironmentId);
-          })
-          .catch((error) => {
+        })
+        .then((result) => {
+          if (result.status === "rejected") {
             toast.error("Could not start pull request creation", {
-              description: error instanceof Error ? error.message : String(error),
+              description: result.error || "The agent rejected the request.",
             });
+            return false;
+          }
+          // Monitoring starts only after the backend owns the session and turn.
+          setModeCreatePending();
+          return true;
+        })
+        .catch((error) => {
+          toast.error("Could not start pull request creation", {
+            description: error instanceof Error ? error.message : String(error),
           });
-      }
-
-      // Set monitoring mode only after the tab exists. Otherwise a rejected
-      // launch leaves the backend polling for a PR no agent is creating.
-      setModeCreatePending();
-      return true;
+          return false;
+        });
     },
     [
       actionDefaultFor,
-      canCreateTab,
       config.repositories,
-      createTab,
       hasPR,
       isRunning,
       preferredFastModesByPlatform,
@@ -1306,11 +1307,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironmentId,
       selectedProjectId,
       setModeCreatePending,
+      tabCount,
     ],
   );
 
   const canConfigurePR = Boolean(
-    canCreateTab && isRunning && !hasPR && selectedEnvironmentId && selectedProjectId,
+    tabCount < MAX_TABS && isRunning && !hasPR && selectedEnvironmentId && selectedProjectId,
   );
 
   const openPrDialog = useCallback(() => {
@@ -1339,14 +1341,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             // terminal is not ready, which the tab limit wording would misdescribe.
             tabCount >= MAX_TABS
             ? "The maximum number of tabs has been reached."
-            : !canCreateTab
-              ? "This environment is not ready to open a new tab yet."
-              : null;
+            : null;
 
   const handleConfiguredCreatePR = useCallback(
-    (selection: AgentLaunchSelection) => {
+    async (selection: AgentLaunchSelection) => {
       if (!prDialogTarget || prEligibilityError) return;
-      const created = handleCreatePR(
+      const created = await handleCreatePR(
         selection.agent,
         {
           agentLaunchMode: "native",
@@ -1369,8 +1369,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for pushing changes to an existing PR - launches agent tab with commit/push prompt
   const handlePushChanges = useCallback(
-    (agentOverride?: AgentPlatform) => {
-      if (!createTab || !canCreateTab) return;
+    async (agentOverride?: AgentPlatform) => {
+      const environmentId = selectedEnvironmentId;
+      if (!environmentId || tabCount >= MAX_TABS || !isRunning) return;
 
       const pushPrompt = createPushChangesPrompt();
       // The context menu picks an agent only, so its choice keeps the configured
@@ -1378,19 +1379,34 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const actionDefault = actionDefaultFor("push");
       const agent = agentOverride || actionDefault.agent;
       const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
-      createTab(agent, {
-        initialPrompt: pushPrompt,
-        displayTitle: "Git Push",
-        ...(defaultForAgent?.model ? { initialAgentModel: defaultForAgent.model } : {}),
-        ...(defaultForAgent?.reasoningEffort
-          ? { initialReasoningEffort: defaultForAgent.reasoningEffort }
-          : {}),
-      });
+      try {
+        const result = await backend.launchNativeAgentJob({
+          requestId: `push-changes-${createUuid()}`,
+          environmentId,
+          agent,
+          prompt: pushPrompt,
+          title: "Git Push",
+          conversationMode: "build",
+          activateTab: true,
+          ...(defaultForAgent?.model ? { modelId: defaultForAgent.model } : {}),
+          ...(defaultForAgent?.reasoningEffort
+            ? { reasoningId: defaultForAgent.reasoningEffort }
+            : {}),
+        });
+        if (result.status === "rejected") {
+          throw new Error(result.error || "The agent rejected the request.");
+        }
+      } catch (error) {
+        toast.error("Could not push changes", {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
-    [actionDefaultFor, createTab, canCreateTab],
+    [actionDefaultFor, isRunning, selectedEnvironmentId, tabCount],
   );
 
-  // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
+  // Launch conflict resolution as a backend-owned job. The resulting tab is a
+  // projection of the already-running session, never the trigger that starts it.
   const handleResolveConflicts = useCallback(
     async (options?: {
       agent?: AgentPlatform;
@@ -1415,10 +1431,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       } = options ?? {};
       const operationEnvironmentId = selectedEnvironmentId;
       if (
-        !createTab ||
         !operationEnvironmentId ||
         !selectedProjectId ||
-        !canCreateTab ||
+        tabCount >= MAX_TABS ||
         resolveLaunchEnvironmentIdRef.current !== null
       )
         return { ok: false, message: null };
@@ -1429,19 +1444,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const repoConfig = config.repositories[selectedProjectId];
       const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
       const resolvePrompt = createResolveConflictsPrompt(targetBranch);
-      let armedAt: string | null = null;
-
-      const rollBackArm = async () => {
-        if (!armedAt) return;
-        try {
-          await disarmRefreshAfterAgentCompletion(armedAt);
-        } catch (error) {
-          console.warn("[ActionBar] Failed to roll back the PR refresh arm:", error);
-        }
-      };
-
-      const fail = async (message: string): Promise<ResolveLaunchResult> => {
-        await rollBackArm();
+      const fail = (message: string): ResolveLaunchResult => {
         if (reportFailure === "toast") {
           toast.error("Could not open conflict resolution", { description: message });
         }
@@ -1449,24 +1452,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       };
 
       try {
-        // The backend stores this intent before the turn can be dispatched, so
-        // inactive environments and renderer reloads cannot lose the refresh.
-        armedAt = await armRefreshAfterAgentCompletion();
-      } catch (error) {
-        console.warn("[ActionBar] Failed to arm PR refresh after conflict resolution:", error);
-        // Always a toast: the launch still proceeds and the dialog closes behind
-        // it, so there is no surface left to carry a degraded-refresh warning.
-        toast.error("Could not schedule the PR refresh", {
-          description:
-            "Conflict resolution will still open, but PR status may need a manual refresh.",
-        });
-      }
-
-      try {
-        if (selectedEnvironmentIdRef.current !== operationEnvironmentId) {
-          return await fail("The selected environment changed before the agent could launch.");
-        }
-
         const actionDefault = actionDefaultFor("resolve");
         const agent = agentOverride || actionDefault.agent;
         const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
@@ -1475,21 +1460,37 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
         const initialReasoningEffort =
           launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
-        const created = createTab(agent, {
-          initialPrompt: resolvePrompt,
-          displayTitle: "Resolve",
-          ...launchOptions,
-          ...(initialAgentModel ? { initialAgentModel } : {}),
-          ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+        const result = await backend.launchNativeAgentJob({
+          requestId: `resolve-${createUuid()}`,
+          environmentId: operationEnvironmentId,
+          agent,
+          prompt: resolvePrompt,
+          title: "Resolve",
+          conversationMode: "build",
+          completionAction: "refresh-pr-after-agent-completion",
+          activateTab: true,
+          ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
+          ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
         });
-        if (!created) {
-          return await fail(
-            "The environment may no longer be ready or the maximum tab count was reached.",
-          );
+        if (result.status === "rejected") {
+          return fail(result.error || "The conflict-resolution agent rejected the prompt.");
+        }
+        if (result.status === "unknown") {
+          toast.info("Conflict resolution is reconciling", {
+            description:
+              "The backend owns the launch and will recover its status without keeping this environment open.",
+          });
+        }
+        if (result.completionActionArmed === false) {
+          toast.warning("Automatic PR refresh was not scheduled", {
+            description:
+              result.warning ||
+              "Conflict resolution is running, but PR status may need a manual refresh when it finishes.",
+          });
         }
         return { ok: true };
       } catch (error) {
-        return await fail(error instanceof Error ? error.message : String(error));
+        return fail(error instanceof Error ? error.message : String(error));
       } finally {
         if (resolveLaunchEnvironmentIdRef.current === operationEnvironmentId) {
           resolveLaunchEnvironmentIdRef.current = null;
@@ -1497,22 +1498,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         }
       }
     },
-    [
-      actionDefaultFor,
-      armRefreshAfterAgentCompletion,
-      disarmRefreshAfterAgentCompletion,
-      createTab,
-      selectedEnvironmentId,
-      selectedProjectId,
-      canCreateTab,
-      config.repositories,
-    ],
+    [actionDefaultFor, selectedEnvironmentId, selectedProjectId, tabCount, config.repositories],
   );
 
   const resolveLaunchInFlight = resolveLaunchEnvironmentId !== null;
 
   const canConfigureResolve = Boolean(
-    canCreateTab &&
+    tabCount < MAX_TABS &&
     isRunning &&
     hasPR &&
     !isPRFinished &&
@@ -1547,9 +1539,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ? "The environment is no longer running."
           : tabCount >= MAX_TABS
             ? "The maximum number of tabs has been reached."
-            : !canCreateTab
-              ? "This environment is not ready to open a new tab yet."
-              : null;
+            : null;
 
   const handleConfiguredResolve = useCallback(
     async (selection: AgentLaunchSelection) => {
@@ -1780,8 +1770,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     hasMergeConflicts,
     viewPR,
     setModeCreatePending,
-    armRefreshAfterAgentCompletion,
-    disarmRefreshAfterAgentCompletion,
     deleteEnvironment,
     hasPR,
     isPRMerged,
@@ -1790,6 +1778,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     isPRFinished,
     isSelectedEnvironmentDeleting,
     canCreateTab,
+    canLaunchBackendJob,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,

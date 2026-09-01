@@ -577,6 +577,117 @@ export abstract class StorageSessions extends StorageConfig {
     });
   }
 
+  /** Publish a terminal/tmux tab whose process was already started by the backend. */
+  async ensureTerminalJobTab(input: {
+    environmentId: string;
+    tabId: string;
+    type: BuildPipelineAgent | "plain" | "claude-tmux";
+    title?: string;
+    activate?: boolean;
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+            activeTabId: "default",
+          };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === input.tabId));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.id === input.tabId);
+      if (existingTab && existingTab.type !== input.type) {
+        throw new Error(`Tab ID is already in use: ${input.tabId}`);
+      }
+      if (!existingTab) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+          throw new Error(
+            `Environment already has the maximum of ${MAX_TABS_PER_ENVIRONMENT} tabs`,
+          );
+        }
+      }
+
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: input.tabId,
+        type: input.type,
+        // The backend creates and bootstraps this tab's PTY. A renderer that
+        // sees the pane before launch completion must attach/retry only; it
+        // must never synthesize a second command from the tab type.
+        backendManagedTerminal: true,
+        ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
+      };
+      delete tab.initialPrompt;
+      delete tab.initialCommands;
+      delete tab.initialAgentModel;
+      delete tab.initialReasoningEffort;
+      delete tab.initialConversationMode;
+      delete tab.initialFastMode;
+      if (input.type === "claude-tmux") {
+        tab.claudeTmuxData = {
+          environmentId: input.environmentId,
+          isLocal: environment.environmentType === "local",
+          ...(environment.environmentType === "local" || !environment.containerId
+            ? {}
+            : { containerId: environment.containerId }),
+        };
+      } else {
+        delete tab.claudeTmuxData;
+      }
+      delete tab.nativeAgentData;
+      if (existingTab) {
+        const existingIndex = target.tabs.findIndex((candidate) => candidate.id === input.tabId);
+        target.tabs[existingIndex] = tab;
+      } else {
+        target.tabs.push(tab);
+      }
+      const activateTab = input.activate === true;
+      if (!target.activeTabId || activateTab) target.activeTabId = input.tabId;
+
+      const containerId = environment.environmentType === "local" ? null : environment.containerId;
+      const activePaneId = activateTab ? target.id : (previous?.activePaneId ?? target.id);
+      // The startup reconciler calls this while setup is still running. Once
+      // the same tab has been published, a sweep must not manufacture a new
+      // layout revision or resource event every two seconds.
+      if (
+        previous &&
+        (previous.containerId ?? null) === (containerId ?? null) &&
+        (previous.activePaneId ?? target.id) === activePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return previous;
+      }
+
+      const saved: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId,
+        activePaneId,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
   /**
    * Publish the native surface for a backend-owned environment launch.
    *

@@ -982,6 +982,34 @@ describe("PersistentTerminal", () => {
     expect(connectMock).toHaveBeenCalledTimes(1);
   });
 
+  it("treats backend-managed agent terminals as attach-only and never bootstraps them", async () => {
+    useTerminalSessionId = "backend-job-session";
+    useTerminalIsConnected = true;
+    useTerminalBootstrapped = false;
+    const terminalData = createTerminalData();
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="startup-agent"
+        tabType="codex"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+        backendManagedTerminal={true}
+      />,
+    );
+
+    await waitFor(() => expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    expect(bootstrapWrites()).toEqual([]);
+  });
+
   it("rearms the connection gate for a new container while already disconnected", async () => {
     useTerminalIsConnected = false;
     useTerminalSessionId = null;

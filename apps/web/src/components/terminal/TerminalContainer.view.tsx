@@ -16,7 +16,6 @@ import {
   useTerminalContext,
   MAX_TABS,
   type CreatableTabType,
-  type TerminalTabType,
   type CreateTabOptions,
   type CreateFileTabOptions,
 } from "@/contexts";
@@ -34,16 +33,8 @@ import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
-import {
-  buildInitialPromptWithAttachmentReferences,
-  saveInitialPromptAttachments,
-} from "@/lib/initial-prompt-attachments";
 import { agentSettingsTiers } from "@/lib/agent-settings";
-import {
-  resolveAgentPlatformSettings,
-  resolveDefaultAgent,
-} from "@orkestrator/protocol/agent-settings";
-import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
+import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import {
   createPersistedPaneLayoutInput,
@@ -73,14 +64,12 @@ import {
   PANE_LAYOUT_VERSION,
   type TabInfo,
 } from "@/types/paneLayout";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { rendererDebugLog } from "@/lib/debug-log";
 import { resolveWorkspaceRelativeFilePath } from "@/lib/workspace-file-path";
 
 import {
   MAX_SETUP_SESSION_BIND_ATTEMPTS,
   SETUP_SESSION_BIND_RETRY_DELAY_MS,
-  STARTUP_AGENT_TAB_ID,
   TerminalContainerProps,
   createAgentNativeTab,
   createClaudeNativeLikeTab,
@@ -111,13 +100,7 @@ export function TerminalContainer({
   // the options record is selected narrowly so writes for other environments
   // do not rerender this container.
   const clearOptions = useClaudeOptionsStore((state) => state.clearOptions);
-  const setOptions = useClaudeOptionsStore((state) => state.setOptions);
-  const setPendingNativeLaunch = useClaudeOptionsStore((state) => state.setPendingNativeLaunch);
-  const clearPendingNativeLaunch = useClaudeOptionsStore((state) => state.clearPendingNativeLaunch);
   const claudeOptions = useClaudeOptionsStore((state) => state.options[environmentId]);
-  const pendingNativeLaunch = useClaudeOptionsStore(
-    (state) => state.pendingNativeLaunches[environmentId],
-  );
   const [hasAppliedClaudeOptions, setHasAppliedClaudeOptions] = useState(false);
 
   // Get config for agent modes - per-environment overrides take precedence over global
@@ -147,16 +130,6 @@ export function TerminalContainer({
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
   const claudeNativeBackend = claude.claudeNativeBackend;
-  /*
-   * Whether the backend's native agent service will dispatch this environment's
-   * pending launch itself — which is also whether it owns the initial prompt's
-   * image attachments. It must be answered exactly as
-   * `reconcileInitialLaunchOnce` answers it: when the two disagree, either both
-   * sides consume the attachments or neither delivers them.
-   */
-  const startupLaunchDispatchedByBackend =
-    resolveStartupLaunchFromSettings(tiers).dispatchedByBackend;
-
   // Check if this is a local environment (no container)
   const environment = useEnvironmentStore((state) =>
     state.environments.find((env) => env.id === environmentId),
@@ -235,11 +208,8 @@ export function TerminalContainer({
     setOpenFilePaths,
   } = useTerminalContext();
 
-  // Track the initial prompt to pass to the first tab
-  const initialPromptRef = useRef<string | undefined>(undefined);
   const previousContainerIdRef = useRef<string | null>(null);
   const previousEnvironmentIdRef = useRef<string | null>(null);
-  const isSavingInitialPromptAttachmentsRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(new Map<string, symbol>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const setupSessionPostSetupCheckedTabsRef = useRef(new Set<string>());
@@ -259,7 +229,6 @@ export function TerminalContainer({
   // been checked after setup completed.
   const backendSetupRunningRef = useRef(backendSetupRunning);
   backendSetupRunningRef.current = backendSetupRunning;
-  const durableLaunchClearInFlightRef = useRef(false);
   // Keyed by environment, not a single "last handed off" id: this component is
   // reused across environment selections (see the container-change effect
   // below), so a scalar would be re-armed by every switch away and back.
@@ -700,158 +669,34 @@ export function TerminalContainer({
   ]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
-  // Represent backend-owned launch state after a mobile page reload. Native
-  // launches are projected durably by the backend; this effect binds their
-  // provider identity (and provides a short-lived optimistic representation)
-  // while still materializing the remaining PTY/tmux launches.
+  // Bind provider identity onto the durable startup tab once the backend has
+  // published both. The renderer never creates or dispatches startup work.
   useEffect(() => {
     if (!environment) return;
     const startupSession = environment.startupAgentSession;
-    // A starting or failed launch is still owned by the backend. In particular,
-    // pendingAgentLaunch is the backend's retry intent after an error, so a
-    // renderer must not project an ordinary text-only launch and clear it.
     if (startupSession && startupSession.status !== "running") return;
-    if (startupLaunchDispatchedByBackend && (environment.pendingAgentLaunch || startupSession)) {
-      if (
-        !currentEnvState ||
-        !isEnvironmentRunning ||
-        (!setupReady && environment.setupScriptsComplete !== true)
-      )
-        return;
-      const existingStartupTabId = findStartupAgentTabId(currentEnvState);
-      if (existingStartupTabId) {
-        if (startupSession?.providerSessionId) {
-          usePaneLayoutStore
-            .getState()
-            .updateTabNativeSessionId(
-              existingStartupTabId,
-              startupSession.providerSessionId,
-              environmentId,
-            );
-          if (pendingNativeLaunch) clearPendingNativeLaunch(environmentId);
-          if (claudeOptions?.launchAgent) clearOptions(environmentId);
-        }
-        return;
-      }
-      if (pendingNativeLaunch) return;
-      // Only an unconsumed backend intent may be projected optimistically. Once
-      // the backend has consumed it the durable pane is authoritative, so a
-      // missing startup tab means the user closed it — re-creating it here
-      // would resurrect it on every render and permanently defeat the close.
-      if (!environment.pendingAgentLaunch) return;
-      const agentType = startupSession?.agent ?? resolveDefaultAgent(tiers);
-      setPendingNativeLaunch(environmentId, {
-        containerId: isLocalEnvironment ? null : containerId,
-        environmentId,
-        targetPaneId: currentEnvState.activePaneId,
-        agentType,
-        launchMode: "native",
-        providerSessionId: startupSession?.providerSessionId,
-        model: startupSession?.model ?? environment.initialAgentModel,
-        reasoningEffort: startupSession?.reasoningEffort ?? environment.initialReasoningEffort,
-        ...(typeof resolveAgentPlatformSettings(tiers, agentType).fastMode === "boolean"
-          ? { fastMode: resolveAgentPlatformSettings(tiers, agentType).fastMode }
-          : {}),
-      });
-      return;
-    }
-    if (!environment.pendingAgentLaunch || !currentEnvState) {
-      return;
-    }
-
+    if ((!environment.pendingAgentLaunch && !startupSession) || !currentEnvState) return;
+    if (!isEnvironmentRunning || (!setupReady && environment.setupScriptsComplete !== true)) return;
     const existingStartupTabId = findStartupAgentTabId(currentEnvState);
-    if (existingStartupTabId) {
-      if (durableLaunchClearInFlightRef.current) return;
-      durableLaunchClearInFlightRef.current = true;
-      const durablePaneState =
-        usePaneLayoutStore.getState().environments.get(environmentId) ?? currentEnvState;
-      // Persist the tab before clearing the launch intent. If the page is
-      // evicted between these operations, the still-pending flag retries; if
-      // clearing succeeds, rehydration is guaranteed to find the agent tab.
-      // The write goes through the persistence loop's per-environment chain so
-      // it uses the latest revision and cannot conflict with an older debounced
-      // write after the launch flag has already been cleared.
-      //
-      // This flush is also what makes it safe to drop the backend's one-shot
-      // `initialAgentModel`/`initialReasoningEffort` here even though the agent
-      // surface may still be resolving a live model catalog: the flushed layout
-      // carries those options on the tab, and `pane-layout-restore` reads them
-      // back, so the tab is the durable carrier from this point on. Blocking the
-      // clear until a consumer acknowledged instead would strand
-      // `pendingAgentLaunch` forever whenever a surface reaches a steady state
-      // without applying them (background mount, empty catalog, init error),
-      // which keeps the environment hidden-mounted and polled for the life of
-      // the app.
-      void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(durablePaneState))
-        .then(() => backend.setEnvironmentPendingAgentLaunch(environmentId, false))
-        .then((updatedEnvironment) => {
-          useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
-        })
-        .catch((error) => {
-          console.warn(
-            `[TerminalContainer] Failed to clear durable agent launch for ${environmentId}:`,
-            error,
-          );
-        })
-        .finally(() => {
-          durableLaunchClearInFlightRef.current = false;
-        });
-      return;
+    if (!existingStartupTabId) return;
+    if (startupSession?.providerSessionId) {
+      usePaneLayoutStore
+        .getState()
+        .updateTabNativeSessionId(
+          existingStartupTabId,
+          startupSession.providerSessionId,
+          environmentId,
+        );
     }
-
-    // The uninterrupted create flow still owns this launch while its transient
-    // options exist. In particular, it may be staging initial-prompt images and
-    // rewriting the prompt with their workspace paths. Reconstructing the
-    // backend intent at the same time queues the older text-only prompt; once
-    // staging finishes, both paths create an agent tab. A renderer reload has no
-    // transient options, so durable recovery continues through the branch below.
-    if (claudeOptions?.launchAgent) return;
-    if (!isEnvironmentRunning || pendingNativeLaunch) return;
-
-    const agentType = resolveDefaultAgent(tiers);
-    const launchMode =
-      (agentType === "claude" && claudeMode === "native") ||
-      (agentType === "codex" && codexMode === "native") ||
-      (agentType === "opencode" && opencodeMode === "native") ||
-      (agentType === "pi" && piMode === "native")
-        ? "native"
-        : "terminal";
-
-    setPendingNativeLaunch(environmentId, {
-      containerId: isLocalEnvironment ? null : containerId,
-      environmentId,
-      initialPrompt: environment.initialPrompt?.trim() || undefined,
-      targetPaneId: currentEnvState.activePaneId,
-      agentType,
-      launchMode,
-      claudeNativeBackend:
-        agentType === "claude" && launchMode === "native" ? claudeNativeBackend : undefined,
-      model: environment.initialAgentModel,
-      reasoningEffort: environment.initialReasoningEffort,
-      ...(typeof resolveAgentPlatformSettings(tiers, agentType).fastMode === "boolean"
-        ? { fastMode: resolveAgentPlatformSettings(tiers, agentType).fastMode }
-        : {}),
-    });
+    if (claudeOptions?.launchAgent) clearOptions(environmentId);
   }, [
-    claudeMode,
-    claudeNativeBackend,
     claudeOptions?.launchAgent,
-    codexMode,
-    tiers,
-    containerId,
     currentEnvState,
-    clearPendingNativeLaunch,
     environment,
     environmentId,
     isEnvironmentRunning,
-    isLocalEnvironment,
-    opencodeMode,
-    piMode,
-    pendingNativeLaunch,
     setupReady,
-    startupLaunchDispatchedByBackend,
     clearOptions,
-    setPendingNativeLaunch,
   ]);
 
   // DnD sensors
@@ -1059,91 +904,10 @@ export function TerminalContainer({
       // cannot apply to an environment that was never registered.
       if (
         !backendSetupRunning &&
-        environment?.pendingAgentLaunch === true &&
-        startupLaunchDispatchedByBackend
+        (environment?.pendingAgentLaunch === true || claudeOptions?.launchAgent === true)
       ) {
         if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
           initialize(containerId, environmentId);
-        }
-        return;
-      }
-
-      const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];
-      /*
-       * A native launch is dispatched by the backend, which stages these images
-       * itself and hands the bridge real attachments — so the transcript shows a
-       * thumbnail. Rewriting the prompt into a plain list of paths here would
-       * destroy that: it also clears the stored attachments, so whichever of the
-       * two paths happened to run first decided whether the user ever saw their
-       * image. Terminal and Claude-tmux launches keep the rewrite, because a
-       * prompt typed into a PTY has no way to carry an attachment.
-       */
-      const backendStagesAttachments =
-        environment?.pendingAgentLaunch === true && startupLaunchDispatchedByBackend;
-      if (
-        claudeOptions?.launchAgent &&
-        pendingAttachments.length > 0 &&
-        !backendStagesAttachments
-      ) {
-        if (!isSavingInitialPromptAttachmentsRef.current) {
-          isSavingInitialPromptAttachmentsRef.current = true;
-          void (async () => {
-            try {
-              const savedAttachments = await saveInitialPromptAttachments({
-                attachments: pendingAttachments,
-                environmentId,
-              });
-              const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
-              if (!currentOptions) return;
-
-              const promptWithReferences = buildInitialPromptWithAttachmentReferences(
-                currentOptions.initialPrompt,
-                savedAttachments,
-              );
-              setOptions(environmentId, {
-                ...currentOptions,
-                initialPrompt: promptWithReferences,
-                initialPromptAttachments: [],
-              });
-
-              // The attachments now live in the workspace, but the references to
-              // them only existed in this renderer's options store. Persist the
-              // rewritten prompt so a launch recovered after page eviction reads
-              // a prompt whose references still resolve, instead of the raw text
-              // the user typed. (Eviction *before* this point still loses the
-              // attachments themselves — they are never persisted.)
-              if (
-                promptWithReferences !== currentOptions.initialPrompt ||
-                pendingAttachments.length > 0
-              ) {
-                try {
-                  const updatedEnvironment = await backend.setEnvironmentInitialPrompt(
-                    environmentId,
-                    promptWithReferences,
-                    [],
-                  );
-                  useEnvironmentStore
-                    .getState()
-                    .updateEnvironment(environmentId, updatedEnvironment);
-                } catch (error) {
-                  console.warn(
-                    "[TerminalContainer] Failed to persist initial prompt attachment references:",
-                    error,
-                  );
-                }
-              }
-            } catch (error) {
-              console.error(
-                "[TerminalContainer] Failed to save initial prompt attachments:",
-                error,
-              );
-              // Keep both renderer and backend copies so a later retry can
-              // recover the images rather than silently launching without
-              // them.
-            } finally {
-              isSavingInitialPromptAttachmentsRef.current = false;
-            }
-          })();
         }
         return;
       }
@@ -1157,35 +921,8 @@ export function TerminalContainer({
       const initialPaneId =
         usePaneLayoutStore.getState().environments.get(environmentId)?.activePaneId ?? "default";
 
-      // Determine initial tab type based on agent options
-      let initialTabType: TerminalTabType = "plain";
-      let pendingInitialPrompt: string | undefined;
-      let initialAgentModel: string | undefined;
-      let initialReasoningEffort: string | undefined;
-      let initialFastMode: boolean | undefined;
       const launchAgent = claudeOptions?.launchAgent ?? false;
-      if (launchAgent) {
-        initialTabType = claudeOptions!.agentType;
-        initialAgentModel = claudeOptions!.model;
-        initialReasoningEffort = claudeOptions!.reasoningEffort;
-        initialFastMode = resolveAgentPlatformSettings(tiers, initialTabType).fastMode;
-        setHasAppliedClaudeOptions(true);
-        if (claudeOptions!.initialPrompt?.trim()) {
-          pendingInitialPrompt = claudeOptions!.initialPrompt.trim();
-          initialPromptRef.current = pendingInitialPrompt;
-        }
-      }
-      const initialTabId =
-        launchAgent && initialTabType !== "plain" ? STARTUP_AGENT_TAB_ID : "default";
-
-      // Check if we should use native mode instead of terminal
-      const useNativeOpenCode = initialTabType === "opencode" && opencodeMode === "native";
-      const useNativeClaude = initialTabType === "claude" && claudeMode === "native";
-      const useNativeCodex = initialTabType === "codex" && codexMode === "native";
-      const useNativeAcp =
-        initialTabType === "cursor" ||
-        initialTabType === "grok" ||
-        (initialTabType === "pi" && piMode === "native");
+      if (launchAgent) setHasAppliedClaudeOptions(true);
 
       if (backendSetupRunning) {
         console.info("[setup-terminal] adding backend-managed setup tab", {
@@ -1193,24 +930,6 @@ export function TerminalContainer({
           tabId: "default",
           hasDefaultSetupSession: hasBoundSetupSession("default"),
         });
-        if (launchAgent && initialTabType !== "plain" && !startupLaunchDispatchedByBackend) {
-          setPendingNativeLaunch(environmentId, {
-            containerId: isLocalEnvironment ? null : containerId,
-            environmentId,
-            initialPrompt: pendingInitialPrompt,
-            targetPaneId: initialPaneId,
-            agentType: initialTabType,
-            launchMode:
-              useNativeOpenCode || useNativeClaude || useNativeCodex || useNativeAcp
-                ? "native"
-                : "terminal",
-            claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
-            model: initialAgentModel,
-            reasoningEffort: initialReasoningEffort,
-            ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
-          });
-        }
-
         const setupTab: TabInfo = {
           id: "default",
           type: "plain",
@@ -1220,66 +939,13 @@ export function TerminalContainer({
         return;
       }
 
-      rendererDebugLog("[TerminalContainer] Initial tab decision:", {
-        agentType: claudeOptions?.agentType,
-        launchAgent,
-        opencodeMode,
-        claudeMode,
-        codexMode,
-        useNativeOpenCode,
-        useNativeClaude,
-        useNativeCodex,
-        useNativeAcp,
-        isLocalEnvironment,
-        setupPhase,
-      });
-      if (useNativeClaude) {
-        addTab(
-          initialPaneId,
-          createClaudeNativeLikeTab({
-            id: initialTabId,
-            nativeBackend: claudeNativeBackend,
-            containerId: isLocalEnvironment ? undefined : (containerId ?? undefined),
-            environmentId,
-            isLocal: isLocalEnvironment,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-            initialFastMode,
-          }),
-          environmentId,
-        );
-      } else if (useNativeCodex || useNativeOpenCode || useNativeAcp) {
-        const platform = initialTabType as AgentPlatform;
-        addTab(
-          initialPaneId,
-          createAgentNativeTab({
-            id: initialTabId,
-            platform,
-            containerId: containerId ?? undefined,
-            environmentId,
-            isLocal: isLocalEnvironment,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-            initialFastMode,
-          }),
-          environmentId,
-        );
-      } else {
-        addTab(
-          initialPaneId,
-          {
-            id: initialTabId,
-            type: initialTabType,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-            initialFastMode,
-          },
-          environmentId,
-        );
+      if (launchAgent) {
+        // Startup work and its durable tab are both backend-owned. Returning
+        // here prevents this mount from racing the backend with a second tab or
+        // a second initial prompt.
+        return;
       }
+      addTab(initialPaneId, { id: "default", type: "plain" }, environmentId);
     }
   }, [
     isEnvironmentRunning,
@@ -1295,7 +961,6 @@ export function TerminalContainer({
     environmentId,
     currentEnvState,
     environment?.pendingAgentLaunch,
-    startupLaunchDispatchedByBackend,
     hydrationStatus,
     beginHydration,
     finishHydration,
@@ -1304,8 +969,6 @@ export function TerminalContainer({
     claudeNativeBackend,
     codexMode,
     piMode,
-    setPendingNativeLaunch,
-    setOptions,
     worktreePath,
     hasBoundSetupSession,
     bindBackendSetupSession,
@@ -1336,11 +999,10 @@ export function TerminalContainer({
       );
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
-      clearPendingNativeLaunch(environmentId);
     }
     previousContainerIdRef.current = containerId;
     previousEnvironmentIdRef.current = environmentId;
-  }, [containerId, environmentId, reset, clearPendingNativeLaunch]);
+  }, [containerId, environmentId, reset]);
 
   // Reset pane layout when the container stops.
   // This clears all terminals and tabs since their backend sessions are destroyed
@@ -1351,10 +1013,8 @@ export function TerminalContainer({
         environmentId,
       );
       reset(environmentId);
-      // Clear pending native OpenCode launch on container stop
-      clearPendingNativeLaunch(environmentId);
     }
-  }, [isContainerRunning, environmentId, containerId, reset, clearPendingNativeLaunch]);
+  }, [isContainerRunning, environmentId, containerId, reset]);
 
   // The backend publishes the startup agent while setup still runs, and this
   // renderer keeps the setup terminal selected so the user can watch it. When
@@ -1377,121 +1037,6 @@ export function TerminalContainer({
     handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId);
     handedOffSetupFocusRef.current.add(environmentId);
   }, [setupReady, isStartupLaunchPending, currentEnvState, environmentId]);
-
-  // Launch native tab after workspace setup completes
-  useEffect(() => {
-    const canLaunchPendingNative =
-      setupReady && pendingNativeLaunch && (containerId || isLocalEnvironmentReady);
-    rendererDebugLog(
-      "[TerminalContainer] Native tab effect check - setupPhase:",
-      setupPhase,
-      "hasPending:",
-      !!pendingNativeLaunch,
-      "containerId:",
-      !!containerId,
-      "isLocalEnvironmentReady:",
-      isLocalEnvironmentReady,
-    );
-
-    // Simple logic: when workspace is ready and we have a pending launch, create the tab
-    // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
-    if (canLaunchPendingNative) {
-      const pending = pendingNativeLaunch;
-
-      // Only launch if this is for the current container/environment
-      // For local envs, both containerId values are null, so we also check environmentId
-      const containerMatch = isLocalEnvironment
-        ? pending.containerId === null && pending.environmentId === environmentId
-        : pending.containerId === containerId && pending.environmentId === environmentId;
-
-      if (containerMatch) {
-        const isClaudeNative = pending.agentType === "claude";
-        const isCodexNative = pending.agentType === "codex";
-        const launchMode = pending.launchMode ?? "native";
-        rendererDebugLog(
-          "[TerminalContainer] Workspace ready, launching",
-          launchMode,
-          isClaudeNative ? "Claude" : isCodexNative ? "Codex" : "OpenCode",
-          "tab for environment:",
-          environmentId,
-        );
-
-        const newTabId = STARTUP_AGENT_TAB_ID;
-        const paneStore = usePaneLayoutStore.getState();
-        const livePaneState = paneStore.environments.get(environmentId);
-        const targetPaneId = paneStore.getPane(pending.targetPaneId, environmentId)
-          ? pending.targetPaneId
-          : livePaneState && paneStore.getPane(livePaneState.activePaneId, environmentId)
-            ? livePaneState.activePaneId
-            : livePaneState
-              ? getAllLeaves(livePaneState.root)[0]?.id
-              : undefined;
-        if (!targetPaneId) {
-          console.warn(
-            "[TerminalContainer] Deferred native launch because no pane is available:",
-            environmentId,
-          );
-          return;
-        }
-        if (launchMode === "terminal") {
-          const newTab: TabInfo = {
-            id: newTabId,
-            type: pending.agentType,
-            initialPrompt: pending.initialPrompt,
-            initialAgentModel: pending.model,
-            initialReasoningEffort: pending.reasoningEffort,
-            initialFastMode: pending.fastMode,
-          };
-          addTab(targetPaneId, newTab, environmentId);
-        } else if (isClaudeNative) {
-          const backend = pending.claudeNativeBackend ?? claudeNativeBackend;
-          const newTab = createClaudeNativeLikeTab({
-            id: newTabId,
-            nativeBackend: backend,
-            containerId: pending.containerId ?? undefined,
-            environmentId: pending.environmentId,
-            isLocal: isLocalEnvironment,
-            sessionId: pending.providerSessionId,
-            initialPrompt: pending.initialPrompt,
-            initialAgentModel: pending.model,
-            initialReasoningEffort: pending.reasoningEffort,
-            initialFastMode: pending.fastMode,
-          });
-          addTab(targetPaneId, newTab, environmentId);
-        } else {
-          const newTab = createAgentNativeTab({
-            id: newTabId,
-            platform: pending.agentType,
-            containerId: pending.containerId ?? undefined,
-            environmentId: pending.environmentId,
-            isLocal: isLocalEnvironment,
-            sessionId: pending.providerSessionId,
-            initialPrompt: pending.initialPrompt,
-            initialAgentModel: pending.model,
-            initialReasoningEffort: pending.reasoningEffort,
-            initialFastMode: pending.fastMode,
-          });
-          addTab(targetPaneId, newTab, environmentId);
-        }
-
-        // Clear the pending launch
-        clearPendingNativeLaunch(environmentId);
-        clearOptions(environmentId);
-      }
-    }
-  }, [
-    setupReady,
-    setupPhase,
-    pendingNativeLaunch,
-    containerId,
-    environmentId,
-    isLocalEnvironment,
-    isLocalEnvironmentReady,
-    addTab,
-    clearPendingNativeLaunch,
-    clearOptions,
-    claudeNativeBackend,
-  ]);
 
   // Register terminal write function with context
   useEffect(() => {

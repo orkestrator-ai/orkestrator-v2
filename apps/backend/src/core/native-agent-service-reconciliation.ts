@@ -127,6 +127,7 @@ import {
   buildInitialPromptWithAttachmentReferences,
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
+import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 
 export abstract class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
   reconcileAgentActivity(): Promise<void> {
@@ -1018,23 +1019,16 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(environment.projectId);
-    // Shared with the renderer rather than reimplemented here: the renderer has
-    // to predict this exact decision to know whether it may still stage the
-    // initial prompt's images itself, and any divergence silently costs the
-    // user the attachment. See `resolveStartupLaunchFromSettings`.
+    // Resolve the same inherited settings contract the renderer uses to label
+    // the durable startup projection. Launching and attachment staging are now
+    // backend-owned for every mode.
     const tiers = {
       environment: environment.agentSettings,
       repository: repository.agentSettings,
       global: config.global.agentSettings,
     };
-    const { agent, dispatchedByBackend } = resolveStartupLaunchFromSettings(tiers);
-
-    // Terminal and Claude-tmux launches still need a PTY/tmux projection. They
-    // are left pending for the backend terminal coordinator rather than being
-    // falsely marked consumed by this native-session service.
-    if (!dispatchedByBackend) {
-      return;
-    }
+    const configuredLaunch = resolveStartupLaunchFromSettings(tiers);
+    const agent = environment.initialAgentPlatform ?? configuredLaunch.agent;
 
     const logicalSessionKey = `env-${environment.id}:startup-agent`;
     // One resolver for the whole chain. This used to read the repository's
@@ -1042,9 +1036,125 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     // belonging to one platform's catalogue could be sent to another; a model
     // now travels only down its own platform column.
     const resolved = resolveAgentPlatformSettings(tiers, agent);
+    const mode = resolved.mode;
+    const claudeNativeBackend = resolveAgentPlatformSettings(tiers, "claude").claudeNativeBackend;
     const model = environment.initialAgentModel ?? resolved.model;
     const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
     const conversationMode = environment.initialConversationMode;
+    const nativeProviderLaunch =
+      mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+
+    if (!nativeProviderLaunch) {
+      try {
+        await this.storage.ensureTerminalJobTab({
+          environmentId: environment.id,
+          tabId: "startup-agent",
+          type: agent === "claude" && claudeNativeBackend === "tmux" ? "claude-tmux" : agent,
+        });
+        const startupSession = environment.startupAgentSession;
+        if (
+          !startupSession ||
+          startupSession.tabId !== "startup-agent" ||
+          startupSession.agent !== agent ||
+          startupSession.style !== "terminal" ||
+          startupSession.model !== model ||
+          startupSession.reasoningEffort !== reasoningEffort ||
+          startupSession.status !== "starting"
+        ) {
+          await this.storage.updateEnvironment(environment.id, {
+            startupAgentSession: {
+              tabId: "startup-agent",
+              agent,
+              style: "terminal",
+              model,
+              reasoningEffort,
+              status: "starting",
+            },
+          });
+        }
+        if (!isEnvironmentReadyForAgents(environment)) return;
+
+        let prompt = environment.initialPrompt?.trim() ?? "";
+        const attachments = environment.initialPromptAttachments ?? [];
+        if (attachments.length > 0) {
+          const saved = await this.invoke<SavedInitialPromptAttachment[]>(
+            "write_initial_prompt_attachments",
+            {
+              environmentId: environment.id,
+              attachments: attachments.map(({ id, name, base64Data }) => ({
+                id,
+                name,
+                base64Data,
+              })),
+            },
+          );
+          prompt = buildInitialPromptWithAttachmentReferences(prompt, saved);
+          // Staging is a durable step of this launch. Persist the rewritten
+          // prompt and consume the bodies before starting the PTY so a retry
+          // reuses the same workspace files instead of creating another batch.
+          await this.storage.updateEnvironment(environment.id, {
+            initialPrompt: prompt,
+            initialPromptAttachments: undefined,
+          });
+        }
+
+        if (agent === "claude" && claudeNativeBackend === "tmux") {
+          await this.invoke("launch_terminal_job", {
+            requestId: `initial-prompt:${environment.id}:startup-agent`,
+            environmentId: environment.id,
+            tabId: "startup-agent",
+            tabType: "claude-tmux",
+            initialPrompt: prompt || undefined,
+            model,
+            reasoningEffort,
+            fastMode: resolved.fastMode,
+            activateTab: true,
+          });
+        } else {
+          const command = buildTerminalAgentLaunchCommand({
+            tabType: agent,
+            initialPrompt: prompt || undefined,
+            model,
+            reasoningEffort,
+          });
+          if (!command) throw new Error(`${agent} does not support terminal launch`);
+          await this.invoke("launch_terminal_job", {
+            requestId: `initial-prompt:${environment.id}:startup-agent`,
+            environmentId: environment.id,
+            tabId: "startup-agent",
+            tabType: agent,
+            data: `${command}\n`,
+            activateTab: true,
+          });
+        }
+
+        await this.storage.updateEnvironment(environment.id, {
+          pendingAgentLaunch: false,
+          initialAgentPlatform: undefined,
+          initialAgentModel: undefined,
+          initialReasoningEffort: undefined,
+          initialConversationMode: undefined,
+          initialPromptAttachments: undefined,
+          startupAgentSession: undefined,
+        });
+        this.launchRetryAt.delete(environment.id);
+      } catch (error) {
+        this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
+        await this.storage.updateEnvironment(environment.id, {
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent,
+            style: "terminal",
+            model,
+            reasoningEffort,
+            status: "error",
+            error: "Agent launch failed; the backend will retry.",
+          },
+        });
+        throw error;
+      }
+      return;
+    }
 
     // Publishing runs inside the same failure handling as the launch itself. A
     // throw here (an unwritable layout file, a root over the size bound) would
@@ -1151,6 +1261,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
 
       await this.storage.updateEnvironment(environment.id, {
         pendingAgentLaunch: false,
+        initialAgentPlatform: undefined,
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
         initialConversationMode: undefined,
@@ -1190,6 +1301,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         ...(terminal
           ? {
               pendingAgentLaunch: false,
+              initialAgentPlatform: undefined,
+              initialAgentModel: undefined,
+              initialReasoningEffort: undefined,
               initialConversationMode: undefined,
               initialPromptAttachments: undefined,
             }

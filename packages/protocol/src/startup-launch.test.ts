@@ -38,7 +38,6 @@ describe("resolveStartupLaunch", () => {
       agent: DEFAULT_STARTUP_LAUNCH_AGENT,
       mode: DEFAULT_CLAUDE_MODE,
       claudeNativeBackend: "sdk",
-      dispatchedByBackend: true,
     });
   });
 
@@ -49,7 +48,7 @@ describe("resolveStartupLaunch", () => {
         repository: { agentStyle: "native" },
         global: { claudeMode: "terminal" },
       }),
-    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    ).toMatchObject({ mode: "native" });
   });
 
   test("lets an environment Claude style override the repository", () => {
@@ -59,10 +58,10 @@ describe("resolveStartupLaunch", () => {
         repository: { agentStyle: "native" },
         global: { claudeMode: "native" },
       }),
-    ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
+    ).toMatchObject({ mode: "terminal" });
   });
 
-  test("leaves a tmux-backed Claude launch with the terminal coordinator", () => {
+  test("dispatches a tmux-backed Claude launch from the backend", () => {
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: "claude", claudeMode: "native" },
@@ -72,28 +71,27 @@ describe("resolveStartupLaunch", () => {
     ).toMatchObject({
       mode: "native",
       claudeNativeBackend: "tmux",
-      dispatchedByBackend: false,
     });
   });
 
-  test("dispatches an sdk-backed native Claude launch from the backend", () => {
+  test("resolves an sdk-backed native Claude launch", () => {
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: "claude", claudeMode: "native" },
         global: { claudeNativeBackend: "sdk" },
-      }).dispatchedByBackend,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ mode: "native", claudeNativeBackend: "sdk" });
   });
 
   test.each([
     ["codex", { codexMode: "native" as const }],
     ["opencode", { opencodeMode: "native" as const }],
-  ])("dispatches a native %s launch from the backend", (agent, modes) => {
+  ])("resolves a native %s launch", (agent, modes) => {
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: agent as "codex" | "opencode", ...modes },
-      }).dispatchedByBackend,
-    ).toBe(true);
+      }),
+    ).toMatchObject({ mode: "native" });
   });
 
   test("routes Grok through the legacy OpenCode mode and Cursor through its SDK", () => {
@@ -102,32 +100,27 @@ describe("resolveStartupLaunch", () => {
         environment: { defaultAgent: "grok" },
         global: { opencodeMode: "native", codexMode: "terminal" },
       }),
-    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    ).toMatchObject({ mode: "native" });
 
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: "cursor" },
         global: { opencodeMode: "terminal" },
       }),
-    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    ).toMatchObject({ mode: "native" });
   });
 
-  test("keeps the conservative terminal fallback for non-Claude agents", () => {
+  test("resolves terminal-mode non-Claude agents", () => {
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: "codex" },
         global: { defaultAgent: "codex" },
-      }).dispatchedByBackend,
-    ).toBe(false);
+      }),
+    ).toMatchObject({ mode: "terminal" });
   });
 });
 
 /**
- * `dispatchedByBackend` is the attachment-ownership contract: the backend's
- * `reconcileInitialLaunchOnce` and the renderer's `TerminalContainer` both call
- * this exact function over the same three tiers, and when they disagree either
- * both consume the initial prompt's images or neither delivers them.
- *
  * Grok gained a mode column in the agent-settings migration. Cursor is
  * SDK-only and must stay native even when a legacy tier says terminal.
  */
@@ -153,7 +146,6 @@ describe("resolveStartupLaunchFromSettings", () => {
       expect(resolveStartupLaunchFromSettings(tiers)).toMatchObject({
         agent: "cursor",
         mode: "native",
-        dispatchedByBackend: true,
       });
     }
   });
@@ -164,23 +156,22 @@ describe("resolveStartupLaunchFromSettings", () => {
       agent: platform,
       mode: "terminal",
       claudeNativeBackend: "sdk",
-      dispatchedByBackend: false,
     });
 
-    // A tier that opts in hands the launch to the backend...
+    // A tier that opts in changes the surface while retaining backend ownership...
     expect(
       resolveStartupLaunchFromSettings({
         global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
       }),
-    ).toMatchObject({ agent: platform, mode: "native", dispatchedByBackend: true });
+    ).toMatchObject({ agent: platform, mode: "native" });
 
-    // ...and a narrower tier that opts back out takes it away again.
+    // ...and a narrower tier can opt back to a terminal surface.
     expect(
       resolveStartupLaunchFromSettings({
         global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
         repository: { platforms: { [platform]: { mode: "terminal" } } },
       }),
-    ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
+    ).toMatchObject({ mode: "terminal" });
 
     expect(
       resolveStartupLaunchFromSettings({
@@ -188,7 +179,7 @@ describe("resolveStartupLaunchFromSettings", () => {
         repository: { platforms: { [platform]: { mode: "terminal" } } },
         environment: { platforms: { [platform]: { mode: "native" } } },
       }),
-    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    ).toMatchObject({ mode: "native" });
   });
 
   for (const platform of ["cursor", "grok"] as const) {
@@ -200,17 +191,11 @@ describe("resolveStartupLaunchFromSettings", () => {
             platforms: { opencode: { mode: "native" }, codex: { mode: "native" } },
           },
         }),
-      ).toMatchObject(
-        platform === "cursor"
-          ? { mode: "native", dispatchedByBackend: true }
-          : { mode: "terminal", dispatchedByBackend: false },
-      );
+      ).toMatchObject(platform === "cursor" ? { mode: "native" } : { mode: "terminal" });
     });
   }
 
-  test("a tmux-backed Claude launch stays with the terminal coordinator", () => {
-    // Native, but the renderer still owns it: a tmux session needs a real PTY
-    // projection, so this is the one case where native does not mean dispatched.
+  test("resolves a tmux-backed Claude launch", () => {
     expect(
       resolveStartupLaunchFromSettings({
         global: {
@@ -218,7 +203,7 @@ describe("resolveStartupLaunchFromSettings", () => {
           platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
         },
       }),
-    ).toMatchObject({ mode: "native", dispatchedByBackend: false });
+    ).toMatchObject({ mode: "native" });
   });
 
   test("the Claude backend is read from Claude's own column whatever the agent is", () => {
@@ -239,7 +224,6 @@ describe("resolveStartupLaunchFromSettings", () => {
       agent: "cursor",
       mode: "native",
       claudeNativeBackend: "tmux",
-      dispatchedByBackend: true,
     });
   });
 });

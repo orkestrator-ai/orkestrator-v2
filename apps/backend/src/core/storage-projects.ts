@@ -9,6 +9,7 @@ import {
   migrateEnvironmentAgentSettings,
 } from "./storage-agent-settings.js";
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -615,6 +616,12 @@ export abstract class StorageProjects extends StorageBase {
       }
       if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
         environment.pendingAgentLaunch = updates.pendingAgentLaunch;
+      }
+      if ("initialAgentPlatform" in updates) {
+        const value = updates.initialAgentPlatform;
+        if (value == null) environment.initialAgentPlatform = undefined;
+        else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
+        else throw new Error("Invalid initial agent platform");
       }
       if ("initialPromptAttachments" in updates) {
         if (updates.initialPromptAttachments == null) {

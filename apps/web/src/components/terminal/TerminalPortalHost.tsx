@@ -210,6 +210,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
             initialReasoningEffort={tab.initialReasoningEffort}
             paneId={paneId}
             isSetupTab={tab.isSetupTab}
+            backendManagedTerminal={tab.backendManagedTerminal}
           />
         </div>,
         portalTarget,

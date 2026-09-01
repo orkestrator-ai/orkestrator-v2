@@ -34,7 +34,7 @@ export type TerminalSessionConfig = (
       rows: number;
       trackEnvironmentActivity?: boolean;
     }
-) & { bootstrapped?: boolean };
+) & { bootstrapped?: boolean; bootstrapDataHash?: string };
 
 export const terminalProcesses = new Map<string, PtyProcess>();
 export const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();

@@ -3,6 +3,7 @@ import {
   normalizeAgentSettings,
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   createEnvironment,
@@ -162,6 +163,7 @@ export function registerEnvironmentCommands(
         buildPipelineId,
         agentSettings,
         pendingAgentLaunch,
+        initialAgentPlatform,
         initialAgentModel,
         initialReasoningEffort,
         initialConversationMode,
@@ -223,6 +225,12 @@ export function registerEnvironmentCommands(
       if (agentSettings !== undefined) env.agentSettings = normalizedTier(agentSettings);
       if (pendingAgentLaunch === true) {
         env.pendingAgentLaunch = true;
+        if (initialAgentPlatform !== undefined) {
+          if (!isAgentPlatform(initialAgentPlatform)) {
+            throw new Error("initialAgentPlatform is invalid");
+          }
+          env.initialAgentPlatform = initialAgentPlatform;
+        }
         env.initialAgentModel = asOptionalString(initialAgentModel)?.trim() || undefined;
         env.initialReasoningEffort = asOptionalString(initialReasoningEffort)?.trim() || undefined;
         if (
@@ -539,9 +547,11 @@ export function registerEnvironmentCommands(
         environmentId,
         agentSettings,
         pendingAgentLaunch,
+        initialAgentPlatform,
         initialAgentModel,
         initialReasoningEffort,
         initialConversationMode,
+        initialPrompt,
         initialPromptAttachments,
       },
       { storage },
@@ -564,17 +574,27 @@ export function registerEnvironmentCommands(
       if (typeof pendingAgentLaunch === "boolean") {
         updates.pendingAgentLaunch = pendingAgentLaunch;
         if (!pendingAgentLaunch) {
+          updates.initialAgentPlatform = undefined;
           updates.initialAgentModel = undefined;
           updates.initialReasoningEffort = undefined;
           updates.initialConversationMode = undefined;
           updates.initialPromptAttachments = undefined;
         }
       }
+      if (pendingAgentLaunch !== false && initialAgentPlatform !== undefined) {
+        if (!isAgentPlatform(initialAgentPlatform)) {
+          throw new Error("initialAgentPlatform is invalid");
+        }
+        updates.initialAgentPlatform = initialAgentPlatform;
+      }
       if (pendingAgentLaunch !== false && typeof initialAgentModel === "string") {
         updates.initialAgentModel = initialAgentModel;
       }
       if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
         updates.initialReasoningEffort = initialReasoningEffort;
+      }
+      if (pendingAgentLaunch !== false && initialPrompt !== undefined) {
+        updates.initialPrompt = asString(initialPrompt, "initialPrompt");
       }
       if (
         initialConversationMode !== undefined &&

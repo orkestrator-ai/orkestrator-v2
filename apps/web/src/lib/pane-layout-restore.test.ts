@@ -283,6 +283,7 @@ describe("reconcilePersistedLayout", () => {
     ].map((tab) => ({
       ...tab,
       backendManagedTerminal: tab.id.endsWith("-terminal"),
+      backendTerminalSessionId: tab.id.endsWith("-terminal") ? `${tab.id}-session` : undefined,
       initialAgentModel: `${tab.id}-model`,
       initialReasoningEffort: "xhigh",
       initialExecutionProfileId: "plan",
@@ -307,6 +308,7 @@ describe("reconcilePersistedLayout", () => {
       expect(tab.initialExecutionProfileId).toBe("plan");
       if (String(tab.id).endsWith("-terminal")) {
         expect(tab.backendManagedTerminal).toBe(true);
+        expect(tab.backendTerminalSessionId).toBe(`${tab.id}-session`);
       }
     }
   });

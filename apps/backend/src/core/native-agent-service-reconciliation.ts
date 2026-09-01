@@ -1050,6 +1050,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           environmentId: environment.id,
           tabId: "startup-agent",
           type: agent === "claude" && claudeNativeBackend === "tmux" ? "claude-tmux" : agent,
+          // A restored renderer must not attach to a PTY identity left by a
+          // previous backend generation while this launch is still pending.
+          terminalSessionId: null,
         });
         const startupSession = environment.startupAgentSession;
         if (

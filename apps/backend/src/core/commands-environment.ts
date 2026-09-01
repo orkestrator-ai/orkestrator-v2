@@ -941,6 +941,14 @@ export async function startEnvironmentOnce(
   let unpersistedWorktree: { projectPath: string; path: string; branch: string } | null = null;
 
   try {
+    if (environment.status !== "running") {
+      // Starting a stopped/error environment establishes a new runtime
+      // generation. Any pane-carried PTY id names the previous generation and
+      // must be removed before a renderer can attempt to attach to it.
+      // Command-registry compatibility fixtures use deliberately partial
+      // storage adapters; production StorageService always provides this.
+      await storage.clearBackendTerminalSessionIds?.(environment.id);
+    }
     await storage.updateEnvironment(environment.id, {
       status: "creating",
       lifecycleError: null,

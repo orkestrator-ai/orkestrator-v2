@@ -54,6 +54,7 @@ export class OrkestratorBackend {
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   private setupStartupReconciled = false;
+  private terminalStartupReconciled = false;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
   private readonly agentTools: Pick<
@@ -264,6 +265,14 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    if (!this.terminalStartupReconciled) {
+      // A terminal session id names state owned by this backend process. On a
+      // renderer-only reload the backend stays alive and the id remains valid;
+      // on backend startup no previous id can be honoured, so invalidate them
+      // before the gateway can serve a pane snapshot.
+      await this.context.storage.clearBackendTerminalSessionIds();
+      this.terminalStartupReconciled = true;
+    }
     // Do not accept commands while durable state claims work is still running
     // from a previous process. If this write fails, startup fails closed rather
     // than exposing progress that this backend can never complete.

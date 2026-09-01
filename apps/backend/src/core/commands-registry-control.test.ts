@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -432,6 +432,7 @@ describe("launch_terminal_job command", () => {
     registry.set("create_local_terminal_session", createSession);
     registry.set("start_local_terminal_session", startSession);
     registry.set("bootstrap_terminal_session", bootstrap);
+    const ensureTerminalJobTab = spyOn(storage, "ensureTerminalJobTab");
     const context = { storage } as unknown as CommandContext;
 
     try {
@@ -444,6 +445,14 @@ describe("launch_terminal_job command", () => {
         activateTab: true,
       };
       const first = (await launch(input, context)) as Record<string, unknown>;
+      expect(ensureTerminalJobTab).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          activate: false,
+          existingOnly: true,
+          terminalSessionId: "local-session-1",
+        }),
+      );
       const layoutAfterFirstLaunch = await storage.getPaneLayout("env-1");
       const second = (await launch(input, context)) as Record<string, unknown>;
 
@@ -486,12 +495,110 @@ describe("launch_terminal_job command", () => {
             type: "plain",
             displayTitle: "Run Commands",
             backendManagedTerminal: true,
+            backendTerminalSessionId: "local-session-1",
           },
         ],
       });
       expect(JSON.stringify(layout?.root).match(/"id":"terminal-job-/g)).toHaveLength(1);
       expect(JSON.stringify(layout?.root)).not.toContain("initialCommands");
     } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reactivate the job tab when bootstrap finishes after the user moves focus", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-focus-race-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    let releaseBootstrap!: () => void;
+    let signalBootstrap!: () => void;
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const bootstrapEntered = new Promise<void>((resolve) => {
+      signalBootstrap = resolve;
+    });
+    registry.set("create_local_terminal_session", async () => ({
+      sessionId: "local-session-1",
+      created: true,
+      bootstrapped: false,
+    }));
+    registry.set("start_local_terminal_session", async () => undefined);
+    registry.set("bootstrap_terminal_session", async () => {
+      signalBootstrap();
+      await bootstrapGate;
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    });
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      const launching = launch(
+        {
+          requestId: "focus-race",
+          environmentId: "env-1",
+          tabId: "job-tab",
+          tabType: "plain",
+          data: "bun test\n",
+          activateTab: true,
+        },
+        context,
+      );
+      await bootstrapEntered;
+      const published = await storage.getPaneLayout("env-1");
+      const publishedRoot = published?.root as
+        | {
+            kind: string;
+            id: string;
+            tabs: unknown[];
+            activeTabId: string | null;
+          }
+        | undefined;
+      if (!published || publishedRoot?.kind !== "leaf") throw new Error("Expected leaf layout");
+      await storage.savePaneLayout(
+        "env-1",
+        {
+          version: published.version,
+          containerId: published.containerId,
+          activePaneId: published.activePaneId,
+          root: { ...publishedRoot, activeTabId: "default" },
+        },
+        published.revision,
+      );
+      releaseBootstrap();
+      await launching;
+
+      const completed = await storage.getPaneLayout("env-1");
+      expect(completed?.root).toMatchObject({
+        activeTabId: "default",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "job-tab",
+            backendTerminalSessionId: "local-session-1",
+          }),
+        ]),
+      });
+    } finally {
+      releaseBootstrap();
       await rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -549,6 +656,9 @@ describe("launch_terminal_job command", () => {
       ).rejects.toThrow("already bootstrapped by another owner");
       expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).toContain(
         '"backendManagedTerminal":true',
+      );
+      expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).not.toContain(
+        "backendTerminalSessionId",
       );
     } finally {
       await rm(dataDir, { recursive: true, force: true });

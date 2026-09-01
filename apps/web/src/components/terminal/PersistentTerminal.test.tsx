@@ -1010,6 +1010,77 @@ describe("PersistentTerminal", () => {
     expect(bootstrapWrites()).toEqual([]);
   });
 
+  it("attaches a backend-managed terminal to the authoritative pane session", async () => {
+    act(() => {
+      useTerminalSessionStore
+        .getState()
+        .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
+          sessionId: "stale-renderer-session",
+        });
+    });
+    const terminalData = createTerminalData();
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+        backendManagedTerminal={true}
+        backendTerminalSessionId="authoritative-backend-session"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
+      expect(lastUseTerminalOptions?.existingSessionId).toBe("authoritative-backend-session");
+    });
+  });
+
+  it("waits for a pane-published backend session instead of adopting renderer-local state", async () => {
+    const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
+    act(() => {
+      useTerminalSessionStore.getState().setSession(sessionKey, {
+        sessionId: "stale-renderer-session",
+      });
+    });
+    useTerminalSessionId = null;
+    useTerminalIsConnected = false;
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+      backendManagedTerminal: true,
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
+      expect(lastUseTerminalOptions?.existingSessionId).toBeUndefined();
+    });
+
+    view.rerender(
+      <PersistentTerminal {...props} backendTerminalSessionId="newly-published-backend-session" />,
+    );
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions?.existingSessionId).toBe("newly-published-backend-session");
+      expect(connectMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it("rearms the connection gate for a new container while already disconnected", async () => {
     useTerminalIsConnected = false;
     useTerminalSessionId = null;
@@ -3731,6 +3802,63 @@ describe("PersistentTerminal", () => {
       const sessions = useTerminalSessionStore.getState().sessions;
       const session = sessions.get("container-1:tab-1");
       expect(session?.serializedBuffer).toBe("restored-buffer");
+    });
+  });
+
+  it("loads durable history on a cold backend-managed mount with a pane session id", async () => {
+    useTerminalSessionId = null;
+    useTerminalIsConnected = false;
+    act(() => {
+      useTerminalSessionStore
+        .getState()
+        .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
+          sessionId: "stale-renderer-session",
+        });
+    });
+    persistentSessionStore.loadSessionBuffer.mockResolvedValue("completed job output\r\n");
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "saved-job-session",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "disconnected",
+        hasLaunchedCommand: true,
+        lastActivityAt: "2024-01-01T00:00:00.000Z",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ];
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+        backendManagedTerminal
+        backendTerminalSessionId="dead-previous-generation-session"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions).toMatchObject({
+        attachExistingOnly: true,
+        existingSessionId: "dead-previous-generation-session",
+      });
+      expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith("saved-job-session");
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey("container-1", "tab-1", "env-1"))?.serializedBuffer,
+      ).toBe("completed job output\r\n");
     });
   });
 

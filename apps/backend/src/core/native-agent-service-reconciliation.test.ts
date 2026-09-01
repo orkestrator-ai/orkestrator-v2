@@ -2469,6 +2469,49 @@ describe("NativeAgentService", () => {
       },
     );
 
+    test("clears a previous terminal identity before retrying a startup launch", async () => {
+      const { provider } = createProviderStub("codex");
+      let storageAtLaunch: StorageService | undefined;
+      const invokeMock = mock(async (command: string, _args?: Record<string, unknown>) => {
+        expect(command).toBe("launch_terminal_job");
+        const layout = await storageAtLaunch?.getPaneLayout("env-1");
+        expect(JSON.stringify(layout?.root)).not.toContain("backendTerminalSessionId");
+        return { status: "started" };
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        (await invokeMock(command, args)) as T;
+
+      await withService(
+        {
+          prefix: "orkestrator-terminal-session-clear-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "codex",
+            codexMode: "terminal",
+            initialPrompt: "Resume work",
+          },
+          provider: async () => provider,
+          invoke,
+        },
+        async ({ storage, service }) => {
+          await storage.ensureTerminalJobTab({
+            environmentId: "env-1",
+            tabId: "startup-agent",
+            type: "codex",
+            terminalSessionId: "previous-generation-session",
+          });
+          storageAtLaunch = storage;
+
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(invokeMock).toHaveBeenCalledTimes(1);
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: false,
+          });
+        },
+      );
+    });
+
     test("reuses staged terminal attachments after a launch retry", async () => {
       const { provider } = createProviderStub("codex");
       let launchAttempts = 0;

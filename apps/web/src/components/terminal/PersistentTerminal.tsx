@@ -114,6 +114,7 @@ interface PersistentTerminalProps {
   paneId: string;
   isSetupTab?: boolean;
   backendManagedTerminal?: boolean;
+  backendTerminalSessionId?: string;
   onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
   onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
   onWrite?: (write: (data: string) => Promise<void>) => void;
@@ -145,6 +146,7 @@ export function PersistentTerminal({
   paneId,
   isSetupTab,
   backendManagedTerminal = false,
+  backendTerminalSessionId,
   onReady,
   onSetupComplete,
   onWrite,
@@ -250,7 +252,12 @@ export function PersistentTerminal({
   const existingSession = useTerminalSessionStore((state) => state.sessions.get(sessionKey));
   const setSession = useTerminalSessionStore((state) => state.setSession);
   const setSerializedBuffer = useTerminalSessionStore((state) => state.setSerializedBuffer);
-  const existingSessionId = existingSession?.sessionId;
+  // Backend-managed jobs publish their authoritative PTY identity in the pane
+  // snapshot. Prefer it over renderer-local state, which may belong to an old
+  // backend generation or may not exist when the tab is first rehydrated.
+  const existingSessionId = backendManagedTerminal
+    ? backendTerminalSessionId
+    : existingSession?.sessionId;
   const serializedBuffer = existingSession?.serializedBuffer;
   const isReconnecting = !!existingSessionId;
   const isBackendManagedSetupTab =
@@ -265,7 +272,15 @@ export function PersistentTerminal({
   // This distinguishes between:
   // 1. App restart/tab switch where we're reconnecting to existing session
   // 2. Newly created environment where session ID gets stored during this mount cycle
-  const hadExistingSessionAtMountRef = useRef(!!existingSessionId);
+  // The pane-carried backend id is an attach target, not proof that this fresh
+  // renderer has already restored the terminal. Renderer-local state only
+  // proves an in-place reconnect when it names that same authoritative PTY;
+  // a backend restart can leave the renderer holding a previous generation's
+  // id while the pane id is cleared or replaced.
+  const hadExistingSessionAtMountRef = useRef(
+    !!existingSession?.sessionId &&
+      (!backendManagedTerminal || existingSession.sessionId === backendTerminalSessionId),
+  );
 
   const [hasReconnected, setHasReconnected] = useState(false);
 

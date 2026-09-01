@@ -1218,6 +1218,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       },
     });
     const internals = backend as unknown as {
+      context: { storage: StorageService };
       buildPipelines: { init: () => Promise<void> };
       nativeAgents: {
         init: () => Promise<void>;
@@ -1227,6 +1228,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.buildPipelines.init = mock(async () => undefined);
     internals.nativeAgents.init = mock(async () => undefined);
     internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+    const clearBackendTerminalSessionIds = spyOn(
+      internals.context.storage,
+      "clearBackendTerminalSessionIds",
+    );
     const { intervals, tick, restore } = controlledIntervals();
 
     try {
@@ -1234,6 +1239,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await backend.init();
 
       expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(1);
+      expect(clearBackendTerminalSessionIds).toHaveBeenCalledTimes(1);
       tick(2_000);
       await Promise.resolve();
       // Two init calls, one interval: three reconciles, not four.

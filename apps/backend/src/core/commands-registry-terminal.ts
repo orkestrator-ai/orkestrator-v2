@@ -220,6 +220,21 @@ export function registerTerminalCommands(
     if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
       throw new Error("Terminal job session was already bootstrapped by another owner");
     }
+    // Publish the backend-owned PTY identity only after it is ready to attach.
+    // The renderer is intentionally forbidden from manufacturing a replacement
+    // for these tabs, so the durable pane snapshot must carry the exact session.
+    await context.storage.ensureTerminalJobTab({
+      environmentId,
+      tabId,
+      type: tabType,
+      title,
+      // The first publish already handled the requested selection. By the time
+      // bootstrap finishes the user may have moved elsewhere or closed this
+      // tab, and the identity update must not override either action.
+      activate: false,
+      terminalSessionId: created.sessionId,
+      existingOnly: true,
+    });
     return {
       jobId,
       environmentId,

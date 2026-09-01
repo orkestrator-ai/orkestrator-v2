@@ -171,6 +171,8 @@ export interface TabInfo {
   isSetupTab?: boolean;
   /** Backend owns PTY creation and bootstrap; the renderer may only attach. */
   backendManagedTerminal?: boolean;
+  /** Exact backend-owned PTY identity to attach to. */
+  backendTerminalSessionId?: string;
 }
 
 /** Validate the one canonical identity before it reaches the adapter registry. */

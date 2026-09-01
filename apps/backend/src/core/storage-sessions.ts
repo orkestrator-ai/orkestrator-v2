@@ -584,6 +584,8 @@ export abstract class StorageSessions extends StorageConfig {
     type: BuildPipelineAgent | "plain" | "claude-tmux";
     title?: string;
     activate?: boolean;
+    terminalSessionId?: string | null;
+    existingOnly?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.getEnvironment(input.environmentId);
@@ -606,6 +608,13 @@ export abstract class StorageSessions extends StorageConfig {
 
       const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === input.tabId));
       const existingTab = existingLeaf?.tabs.find((tab) => tab.id === input.tabId);
+      // The post-bootstrap identity publish must lose a race with an explicit
+      // user close. Returning the current snapshot keeps the command result
+      // idempotent without recreating the tab the user removed.
+      if (input.existingOnly && !existingTab) {
+        if (!previous) throw new Error("Persisted pane layout disappeared during terminal launch");
+        return previous;
+      }
       if (existingTab && existingTab.type !== input.type) {
         throw new Error(`Tab ID is already in use: ${input.tabId}`);
       }
@@ -630,6 +639,11 @@ export abstract class StorageSessions extends StorageConfig {
         backendManagedTerminal: true,
         ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
       };
+      if (input.terminalSessionId === null) {
+        delete tab.backendTerminalSessionId;
+      } else if (input.terminalSessionId !== undefined) {
+        tab.backendTerminalSessionId = input.terminalSessionId;
+      }
       delete tab.initialPrompt;
       delete tab.initialCommands;
       delete tab.initialAgentModel;
@@ -685,6 +699,55 @@ export abstract class StorageSessions extends StorageConfig {
       await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", input.environmentId);
       return saved;
+    });
+  }
+
+  /**
+   * Invalidate PTY identities owned by a previous runtime generation.
+   *
+   * Renderer reloads do not call this method, so they keep attaching to live
+   * background terminals. A backend or environment restart cannot honour the
+   * old ids, however, and must remove them before a renderer can hydrate the
+   * pane snapshot.
+   */
+  async clearBackendTerminalSessionIds(environmentId?: string): Promise<number> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const changedEnvironmentIds: string[] = [];
+      let cleared = 0;
+
+      for (const [layoutEnvironmentId, previous] of Object.entries(layouts)) {
+        if (environmentId && layoutEnvironmentId !== environmentId) continue;
+        const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+        let changed = false;
+        for (const leaf of paneLayoutLeaves(root)) {
+          for (const tab of leaf.tabs) {
+            if (!("backendTerminalSessionId" in tab)) continue;
+            delete tab.backendTerminalSessionId;
+            cleared += 1;
+            changed = true;
+          }
+        }
+        if (!changed) continue;
+        assertPaneLayoutRootWithinBounds(root);
+        layouts[layoutEnvironmentId] = {
+          ...previous,
+          root,
+          updatedAt: nowIso(),
+          revision: previous.revision + 1,
+        };
+        changedEnvironmentIds.push(layoutEnvironmentId);
+      }
+
+      if (changedEnvironmentIds.length === 0) return 0;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      for (const environmentId of changedEnvironmentIds) {
+        this.announce("pane-layout", environmentId);
+      }
+      return cleared;
     });
   }
 

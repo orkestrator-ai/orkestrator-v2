@@ -731,6 +731,7 @@ describe("backend-owned setup and build surfaces", () => {
         tabId: "startup-agent",
         type: "codex",
         activate: true,
+        terminalSessionId: "backend-session-1",
       });
 
       expect(layout.root).toMatchObject({
@@ -742,9 +743,104 @@ describe("backend-owned setup and build surfaces", () => {
             id: "startup-agent",
             type: "codex",
             backendManagedTerminal: true,
+            backendTerminalSessionId: "backend-session-1",
           },
         ],
       });
+
+      const pendingLayout = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "startup-agent",
+        type: "codex",
+        terminalSessionId: null,
+      });
+      expect(JSON.stringify(pendingLayout.root)).not.toContain("backendTerminalSessionId");
+    });
+  });
+
+  test("invalidates backend terminal identities from a previous process", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-stale-terminal-session";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      const otherEnvironment = createEnvironment("project-1");
+      otherEnvironment.id = "env-live-terminal-session";
+      otherEnvironment.environmentType = "local";
+      otherEnvironment.containerId = null;
+      await storage.addEnvironment(otherEnvironment);
+
+      const published = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "job-tab",
+        type: "plain",
+        activate: true,
+        terminalSessionId: "previous-process-session",
+      });
+      await storage.ensureTerminalJobTab({
+        environmentId: otherEnvironment.id,
+        tabId: "live-job-tab",
+        type: "plain",
+        terminalSessionId: "current-process-session",
+      });
+      expect(await storage.clearBackendTerminalSessionIds(environment.id)).toBe(1);
+
+      const cleared = await storage.getPaneLayout(environment.id);
+      expect(JSON.stringify(cleared?.root)).not.toContain("backendTerminalSessionId");
+      expect(cleared?.activePaneId).toBe(published.activePaneId);
+      expect(cleared?.root).toMatchObject({ activeTabId: "job-tab" });
+      expect(cleared?.revision).toBe(published.revision + 1);
+      expect(JSON.stringify((await storage.getPaneLayout(otherEnvironment.id))?.root)).toContain(
+        "current-process-session",
+      );
+      expect(await storage.clearBackendTerminalSessionIds()).toBe(1);
+      expect(await storage.clearBackendTerminalSessionIds()).toBe(0);
+      expect((await storage.getPaneLayout(environment.id))?.revision).toBe(cleared?.revision);
+    });
+  });
+
+  test("does not recreate a terminal tab during an existing-only identity publish", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-closed-terminal-job";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      const existing = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "job-tab",
+        type: "plain",
+        activate: true,
+      });
+      const withoutJob = await storage.savePaneLayout(
+        environment.id,
+        {
+          version: existing.version,
+          containerId: existing.containerId,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+            activeTabId: "default",
+          },
+        },
+        existing.revision,
+      );
+
+      const result = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "job-tab",
+        type: "plain",
+        activate: false,
+        terminalSessionId: "late-session",
+        existingOnly: true,
+      });
+
+      expect(result).toEqual(withoutJob);
+      expect(JSON.stringify(result.root)).not.toContain("job-tab");
     });
   });
 

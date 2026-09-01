@@ -110,6 +110,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     agentHandoffId: nonEmptyString(value.agentHandoffId) ?? undefined,
     consumedAgentHandoffId: nonEmptyString(value.consumedAgentHandoffId) ?? undefined,
     backendManagedTerminal: optionalBoolean(value.backendManagedTerminal),
+    backendTerminalSessionId: nonEmptyString(value.backendTerminalSessionId) ?? undefined,
   };
 
   if (value.isSetupTab === true) {

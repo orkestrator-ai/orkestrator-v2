@@ -50,6 +50,7 @@ const {
   http,
   isImmutableCommitRef,
   isLoopedReviewWorkflow,
+  isReviewPackageReference,
   isPaneLayoutRevisionConflict,
   isProcessRunning,
   isolateCodexBinaryLookup,
@@ -1431,6 +1432,44 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       const second = (await command(args, context)) as Record<string, unknown>;
       expect(second).toEqual(first);
       expect(first).toMatchObject({
+        kind: "file",
+        id: packageId,
+        round: 2,
+        targetBranch: "main",
+        baseRef,
+        headRef,
+        changedFileCount: 2,
+        limitations: [],
+      });
+      expect(first.diffCharacters).toBeNumber();
+      expect(first.bytes).toBeNumber();
+      expect(first.sha256).toBeString();
+      expect(first.sha256 as string).toMatch(/^[a-f0-9]{64}$/);
+      expect(first.filePath).toBe(
+        `.orkestrator/review-artifacts/${packageId}/review-package-${first.sha256}.json`,
+      );
+      expect(isReviewPackageReference(first, 2)).toBe(true);
+      expect((await fs.stat(path.join(worktreePath, String(first.filePath)))).mode & 0o777).toBe(
+        0o444,
+      );
+      await expect(
+        execFileAsync("git", [
+          "-C",
+          worktreePath,
+          "check-ignore",
+          "--quiet",
+          "--no-index",
+          "--",
+          String(first.filePath),
+        ]),
+      ).resolves.toBeDefined();
+      await expect(
+        execFileAsync("git", ["-C", worktreePath, "status", "--short"]),
+      ).resolves.toMatchObject({ stdout: "" });
+      const reviewPackage = JSON.parse(
+        await fs.readFile(path.join(worktreePath, String(first.filePath)), "utf8"),
+      ) as Record<string, unknown>;
+      expect(reviewPackage).toMatchObject({
         id: packageId,
         round: 2,
         targetBranch: "main",
@@ -1479,13 +1518,13 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       // The context key is deliberately absent rather than null. The workflow
       // supplies it, and a null is not a valid ReviewPackageContext — persisting
       // one made the snapshot fail validation on its very next read.
-      expect(first).not.toHaveProperty("context");
+      expect(reviewPackage).not.toHaveProperty("context");
       // Same reason, for the same reason it is easy to miss: the preparation
       // agent reports `limitation: null` for a command that ran without one, but
       // the persisted contract is `limitation?: string`. Carrying that null
       // through made every package with an executed validation command
       // unpersistable, failing the round at `package` on a loop no retry escaped.
-      expect((first.validation as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
+      expect((reviewPackage.validation as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
         "limitation",
       );
       // The whole point of the shape assertions above: a generated package has to
@@ -1495,9 +1534,22 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           loopedReviewWorkflowAround(first, { round: 2, targetBranch: "main" }),
         ),
       ).toBe(true);
-      expect(first.completeDiff).toContain("diff --git a/review.txt b/review.txt");
-      expect(first.completeDiff).toContain("GIT binary patch");
-      expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
+      expect(reviewPackage.completeDiff).toContain("diff --git a/review.txt b/review.txt");
+      expect(reviewPackage.completeDiff).toContain("GIT binary patch");
+      expect(reviewPackage.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
+
+      const verify = commands.get("verify_looped_review_package")!;
+      await expect(
+        verify({ environmentId: environment.id, reviewPackage: first }, context),
+      ).resolves.toEqual({ valid: true });
+      await fs.chmod(path.join(worktreePath, String(first.filePath)), 0o600);
+      await fs.appendFile(path.join(worktreePath, String(first.filePath)), "tampered");
+      await expect(
+        verify({ environmentId: environment.id, reviewPackage: first }, context),
+      ).resolves.toMatchObject({ valid: false });
+      // Regeneration restores the content-addressed file before the remaining
+      // path-contract checks reuse this package id.
+      expect(await command(args, context)).toEqual(first);
 
       await expect(
         command(
@@ -1711,7 +1763,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     };
 
     const generated = (await command(args, context)) as Record<string, unknown>;
-    expect(generated.validation).toEqual([
+    const reviewPackage = JSON.parse(
+      await fs.readFile(path.join(worktreePath, String(generated.filePath)), "utf8"),
+    ) as Record<string, unknown>;
+    expect(reviewPackage.validation).toEqual([
       {
         command: "bun run --cwd apps/ios typecheck",
         status: "skipped",
@@ -1923,6 +1978,34 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     await expect(call([skipped, { ...ran, exitCode: 1 }])).rejects.toThrow(
       "Validation[1] status does not match its exit code",
     );
+    for (const additionalLimitations of [[""], ["   "], [7], "not-an-array"]) {
+      await expect(
+        command(
+          {
+            environmentId: environment.id,
+            packageId,
+            round: 1,
+            targetBranch: "main",
+            preparation: { validation: [], uncommittedFiles: [], limitations: [] },
+            additionalLimitations,
+          },
+          context,
+        ),
+      ).rejects.toThrow("additionalLimitations");
+    }
+    await expect(
+      command(
+        {
+          environmentId: environment.id,
+          packageId,
+          round: 1,
+          targetBranch: "main",
+          preparation: { validation: [], uncommittedFiles: [], limitations: [] },
+          packageContext: { ticketTitle: "must not enter the workspace" },
+        },
+        context,
+      ),
+    ).rejects.toThrow("Unexpected generate_looped_review_package field: packageContext");
   });
 
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {

@@ -5,7 +5,13 @@ import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
-import { InlineMessageMarkdown, MessageMarkdown } from "./MessageMarkdown";
+import {
+  InlineMessageMarkdown,
+  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
+  MAX_INLINE_MARKDOWN_RENDER_CHARACTERS,
+  MessageMarkdown,
+  markdownRenderSource,
+} from "./MessageMarkdown";
 
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
@@ -159,6 +165,31 @@ describe("MessageMarkdown code styling", () => {
       (node) => node.closest("pre") === null,
     );
     expect(inline?.textContent).toBe("bun test");
+  });
+});
+
+describe("MessageMarkdown parser budgets", () => {
+  test("bounds block content before it reaches react-markdown", () => {
+    const source = `${"x".repeat(MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS)}UNPARSED_BLOCK_TAIL`;
+    const bounded = markdownRenderSource(source, MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS);
+    const { container } = render(<MessageMarkdown content={source} />);
+
+    expect(bounded.source).toHaveLength(MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS);
+    expect(bounded.source).not.toContain("UNPARSED_BLOCK_TAIL");
+    expect(container.textContent).not.toContain("UNPARSED_BLOCK_TAIL");
+    expect(container.querySelector('[data-markdown-truncated="true"]')?.textContent).toContain(
+      String(source.length - MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS),
+    );
+  });
+
+  test("gives inline Markdown its own smaller parser budget", () => {
+    const source = `${"x".repeat(MAX_INLINE_MARKDOWN_RENDER_CHARACTERS)}UNPARSED_INLINE_TAIL`;
+    const { container } = render(<InlineMessageMarkdown content={source} />);
+
+    expect(container.textContent).not.toContain("UNPARSED_INLINE_TAIL");
+    expect(container.querySelector('[data-markdown-truncated="true"]')?.textContent).toContain(
+      String(source.length - MAX_INLINE_MARKDOWN_RENDER_CHARACTERS),
+    );
   });
 });
 

@@ -46,6 +46,9 @@ export interface MultiReviewLaunchDefaults {
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  /** Exact reviewer rows a plain Multi Review starts with. */
+  reviewerDefaults?: MultiReviewRowDefaults[];
+  /** @deprecated Compatibility for callers that have not moved to reviewerDefaults. */
   secondReviewerDefaults?: MultiReviewRowDefaults;
   fixModelDefaults?: MultiReviewRowDefaults;
 }
@@ -119,6 +122,7 @@ function catalogWithConfiguredOpenCodeFallbacks(
 
   const configuredRows = [
     defaults,
+    ...(defaults.reviewerDefaults ?? []),
     defaults.secondReviewerDefaults,
     defaults.fixModelDefaults,
   ].filter((row): row is MultiReviewRowDefaults => row?.defaultAgent === "opencode");
@@ -151,6 +155,7 @@ function initialRows({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  reviewerDefaults,
   secondReviewerDefaults,
   fixModelDefaults,
 }: MultiReviewLaunchDefaults): { reviewers: PickerRow[]; fixModel: PickerRow } {
@@ -159,6 +164,7 @@ function initialRows({
     catalog,
     preferredModels,
     preferredReasoningEfforts,
+    reviewerDefaults,
     secondReviewerDefaults,
     fixModelDefaults,
   });
@@ -167,11 +173,14 @@ function initialRows({
     preferredModels,
     preferredReasoningEfforts,
   };
+  const configuredReviewers =
+    reviewerDefaults && reviewerDefaults.length > 0
+      ? reviewerDefaults
+      : [fallbackDefaults, secondReviewerDefaults ?? fallbackDefaults];
   return {
-    reviewers: [
-      initialRow(defaultAgent, resolvedCatalog, preferredModels, preferredReasoningEfforts),
-      initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, resolvedCatalog),
-    ],
+    reviewers: configuredReviewers.map((defaults) =>
+      initialConfiguredRow(defaults, fallbackDefaults, resolvedCatalog),
+    ),
     fixModel: initialConfiguredRow(fixModelDefaults, fallbackDefaults, resolvedCatalog),
   };
 }
@@ -301,6 +310,7 @@ export function MultiReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  reviewerDefaults,
   secondReviewerDefaults,
   fixModelDefaults,
   busy = false,
@@ -335,6 +345,7 @@ export function MultiReviewLaunchDialog({
       catalog,
       preferredModels,
       preferredReasoningEfforts,
+      reviewerDefaults,
       secondReviewerDefaults,
       fixModelDefaults,
     });
@@ -348,6 +359,7 @@ export function MultiReviewLaunchDialog({
     open,
     preferredModels,
     preferredReasoningEfforts,
+    reviewerDefaults,
     secondReviewerDefaults,
   ]);
 

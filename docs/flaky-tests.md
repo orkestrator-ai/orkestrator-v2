@@ -12,7 +12,7 @@ history rather than two partial ones.
 
 ## `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:5467`)
 
-- **Status:** open — third recorded occurrence of the same assertion, after
+- **Status:** open — recurring failure of the same assertion, after
   `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts`
   (`ActionBar.test.tsx:1704`, observed 2026-08-17, resolved in the 2026-08-27
   sweep and already reopened once as "recurred after the 2026-08-27 resolution
@@ -77,6 +77,19 @@ history rather than two partial ones.
   creation to `launch_terminal_job`; the recurrence still isolates to the same
   asynchronously loaded run-command shortcut while the synchronous shortcuts
   in the case pass.
+- **Recurrence (Multi Review reviewer-default fixes, 2026-09-01):** `bun run
+  test` failed the same `createTabMock` assertion at `ActionBar.test.tsx:5546`
+  after 14.84 ms. The mock again contained exactly the preceding plain,
+  native-agent, and Codex review-tab calls, with only the asynchronously loaded
+  run-command call absent. The web workspace group reported 5,647 passed, 1
+  skipped, and 1 failed across 248 files in 64.19 s; the root, bridge, and
+  protocol-lockfile groups passed. The immediate isolated rerun, `bun
+  --cwd=apps/web test src/components/layout/ActionBar.test.tsx --only-failures`,
+  passed all 200 tests with 782 assertions in 14.01 s. This change adds Multi
+  Review default resolution and tests in the same file but does not change the
+  run-command loader or keyboard-shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.IkAB8E`.
 
 ## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 
@@ -299,6 +312,13 @@ history rather than two partial ones.
   immediate isolated rerun, `cd apps/backend && bun test --preload
   ../../tests/setup-node.ts src/core/multi-review-service.test.ts`, passed all
   100 tests; the affected case passed in 50.84 ms.
+- **Recurrence:** on 2026-08-31, `bun run --cwd apps/backend test` ran the
+  backend suite with 18 Bun workers. The case failed after 583.72 ms; the
+  aggregate capture retained the test name but not its assertion detail. The
+  package reported 2,358 passed and 1 failed across 2,359 tests. The immediate
+  isolated rerun, `bun --cwd=apps/backend test --preload
+  ../../tests/setup-node.ts src/core/multi-review-service.test.ts`, passed all
+  100 tests and 446 assertions in 4.92 s; the affected case passed in 37.45 ms.
 
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:732`)
 

@@ -9,6 +9,7 @@
  */
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
+import { reviewPackageArtifactPath } from "./review-artifacts.js";
 import { isAgentPlatform } from "./agent-platforms.js";
 import type {
   AgentInteractionKind,
@@ -144,6 +145,31 @@ export interface ReviewPackage {
   context?: ReviewPackageContext;
 }
 
+/**
+ * Lightweight durable pointer to a backend-owned review package in the
+ * environment workspace. The full diff, file contents and validation output
+ * live only in `filePath`; snapshots keep the fields needed for recovery and
+ * the round summary UI.
+ */
+export interface ReviewPackageReference {
+  kind: "file";
+  id: string;
+  round: number;
+  preparedAt: string;
+  targetBranch: string;
+  baseRef: string;
+  headRef: string;
+  filePath: string;
+  sha256: string;
+  bytes: number;
+  changedFileCount: number;
+  diffCharacters: number;
+  limitations: string[];
+}
+
+/** Legacy snapshots may still contain the inline package written before file-backed packages. */
+export type PersistedReviewPackage = ReviewPackage | ReviewPackageReference;
+
 export interface LoopedReviewInteractionQuestion {
   prompt: string;
   options: string[];
@@ -230,7 +256,7 @@ export interface LoopedReviewRound {
   round: number;
   allowance: number;
   status: "preparing" | "reviewing" | "fixing" | "completed" | "failed";
-  package?: ReviewPackage;
+  package?: PersistedReviewPackage;
   passes: LoopedReviewPass[];
   startedAt: string;
   completedAt?: string;
@@ -483,7 +509,7 @@ export function isStartLoopedReviewInput(value: unknown): value is StartLoopedRe
   );
 }
 
-function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
+export function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
   if (!isRecord(value)) return false;
   const context = value;
   const allowed = new Set([
@@ -614,6 +640,53 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
   );
 }
 
+export function isReviewPackageReference(
+  value: unknown,
+  round?: number,
+): value is ReviewPackageReference {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "kind",
+      "id",
+      "round",
+      "preparedAt",
+      "targetBranch",
+      "baseRef",
+      "headRef",
+      "filePath",
+      "sha256",
+      "bytes",
+      "changedFileCount",
+      "diffCharacters",
+      "limitations",
+    ]) &&
+    value.kind === "file" &&
+    isPositiveInteger(value.round) &&
+    (round === undefined || value.round === round) &&
+    isBoundedNonEmptyString(value.id, LOOPED_REVIEW_MAX_ID_LENGTH) &&
+    typeof value.preparedAt === "string" &&
+    isSafeLoopedReviewTargetBranch(value.targetBranch) &&
+    isBoundedNonEmptyString(value.baseRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.headRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+    typeof value.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(value.sha256) &&
+    value.filePath === reviewPackageArtifactPath(value.id, value.sha256) &&
+    Number.isSafeInteger(value.bytes) &&
+    (value.bytes as number) > 0 &&
+    isNonNegativeInteger(value.changedFileCount) &&
+    isNonNegativeInteger(value.diffCharacters) &&
+    isStringArray(value.limitations)
+  );
+}
+
+export function isPersistedReviewPackage(
+  value: unknown,
+  round?: number,
+): value is PersistedReviewPackage {
+  return isReviewPackageReference(value, round) || isReviewPackage(value, round);
+}
+
 function isFindingOutcome(value: unknown): value is LoopedReviewFindingOutcome {
   return (
     isRecord(value) &&
@@ -677,7 +750,7 @@ function isLoopedReviewRound(value: unknown): value is LoopedReviewRound {
       value.status === "failed") &&
     typeof value.startedAt === "string" &&
     isOptionalString(value.completedAt) &&
-    (value.package === undefined || isReviewPackage(value.package, value.round)) &&
+    (value.package === undefined || isPersistedReviewPackage(value.package, value.round)) &&
     Array.isArray(value.passes) &&
     value.passes.length <= LOOPED_REVIEW_MAX_ALLOWANCE &&
     value.passes.every(isLoopedReviewPass) &&

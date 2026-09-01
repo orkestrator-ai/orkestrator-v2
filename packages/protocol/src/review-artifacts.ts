@@ -10,9 +10,21 @@
  */
 
 export const REVIEW_ARTIFACT_ROOT = ".orkestrator/review-artifacts";
+export const REVIEW_PACKAGE_FILENAME = "review-package.json";
 
 export function reviewArtifactDirectory(packageId: string): string {
   return `${REVIEW_ARTIFACT_ROOT}/${packageId}`;
+}
+
+/**
+ * The backend-owned package file every reviewer in one round reads.
+ *
+ * New packages include their digest in the filename. A stale controller can
+ * therefore publish only a different immutable object; it cannot replace the
+ * bytes named by an already-persisted reference.
+ */
+export function reviewPackageArtifactPath(packageId: string, sha256?: string): string {
+  return `${reviewArtifactDirectory(packageId)}/${sha256 ? `review-package-${sha256}.json` : REVIEW_PACKAGE_FILENAME}`;
 }
 
 /**

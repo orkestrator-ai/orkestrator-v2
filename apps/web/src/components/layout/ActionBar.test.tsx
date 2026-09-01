@@ -225,6 +225,7 @@ let currentEnabledAgentPlatforms:
   | Array<"claude" | "codex" | "cursor" | "grok" | "opencode">
   | undefined;
 let currentActionDefaults: ActionDefaults | undefined;
+let currentMultiReviewSettings: AgentSettingsTier["multiReview"];
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
 let currentRepositoryConfig: Record<
   string,
@@ -529,6 +530,7 @@ mock.module("@/stores", () => ({
             agentSettings: {
               defaultAgent: currentDefaultAgent,
               actionDefaults: currentActionDefaults,
+              multiReview: currentMultiReviewSettings,
               platforms: {
                 claude: { model: currentClaudeModel, fastMode: currentClaudeFastMode },
                 codex: {
@@ -861,6 +863,7 @@ beforeEach(() => {
   currentDefaultAgent = "codex";
   currentEnabledAgentPlatforms = undefined;
   currentActionDefaults = undefined;
+  currentMultiReviewSettings = undefined;
   currentClaudeModel = "claude-default-model";
   currentCodexModel = "codex-default-model";
   currentClaudeFastMode = undefined;
@@ -4783,6 +4786,16 @@ describe("ActionBar configured action defaults", () => {
         reasoningEffort: "xhigh",
       },
     };
+    currentMultiReviewSettings = {
+      reviewerCount: 3,
+      additionalReviewers: [
+        {
+          platform: "claude",
+          model: "claude-fable-5[1m]",
+          reasoningEffort: "xhigh",
+        },
+      ],
+    };
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
@@ -4794,7 +4807,7 @@ describe("ActionBar configured action defaults", () => {
       reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
       fixModel: { agent: string; model: string; reasoningEffort?: string };
     };
-    expect(launch.reviewers).toHaveLength(2);
+    expect(launch.reviewers).toHaveLength(3);
     expect(launch.reviewers[0]).toMatchObject({
       agent: "claude",
       model: "sonnet",
@@ -4803,6 +4816,11 @@ describe("ActionBar configured action defaults", () => {
     expect(launch.reviewers[1]).toMatchObject({
       agent: "codex",
       model: "gpt-5.4",
+      reasoningEffort: "xhigh",
+    });
+    expect(launch.reviewers[2]).toMatchObject({
+      agent: "claude",
+      model: "claude-fable-5[1m]",
       reasoningEffort: "xhigh",
     });
     expect(launch.fixModel).toMatchObject({
@@ -4867,6 +4885,7 @@ describe("ActionBar configured action defaults", () => {
     currentActionDefaults = {
       review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
+    currentMultiReviewSettings = { reviewerCount: 3 };
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
@@ -4879,12 +4898,70 @@ describe("ActionBar configured action defaults", () => {
     expect(launch.reviewers).toEqual([
       expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
       expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
+      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
     ]);
     expect(launch.fixModel).toMatchObject({
       agent: "claude",
       model: "sonnet",
       reasoningEffort: "high",
     });
+  });
+
+  test("falls back to Review when an additional reviewer names a disabled platform", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentEnabledAgentPlatforms = ["codex"];
+    currentActionDefaults = {
+      review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+    };
+    currentMultiReviewSettings = {
+      reviewerCount: 3,
+      additionalReviewers: [{ platform: "claude", model: "sonnet" }],
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
+    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
+      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
+    };
+    expect(launch.reviewers).toHaveLength(3);
+    expect(launch.reviewers[2]).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+  });
+
+  test("launches exactly one reviewer when the saved count is one", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+    };
+    currentMultiReviewSettings = { reviewerCount: 1 };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
+    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
+      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
+    };
+    expect(launch.reviewers).toEqual([
+      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
+    ]);
   });
 
   /**

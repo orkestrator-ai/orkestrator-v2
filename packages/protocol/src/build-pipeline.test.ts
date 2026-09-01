@@ -1796,6 +1796,36 @@ describe("build pipeline protocol", () => {
         reviewPackage: { ...reviewPackage, changedFiles: [null] },
       }),
     ).toBe(false);
+
+    const referenceSha256 = "a".repeat(64);
+    const reference = {
+      kind: "file",
+      id: "review-package-build-abc-r1",
+      round: 1,
+      preparedAt: "2026-08-29T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "0".repeat(40),
+      headRef: "1".repeat(40),
+      filePath: `.orkestrator/review-artifacts/review-package-build-abc-r1/review-package-${referenceSha256}.json`,
+      sha256: referenceSha256,
+      bytes: 1024,
+      changedFileCount: 1,
+      diffCharacters: 37,
+      limitations: [],
+    };
+    expect(isBuildPipeline({ ...snapshot(), reviewPackage: reference })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        reviewPackage: { ...reference, filePath: "review-package.json" },
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        reviewPackage: { ...reference, completeDiff: "must not remain inline" },
+      }),
+    ).toBe(false);
   });
 
   test("accepts the blank environmentId a pipeline holds before provisioning", () => {

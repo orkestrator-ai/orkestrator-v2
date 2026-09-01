@@ -80,6 +80,7 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
+import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useProjectStore, useUIStore } from "@/stores";
@@ -244,109 +245,120 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderReview = () => (
     <div className="max-w-3xl space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Eye className="h-4 w-4" />
-            Code review instruction
-          </h3>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Applied to normal, build-pipeline, and looped native reviews. Orkestrator adds the fixed
-            safety, workflow, and output-schema contract around it.
-          </p>
-        </div>
-        <span
-          className={cn(
-            "w-fit rounded-full border px-2 py-1 font-mono text-[10px] font-medium uppercase tracking-wider",
-            isUsingDefaultReviewInstruction
-              ? "border-zinc-700 bg-zinc-900 text-muted-foreground"
-              : "border-blue-500/40 bg-blue-500/10 text-blue-300",
-          )}
-        >
-          {isUsingDefaultReviewInstruction ? "Default" : "Custom"}
-        </span>
-      </div>
+      <MultiReviewDefaultsEditor
+        tier={agentSettings}
+        onChange={setAgentSettings}
+        tiers={{ global: agentSettings }}
+        enabledPlatforms={enabledAgentPlatforms}
+        catalog={catalog}
+        disabled={isSaving}
+      />
 
-      <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
-        <div className="flex flex-col gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <Label htmlFor="review-instruction" className="text-sm font-medium">
-              Review instruction
-            </Label>
-            <p id="review-instruction-description" className="text-xs text-muted-foreground">
-              Describe what reviewers should emphasize. Use{" "}
-              <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-[11px] text-zinc-300">
-                {REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN}
-              </code>{" "}
-              for the repository&apos;s PR base branch.
+      <div className="border-t border-zinc-800/80 pt-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Eye className="h-4 w-4" />
+              Code review instruction
+            </h3>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+              Applied to normal, build-pipeline, and looped native reviews. Orkestrator adds the
+              fixed safety, workflow, and output-schema contract around it.
             </p>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 w-fit gap-1.5 text-xs"
-            onClick={() => setReviewInstruction(DEFAULT_REVIEW_INSTRUCTION)}
-            disabled={isUsingDefaultReviewInstruction || isSaving}
+          <span
+            className={cn(
+              "w-fit rounded-full border px-2 py-1 font-mono text-[10px] font-medium uppercase tracking-wider",
+              isUsingDefaultReviewInstruction
+                ? "border-zinc-700 bg-zinc-900 text-muted-foreground"
+                : "border-blue-500/40 bg-blue-500/10 text-blue-300",
+            )}
           >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Reset to default
-          </Button>
-        </div>
-
-        <Textarea
-          id="review-instruction"
-          aria-describedby={reviewInstructionDescribedBy}
-          aria-invalid={reviewInstructionValidationError ? true : undefined}
-          value={reviewInstruction}
-          onChange={(event) => setReviewInstruction(event.target.value)}
-          maxLength={REVIEW_INSTRUCTION_MAX_LENGTH}
-          disabled={isSaving}
-          spellCheck={false}
-          className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
-        />
-
-        <div
-          id="review-instruction-status"
-          aria-live="polite"
-          className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-900/40 px-4 py-2 font-mono text-[10px] text-muted-foreground"
-        >
-          <span>
-            {reviewInstruction.includes(REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN)
-              ? "Target branch token active"
-              : "No dynamic target branch token"}
-          </span>
-          <span>
-            {reviewInstruction.length.toLocaleString()} /{" "}
-            {REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters
-            {` · ~${reviewInstructionApproxTokens.toLocaleString()} tokens`}
+            {isUsingDefaultReviewInstruction ? "Default" : "Custom"}
           </span>
         </div>
+
+        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+          <div className="flex flex-col gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <Label htmlFor="review-instruction" className="text-sm font-medium">
+                Review instruction
+              </Label>
+              <p id="review-instruction-description" className="text-xs text-muted-foreground">
+                Describe what reviewers should emphasize. Use{" "}
+                <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-[11px] text-zinc-300">
+                  {REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN}
+                </code>{" "}
+                for the repository&apos;s PR base branch.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-fit gap-1.5 text-xs"
+              onClick={() => setReviewInstruction(DEFAULT_REVIEW_INSTRUCTION)}
+              disabled={isUsingDefaultReviewInstruction || isSaving}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset to default
+            </Button>
+          </div>
+
+          <Textarea
+            id="review-instruction"
+            aria-describedby={reviewInstructionDescribedBy}
+            aria-invalid={reviewInstructionValidationError ? true : undefined}
+            value={reviewInstruction}
+            onChange={(event) => setReviewInstruction(event.target.value)}
+            maxLength={REVIEW_INSTRUCTION_MAX_LENGTH}
+            disabled={isSaving}
+            spellCheck={false}
+            className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
+          />
+
+          <div
+            id="review-instruction-status"
+            aria-live="polite"
+            className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-900/40 px-4 py-2 font-mono text-[10px] text-muted-foreground"
+          >
+            <span>
+              {reviewInstruction.includes(REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN)
+                ? "Target branch token active"
+                : "No dynamic target branch token"}
+            </span>
+            <span>
+              {reviewInstruction.length.toLocaleString()} /{" "}
+              {REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters
+              {` · ~${reviewInstructionApproxTokens.toLocaleString()} tokens`}
+            </span>
+          </div>
+        </div>
+
+        {reviewInstructionWarningVisible && (
+          <p
+            id="review-instruction-warning"
+            className="flex items-start gap-1.5 text-xs text-amber-300"
+          >
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Long review instructions are repeated across review passes and can slow reviews. Keeping
+            them to {REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer is
+            recommended; legacy values remain supported.
+          </p>
+        )}
+
+        {reviewInstructionValidationError && (
+          <p className="flex items-start gap-1.5 text-xs text-destructive">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {reviewInstructionValidationError}
+          </p>
+        )}
+
+        <p className="text-xs leading-relaxed text-muted-foreground/70">
+          The instruction cannot remove or override the fixed safety rules, review workflow, or JSON
+          schema. Changes apply to newly started review sessions.
+        </p>
       </div>
-
-      {reviewInstructionWarningVisible && (
-        <p
-          id="review-instruction-warning"
-          className="flex items-start gap-1.5 text-xs text-amber-300"
-        >
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Long review instructions are repeated across review passes and can slow reviews. Keeping
-          them to {REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer is
-          recommended; legacy values remain supported.
-        </p>
-      )}
-
-      {reviewInstructionValidationError && (
-        <p className="flex items-start gap-1.5 text-xs text-destructive">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {reviewInstructionValidationError}
-        </p>
-      )}
-
-      <p className="text-xs leading-relaxed text-muted-foreground/70">
-        Only this review preference is editable. It cannot remove or override the fixed safety
-        rules, review workflow, or JSON schema. Changes apply to newly started review sessions.
-      </p>
     </div>
   );
 

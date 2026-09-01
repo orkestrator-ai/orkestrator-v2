@@ -31,6 +31,11 @@ import {
 const ADDRESS_REVIEW_FINDINGS_TAIL =
   "Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing.";
 
+export const REVIEW_PREPARATION_OUTPUT_CONTRACT =
+  "Send interim progress only through the provider's commentary or update channel, using ordinary prose sentences. " +
+  "Never send a JSON object or array as an interim update, and do not use the final-response channel for progress. " +
+  "After every implementation step, validation command, tool call, and subagent has finished, make the final assistant response the only JSON object, containing the provider-enforced preparation metadata.";
+
 function numberedComment(text: string, index: number): string {
   const marker = `${index + 1}. `;
   const continuationIndent = " ".repeat(marker.length);
@@ -181,7 +186,8 @@ After implementation is complete, prepare the single evidence package that all r
 - Do not generate, copy, summarize, redact, or truncate the Git diff or changed-file contents. The backend owns that evidence.
 - Create the Git-excluded directory \`${artifactDirectory}\`.
 - Run the relevant full tests, typechecking, and build validation exactly once after the final commit. Redirect each command's exact stdout and stderr bytes to deterministic files named \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on in that directory. Capture the original exit code and elapsed milliseconds even on failure; continue preparing the remaining evidence.
-- Return only the provider-enforced preparation metadata. For validation entry N, use the exact workspace-relative artifact paths for its 1-based ordinal; entry 1 is \`${first.stdoutPath}\` and \`${first.stderrPath}\`, entry 2 is \`${second.stdoutPath}\` and \`${second.stderrPath}\`. Count skipped entries in the ordinal.
+- ${REVIEW_PREPARATION_OUTPUT_CONTRACT}
+- For validation entry N, use the exact workspace-relative artifact paths for its 1-based ordinal; entry 1 is \`${first.stdoutPath}\` and \`${first.stderrPath}\`, entry 2 is \`${second.stdoutPath}\` and \`${second.stderrPath}\`. Count skipped entries in the ordinal.
 - A skipped command has \`status="skipped"\`, \`exitCode=null\`, null artifact paths, and a non-empty \`limitation\`. A command that ran has its actual integer exit code, both artifact paths, and \`status="passed"\` only for exit code 0.
 - \`uncommittedFiles\` must list every remaining non-ignored Git status path and its real exclusion reason. Review cannot begin while this list is non-empty. Do not include Git refs, diffs, hashes, or file contents.
 

@@ -25,6 +25,7 @@ import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent
 
 import {
   isLoopedReviewWorkflow,
+  isReviewPackageReference,
   LOOPED_REVIEW_WORKFLOW_VERSION,
 } from "@orkestrator/protocol/review-workflow";
 
@@ -1385,6 +1386,7 @@ exit 0
     http,
     isImmutableCommitRef,
     isLoopedReviewWorkflow,
+    isReviewPackageReference,
     isPaneLayoutRevisionConflict,
     isProcessRunning,
     isolateCodexBinaryLookup,

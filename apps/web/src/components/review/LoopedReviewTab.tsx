@@ -924,7 +924,9 @@ export function LoopedReviewTab({
                         <dt className="text-xs text-muted-foreground">Changed files</dt>
                         <dd className="text-xs">
                           {countLabel(
-                            selectedStage.round.package.changedFiles.length,
+                            "kind" in selectedStage.round.package
+                              ? selectedStage.round.package.changedFileCount
+                              : selectedStage.round.package.changedFiles.length,
                             "changed file",
                           )}
                         </dd>
@@ -932,8 +934,11 @@ export function LoopedReviewTab({
                       <div>
                         <dt className="text-xs text-muted-foreground">Diff size</dt>
                         <dd className="text-xs">
-                          {selectedStage.round.package.completeDiff.length.toLocaleString()} diff
-                          characters
+                          {("kind" in selectedStage.round.package
+                            ? selectedStage.round.package.diffCharacters
+                            : selectedStage.round.package.completeDiff.length
+                          ).toLocaleString()}{" "}
+                          diff characters
                         </dd>
                       </div>
                     </dl>

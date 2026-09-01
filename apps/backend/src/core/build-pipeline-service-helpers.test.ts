@@ -287,6 +287,7 @@ async function withService(
     if (command === "generate_looped_review_package") {
       return testGeneratedReviewPackage(args) as T;
     }
+    if (command === "verify_looped_review_package") return { valid: true } as T;
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -406,9 +407,13 @@ describe("BuildPipelineService", () => {
       const reviewing = await pipeline(storage, started.id);
       expect(reviewing.phase).toBe("reviewing");
       expect(reviewing.reviewPackage).toMatchObject({
+        kind: "file",
         headRef: "1111111111111111111111111111111111111111",
-        commit: { sha: "1111111111111111111111111111111111111111" },
       });
+      expect("filePath" in reviewing.reviewPackage!).toBe(true);
+      expect(
+        "filePath" in reviewing.reviewPackage! ? reviewing.reviewPackage.filePath : "",
+      ).toContain(".orkestrator/review-artifacts/");
       expect(invocations.some((entry) => entry.command === "generate_looped_review_package")).toBe(
         true,
       );
@@ -417,6 +422,7 @@ describe("BuildPipelineService", () => {
       expect(provider.sent.at(-1)?.prompt).toContain(
         "Do not modify files, run git, rerun validation",
       );
+      expect(provider.sent.at(-1)?.prompt).toContain("review-package-");
     });
   });
 

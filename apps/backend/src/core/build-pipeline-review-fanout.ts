@@ -88,7 +88,11 @@ export interface BuildPipelineReviewFanoutDeps {
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
   ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string }>;
-  refreshTranscript(session: PipelineSession, provider: BuildPipelineProvider): Promise<boolean>;
+  refreshTranscript(
+    session: PipelineSession,
+    provider: BuildPipelineProvider,
+    messages?: readonly unknown[],
+  ): Promise<boolean>;
   shouldPersistTranscript(session: PipelineSession): boolean;
   /** The branch the diff is reviewed against, as the review prompt states it. */
   targetBranch(pipeline: BuildPipeline): Promise<string>;
@@ -200,8 +204,8 @@ export class BuildPipelineReviewFanout {
         resolveUnattendedReviewerInteractions(provider, providerSessionId, async () => {}),
       abandonSession: (selection, providerSessionId) =>
         this.abandonSession(pipeline, selection.agent as BuildPipelineAgent, providerSessionId),
-      onReviewerObserved: (reviewer, index, provider) =>
-        this.mirrorReviewerSession(pipeline, reviewer, index, provider),
+      onReviewerObserved: (reviewer, index, provider, messages) =>
+        this.mirrorReviewerSession(pipeline, reviewer, index, provider, messages),
       progress: this.deps.progress,
       stallWarningMs: this.deps.stallWarningMs,
       stallAbandonMs: this.deps.stallAbandonMs,
@@ -220,6 +224,7 @@ export class BuildPipelineReviewFanout {
     reviewer: ReviewerRecord,
     index: number,
     provider: BuildPipelineProvider,
+    messages?: readonly unknown[],
   ): Promise<void> {
     if (!reviewer.providerSessionId || !reviewer.sessionKey) return;
     const session = this.ensureSession(pipeline, {
@@ -229,7 +234,7 @@ export class BuildPipelineReviewFanout {
       label: `Review ${index + 1}`,
       startedAt: reviewer.startedAt,
     });
-    const changed = await this.deps.refreshTranscript(session, provider);
+    const changed = await this.deps.refreshTranscript(session, provider, messages);
     const status = reviewer.status === "running" ? "running" : "idle";
     const statusChanged = session.status !== status;
     if (statusChanged || (changed && this.deps.shouldPersistTranscript(session))) {

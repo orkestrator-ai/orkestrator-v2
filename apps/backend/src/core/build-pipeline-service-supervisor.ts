@@ -94,7 +94,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           await this.save(pipeline, pipeline.backendRevision);
         },
         stepSettings: (pipeline, sessionPhase) => this.stepSettings(pipeline, sessionPhase),
-        refreshTranscript: (session, provider) => this.refreshTranscript(session, provider),
+        refreshTranscript: (session, provider, messages) =>
+          this.refreshTranscript(session, provider, messages),
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
         targetBranch: async (pipeline) => {
           const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
@@ -693,8 +694,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected async refreshTranscript(
     session: PipelineSession,
     provider: BuildPipelineProvider,
+    observedMessages?: readonly unknown[],
   ): Promise<boolean> {
-    const messages = await provider.messages(session.sdkSessionId);
+    const messages = observedMessages
+      ? Array.from(observedMessages)
+      : await provider.messages(session.sdkSessionId);
     const fingerprint = transcriptFingerprint(messages);
     // A snapshot restored before fingerprints existed has none, so fall back to
     // recomputing it from the stored transcript exactly once.

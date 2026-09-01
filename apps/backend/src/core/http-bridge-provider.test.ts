@@ -1301,6 +1301,72 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test.each([
+    ["claude" as const, claudeConnection, "http://claude.test/session/session-1"],
+    ["codex" as const, codexConnection, "http://codex.test/session/session-1/status"],
+  ])("reads %s status and cumulative usage in one request", async (_agent, connection, url) => {
+    const { provider, requests } = httpProvider(
+      () =>
+        Response.json({
+          status: "running",
+          contextUsage: { usedTokens: 7_000, sessionTokens: 12_345 },
+        }),
+      connection,
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toMatchObject({
+      status: "running",
+      contextUsage: { usedTokens: 7_000, sessionTokens: 12_345 },
+    });
+    expect(requests.map((request) => request.url)).toEqual([url]);
+  });
+
+  test("does not expose occupancy-only bridge usage as cumulative consumption", async () => {
+    const cursor = httpProvider(
+      () => Response.json({ status: "idle", contextUsage: { usedTokens: 8_000 } }),
+      cursorConnection,
+    );
+    await expect(readProviderStatus(cursor.provider, "session-1")).resolves.toEqual({
+      status: "idle",
+      usagePending: true,
+    });
+
+    const pi = httpProvider(
+      () => Response.json({ status: "idle", contextUsage: { usedTokens: 8_000 } }),
+      piConnection,
+    );
+    await expect(readProviderStatus(pi.provider, "session-1")).resolves.toEqual({
+      status: "idle",
+    });
+  });
+
+  test("returns missing or usage-free observations without inventing usage", async () => {
+    const missing = httpProvider(() => new Response(null, { status: 404 }), codexConnection);
+    await expect(readProviderStatus(missing.provider, "session-1")).resolves.toEqual({
+      status: "missing",
+    });
+
+    const noUsage = httpProvider(() => Response.json({ status: "running" }), codexConnection);
+    await expect(readProviderStatus(noUsage.provider, "session-1")).resolves.toEqual({
+      status: "running",
+    });
+  });
+
+  test("bounds and validates the combined status observation", async () => {
+    const malformed = httpProvider(() => new Response("not json"), codexConnection);
+    await expect(readProviderStatus(malformed.provider, "session-1")).rejects.toThrow(
+      "codex status read is malformed",
+    );
+
+    const oversized = httpProvider(
+      () => new Response("x".repeat(16 * 1024 * 1024 + 1)),
+      codexConnection,
+    );
+    await expect(readProviderStatus(oversized.provider, "session-1")).rejects.toThrow(
+      "codex status read is oversized",
+    );
+  });
+
   test("readProviderStatus still rejects a transport fault", async () => {
     const { provider } = httpProvider(() => new Response("boom", { status: 500 }), codexConnection);
 

@@ -96,6 +96,16 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ model: "default" }))).toBe(true);
     expect(isReviewerRecord(reviewer({ modelUnpinned: "yes" as never }))).toBe(false);
   });
+
+  test("accepts a non-negative token count and rejects malformed usage", () => {
+    expect(isReviewerRecord(reviewer({ tokenCount: 12_345 }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ tokenCount: -1 }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ tokenCount: 1.5 }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ tokenCount: Number.NaN }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ tokenCount: Number.MAX_SAFE_INTEGER + 1 }))).toBe(false);
+    expect(isReviewerRecord(reviewer({ usageFinalizationPolls: 12 }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ usageFinalizationPolls: 13 }))).toBe(false);
+  });
 });
 
 describe("reviewer lists", () => {

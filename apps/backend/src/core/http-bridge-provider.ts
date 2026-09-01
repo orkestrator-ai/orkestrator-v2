@@ -10,6 +10,7 @@ import type {
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
   ProviderSendOptions,
+  ProviderSessionObservation,
   ProviderSessionRegistration,
   ProviderSteerDispatchStatus,
   ProviderStatus,
@@ -534,23 +535,46 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * fires either way and the detail is available to it.
    */
   async status(sessionId: string): Promise<ProviderStatus> {
+    return (await this.observeSession(sessionId)).status;
+  }
+
+  async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
     const path =
       this.agent === "claude"
         ? `/session/${encodeURIComponent(sessionId)}`
         : `/session/${encodeURIComponent(sessionId)}/status`;
     const response = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
-    if (response.status === 404) return "missing";
+    if (response.status === 404) return { status: "missing" };
     assertOk(response, `${this.agent} status read`);
-    const body = (await response.json()) as { status?: unknown; error?: unknown };
+    const body =
+      asRecord(
+        await boundedJson(response, `${this.agent} status read`, {
+          remaining: 16 * 1024 * 1024,
+        }),
+      ) ?? {};
     if (body.status === "error" && typeof body.error === "string") {
       const detail = body.error.trim().slice(0, 4_000);
       if (detail) {
         throw new ProviderSessionFailedError(this.agent, detail);
       }
     }
-    return body.status === "running" || body.status === "idle" || body.status === "error"
-      ? body.status
-      : "error";
+    const status =
+      body.status === "running" || body.status === "idle" || body.status === "error"
+        ? body.status
+        : "error";
+    const contextUsage = normalizeProviderContextUsage(body.contextUsage);
+    return {
+      status,
+      // sessionTokens has explicit cumulative semantics. Do not expose an
+      // occupancy-only bridge snapshot as review consumption.
+      ...(contextUsage?.sessionTokens !== undefined ? { contextUsage } : {}),
+      ...(this.agent === "cursor" &&
+      status === "idle" &&
+      contextUsage !== undefined &&
+      contextUsage.sessionTokens === undefined
+        ? { usagePending: true }
+        : {}),
+    };
   }
 
   /**

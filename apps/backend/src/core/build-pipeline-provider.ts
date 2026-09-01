@@ -29,6 +29,7 @@ export type {
   ProviderExecutionMode,
   ProviderInteractionObservationEvent,
   ProviderSendOptions,
+  ProviderSessionObservation,
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./native-agent-provider.js";

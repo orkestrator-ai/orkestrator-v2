@@ -474,6 +474,8 @@ export class MultiReviewService {
           delete reviewer.progressAt;
           delete reviewer.progressDigest;
           delete reviewer.stalledSince;
+          delete reviewer.tokenCount;
+          delete reviewer.usageFinalizationPolls;
           delete reviewer.startedAt;
           delete reviewer.completedAt;
         }
@@ -531,6 +533,8 @@ export class MultiReviewService {
             delete reviewer.progressAt;
             delete reviewer.progressDigest;
             delete reviewer.stalledSince;
+            delete reviewer.tokenCount;
+            delete reviewer.usageFinalizationPolls;
             delete reviewer.completedAt;
           }
           workflow.phase = "reviewing";
@@ -671,6 +675,8 @@ export class MultiReviewService {
         delete reviewer.progressAt;
         delete reviewer.progressDigest;
         delete reviewer.stalledSince;
+        delete reviewer.tokenCount;
+        delete reviewer.usageFinalizationPolls;
         delete reviewer.report;
         delete reviewer.error;
         delete reviewer.startedAt;
@@ -1354,6 +1360,7 @@ export class MultiReviewService {
         this.resolveUnattendedInteractions(workflow, token, provider, providerSessionId),
       abandonSession: (selection, providerSessionId) =>
         this.abandonSession(workflow, selection, providerSessionId),
+      captureReviewerUsage: true,
       progress: this.progress,
       stallWarningMs: this.stallWarningMs(),
       stallAbandonMs: this.stallAbandonMs(),

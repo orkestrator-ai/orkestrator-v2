@@ -34,6 +34,8 @@ import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { formatElapsed } from "@/lib/format-elapsed";
+import { formatTokenCount } from "@/lib/context-usage";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -150,6 +152,25 @@ export function reviewerProgressSummary(reviewers: MultiReviewWorkflow["reviewer
   return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
 }
 
+export function reviewerRuntimeSummary(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+  now = Date.now(),
+): string | null {
+  if (!reviewer.startedAt) return null;
+  const startedAt = Date.parse(reviewer.startedAt);
+  if (!Number.isFinite(startedAt)) return null;
+  const running = reviewer.status === "running";
+  if (!running && reviewer.tokenCount === undefined) return null;
+  const completedAt = reviewer.completedAt ? Date.parse(reviewer.completedAt) : Number.NaN;
+  const end = running || !Number.isFinite(completedAt) ? now : completedAt;
+  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
+  const tokens =
+    reviewer.tokenCount === undefined
+      ? "Tokens pending"
+      : `${formatTokenCount(reviewer.tokenCount)} tokens`;
+  return `${elapsed} · ${tokens}`;
+}
+
 const NOTE_TONE_CLASS = {
   muted: "text-muted-foreground",
   warning: "text-amber-500",
@@ -179,8 +200,20 @@ function MultiReviewOverviewTab({
   const [customFixPending, setCustomFixPending] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
   const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
+  const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
   const mountedRef = useRef(false);
   const isActiveRef = useRef(isActive);
+
+  const hasRunningReviewer = workflow?.reviewers.some(
+    (reviewer) => reviewer.status === "running" && reviewer.startedAt,
+  );
+
+  useEffect(() => {
+    if (!isActive || !hasRunningReviewer) return;
+    setReviewPanelNow(Date.now());
+    const interval = window.setInterval(() => setReviewPanelNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasRunningReviewer, isActive]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -444,6 +477,7 @@ function MultiReviewOverviewTab({
             <div className="grid gap-2 sm:grid-cols-2">
               {workflow.reviewers.map((reviewer, index) => {
                 const note = reviewerStatusNote(reviewer);
+                const runtimeSummary = reviewerRuntimeSummary(reviewer, reviewPanelNow);
                 const stoppable = reviewer.status === "pending" || reviewer.status === "running";
                 const canRestart =
                   (workflow.phase === "reviewing" ||
@@ -501,6 +535,14 @@ function MultiReviewOverviewTab({
                               {reviewer.model}
                               {reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}
                             </p>
+                            {runtimeSummary ? (
+                              <p
+                                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-cyan-300/75"
+                                aria-label={`Reviewer ${index + 1} runtime and token usage`}
+                              >
+                                {runtimeSummary}
+                              </p>
+                            ) : null}
                             {/* The workflow error generalizes a shared cause; this is
                             the only place the reviewer's own outcome is legible. */}
                             {note ? (

@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
   REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS,
+  REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
   REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS,
   REVIEW_FANOUT_MAX_SNAPSHOT_PATHS,
   reviewersSettled,
@@ -568,6 +569,8 @@ export interface ReviewFanoutHost {
   ): Promise<void>;
   /** Best-effort abort of a session the workflow is discarding. */
   abandonSession(selection: ReviewerModelSelection, providerSessionId: string): Promise<void>;
+  /** Multi Review renders reviewer usage; pipeline fanout deliberately does not. */
+  readonly captureReviewerUsage?: boolean;
   /**
    * Lets an owner mirror a reviewer's transcript into its own read model.
    *
@@ -579,6 +582,7 @@ export interface ReviewFanoutHost {
     reviewer: ReviewerRecord,
     index: number,
     provider: BuildPipelineProvider,
+    messages?: readonly unknown[],
   ): Promise<void>;
   readonly progress: MultiReviewProgressTracker;
   readonly stallWarningMs?: number;
@@ -719,6 +723,8 @@ export class ReviewFanoutRunner {
       reviewer.dispatchState = "prepared";
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
+      delete reviewer.tokenCount;
+      delete reviewer.usageFinalizationPolls;
       delete reviewer.progressAt;
       delete reviewer.progressDigest;
       delete reviewer.stalledSince;
@@ -792,15 +798,20 @@ export class ReviewFanoutRunner {
     await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      reviewer.providerSessionId,
-    );
+    const observation = await readProviderStatus(provider, reviewer.providerSessionId);
+    const { status, error: statusDetail } = observation;
     await host.assertFence();
-    await this.mirrorTranscript(reviewer, index, provider);
+    const messages = this.readReviewerMessages(reviewer, provider, status);
+    await this.mirrorTranscript(reviewer, index, provider, messages);
+    const usageChanged = await this.refreshReviewerUsage(
+      reviewer,
+      provider,
+      observation.contextUsage,
+      messages,
+    );
     if (status === "running") {
       await this.clearStall(reviewer);
-      return this.observeReviewerProgress(provider, reviewer);
+      return this.observeReviewerProgress(provider, reviewer, messages, usageChanged);
     }
     if (status === "blocked") {
       // Every unattended interaction was already resolved above, and a provider
@@ -838,12 +849,22 @@ export class ReviewFanoutRunner {
     if (!parsed.success) {
       return this.prepareReviewerReportRepair(reviewer, parsed.error);
     }
+    if (
+      host.captureReviewerUsage &&
+      observation.usagePending === true &&
+      (reviewer.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+    ) {
+      reviewer.usageFinalizationPolls = (reviewer.usageFinalizationPolls ?? 0) + 1;
+      await host.save();
+      return "continue";
+    }
     reviewer.report = attributeReportFindings(parsed.data, reviewer);
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
     delete reviewer.schemaRepairPrompt;
     delete reviewer.continuationPrompt;
     delete reviewer.idleResultPolls;
+    delete reviewer.usageFinalizationPolls;
     delete reviewer.stalledSince;
     this.host.progress.forget(reviewer.providerSessionId);
     delete reviewer.progressDigest;
@@ -871,15 +892,78 @@ export class ReviewFanoutRunner {
     reviewer: ReviewerRecord,
     index: number,
     provider: BuildPipelineProvider,
+    messages?: Promise<unknown[]>,
   ): Promise<void> {
     if (!this.host.onReviewerObserved) return;
     try {
-      await this.host.onReviewerObserved(reviewer, index, provider);
+      await this.host.onReviewerObserved(
+        reviewer,
+        index,
+        provider,
+        messages ? await messages : undefined,
+      );
     } catch (error) {
       console.warn(
         "[review-fanout] Mirroring a reviewer transcript failed:",
         reviewFanoutErrorMessage(error),
       );
+    }
+  }
+
+  /** Shares one bounded transcript observation between mirroring, usage, and progress. */
+  private readReviewerMessages(
+    reviewer: ReviewerRecord,
+    provider: BuildPipelineProvider,
+    status: "running" | "blocked" | "idle" | "error" | "missing",
+  ): Promise<unknown[]> | undefined {
+    if (!reviewer.providerSessionId) return undefined;
+    const needsUsageMessages =
+      this.host.captureReviewerUsage === true && provider.usageFromMessages !== undefined;
+    if (!this.host.onReviewerObserved && status !== "running" && !needsUsageMessages) {
+      return undefined;
+    }
+    const limit = this.host.onReviewerObserved
+      ? undefined
+      : needsUsageMessages
+        ? provider.usageMessageLimit
+        : PROGRESS_TRANSCRIPT_TAIL_MESSAGES;
+    return provider.messages(reviewer.providerSessionId, limit === undefined ? {} : { limit });
+  }
+
+  /**
+   * Copies the provider's cumulative token counter into the durable workflow.
+   * Usage is presentation metadata: an unavailable meter must never fail an
+   * otherwise healthy review turn.
+   */
+  private async refreshReviewerUsage(
+    reviewer: ReviewerRecord,
+    provider: BuildPipelineProvider,
+    observedUsage: { sessionTokens?: number } | undefined,
+    messages: Promise<unknown[]> | undefined,
+  ): Promise<boolean> {
+    if (!this.host.captureReviewerUsage || !reviewer.providerSessionId) return false;
+    try {
+      const usage =
+        observedUsage ??
+        (provider.usageFromMessages && messages
+          ? provider.usageFromMessages(await messages)
+          : undefined);
+      const reported = usage?.sessionTokens;
+      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0) {
+        return false;
+      }
+      await this.host.assertFence();
+      const tokenCount = Math.max(reviewer.tokenCount ?? 0, reported);
+      if (reviewer.tokenCount === tokenCount) return false;
+      reviewer.tokenCount = tokenCount;
+      return true;
+    } catch (error) {
+      if (this.isFatal(error)) throw error;
+      console.warn(
+        "[review-fanout] Reading reviewer token usage failed:",
+        reviewFanoutErrorMessage(error),
+      );
+      return false;
     }
   }
 
@@ -905,13 +989,18 @@ export class ReviewFanoutRunner {
   private async observeReviewerProgress(
     provider: BuildPipelineProvider,
     reviewer: ReviewerRecord,
+    messages: Promise<unknown[]> | undefined,
+    usageChanged: boolean,
   ): Promise<"continue"> {
     const providerSessionId = reviewer.providerSessionId;
     if (!providerSessionId) return "continue";
     const previousDigest = reviewer.progressDigest;
     const observation = await this.host.progress.observe(
       providerSessionId,
-      () => provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
+      async () =>
+        messages
+          ? (await messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES)
+          : provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
       reviewer.progressDigest,
     );
     await this.host.assertFence();
@@ -922,7 +1011,7 @@ export class ReviewFanoutRunner {
     }
     const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
     if (elapsedMs === null) {
-      if (reviewer.progressDigest !== previousDigest) await this.host.save();
+      if (usageChanged || reviewer.progressDigest !== previousDigest) await this.host.save();
       return "continue";
     }
     if (elapsedMs >= this.stallAbandonMs()) {
@@ -943,7 +1032,7 @@ export class ReviewFanoutRunner {
       await this.host.save();
       return "continue";
     }
-    if (reviewer.progressDigest !== previousDigest) await this.host.save();
+    if (usageChanged || reviewer.progressDigest !== previousDigest) await this.host.save();
     return "continue";
   }
 

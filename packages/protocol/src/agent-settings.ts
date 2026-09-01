@@ -22,8 +22,10 @@ import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-pl
 import {
   ACTION_DEFAULT_KEYS,
   normalizeActionDefaults,
+  type AgentActionDefault,
   type ActionDefaults,
 } from "./action-defaults.js";
+import { REVIEW_FANOUT_MAX_REVIEWERS, REVIEW_FANOUT_MIN_REVIEWERS } from "./review-fanout.js";
 
 export type AgentLaunchMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
@@ -45,6 +47,16 @@ export interface AgentPlatformSettings {
   claudeNativeBackend?: ClaudeNativeBackend;
 }
 
+export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
+
+/** App-wide Multi Review choices beyond the two action defaults shown on Defaults. */
+export interface MultiReviewAgentSettings {
+  /** Number of reviewer sessions a plain Multi Review click starts. */
+  reviewerCount?: number;
+  /** Reviewer 3 onward. Null means use the first reviewer's resolved default. */
+  additionalReviewers?: Array<AgentActionDefault | null>;
+}
+
 /**
  * One tier's whole agent configuration.
  *
@@ -61,6 +73,7 @@ export interface AgentPlatformSettings {
 export interface AgentSettingsTier {
   defaultAgent?: AgentPlatform;
   actionDefaults?: ActionDefaults;
+  multiReview?: MultiReviewAgentSettings;
   platforms?: Partial<Record<AgentPlatform, AgentPlatformSettings>>;
 }
 
@@ -209,6 +222,32 @@ function normalizePlatformSettings(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeMultiReviewSettings(value: unknown): MultiReviewAgentSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const rawAdditional = Array.isArray(record.additionalReviewers) ? record.additionalReviewers : [];
+  const storedCount = record.reviewerCount;
+  const reviewerCount =
+    typeof storedCount === "number" &&
+    Number.isInteger(storedCount) &&
+    storedCount >= REVIEW_FANOUT_MIN_REVIEWERS &&
+    storedCount <= REVIEW_FANOUT_MAX_REVIEWERS
+      ? storedCount
+      : DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
+  const additionalCount = Math.max(0, reviewerCount - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT);
+  const additionalReviewers = rawAdditional.slice(0, additionalCount).map((entry) => {
+    if (entry === null) return null;
+    return normalizeActionDefaults({ review: entry }).review ?? null;
+  });
+  while (additionalReviewers.at(-1) === null) additionalReviewers.pop();
+
+  const normalized: MultiReviewAgentSettings = {
+    ...(reviewerCount !== DEFAULT_MULTI_REVIEW_REVIEWER_COUNT ? { reviewerCount } : {}),
+    ...(additionalReviewers.length > 0 ? { additionalReviewers } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 /**
  * Keep only well-formed values. Every settings dialog writes this object
  * wholesale, so an unknown platform key or a half-filled block must not reach
@@ -219,6 +258,7 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
   const record = value as Record<string, unknown>;
   const defaultAgent = isAgentPlatform(record.defaultAgent) ? record.defaultAgent : undefined;
   const actionDefaults = normalizeActionDefaults(record.actionDefaults);
+  const multiReview = normalizeMultiReviewSettings(record.multiReview);
 
   const platforms: Partial<Record<AgentPlatform, AgentPlatformSettings>> = {};
   const rawPlatforms =
@@ -233,6 +273,7 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
   return {
     ...(defaultAgent ? { defaultAgent } : {}),
     ...(Object.keys(actionDefaults).length > 0 ? { actionDefaults } : {}),
+    ...(multiReview ? { multiReview } : {}),
     ...(Object.keys(platforms).length > 0 ? { platforms } : {}),
   };
 }
@@ -243,6 +284,7 @@ export function isEmptyAgentSettings(tier: AgentSettingsTier | null | undefined)
   return (
     !tier.defaultAgent &&
     Object.keys(tier.actionDefaults ?? {}).length === 0 &&
+    !tier.multiReview &&
     Object.keys(tier.platforms ?? {}).length === 0
   );
 }

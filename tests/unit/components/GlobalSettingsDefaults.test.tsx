@@ -26,6 +26,13 @@ function savedActionDefaults(): ActionDefaults {
   return call?.agentSettings?.actionDefaults ?? {};
 }
 
+function savedAgentSettings() {
+  const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
+    | { agentSettings?: Record<string, unknown> }
+    | undefined;
+  return call?.agentSettings;
+}
+
 function openPicker(action: string) {
   fireEvent.pointerDown(
     screen.getByRole("combobox", { name: `${action} default agent, model and reasoning` }),
@@ -390,5 +397,217 @@ describe("GlobalSettings defaults section", () => {
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual(stored);
+  });
+
+  test("edits a two-column variable reviewer list shared with Defaults", async () => {
+    const view = render(<GlobalSettings activeSection="review" />);
+
+    const grid = screen.getByRole("group", { name: "Default Multi Review models" });
+    expect(grid.className).toContain("sm:grid-cols-2");
+    expect(grid.querySelectorAll("[data-multi-review-default-row]")).toHaveLength(2);
+
+    fireEvent.pointerDown(
+      screen.getByRole("combobox", {
+        name: "Reviewer 1 default agent, model and reasoning",
+      }),
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Use one more reviewer" }));
+    expect(grid.querySelectorAll("[data-multi-review-default-row]")).toHaveLength(3);
+    fireEvent.pointerDown(
+      screen.getByRole("combobox", {
+        name: "Reviewer 3 default agent, model and reasoning",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(savedAgentSettings()).toMatchObject({
+      actionDefaults: { review: { platform: "claude", model: "haiku" } },
+      multiReview: {
+        reviewerCount: 3,
+        additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+      },
+    });
+
+    view.rerender(<GlobalSettings activeSection="defaults" />);
+    expect(
+      screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
+        .textContent,
+    ).toContain("Haiku");
+  });
+
+  test("shows unset secondary reviewers as following the resolved Review default", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            defaultAgent: "codex",
+            actionDefaults: {
+              review: { platform: "claude", model: "haiku", reasoningEffort: "high" },
+            },
+            multiReview: { reviewerCount: 3 },
+          },
+        },
+      },
+    }));
+
+    render(<GlobalSettings activeSection="review" />);
+
+    expect(
+      screen.getByRole("combobox", {
+        name: "Reviewer 1 default agent, model and reasoning",
+      }).textContent,
+    ).toContain("Claude Code · Haiku");
+    for (const reviewer of [2, 3]) {
+      const label = screen.getByRole("combobox", {
+        name: `Reviewer ${reviewer} default agent, model and reasoning`,
+      }).textContent;
+      expect(label).toContain("Follows Review — Claude");
+      expect(label).toContain("Haiku");
+      expect(label).toContain("High");
+    }
+  });
+
+  test("decreasing to two reviewers discards trailing defaults and removes multiReview", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            multiReview: {
+              reviewerCount: 3,
+              additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+            },
+          },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use one fewer reviewer" }));
+    expect(
+      screen
+        .getByRole("group", { name: "Default Multi Review models" })
+        .querySelectorAll("[data-multi-review-default-row]"),
+    ).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(savedAgentSettings()?.multiReview).toBeUndefined();
+  });
+
+  test("resetting a middle reviewer preserves later reviewer positions", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            multiReview: {
+              reviewerCount: 4,
+              additionalReviewers: [
+                { platform: "codex", model: "gpt-5.4" },
+                { platform: "claude", model: "haiku" },
+              ],
+            },
+          },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+
+    const rows = screen
+      .getByRole("group", { name: "Default Multi Review models" })
+      .querySelectorAll<HTMLElement>("[data-multi-review-default-row]");
+    fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(savedAgentSettings()?.multiReview).toEqual({
+      reviewerCount: 4,
+      additionalReviewers: [null, { platform: "claude", model: "haiku" }],
+    });
+  });
+
+  test("resetting the only additional reviewer trims the trailing null", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            multiReview: {
+              reviewerCount: 3,
+              additionalReviewers: [{ platform: "codex", model: "gpt-5.4" }],
+            },
+          },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+
+    const rows = screen
+      .getByRole("group", { name: "Default Multi Review models" })
+      .querySelectorAll<HTMLElement>("[data-multi-review-default-row]");
+    fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(savedAgentSettings()?.multiReview).toEqual({ reviewerCount: 3 });
+  });
+
+  test("disables the reviewer-count controls at both bounds", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            multiReview: { reviewerCount: 1 },
+          },
+        },
+      },
+    }));
+    const view = render(<GlobalSettings activeSection="review" />);
+    expect(
+      (screen.getByRole("button", { name: "Use one fewer reviewer" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    view.unmount();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            multiReview: { reviewerCount: 32 },
+          },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+    expect(
+      (screen.getByRole("button", { name: "Use one more reviewer" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

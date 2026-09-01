@@ -79,6 +79,11 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useActionBarController } from "./useActionBarController";
+import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
+import {
+  MULTI_REVIEW_MAX_REVIEWERS,
+  MULTI_REVIEW_MIN_REVIEWERS,
+} from "@orkestrator/protocol/multi-review";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -348,6 +353,35 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
+  const storedReviewerCount =
+    config.global.agentSettings?.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
+  const multiReviewReviewerCount = Math.min(
+    MULTI_REVIEW_MAX_REVIEWERS,
+    Math.max(MULTI_REVIEW_MIN_REVIEWERS, storedReviewerCount),
+  );
+  const additionalReviewerDefaults =
+    config.global.agentSettings?.multiReview?.additionalReviewers ?? [];
+  const multiReviewReviewerDefaults = Array.from(
+    { length: multiReviewReviewerCount },
+    (_, index) => {
+      if (index === 0) return reviewLaunchDefaults;
+      if (index === 1) return review2LaunchDefaults ?? reviewLaunchDefaults;
+      const entry =
+        additionalReviewerDefaults[index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT] ?? undefined;
+      if (!entry?.platform || !enabledAgents.has(entry.platform)) return reviewLaunchDefaults;
+      return {
+        defaultAgent: entry.platform,
+        preferredModels: {
+          ...reviewLaunchDefaults.preferredModels,
+          ...(entry.model ? { [entry.platform]: entry.model } : {}),
+        },
+        preferredReasoningEfforts: {
+          ...reviewLaunchDefaults.preferredReasoningEfforts,
+          ...(entry.reasoningEffort ? { [entry.platform]: entry.reasoningEffort } : {}),
+        },
+      };
+    },
+  );
 
   /*
    * Declared once and placed twice. The desktop toolbar renders it on the
@@ -729,7 +763,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                             preferredModels: reviewLaunchDefaults.preferredModels,
                             preferredReasoningEfforts:
                               reviewLaunchDefaults.preferredReasoningEfforts,
-                            secondReviewerDefaults: review2LaunchDefaults,
+                            reviewerDefaults: multiReviewReviewerDefaults,
                             fixModelDefaults: fixReviewIssuesLaunchDefaults,
                           }),
                         );
@@ -1348,7 +1382,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         catalog={reviewModelCatalog}
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
-        secondReviewerDefaults={review2LaunchDefaults}
+        reviewerDefaults={multiReviewReviewerDefaults}
         fixModelDefaults={fixReviewIssuesLaunchDefaults}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}

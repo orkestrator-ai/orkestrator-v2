@@ -12,7 +12,7 @@ history rather than two partial ones.
 
 ## `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:5467`)
 
-- **Status:** open — third recorded occurrence of the same assertion, after
+- **Status:** open — recurring failure of the same assertion, after
   `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts`
   (`ActionBar.test.tsx:1704`, observed 2026-08-17, resolved in the 2026-08-27
   sweep and already reopened once as "recurred after the 2026-08-27 resolution
@@ -64,6 +64,19 @@ history rather than two partial ones.
   isolated rerun, `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`,
   passed all 198 tests and 774 assertions in 14.05 s, including the affected
   case in 14.65 ms.
+- **Recurrence (Multi Review reviewer-default fixes, 2026-09-01):** `bun run
+  test` failed the same `createTabMock` assertion at `ActionBar.test.tsx:5546`
+  after 14.84 ms. The mock again contained exactly the preceding plain,
+  native-agent, and Codex review-tab calls, with only the asynchronously loaded
+  run-command call absent. The web workspace group reported 5,647 passed, 1
+  skipped, and 1 failed across 248 files in 64.19 s; the root, bridge, and
+  protocol-lockfile groups passed. The immediate isolated rerun, `bun
+  --cwd=apps/web test src/components/layout/ActionBar.test.tsx --only-failures`,
+  passed all 200 tests with 782 assertions in 14.01 s. This change adds Multi
+  Review default resolution and tests in the same file but does not change the
+  run-command loader or keyboard-shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.IkAB8E`.
 
 ## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 

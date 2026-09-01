@@ -234,6 +234,88 @@ describe("MultiReviewLaunchDialog", () => {
     });
   });
 
+  test("uses the full configured reviewer list for direct and configured launches", () => {
+    const defaults: MultiReviewLaunchDefaults = {
+      defaultAgent: "claude",
+      catalog,
+      reviewerDefaults: [
+        { defaultAgent: "claude", preferredModels: { claude: "opus" } },
+        { defaultAgent: "codex", preferredModels: { codex: "gpt-5.6" } },
+        {
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.5" },
+          preferredReasoningEfforts: { codex: "high" },
+        },
+      ],
+    };
+    const expected = defaultMultiReviewLaunchSelection(defaults);
+    expect(expected.reviewers).toEqual([
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6" },
+      { agent: "codex", model: "gpt-5.5", reasoningEffort: "high" },
+    ]);
+
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        {...defaults}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect(screen.getByLabelText("Reviewer 3 model").textContent).toContain("GPT-5.5");
+    fireEvent.click(screen.getByRole("button", { name: "Start 3-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual(expected);
+  });
+
+  test("treats a supplied reviewer list as exact at the one and empty boundaries", () => {
+    expect(
+      defaultMultiReviewLaunchSelection({
+        defaultAgent: "claude",
+        catalog,
+        reviewerDefaults: [{ defaultAgent: "codex", preferredModels: { codex: "gpt-5.6" } }],
+      }).reviewers,
+    ).toEqual([{ agent: "codex", model: "gpt-5.6" }]);
+
+    expect(
+      defaultMultiReviewLaunchSelection({
+        defaultAgent: "claude",
+        catalog,
+        reviewerDefaults: [],
+      }).reviewers,
+    ).toEqual([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "opus" },
+    ]);
+  });
+
+  test("synthesizes a configured OpenCode model for an additional reviewer", () => {
+    const selection = defaultMultiReviewLaunchSelection({
+      defaultAgent: "claude",
+      catalog: {
+        ...catalog,
+        opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
+      },
+      reviewerDefaults: [
+        { defaultAgent: "claude", preferredModels: { claude: "opus" } },
+        { defaultAgent: "codex", preferredModels: { codex: "gpt-5.6" } },
+        {
+          defaultAgent: "opencode",
+          preferredModels: { opencode: "provider/repository-cached-reviewer-3" },
+          preferredReasoningEfforts: { opencode: "high" },
+        },
+      ],
+    });
+
+    expect(selection.reviewers[2]).toEqual({
+      agent: "opencode",
+      model: "provider/repository-cached-reviewer-3",
+      reasoningEffort: "high",
+    });
+  });
+
   test("submits the same initial selection as the direct-launch helper", () => {
     const defaults: MultiReviewLaunchDefaults = {
       defaultAgent: "claude",

@@ -259,6 +259,30 @@ describe("normalizeAgentSettings", () => {
       normalizeAgentSettings({ platforms: { cursor: { fastMode: false } } }).platforms?.cursor,
     ).toEqual({ fastMode: false });
   });
+
+  test("bounds and normalizes the extra Multi Review reviewer defaults", () => {
+    expect(
+      normalizeAgentSettings({
+        multiReview: {
+          reviewerCount: 4,
+          additionalReviewers: [
+            { platform: "codex", model: "  gpt-5.6-sol  ", reasoningEffort: " high " },
+            { platform: "unknown", model: "ignored" },
+            { platform: "claude", model: "outside-the-count" },
+          ],
+        },
+      }).multiReview,
+    ).toEqual({
+      reviewerCount: 4,
+      additionalReviewers: [{ platform: "codex", model: "gpt-5.6-sol", reasoningEffort: "high" }],
+    });
+
+    expect(
+      normalizeAgentSettings({
+        multiReview: { reviewerCount: 99, additionalReviewers: [{ platform: "codex" }] },
+      }).multiReview,
+    ).toBeUndefined();
+  });
 });
 
 describe("isEmptyAgentSettings", () => {
@@ -268,5 +292,6 @@ describe("isEmptyAgentSettings", () => {
     expect(isEmptyAgentSettings({ actionDefaults: {}, platforms: {} })).toBe(true);
     expect(isEmptyAgentSettings({ platforms: { claude: { mode: "native" } } })).toBe(false);
     expect(isEmptyAgentSettings({ defaultAgent: "codex" })).toBe(false);
+    expect(isEmptyAgentSettings({ multiReview: { reviewerCount: 3 } })).toBe(false);
   });
 });

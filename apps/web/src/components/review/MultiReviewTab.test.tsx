@@ -19,6 +19,7 @@ import {
   MultiReviewTab,
   multiReviewFixSessionTabOptions,
   reviewerProgressSummary,
+  reviewerRuntimeSummary,
   reviewerStatusNote,
 } from "./MultiReviewTab";
 import {
@@ -165,6 +166,129 @@ async function openTranscriptRefreshMenu() {
 }
 
 describe("MultiReviewTab backend snapshot viewer", () => {
+  test("formats live reviewer elapsed time and token usage", () => {
+    const reviewer = reviewingWorkflow().reviewers[0]!;
+    reviewer.startedAt = "2026-08-14T00:00:00.000Z";
+    reviewer.tokenCount = 12_345;
+
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T00:01:35.000Z"))).toBe(
+      "1m 35s · 12k tokens",
+    );
+    delete reviewer.tokenCount;
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T00:01:35.000Z"))).toBe(
+      "1m 35s · Tokens pending",
+    );
+    reviewer.status = "completed";
+    reviewer.completedAt = "2026-08-14T00:01:40.000Z";
+    reviewer.tokenCount = 12_345;
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T01:00:00.000Z"))).toBe(
+      "1m 40s · 12k tokens",
+    );
+    reviewer.startedAt = "not-a-date";
+    expect(reviewerRuntimeSummary(reviewer)).toBeNull();
+  });
+
+  test("shows runtime metadata on each running reviewer card", () => {
+    const originalNow = Date.now;
+    Date.now = () => Date.parse("2026-08-14T00:01:35.000Z");
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0]!.startedAt = "2026-08-14T00:00:00.000Z";
+    reviewing.reviewers[0]!.tokenCount = 12_345;
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    try {
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => reviewing)}
+        />,
+      );
+
+      expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toBe(
+        "1m 35s · 12k tokens",
+      );
+      expect(screen.getByLabelText("Reviewer 2 runtime and token usage").textContent).toContain(
+        "Tokens pending",
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("keeps final usage visible on a settled reviewer card", () => {
+    const ready = readyWorkflow();
+    ready.reviewers[0]!.startedAt = "2026-08-14T00:00:00.000Z";
+    ready.reviewers[0]!.completedAt = "2026-08-14T00:02:00.000Z";
+    ready.reviewers[0]!.tokenCount = 23_456;
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toBe(
+      "2m 0s · 23k tokens",
+    );
+  });
+
+  test("freezes the clock while inactive, reanchors on activation, and clears its timer", async () => {
+    const originalNow = Date.now;
+    const originalClearInterval = window.clearInterval;
+    const clearInterval = mock((handle?: number) => originalClearInterval(handle));
+    window.clearInterval = clearInterval as typeof window.clearInterval;
+    let now = Date.parse("2026-08-14T00:01:35.000Z");
+    Date.now = () => now;
+    const reviewing = reviewingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+
+    const view = render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive={false}
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
+    try {
+      expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toContain(
+        "1m 35s",
+      );
+      now = Date.parse("2026-08-14T00:02:05.000Z");
+      view.rerender(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+          isActive={false}
+          hydrateWorkflow={mock(async () => reviewing)}
+        />,
+      );
+      expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toContain(
+        "1m 35s",
+      );
+
+      view.rerender(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => reviewing)}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toContain(
+          "2m 5s",
+        ),
+      );
+      view.unmount();
+      expect(clearInterval.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      view.unmount();
+      Date.now = originalNow;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
   test("opens a reviewer transcript in a separate tab intent", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);

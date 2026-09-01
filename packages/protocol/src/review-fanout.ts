@@ -25,6 +25,7 @@ export const REVIEW_FANOUT_MAX_SNAPSHOT_PATHS = 10_000;
 export const REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
 /** Bounds how long a settled session may be polled for a missing result. */
 export const REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS = 5;
+export const REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS = 12;
 
 export interface ReviewerModelSelection {
   agent: AgentPlatform;
@@ -74,6 +75,10 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   stalledSince?: string;
   report?: StructuredReviewReport;
   error?: string;
+  /** Cumulative tokens consumed by this reviewer's provider session. */
+  tokenCount?: number;
+  /** Bounded terminal polls while a provider reconciles its exact cumulative total. */
+  usageFinalizationPolls?: number;
   startedAt?: string;
   completedAt?: string;
 }
@@ -152,6 +157,15 @@ function optionalPollCount(value: unknown): boolean {
   );
 }
 
+function optionalFinalUsagePollCount(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) &&
+      (value as number) >= 0 &&
+      (value as number) <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS)
+  );
+}
+
 function optionalProgressDigest(value: unknown): boolean {
   return value === undefined || (typeof value === "string" && /^[0-9a-f]{64}$/.test(value));
 }
@@ -201,6 +215,8 @@ const REVIEWER_KEYS = [
   "schemaRepairPrompt",
   "continuationPrompt",
   "error",
+  "tokenCount",
+  "usageFinalizationPolls",
   "progressAt",
   "progressDigest",
   "stalledSince",
@@ -229,6 +245,11 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalString(value.continuationPrompt, 4_096) &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
+    (value.tokenCount === undefined ||
+      (typeof value.tokenCount === "number" &&
+        Number.isSafeInteger(value.tokenCount) &&
+        value.tokenCount >= 0)) &&
+    optionalFinalUsagePollCount(value.usageFinalizationPolls) &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&

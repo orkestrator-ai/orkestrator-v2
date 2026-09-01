@@ -32,6 +32,14 @@ export type ProviderActivityState = AgentActivityState | "missing";
 export type ProviderExecutionMode = "plan" | "build";
 export type ProviderAgent = AgentInteractionProvider;
 
+export interface ProviderSessionObservation {
+  status: ProviderStatus;
+  /** Cumulative session consumption only; context-window occupancy is not interchangeable. */
+  contextUsage?: NativeAgentContextUsage;
+  /** A terminal provider is still reconciling its exact cumulative total. */
+  usagePending?: boolean;
+}
+
 export interface ProviderPromptImage {
   filename: string;
   data: string;
@@ -109,11 +117,13 @@ export class ProviderSessionFailedError extends Error {
 }
 
 export async function readProviderStatus(
-  provider: Pick<AgentSessionProvider, "status">,
+  provider: Pick<AgentSessionProvider, "status" | "observeSession">,
   sessionId: string,
-): Promise<{ status: ProviderStatus; error?: string }> {
+): Promise<ProviderSessionObservation & { error?: string }> {
   try {
-    return { status: await provider.status(sessionId) };
+    return provider.observeSession
+      ? await provider.observeSession(sessionId)
+      : { status: await provider.status(sessionId) };
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
       return { status: "error", error: error.detail };
@@ -246,6 +256,12 @@ export interface AgentSessionProvider {
   dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
+   * Read lifecycle and cumulative usage from one authoritative provider
+   * snapshot. Providers should implement this only when both values come from
+   * the same upstream read; callers otherwise fall back to status().
+   */
+  observeSession?(sessionId: string): Promise<ProviderSessionObservation>;
+  /**
    * Authoritative activity including input parked at the provider. Optional so
    * narrow test providers and non-interactive integrations can fall back to
    * the coarser status contract.
@@ -257,6 +273,13 @@ export interface AgentSessionProvider {
    * let callers fall back to activity()/status() per session.
    */
   activityBatch?(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>>;
+  /**
+   * Derive cumulative session usage from an already-read transcript. The
+   * function must never reinterpret current context occupancy as consumption.
+   */
+  usageFromMessages?(messages: readonly unknown[]): NativeAgentContextUsage | undefined;
+  /** Minimum transcript tail needed by usageFromMessages; undefined means all messages. */
+  readonly usageMessageLimit?: number;
   readonly interactions?: AgentInteractionProviderCapability;
   messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]>;
   structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null>;

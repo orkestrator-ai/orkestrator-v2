@@ -331,6 +331,61 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("derives cumulative usage from one already-read OpenCode transcript", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesResponse({
+      data: [
+        {
+          info: {
+            id: "assistant-1",
+            role: "assistant",
+            providerID: "anthropic",
+            modelID: "claude-sonnet",
+            tokens: {
+              input: 100,
+              output: 20,
+              reasoning: 5,
+              cache: { read: 30, write: 10 },
+            },
+            time: { created: 1_000, completed: 1_100 },
+          },
+          parts: [],
+        },
+        {
+          info: {
+            id: "assistant-2",
+            role: "assistant",
+            tokens: { input: 40, output: 10, cache: { read: 5, write: 0 } },
+            time: { created: 2_000, completed: 2_050 },
+          },
+          parts: [],
+        },
+      ],
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const messages = await provider.messages("owned-session", {
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      });
+      expect(provider.usageFromMessages?.(messages)).toMatchObject({
+        sessionTokens: 215,
+        inputTokens: 140,
+        outputTokens: 30,
+        reasoningTokens: 5,
+        cacheReadTokens: 35,
+        cacheWriteTokens: 10,
+        lastTurnTokens: 55,
+      });
+      expect(fake.messageCalls).toEqual([
+        { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      ]);
+      expect(provider.usageFromMessages?.([])).toBeUndefined();
+      expect(fake.messageCalls).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("projects and caches the live OpenCode model catalog with session metadata", async () => {
     const fake = openCodeFake();
     const providerList = mock(async () => ({

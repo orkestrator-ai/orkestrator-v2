@@ -17,6 +17,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -150,6 +151,11 @@ class Provider implements BuildPipelineProvider {
   reviewerReport: StructuredReviewReport = cleanReport;
   consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
+  usageTokens: number | undefined;
+  usageUsedTokens: number | undefined;
+  usagePending = false;
+  usageFromMessages?: (messages: readonly unknown[]) => NativeAgentContextUsage | undefined;
+  usageMessageLimit?: number;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
   readonly createdSessionKeys: string[] = [];
   disposeCalls = 0;
@@ -213,6 +219,21 @@ class Provider implements BuildPipelineProvider {
     const failure = this.sessionFailures.get(sessionId);
     if (failure) throw new ProviderSessionFailedError(this.agent, failure);
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
+  }
+  async observeSession(sessionId: string) {
+    const status = await this.status(sessionId);
+    const contextUsage: NativeAgentContextUsage | undefined =
+      this.usageTokens === undefined && this.usageUsedTokens === undefined
+        ? undefined
+        : {
+            usedTokens: this.usageUsedTokens ?? this.usageTokens ?? 0,
+            ...(this.usageTokens === undefined ? {} : { sessionTokens: this.usageTokens }),
+          };
+    return {
+      status,
+      ...(contextUsage ? { contextUsage } : {}),
+      ...(this.usagePending ? { usagePending: true } : {}),
+    };
   }
   async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messagesCalls += 1;
@@ -452,6 +473,132 @@ test("MultiReviewService exposes an authoritative reviewer transcript read model
       messages: provider.messagesValue,
     });
   });
+});
+
+test("MultiReviewService persists reviewer token usage while the review is running", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.usageTokens = 12_345;
+  provider.usageUsedTokens = 999;
+
+  await withService("env-reviewer-usage", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+      status: "running",
+      tokenCount: 12_345,
+    });
+  });
+});
+
+test("MultiReviewService ignores context occupancy when cumulative usage is unavailable", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.usageUsedTokens = 98_765;
+
+  await withService("env-reviewer-occupancy", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+
+    expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBeUndefined();
+  });
+});
+
+test("MultiReviewService keeps reviewer usage monotonic and rejects malformed totals", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.usageTokens = 12_345;
+
+  await withService("env-reviewer-usage-guard", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBe(12_345);
+
+    provider.usageTokens = 1_234;
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBe(12_345);
+
+    for (const malformed of [Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      provider.usageTokens = malformed;
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBe(12_345);
+    }
+  });
+});
+
+test("MultiReviewService treats transcript-derived usage failures as non-fatal", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.usageMessageLimit = 64;
+  provider.usageFromMessages = () => {
+    throw new Error("usage unavailable");
+  };
+
+  await withService("env-reviewer-usage-error", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({ status: "running" });
+    expect((await snapshot(started.id))?.reviewers[0]?.tokenCount).toBeUndefined();
+    expect(provider.messagesCalls).toBe(provider.statusCalls);
+    expect(provider.messageOptions.every((options) => options?.limit === 64)).toBe(true);
+  });
+});
+
+test("MultiReviewService waits for a terminal cumulative total before settling", async () => {
+  const provider = new Provider();
+  provider.usageUsedTokens = 2_000;
+  provider.usagePending = true;
+
+  await withService("env-reviewer-final-usage", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+      status: "running",
+    });
+    expect((await snapshot(started.id))?.reviewers[0]?.usageFinalizationPolls).toBeGreaterThan(0);
+    while (((await snapshot(started.id))?.reviewers[0]?.usageFinalizationPolls ?? 0) < 6) {
+      await service.advanceNow(started.id);
+    }
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+      status: "running",
+      usageFinalizationPolls: 6,
+    });
+
+    provider.usagePending = false;
+    provider.usageTokens = 4_321;
+    await service.advanceNow(started.id);
+    expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+      status: "completed",
+      tokenCount: 4_321,
+    });
+  });
+});
+
+test("MultiReviewService persists usage and transcript progress in one workflow save", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ text: "baseline" }];
+
+  await withService(
+    "env-reviewer-single-save",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+      const before = (await snapshot(started.id))!;
+
+      provider.usageTokens = 222;
+      provider.messagesValue = [{ text: "progress" }];
+      await service.advanceNow(started.id);
+      const after = (await snapshot(started.id))!;
+
+      expect(after.backendRevision).toBe(before.backendRevision + 1);
+      expect(after.reviewers[0]).toMatchObject({ tokenCount: 222 });
+    },
+    { serviceOptions: { progressProbeIntervalMs: 0 } },
+  );
 });
 
 test("MultiReviewService hands the idle consolidation session to interactive addressing", async () => {
@@ -1180,6 +1327,7 @@ test("MultiReviewService reports a clean worktree and dispatches without it when
 
 test("MultiReviewService stops when the snapshot changes between reviewers and retries all reviewers", async () => {
   const provider = new Provider();
+  provider.usageTokens = 444;
   const replacementFingerprint = "b".repeat(64);
   const probes: Array<Record<string, unknown> | undefined> = [];
   await withService(
@@ -1196,6 +1344,7 @@ test("MultiReviewService stops when the snapshot changes between reviewers and r
       expect(failed.reviewSnapshotStale).toBe(true);
       expect(failed.error).toContain("worktree changed after the review started");
       expect(failed.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "failed"]);
+      expect(failed.reviewers[0]?.tokenCount).toBe(444);
       expect(
         [...provider.sends.values()].filter((sent) =>
           sent.prompt.includes("You are independent reviewer"),
@@ -1222,6 +1371,7 @@ test("MultiReviewService stops when the snapshot changes between reviewers and r
         "src/added-while-reviewing.ts",
       ]);
       expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
+      expect(retried.reviewers.every((reviewer) => reviewer.tokenCount === undefined)).toBe(true);
       await waitUntil(async () => {
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
@@ -3016,6 +3166,7 @@ test("MultiReviewService bounds a blocked fix model", async () => {
 test("MultiReviewService retries a failed reviewer without stranding its provider session", async () => {
   const provider = new Provider(false);
   provider.idempotentSessionKeys = true;
+  provider.usageTokens = 777;
   await withService("env-retry-reviewer", provider, async ({ service, start, snapshot }) => {
     const started = await start();
     for (let attempt = 0; attempt < 7; attempt++) await service.advanceNow(started.id);
@@ -3024,6 +3175,7 @@ test("MultiReviewService retries a failed reviewer without stranding its provide
     expect(failed?.reviewers[0]).toMatchObject({
       status: "failed",
       providerSessionId: "session-1",
+      tokenCount: 777,
     });
 
     const retried = await service.retry(started.id);
@@ -3037,6 +3189,7 @@ test("MultiReviewService retries a failed reviewer without stranding its provide
     expect(retried.reviewers[0]?.requestId).toBeUndefined();
     expect(retried.reviewers[0]?.idleResultPolls).toBeUndefined();
     expect(retried.reviewers[0]?.error).toBeUndefined();
+    expect(retried.reviewers[0]?.tokenCount).toBeUndefined();
 
     // The retry runs against a brand new session rather than the abandoned one.
     await waitUntil(
@@ -3534,6 +3687,7 @@ test("MultiReviewService restarts only the selected reviewer in a fresh session"
   const provider = new Provider();
   provider.idempotentSessionKeys = true;
   provider.statusValue = "running";
+  provider.usageTokens = 888;
   await withService("env-restart-reviewer", provider, async ({ service, start, snapshot }) => {
     const started = await start([
       { agent: "claude", model: "opus" },
@@ -3551,10 +3705,12 @@ test("MultiReviewService restarts only the selected reviewer in a fresh session"
     expect(restarted.reviewers[0]?.providerSessionId).toBeUndefined();
     expect(restarted.reviewers[0]?.sessionKey).not.toBe(firstSessionKey);
     expect(restarted.reviewers[0]?.startedAt).toBeUndefined();
+    expect(restarted.reviewers[0]?.tokenCount).toBeUndefined();
     expect(restarted.reviewers[1]).toMatchObject({
       id: second.id,
       status: "running",
       providerSessionId: second.providerSessionId,
+      tokenCount: 888,
     });
 
     await waitUntil(async () => {
@@ -3577,6 +3733,7 @@ test("MultiReviewService restarts only the selected reviewer in a fresh session"
 test("MultiReviewService rewinds consolidation when a completed reviewer is restarted", async () => {
   const provider = new Provider();
   provider.idempotentSessionKeys = true;
+  provider.usageTokens = 999;
   await withService(
     "env-restart-ready-reviewer",
     provider,
@@ -3596,6 +3753,7 @@ test("MultiReviewService rewinds consolidation when a completed reviewer is rest
       expect(restarted.phase).toBe("reviewing");
       expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
       expect(restarted.reviewers[0]?.report).toBeUndefined();
+      expect(restarted.reviewers[0]?.tokenCount).toBeUndefined();
       expect(restarted.consolidatedReport).toBeUndefined();
       expect(restarted.fixSession).toBeUndefined();
       expect(restarted.activeRequest).toBeUndefined();

@@ -235,6 +235,20 @@ const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
     useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
 );
+const mockPrepareEnvironmentAgentLaunch = mock(
+  async (
+    environmentId: string,
+    input: Parameters<typeof realBackend.prepareEnvironmentAgentLaunch>[1],
+  ): Promise<Environment> => ({
+    ...(useEnvironmentStore.getState().getEnvironmentById(environmentId) ??
+      makeEnvironment(environmentId, "project-1")),
+    pendingAgentLaunch: true,
+    initialAgentPlatform: input.agent,
+    initialPrompt: input.initialPrompt,
+    initialAgentModel: input.model,
+    initialReasoningEffort: input.reasoningEffort,
+  }),
+);
 const mockSavePaneLayout = mock(
   async (
     environmentId: string,
@@ -320,6 +334,7 @@ mock.module("@/lib/backend", () => ({
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
   getEnvironment: mockGetEnvironment,
+  prepareEnvironmentAgentLaunch: mockPrepareEnvironmentAgentLaunch,
   listBuildPipelines: mockListBuildPipelines,
   listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
@@ -474,6 +489,7 @@ function resetAppMocks() {
     revisions: {},
   }));
   mockGetEnvironment.mockClear();
+  mockPrepareEnvironmentAgentLaunch.mockClear();
   mockGetEnvironment.mockImplementation(
     async (environmentId: string) =>
       useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
@@ -2076,6 +2092,13 @@ describe("App terminal overlay actions", () => {
         agentType: "codex",
         initialPrompt: "Stand up the Codex session",
       });
+      expect(mockPrepareEnvironmentAgentLaunch).toHaveBeenCalledWith("env-visible", {
+        agent: "codex",
+        initialPrompt: "Stand up the Codex session",
+        model: undefined,
+        reasoningEffort: undefined,
+        attachments: undefined,
+      });
     });
   });
 
@@ -2552,6 +2575,13 @@ describe("App terminal overlay actions", () => {
       initialPrompt: "Create setup script",
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
+    });
+    expect(mockPrepareEnvironmentAgentLaunch).toHaveBeenCalledWith("env-visible", {
+      agent: "codex",
+      initialPrompt: "Create setup script",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      attachments: undefined,
     });
   });
 });

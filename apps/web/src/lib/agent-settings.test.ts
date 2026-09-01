@@ -182,12 +182,9 @@ describe("resolvedActionDefault", () => {
 });
 
 /**
- * The renderer and the backend must answer `dispatchedByBackend` identically,
- * because it decides which of them owns the initial prompt's image
- * attachments. They share `resolveStartupLaunchFromSettings`, so the only place
- * they can still drift is the tier assembly they feed it: `TerminalContainer`
- * builds it with `agentSettingsTiers`, while `reconcileInitialLaunchOnce`
- * builds the same triple by hand from its own records.
+ * The renderer and backend share the same tier assembly. TerminalContainer
+ * builds it with `agentSettingsTiers`, while reconciliation builds the same
+ * triple by hand from its own records.
  *
  * Grok gained a mode column of its own in the agent-settings migration, having
  * previously been routed through the OpenCode branch of a mode ternary. Cursor
@@ -242,7 +239,6 @@ describe("agentSettingsTiers matches the backend's own assembly", () => {
         expect(resolveStartupLaunchFromSettings(renderer)).toMatchObject({
           agent: platform,
           mode: expectedMode,
-          dispatchedByBackend: expectedMode === "native",
         });
       });
     }

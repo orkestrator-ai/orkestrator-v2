@@ -113,6 +113,7 @@ interface PersistentTerminalProps {
   initialReasoningEffort?: string;
   paneId: string;
   isSetupTab?: boolean;
+  backendManagedTerminal?: boolean;
   onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
   onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
   onWrite?: (write: (data: string) => Promise<void>) => void;
@@ -143,6 +144,7 @@ export function PersistentTerminal({
   initialReasoningEffort,
   paneId,
   isSetupTab,
+  backendManagedTerminal = false,
   onReady,
   onSetupComplete,
   onWrite,
@@ -253,6 +255,7 @@ export function PersistentTerminal({
   const isReconnecting = !!existingSessionId;
   const isBackendManagedSetupTab =
     !!isSetupTab && (!initialCommands || initialCommands.length === 0);
+  const attachExistingOnly = isBackendManagedSetupTab || backendManagedTerminal;
   // Every terminal view asks for the backend-owned transcript. The serialized
   // frontend buffer is retained as a durable fallback when the backend must
   // create a replacement PTY that has no transcript for the previous process.
@@ -755,7 +758,7 @@ export function PersistentTerminal({
     persistSession: true,
     user: terminalUser,
     replayOutputBuffer: shouldReplayBackendOutputBuffer,
-    attachExistingOnly: isBackendManagedSetupTab,
+    attachExistingOnly,
     trackEnvironmentActivity,
   });
 
@@ -776,7 +779,7 @@ export function PersistentTerminal({
       terminalKey: tabId,
       user: terminalUser,
       replayOutputBuffer: shouldReplayBackendOutputBuffer,
-      attachExistingOnly: isBackendManagedSetupTab,
+      attachExistingOnly,
       trackEnvironmentActivity,
     }),
     // The session this attempt would attach to. The stored id is preferred so
@@ -1720,6 +1723,7 @@ export function PersistentTerminal({
    */
   const initialCommandsKey = initialCommands?.join(" ") ?? null;
   const launchData = useMemo(() => {
+    if (backendManagedTerminal) return null;
     const agentCommand = buildAgentLaunchCommand({
       tabType,
       initialPrompt,
@@ -1749,6 +1753,7 @@ export function PersistentTerminal({
     initialLaunchReasoningEffort,
     initialCommandsKey,
     isSetupTab,
+    backendManagedTerminal,
   ]);
 
   // Launch command based on tab type once environment is ready.

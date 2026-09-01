@@ -1869,7 +1869,12 @@ exit 0
     ).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
     expect(
       await commands.get("bootstrap_terminal_session")?.({ sessionId, data: "codex\n" }, context),
-    ).toEqual({ bootstrapped: true, delivered: false, duplicate: true });
+    ).toEqual({
+      bootstrapped: true,
+      delivered: false,
+      duplicate: true,
+      matchesExisting: true,
+    });
     expect(ptyProcesses[0]?.write).toHaveBeenCalledTimes(1);
     expect(ptyProcesses[0]?.write).toHaveBeenCalledWith("codex\n");
     expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({

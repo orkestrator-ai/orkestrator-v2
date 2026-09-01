@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   path,
@@ -96,8 +98,138 @@ import {
 
 export function registerTerminalCommands(
   register: CommandRegistrar,
-  _dependencies: RegistryDependencies,
+  dependencies: RegistryDependencies,
 ): void {
+  register("launch_terminal_job", async (args, context) => {
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    const requestId = asNonBlankString(args.requestId, "requestId");
+    if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
+    const requestedTabId = asOptionalString(args.tabId)?.trim();
+    if (requestedTabId && requestedTabId.length > 256) {
+      throw new Error("tabId must be at most 256 characters");
+    }
+    const tabType = asNonBlankString(args.tabType, "tabType");
+    if (
+      tabType !== "plain" &&
+      tabType !== "claude-tmux" &&
+      (!isAgentPlatform(tabType) || tabType === "cursor")
+    ) {
+      throw new Error("Terminal job tab type is invalid");
+    }
+    const title = asOptionalString(args.title)?.trim();
+    if (title && title.length > 200) throw new Error("title must be at most 200 characters");
+    const data = tabType === "claude-tmux" ? undefined : asString(args.data, "data");
+    if (data !== undefined && !data.trim()) throw new Error("data must not be blank");
+    if (data !== undefined && data.length > 500_000) {
+      throw new Error("data must be at most 500000 characters");
+    }
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
+      throw new Error("Environment is being deleted");
+    }
+    if (
+      environment.status !== "running" ||
+      !(
+        environment.setupPhase === "ready" ||
+        environment.setupScriptsComplete === true ||
+        environment.setupOverride === true
+      )
+    ) {
+      throw new Error("Environment is not running with setup complete");
+    }
+    if (
+      tabType !== "claude-tmux" &&
+      environment.environmentType !== "local" &&
+      !environment.containerId
+    ) {
+      throw new Error("Environment container is unavailable");
+    }
+
+    const jobId = createHash("sha256")
+      .update(environmentId)
+      .update("\0")
+      .update(requestId)
+      .digest("hex")
+      .slice(0, 24);
+    const tabId = requestedTabId || `terminal-job-${jobId}`;
+    await context.storage.ensureTerminalJobTab({
+      environmentId,
+      tabId,
+      type: tabType,
+      title,
+      activate: args.activateTab === true,
+    });
+
+    const invoke = async <T>(command: string, commandArgs: Record<string, unknown>): Promise<T> => {
+      const handler = dependencies.commands.get(command);
+      if (!handler) throw new Error(`Backend command is unavailable: ${command}`);
+      return (await handler(commandArgs, context)) as T;
+    };
+
+    if (tabType === "claude-tmux") {
+      const status = await invoke<{ running?: boolean } | null>("claude_tmux_status", {
+        tabId,
+        environmentId,
+      });
+      if (!status?.running) {
+        await invoke("claude_tmux_start", {
+          tabId,
+          environmentId,
+          initialPrompt: asOptionalString(args.initialPrompt),
+          model: asOptionalString(args.model),
+          effort: asOptionalString(args.reasoningEffort),
+          ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
+        });
+      }
+      return { jobId, environmentId, tabId, tabType, status: "started" };
+    }
+
+    if (data === undefined) throw new Error("data is required for terminal jobs");
+    const trackEnvironmentActivity = tabType !== "plain";
+    let created: { sessionId: string; created?: boolean; bootstrapped?: boolean };
+    if (environment.environmentType === "local") {
+      created = await invoke("create_local_terminal_session", {
+        environmentId,
+        terminalKey: tabId,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity,
+      });
+      await invoke("start_local_terminal_session", { sessionId: created.sessionId });
+    } else {
+      created = await invoke("create_terminal_session", {
+        containerId: environment.containerId,
+        environmentId,
+        terminalKey: tabId,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity,
+      });
+      await invoke("start_terminal_session", { sessionId: created.sessionId });
+    }
+    const bootstrap = await invoke<{
+      bootstrapped: boolean;
+      duplicate?: boolean;
+      matchesExisting?: boolean;
+    }>("bootstrap_terminal_session", {
+      sessionId: created.sessionId,
+      data,
+    });
+    if (!bootstrap.bootstrapped) throw new Error("Terminal job could not be started");
+    if (bootstrap.duplicate && bootstrap.matchesExisting !== true) {
+      throw new Error("Terminal job session was already bootstrapped by another owner");
+    }
+    return {
+      jobId,
+      environmentId,
+      tabId,
+      tabType,
+      sessionId: created.sessionId,
+      status: "started",
+    };
+  });
+
   register(
     "create_terminal_session",
     async (
@@ -250,8 +382,14 @@ export function registerTerminalCommands(
   register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
+    const bootstrapDataHash = createHash("sha256").update(terminalData).digest("hex");
     if (isTerminalBootstrapped(id)) {
-      return { bootstrapped: true, delivered: false, duplicate: true };
+      return {
+        bootstrapped: true,
+        delivered: false,
+        duplicate: true,
+        matchesExisting: terminalSessionConfigs.get(id)?.bootstrapDataHash === bootstrapDataHash,
+      };
     }
     const terminalProcess = terminalProcesses.get(id);
     if (!terminalProcess) {
@@ -260,12 +398,14 @@ export function registerTerminalCommands(
     const config = terminalSessionConfigs.get(id);
     if (!config) return { bootstrapped: false, delivered: false, duplicate: false };
     config.bootstrapped = true;
+    config.bootstrapDataHash = bootstrapDataHash;
     try {
       terminalProcess.write(terminalData);
       recordTerminalInputActivity(id, terminalData, context);
       return { bootstrapped: true, delivered: true, duplicate: false };
     } catch (error) {
       config.bootstrapped = false;
+      config.bootstrapDataHash = undefined;
       throw error;
     }
   });

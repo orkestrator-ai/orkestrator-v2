@@ -64,6 +64,19 @@ history rather than two partial ones.
   isolated rerun, `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`,
   passed all 198 tests and 774 assertions in 14.05 s, including the affected
   case in 14.65 ms.
+- **Recurrence (backend-owned action jobs, 2026-08-31):** `bun run test` failed
+  the renamed backend-job assertion,
+  `expect(launchTerminalJobMock).toHaveBeenCalledWith(expect.objectContaining({
+  tabType: "plain", data: "bun test\\n" }))`, after 1,017.62 ms while the web
+  workspace ran with two Bun workers. The web group reported 5,610 passed, 1
+  skipped, and 1 failed across 5,612 tests and 248 files in 64.14 s; the other
+  three repository groups passed. The immediate isolated rerun,
+  `bun test ./src/components/layout/ActionBar.test.tsx` from `apps/web`, passed
+  all 195 tests and 738 assertions in 15.06 s, including the affected case in
+  22.22 ms. This change moved the run-command shortcut from renderer tab
+  creation to `launch_terminal_job`; the recurrence still isolates to the same
+  asynchronously loaded run-command shortcut while the synchronous shortcuts
+  in the case pass.
 - **Recurrence (Multi Review reviewer-default fixes, 2026-09-01):** `bun run
   test` failed the same `createTabMock` assertion at `ActionBar.test.tsx:5546`
   after 14.84 ms. The mock again contained exactly the preceding plain,

@@ -688,6 +688,7 @@ export async function completeEnvironmentSetup(
 export function clearPendingAgentLaunchUpdates(): Partial<Environment> {
   return {
     pendingAgentLaunch: false,
+    initialAgentPlatform: undefined,
     initialAgentModel: undefined,
     initialReasoningEffort: undefined,
     initialConversationMode: undefined,

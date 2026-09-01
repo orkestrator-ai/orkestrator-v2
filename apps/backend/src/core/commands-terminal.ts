@@ -69,6 +69,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     ...client
   } = environment;
   if (!client.pendingAgentLaunch && client.startupAgentSession?.status !== "starting") {
+    delete client.initialAgentPlatform;
     delete client.initialAgentModel;
     delete client.initialReasoningEffort;
   }
@@ -394,7 +395,11 @@ export function resolveLocalShellPath(): string {
 }
 
 export function rememberTerminalSession(id: string, config: TerminalSessionConfig): string {
-  terminalSessionConfigs.set(id, { ...config, bootstrapped: false });
+  terminalSessionConfigs.set(id, {
+    ...config,
+    bootstrapped: false,
+    bootstrapDataHash: undefined,
+  });
   ensureTerminalOutputGeneration(id);
   return id;
 }
@@ -699,7 +704,10 @@ export function cleanupTerminalSession(id: string, options: { explicit?: boolean
   // their identity and replay buffer across a natural shell exit, but the
   // replacement PTY must be allowed to receive its launch command once.
   const retainedConfig = terminalSessionConfigs.get(id);
-  if (retainedConfig) retainedConfig.bootstrapped = false;
+  if (retainedConfig) {
+    retainedConfig.bootstrapped = false;
+    retainedConfig.bootstrapDataHash = undefined;
+  }
   if (retainStableState) return;
 
   terminalSessionConfigs.delete(id);

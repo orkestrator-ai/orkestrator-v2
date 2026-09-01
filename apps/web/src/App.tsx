@@ -40,6 +40,7 @@ import {
   getConfig,
   getEnvironment,
   getResourceRevisionManifest,
+  prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
 } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
@@ -593,7 +594,7 @@ function App() {
                 }),
           }),
         );
-        setClaudeOptions(environmentId, {
+        const launchOptions = {
           launchAgent: true,
           agentType:
             existingOptions?.agentType ??
@@ -604,7 +605,24 @@ function App() {
           ...(existingOptions?.reasoningEffort
             ? { reasoningEffort: existingOptions.reasoningEffort }
             : {}),
-        });
+        };
+        setClaudeOptions(environmentId, launchOptions);
+        try {
+          const prepared = await prepareEnvironmentAgentLaunch(environmentId, {
+            agent: launchOptions.agentType,
+            initialPrompt: launchPrompt,
+            model: launchOptions.model,
+            reasoningEffort: launchOptions.reasoningEffort,
+            attachments: launchOptions.initialPromptAttachments,
+          });
+          useEnvironmentStore.getState().updateEnvironment(environmentId, prepared);
+        } catch (error) {
+          console.error("[App] Failed to persist startup agent launch:", error);
+          toast.error("Could not prepare the agent launch", {
+            description: "The environment was not started because its prompt could not be saved.",
+          });
+          return false;
+        }
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);
       }

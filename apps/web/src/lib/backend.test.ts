@@ -81,6 +81,7 @@ const {
   startFeaturePlanning,
   updateFeaturePlan,
   updateEnvironmentAgentSettings,
+  prepareEnvironmentAgentLaunch,
   writeInitialPromptAttachments,
   applyPaneLayoutIntent,
   listAgentSkills,
@@ -146,6 +147,56 @@ describe("backend setup wrappers", () => {
     await expect(listAgentSkills("claude")).rejects.toBe(scanFailure);
   });
 
+  test("forwards backend-owned native job launches without reshaping their intent", async () => {
+    const input = {
+      requestId: "resolve-request-1",
+      environmentId: "env-1",
+      agent: "codex" as const,
+      prompt: "Resolve the merge conflicts.",
+      title: "Resolve",
+      modelId: "gpt-5.6-sol",
+      reasoningId: "high",
+      conversationMode: "build" as const,
+      completionAction: "refresh-pr-after-agent-completion" as const,
+      activateTab: true,
+    };
+    const result = {
+      jobId: "job-1",
+      environmentId: "env-1",
+      tabId: "agent-job-job-1",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:agent-job-job-1",
+      status: "accepted" as const,
+    };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(backendWrappers.launchNativeAgentJob(input)).resolves.toBe(result);
+    expect(invokeMock).toHaveBeenCalledWith("launch_native_agent_job", input);
+  });
+
+  test("forwards backend-owned terminal jobs with their exact launch bytes", async () => {
+    const input = {
+      requestId: "run-command-1",
+      environmentId: "env-1",
+      tabType: "plain" as const,
+      data: "bun test && bun run build\n",
+      title: "Run Commands",
+      activateTab: true,
+    };
+    const result = {
+      jobId: "terminal-job-1",
+      environmentId: "env-1",
+      tabId: "terminal-job-terminal-job-1",
+      tabType: "plain",
+      sessionId: "terminal-session-1",
+      status: "started" as const,
+    };
+    invokeMock.mockResolvedValueOnce(result);
+
+    await expect(backendWrappers.launchTerminalJob(input)).resolves.toBe(result);
+    expect(invokeMock).toHaveBeenCalledWith("launch_terminal_job", input);
+  });
+
   test("passes explicit tri-state PR metadata to the backend", async () => {
     await setEnvironmentPr("env-1", "https://github.com/acme/repo/pull/7", "open", null);
 
@@ -204,6 +255,36 @@ describe("backend setup wrappers", () => {
           pendingAgentLaunch: true,
           initialAgentModel: "gpt-5.6-sol",
           initialReasoningEffort: "high",
+        },
+      ],
+    ]);
+  });
+
+  test("prepares an exact backend-owned restart launch atomically", async () => {
+    const attachments = [
+      { id: "image-1", name: "screen.png", base64Data: "cG5n", type: "image" as const },
+    ];
+    await prepareEnvironmentAgentLaunch("env-1", {
+      agent: "codex",
+      initialPrompt: "Fix the restart",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      conversationMode: "build",
+      attachments,
+    });
+
+    expect(invokeMock.mock.calls).toEqual([
+      [
+        "update_environment_agent_settings",
+        {
+          environmentId: "env-1",
+          pendingAgentLaunch: true,
+          initialAgentPlatform: "codex",
+          initialPrompt: "Fix the restart",
+          initialAgentModel: "gpt-5.6-sol",
+          initialReasoningEffort: "high",
+          initialConversationMode: "build",
+          initialPromptAttachments: attachments,
         },
       ],
     ]);

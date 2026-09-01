@@ -291,6 +291,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isPRFinished,
     isSelectedEnvironmentDeleting,
     canCreateTab,
+    canLaunchBackendJob,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,
@@ -394,7 +395,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       tooltip={
         !isRunning ? (
           "Container must be running"
-        ) : !canCreateTab ? (
+        ) : !canLaunchBackendJob ? (
           "Maximum tabs reached"
         ) : (
           <>
@@ -425,7 +426,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         }}
         {...prLongPress.handlers}
         data-toolbar-custom-context-menu="true"
-        disabled={!isRunning || !canCreateTab}
+        disabled={!isRunning || !canLaunchBackendJob}
         // The visible label is shortened to fit the toolbar, but "PR" on its own
         // names a noun rather than the action, so the accessible name keeps the
         // verb it is announced with.
@@ -1035,7 +1036,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           ) : (
                             "Container must be running"
                           )
-                        ) : !canCreateTab ? (
+                        ) : !canLaunchBackendJob ? (
                           "Maximum tabs reached"
                         ) : (
                           <>
@@ -1066,7 +1067,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         }}
                         {...resolveLongPress.handlers}
                         data-toolbar-custom-context-menu="true"
-                        disabled={!isRunning || !canCreateTab || resolveLaunchInFlight}
+                        disabled={!isRunning || !canLaunchBackendJob || resolveLaunchInFlight}
                       >
                         <AlertTriangle className="h-4 w-4" />
                         <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
@@ -1104,7 +1105,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         tooltip={
                           !isRunning
                             ? "Container must be running"
-                            : !canCreateTab
+                            : !canLaunchBackendJob
                               ? "Maximum tabs reached"
                               : "Launch agent to commit and push changes"
                         }
@@ -1114,7 +1115,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           size="sm"
                           className="gap-2"
                           onClick={() => handlePushChanges()}
-                          disabled={!isRunning || !canCreateTab}
+                          disabled={!isRunning || !canLaunchBackendJob}
                         >
                           <Upload className="h-4 w-4" />
                           <span className={cn(isGrid && "truncate text-xs")}>Push Changes</span>

@@ -169,6 +169,8 @@ export interface TabInfo {
   consumedAgentHandoffId?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
+  /** Backend owns PTY creation and bootstrap; the renderer may only attach. */
+  backendManagedTerminal?: boolean;
 }
 
 /** Validate the one canonical identity before it reaches the adapter registry. */

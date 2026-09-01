@@ -279,8 +279,10 @@ describe("reconcilePersistedLayout", () => {
       { id: "claude-terminal", type: "claude" },
       { id: "codex-terminal", type: "codex" },
       { id: "opencode-terminal", type: "opencode" },
+      { id: "pi-terminal", type: "pi" },
     ].map((tab) => ({
       ...tab,
+      backendManagedTerminal: tab.id.endsWith("-terminal"),
       initialAgentModel: `${tab.id}-model`,
       initialReasoningEffort: "xhigh",
       initialExecutionProfileId: "plan",
@@ -303,6 +305,9 @@ describe("reconcilePersistedLayout", () => {
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
       expect(tab.initialReasoningEffort).toBe("xhigh");
       expect(tab.initialExecutionProfileId).toBe("plan");
+      if (String(tab.id).endsWith("-terminal")) {
+        expect(tab.backendManagedTerminal).toBe(true);
+      }
     }
   });
 

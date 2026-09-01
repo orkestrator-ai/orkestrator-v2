@@ -60,14 +60,6 @@ export interface ResolvedStartupLaunch {
   mode: StartupLaunchMode;
   /** Only meaningful when `agent` is `claude` and `mode` is `native`. */
   claudeNativeBackend: StartupLaunchClaudeBackend;
-  /**
-   * True when the backend's native agent service dispatches this launch itself.
-   *
-   * When true the renderer must leave the initial prompt and its attachments
-   * alone; when false the launch needs a PTY or tmux projection and the
-   * renderer still stages the images and rewrites the prompt.
-   */
-  dispatchedByBackend: boolean;
 }
 
 export const DEFAULT_STARTUP_LAUNCH_AGENT: AgentPlatform = DEFAULT_AGENT_PLATFORM;
@@ -134,10 +126,6 @@ export function resolveStartupLaunchFromSettings(tiers: AgentSettingsTiers): Res
     agent,
     mode,
     claudeNativeBackend,
-    // A tmux-backed Claude launch still needs a real tmux session, so it stays
-    // with the terminal coordinator exactly like a terminal-mode launch.
-    dispatchedByBackend:
-      mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux"),
   };
 }
 

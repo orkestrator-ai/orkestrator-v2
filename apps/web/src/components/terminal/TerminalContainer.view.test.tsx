@@ -661,6 +661,27 @@ describe("TerminalContainer", () => {
    * and no transient options store to fall back on.
    */
   function setupDurableLaunchEnvironment(overrides: Record<string, unknown> = {}): void {
+    const settings = overrides.agentSettings as
+      | {
+          defaultAgent?: "claude" | "codex" | "opencode" | "grok" | "cursor" | "pi";
+          platforms?: Record<string, { mode?: "terminal" | "native" }>;
+        }
+      | undefined;
+    const agent = settings?.defaultAgent ?? "codex";
+    const mode = settings?.platforms?.[agent]?.mode ?? "native";
+    const startupTab =
+      mode === "native"
+        ? {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: agent,
+              environmentId: "env-hidden",
+              containerId: "container-hidden",
+              isLocal: false,
+            },
+          }
+        : { id: "startup-agent", type: agent };
     usePaneLayoutStore.setState({
       environments: new Map([
         [
@@ -669,7 +690,10 @@ describe("TerminalContainer", () => {
             root: {
               kind: "leaf",
               id: "default",
-              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+              tabs: [
+                { id: "default", type: "plain", isSetupTab: true },
+                ...(overrides.pendingAgentLaunch === false ? [] : [startupTab]),
+              ],
               activeTabId: "default",
             },
             activePaneId: "default",
@@ -713,15 +737,8 @@ describe("TerminalContainer", () => {
     );
 
   /**
-   * Wait for the durable launch to reconstruct its agent tab and assert the
-   * one-shot options rode along onto it.
-   *
-   * The tab — not the backend flag — is the durable carrier from this point on:
-   * `TerminalContainer` flushes the layout (options included) before clearing
-   * `pendingAgentLaunch`, and `pane-layout-restore` reads the options back. So
-   * the clear deliberately does *not* wait for a consumer to apply them; doing
-   * so would strand the flag whenever an agent surface reaches a steady state
-   * without applying the model.
+   * Wait for the backend-published startup tab. One-shot launch options belong
+   * to the backend session and must never be reconstructed by the renderer.
    */
   const waitForDurableAgentTab = async (type = "agent-native") => {
     let tabId: string | undefined;
@@ -730,8 +747,9 @@ describe("TerminalContainer", () => {
         .getState()
         .getAllTabs("env-hidden")
         .find((tab) => tab.type === type);
-      expect(agentTab?.initialAgentModel).toBe("gpt-5.6-sol");
-      expect(agentTab?.initialReasoningEffort).toBe("high");
+      expect(agentTab?.id).toBe("startup-agent");
+      expect(agentTab?.initialAgentModel).toBeUndefined();
+      expect(agentTab?.initialReasoningEffort).toBeUndefined();
       tabId = agentTab?.id;
     });
     return tabId!;
@@ -823,7 +841,7 @@ describe("TerminalContainer", () => {
           .getState()
           .getAllTabs("env-hidden")
           .some((tab) => tab.id === "startup-agent"),
-      ).toBe(false);
+      ).toBe(true);
       expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
       expect(acknowledgeStartupAgentSessionMock).not.toHaveBeenCalled();
       expect(
@@ -858,7 +876,7 @@ describe("TerminalContainer", () => {
       model: "sonnet",
     },
   ])(
-    "carries durable model and effort onto the reconstructed $label tab and its flushed layout",
+    "renders the backend-published $label tab without renderer-owned launch options",
     async ({ overrides, expectedType, model }) => {
       setupDurableLaunchEnvironment({
         ...overrides,
@@ -872,25 +890,13 @@ describe("TerminalContainer", () => {
           .getState()
           .getAllTabs("env-hidden")
           .find((tab) => tab.type === expectedType);
-        expect(agentTab?.initialAgentModel).toBe(model);
-        expect(agentTab?.initialReasoningEffort).toBe("high");
+        expect(agentTab?.id).toBe("startup-agent");
+        expect(agentTab?.initialAgentModel).toBeUndefined();
+        expect(agentTab?.initialReasoningEffort).toBeUndefined();
       });
-
-      if (expectedType === "agent-native") {
-        expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
-        return;
-      }
-      await waitFor(() => {
-        expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith("env-hidden", false);
-      });
-      const clearOrder = setEnvironmentPendingAgentLaunchMock.mock.invocationCallOrder[0]!;
-      const flushIndex = savePaneLayoutMock.mock.invocationCallOrder.findIndex(
-        (order) => order < clearOrder,
-      );
-      expect(flushIndex).toBeGreaterThanOrEqual(0);
-      expect(JSON.stringify(savePaneLayoutMock.mock.calls[flushIndex]?.[1])).toContain(
-        `"initialAgentModel":"${model}"`,
-      );
+      expect(model).toBeTruthy();
+      expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
+      expect(savePaneLayoutMock).not.toHaveBeenCalled();
     },
   );
 
@@ -1746,6 +1752,9 @@ describe("TerminalContainer", () => {
     restoreBackendSetupTabLayout();
 
     await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
       expect(setupTabIds()).toEqual([]);
     });
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
@@ -2118,40 +2127,26 @@ describe("TerminalContainer", () => {
 
   test("defers stale setup cleanup until a pending agent launch resolves", async () => {
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
-    // The restored layout already carries the agent tab, so the durable-launch
-    // reconstruction takes its "clear the flag" branch rather than rebuilding
-    // the layout. That isolates the cleanup guard: the setup tab survives only
-    // because `pendingAgentLaunch` defers cleanup.
-    let clearPendingLaunch: (() => void) | undefined;
-    setEnvironmentPendingAgentLaunchMock.mockImplementationOnce(
-      (environmentId: string) =>
-        new Promise((resolve) => {
-          clearPendingLaunch = () =>
-            resolve({
-              ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-              pendingAgentLaunch: false,
-            });
-        }),
-    );
-
+    // The restored layout already carries the backend-published agent tab. The
+    // renderer must wait for the backend to consume the launch intent rather
+    // than clearing it as part of mounting this environment.
     restoreBackendSetupTabLayout({ pendingAgentLaunch: true }, [{ id: "agent", type: "claude" }]);
 
     await waitFor(() => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
-    await waitFor(() => {
-      expect(clearPendingLaunch).toBeDefined();
-    });
-
     // The lookup has settled with no session, so the tab is stale by every
     // other measure — only the pending launch is holding cleanup back.
     await act(async () => {
       await Promise.resolve();
     });
     expect(setupTabIds()).toEqual(["default"]);
+    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      clearPendingLaunch?.();
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        pendingAgentLaunch: false,
+      });
       await Promise.resolve();
     });
 
@@ -2566,7 +2561,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("creates a codex terminal tab when codexMode is terminal", async () => {
+  test("does not create a Codex terminal tab when the backend owns startup", async () => {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -2606,20 +2601,14 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      const codexTab = envHidden.root.tabs.find((tab) => tab.type === "codex");
-      expect(codexTab?.initialPrompt).toBe("Review this diff");
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
   });
 
-  test("saves container initial prompt attachments before creating the agent tab", async () => {
+  test("leaves container initial prompt attachments for the backend", async () => {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -2668,41 +2657,12 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      expect(writeContainerFileMock).toHaveBeenCalledWith(
-        "container-hidden",
-        ".orkestrator/initial-prompt/screen-shot.png",
-        "QUJD",
-      );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      const codexTab = envHidden.root.tabs.find((tab) => tab.type === "codex");
-      expect(codexTab?.initialPrompt).toContain("Use this screenshot");
-      expect(codexTab?.initialPrompt).toContain(
-        "/workspace/.orkestrator/initial-prompt/screen-shot.png",
-      );
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-    });
-
-    // The attachment references only existed in the renderer's options store, so
-    // they are persisted too — otherwise a launch recovered after page eviction
-    // would dispatch the raw prompt with no way to reach the saved files.
-    await waitFor(() => {
-      expect(setEnvironmentInitialPromptMock).toHaveBeenCalled();
-    });
-    const [, persistedPrompt] = setEnvironmentInitialPromptMock.mock.calls.at(-1)!;
-    expect(persistedPrompt).toContain("Use this screenshot");
-    expect(persistedPrompt).toContain("/workspace/.orkestrator/initial-prompt/screen-shot.png");
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.initialPrompt).toBe(
-      persistedPrompt,
-    );
+    expect(writeContainerFileMock).not.toHaveBeenCalled();
+    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
   test("does not persist a prompt that attachment saving left unchanged", async () => {
@@ -2729,14 +2689,14 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(1);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    // Nothing was rewritten, so there is nothing to write back.
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
 
-  test("still creates the agent tab when persisting the rewritten prompt fails", async () => {
+  test("does not enter renderer attachment persistence when the backend owns startup", async () => {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -2788,24 +2748,18 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      await waitFor(() => {
-        expect(setEnvironmentInitialPromptMock).toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
       });
-      // Persisting the references is a durability improvement, not a
-      // precondition: the launch must still happen in this session.
-      await waitFor(() => {
-        const codexTab = usePaneLayoutStore
-          .getState()
-          .getAllTabs("env-hidden")
-          .find((tab) => tab.type === "codex");
-        expect(codexTab?.initialPrompt).toContain("shot.png");
-      });
+      expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+      expect(writeContainerFileMock).not.toHaveBeenCalled();
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
     } finally {
       console.warn = originalWarn;
     }
   });
 
-  test("saves local initial prompt attachments before creating the agent tab", async () => {
+  test("leaves local initial prompt attachments for the backend", async () => {
     useEnvironmentStore.setState((state) => ({
       ...state,
       environments: state.environments.map((env) =>
@@ -2863,159 +2817,12 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      expect(writeLocalFileMock).toHaveBeenCalledWith(
-        "/tmp/env-hidden-worktree",
-        ".orkestrator/initial-prompt/local.png",
-        "REVG",
-      );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs[0]?.type).toBe("codex");
-      expect(envHidden.root.tabs[0]?.initialPrompt).toContain(
-        "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/local.png",
-      );
-      expect(writeContainerFileMock).not.toHaveBeenCalled();
-    });
-  });
-
-  test("retains failed initial prompt attachments and waits for a retry", async () => {
-    writeContainerFileMock.mockImplementation(async () => {
-      throw new Error("disk full");
-    });
-
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "terminal" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Continue without image",
-          initialPromptAttachments: [
-            {
-              id: "img-1",
-              name: "failed.png",
-              previewUrl: "data:image/png;base64,QUJD",
-              base64Data: "QUJD",
-            },
-          ],
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => expect(writeContainerFileMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toEqual([]);
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-      expect(
-        useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
-      ).toEqual([expect.objectContaining({ id: "img-1", name: "failed.png" })]);
-    });
-  });
-
-  test("creates a codex native tab for ready local environments when codexMode is native", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "native" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-            }
-          : env,
-      ),
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Ship it",
-        },
-      },
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.id).toBe("startup-agent");
-      expect(envHidden.root.tabs[0]?.type).toBe("agent-native");
-      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Ship it");
-    });
+    expect(writeLocalFileMock).not.toHaveBeenCalled();
+    expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
   });
 
   test("leaves initial prompt images to the backend when it owns the native launch", async () => {
@@ -3145,65 +2952,6 @@ describe("TerminalContainer", () => {
     ).toEqual(attachments);
   });
 
-  test("still stages images itself for a tmux-backed native Claude launch", async () => {
-    // `native` is not sufficient: a tmux launch needs a real tmux session, so
-    // the backend leaves it to the terminal coordinator. If the renderer stood
-    // down here too, nothing would deliver the image.
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-              setupPhase: "ready",
-              setupScriptsComplete: true,
-              agentSettings: {
-                defaultAgent: "claude",
-                platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
-              },
-              initialPrompt: "Inspect this screenshot",
-              pendingAgentLaunch: true,
-            }
-          : env,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "Inspect this screenshot",
-          initialPromptAttachments: [
-            {
-              id: "img-tmux",
-              name: "tmux.png",
-              previewUrl: "data:image/png;base64,VE1VWA==",
-              base64Data: "VE1VWA==",
-            },
-          ],
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(writeLocalFileMock).toHaveBeenCalledWith(
-        "/tmp/env-hidden-worktree",
-        ".orkestrator/initial-prompt/tmux.png",
-        "VE1VWA==",
-      );
-    });
-  });
-
   test("stands down for a native launch the repository's agent style selects", async () => {
     // The backend resolves the Claude style through the repository tier as
     // well. The renderer has to reach the same verdict from the same tier, or
@@ -3287,228 +3035,6 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentInitialPromptMock).not.toHaveBeenCalled();
   });
 
-  test("does not reconstruct a second tab while a terminal launch stages images", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "terminal" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    let resolveAttachmentWrite: ((savedPath: string) => void) | undefined;
-    writeLocalFileMock.mockImplementationOnce(
-      async () =>
-        new Promise<string>((resolve) => {
-          resolveAttachmentWrite = resolve;
-        }),
-    );
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "terminal" } } },
-              initialPrompt: "Inspect this screenshot",
-              pendingAgentLaunch: true,
-            }
-          : env,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Inspect this screenshot",
-          initialPromptAttachments: [
-            {
-              id: "img-1",
-              name: "race.png",
-              previewUrl: "data:image/png;base64,UkFDRQ==",
-              base64Data: "UkFDRQ==",
-            },
-          ],
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    // A PTY prompt cannot carry an attachment, so this path still rewrites the
-    // prompt into workspace paths — and must not seed a second tab while the
-    // staging write is in flight.
-    await waitFor(() => expect(writeLocalFileMock).toHaveBeenCalledTimes(1));
-
-    await act(async () => {
-      resolveAttachmentWrite?.("/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png");
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      const codexTabs = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "codex");
-      expect(codexTabs).toHaveLength(1);
-      expect(codexTabs[0]?.initialPrompt).toContain(
-        "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png",
-      );
-    });
-  });
-
-  test("creates a Claude tmux tab for ready local environments when Claude native backend is tmux", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-            }
-          : env,
-      ),
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "Use tmux",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("claude-tmux");
-      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Use tmux");
-      expect(envHidden.root.tabs[0]?.initialFastMode).toBe(true);
-      expect(envHidden.root.tabs[0]?.claudeTmuxData).toEqual({
-        containerId: undefined,
-        environmentId: "env-hidden",
-        isLocal: true,
-      });
-    });
-  });
-
-  test("creates a Claude tmux tab after local setup is ready", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-            }
-          : env,
-      ),
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "After setup",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("claude-tmux");
-      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("After setup");
-      expect(envHidden.root.tabs[0]?.initialFastMode).toBe(true);
-      expect(envHidden.root.activeTabId).toBe("startup-agent");
-    });
-  });
-
   test("creates a regular terminal for a ready local environment when no agent is requested", async () => {
     useEnvironmentStore.setState((state) => ({
       ...state,
@@ -3538,633 +3064,6 @@ describe("TerminalContainer", () => {
         },
       ]);
     });
-  });
-
-  test("creates a terminal-mode agent tab for ready local environments", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              opencode: {
-                ...state.config.global.agentSettings?.platforms?.opencode,
-                mode: "terminal",
-              },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) =>
-        environment.id === "env-hidden"
-          ? {
-              ...environment,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-            }
-          : environment,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "opencode",
-          initialPrompt: "Continue locally",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
-      expect(tabs).toHaveLength(1);
-      expect(tabs[0]).toMatchObject({
-        type: "opencode",
-        initialPrompt: "Continue locally",
-      });
-    });
-  });
-
-  test("creates Codex and OpenCode native tabs for ready local environments", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "native" },
-              opencode: { mode: "native" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    usePaneLayoutStore.setState({
-      environments: new Map(),
-      hydration: new Map([
-        ["env-visible", "done"],
-        ["env-hidden", "done"],
-      ]),
-      activeEnvironmentId: "env-visible",
-    });
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) => ({
-        ...environment,
-        containerId: null,
-        environmentType: "local",
-        worktreePath: `/tmp/${environment.id}-worktree`,
-      })),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-visible": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Codex after setup",
-        },
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "opencode",
-          initialPrompt: "OpenCode after setup",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-visible" containerId={null} isActive={false} />
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toMatchObject([
-        {
-          type: "agent-native",
-          initialPrompt: "Codex after setup",
-          nativeAgentData: { environmentId: "env-visible", isLocal: true },
-        },
-      ]);
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
-        {
-          type: "agent-native",
-          initialPrompt: "OpenCode after setup",
-          nativeAgentData: { environmentId: "env-hidden", isLocal: true },
-        },
-      ]);
-    });
-  });
-
-  test("creates OpenCode native and Claude SDK initial tabs for local environments without setup", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              opencode: { mode: "native" },
-              claude: { mode: "native", claudeNativeBackend: "sdk" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    usePaneLayoutStore.setState({
-      environments: new Map(),
-      hydration: new Map([
-        ["env-visible", "done"],
-        ["env-hidden", "done"],
-      ]),
-      activeEnvironmentId: "env-visible",
-    });
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) => ({
-        ...environment,
-        containerId: null,
-        environmentType: "local",
-        worktreePath: `/tmp/${environment.id}-worktree`,
-      })),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-visible": { launchAgent: true, agentType: "opencode", initialPrompt: "" },
-        "env-hidden": { launchAgent: true, agentType: "claude", initialPrompt: "" },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-visible" containerId={null} isActive={false} />
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")[0]).toMatchObject({
-        type: "agent-native",
-        nativeAgentData: {
-          containerId: undefined,
-          environmentId: "env-visible",
-          isLocal: true,
-        },
-      });
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")[0]).toMatchObject({
-        type: "agent-native",
-        nativeAgentData: {
-          containerId: undefined,
-          environmentId: "env-hidden",
-          isLocal: true,
-        },
-      });
-    });
-  });
-
-  test("creates OpenCode, Codex, and Claude native initial tabs for setup-complete containers", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              opencode: { mode: "native" },
-              claude: { mode: "native", claudeNativeBackend: "sdk" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    usePaneLayoutStore.setState({
-      environments: new Map(),
-      hydration: new Map([
-        ["env-visible", "done"],
-        ["env-hidden", "done"],
-        ["env-third", "done"],
-      ]),
-      activeEnvironmentId: "env-visible",
-    });
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: [
-        ...state.environments.map((environment) => ({
-          ...environment,
-          setupScriptsComplete: true,
-        })),
-        {
-          ...state.environments[0]!,
-          id: "env-third",
-          name: "third",
-          containerId: "container-third",
-          setupScriptsComplete: true,
-          order: 2,
-        },
-      ],
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-visible": { launchAgent: true, agentType: "opencode", initialPrompt: "" },
-        "env-hidden": { launchAgent: true, agentType: "codex", initialPrompt: "" },
-        "env-third": { launchAgent: true, agentType: "claude", initialPrompt: "" },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-visible"
-          containerId="container-visible"
-          isContainerRunning
-          isActive={false}
-        />
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-        <TerminalContainer
-          environmentId="env-third"
-          containerId="container-third"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")[0]).toMatchObject({
-        type: "agent-native",
-        nativeAgentData: {
-          containerId: "container-visible",
-          environmentId: "env-visible",
-          isLocal: false,
-        },
-      });
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")[0]).toMatchObject({
-        type: "agent-native",
-        nativeAgentData: {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          isLocal: false,
-        },
-      });
-      expect(usePaneLayoutStore.getState().getAllTabs("env-third")[0]).toMatchObject({
-        type: "agent-native",
-        nativeAgentData: {
-          containerId: "container-third",
-          environmentId: "env-third",
-          isLocal: false,
-        },
-      });
-    });
-  });
-
-  test("resumes a pending container native launch after the environment remounts", async () => {
-    seedContainerSetupCommands();
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: true,
-      startedAt: "2024-01-01T00:00:00.000Z",
-      terminalRunning: true,
-    });
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "native" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Continue after setup",
-          model: "gpt-5.6-sol",
-          reasoningEffort: "high",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    const firstRender = render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("plain");
-      expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
-      ).toBe(true);
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeDefined();
-    });
-
-    firstRender.unmount();
-
-    // Simulate the old timer clearing transient options while the durable
-    // launch intent survives the component unmount.
-    useClaudeOptionsStore.getState().clearOptions("env-hidden");
-    await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "ready" });
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "agent-native");
-      expect(nativeTab?.id).toBe("startup-agent");
-      expect(nativeTab?.initialPrompt).toBe("Continue after setup");
-      expect(nativeTab?.initialAgentModel).toBe("gpt-5.6-sol");
-      expect(nativeTab?.initialReasoningEffort).toBe("high");
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
-      ).toBe(false);
-    });
-  });
-
-  test("launches a pending native tab when persisted setup is complete but workspaceReady is stale", async () => {
-    usePaneLayoutStore.setState((state) => {
-      const environments = new Map(state.environments);
-      environments.set("env-hidden", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-          activeTabId: "default",
-        },
-        activePaneId: "default",
-        containerId: "container-hidden",
-      });
-      return { ...state, environments };
-    });
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              setupScriptsComplete: true,
-            }
-          : env,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-hidden": {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          initialPrompt: "Recover from stale setup state",
-          targetPaneId: "default",
-          agentType: "codex",
-          launchMode: "native",
-        },
-      },
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "agent-native");
-      expect(nativeTab?.initialPrompt).toBe("Recover from stale setup state");
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "ready",
-      ).toBe(true);
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
-      ).toBe(false);
-    });
-  });
-
-  test("falls back to the live active pane when a pending launch target disappeared", async () => {
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        [
-          "env-hidden",
-          {
-            root: {
-              kind: "leaf",
-              id: "survivor",
-              tabs: [{ id: "existing", type: "plain" }],
-              activeTabId: "existing",
-            },
-            activePaneId: "survivor",
-            containerId: "container-hidden",
-          },
-        ],
-      ]),
-      hydration: new Map([["env-hidden", "done"]]),
-      activeEnvironmentId: null,
-    } as never);
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden" ? { ...env, setupScriptsComplete: true } : env,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-hidden": {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          targetPaneId: "removed-pane",
-          agentType: "codex",
-          launchMode: "native",
-        },
-      },
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const survivor = usePaneLayoutStore.getState().getPane("survivor", "env-hidden");
-      expect(survivor?.tabs).toContainEqual(
-        expect.objectContaining({
-          id: "startup-agent",
-          type: "agent-native",
-        }),
-      );
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-    });
-  });
-
-  test("renders a durable native launch without consuming the backend intent", async () => {
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        [
-          "env-hidden",
-          {
-            root: {
-              kind: "leaf",
-              id: "default",
-              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-              activeTabId: "default",
-            },
-            activePaneId: "default",
-            containerId: "container-hidden",
-          },
-        ],
-      ]),
-      hydration: new Map([["env-hidden", "done"]]),
-      activeEnvironmentId: null,
-    });
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) =>
-        environment.id === "env-hidden"
-          ? {
-              ...environment,
-              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-              setupScriptsComplete: true,
-              pendingAgentLaunch: true,
-              initialPrompt: "Recover after mobile reload",
-              initialAgentModel: "gpt-5.6-sol",
-              initialReasoningEffort: "high",
-            }
-          : environment,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const codexTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "agent-native");
-      // Every renderer must choose the same logical tab so pane-layout merging,
-      // Codex session creation, and initial-prompt dispatch are idempotent.
-      expect(codexTab?.id).toBe("startup-agent");
-      // The backend dispatches the prompt; the renderer only represents the
-      // launch and must not dispatch a second copy from the tab.
-      expect(codexTab?.initialPrompt).toBeUndefined();
-      expect(codexTab?.initialAgentModel).toBe("gpt-5.6-sol");
-      expect(codexTab?.initialReasoningEffort).toBe("high");
-    });
-
-    // The frontend may optimistically represent the intent, but only the
-    // backend may consume it after the provider session and pane are durable.
-    expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
-    expect(
-      useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.pendingAgentLaunch,
-    ).toBe(true);
   });
 
   test("projects a backend-created session into one stable tab without acknowledging it", async () => {
@@ -4634,49 +3533,6 @@ describe("TerminalContainer", () => {
     expect(agentTab?.initialReasoningEffort).toBeUndefined();
   });
 
-  test("carries an effort-only durable launch with no model", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-      initialAgentModel: undefined,
-      initialReasoningEffort: "xhigh",
-    });
-    renderHiddenTerminal();
-
-    await waitFor(() => {
-      const agentTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "agent-native");
-      expect(agentTab?.initialReasoningEffort).toBe("xhigh");
-      expect(agentTab?.initialAgentModel).toBeUndefined();
-    });
-  });
-
-  test("records the durable model and effort on the pending native launch itself", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-    });
-
-    // The record is consumed into a tab on the very next render, so sample every
-    // value the store holds rather than polling for a state that has already
-    // been cleared. The tab is built from this record, so a regression here
-    // silently drops the user's choice on every consuming branch.
-    const observed: Array<{ model?: string; reasoningEffort?: string }> = [];
-    const unsubscribe = useClaudeOptionsStore.subscribe((state) => {
-      const pending = state.pendingNativeLaunches["env-hidden"];
-      if (pending)
-        observed.push({ model: pending.model, reasoningEffort: pending.reasoningEffort });
-    });
-
-    try {
-      renderHiddenTerminal();
-      await waitForDurableAgentTab();
-      expect(observed).toContainEqual({ model: "gpt-5.6-sol", reasoningEffort: "high" });
-    } finally {
-      unsubscribe();
-    }
-  });
-
   test("does not make a backend-owned native launch depend on renderer persistence", async () => {
     setupDurableLaunchEnvironment({
       agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
@@ -4893,85 +3749,6 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
-  test("does not queue a second launch when one is already pending", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-    });
-    const existing = {
-      containerId: "container-hidden",
-      environmentId: "env-hidden",
-      targetPaneId: "default",
-      agentType: "claude" as const,
-      launchMode: "native" as const,
-      initialPrompt: "already queued",
-    };
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: { "env-hidden": existing },
-    });
-
-    renderHiddenTerminal();
-
-    // The transient launch already in flight wins; the durable path must not
-    // overwrite it and produce a second agent tab.
-    await waitFor(() => {
-      const agentTabs = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .filter((tab) => tab.type === "agent-native");
-      expect(agentTabs).toHaveLength(1);
-      expect(agentTabs[0]?.type).toBe("agent-native");
-      expect(agentTabs[0]?.initialPrompt).toBe("already queued");
-    });
-  });
-
-  test("reconstructs a terminal-mode agent launch when the agent is not in native mode", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "terminal" } } },
-    });
-
-    renderHiddenTerminal();
-
-    await waitFor(() => {
-      const agentTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "codex");
-      expect(agentTab).toBeDefined();
-      expect(agentTab?.initialPrompt).toBe("Recover after mobile reload");
-    });
-    // Terminal mode must not produce a native tab.
-    expect(
-      usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .some((tab) => tab.type === "agent-native"),
-    ).toBe(false);
-  });
-
-  test("reconstructs a native Claude launch carrying the resolved native backend", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: {
-        defaultAgent: "claude",
-        platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
-      },
-    });
-
-    renderHiddenTerminal();
-
-    // The tmux backend selects a different tab type, so the resolved backend has
-    // to reach the launch rather than being dropped.
-    await waitFor(() => {
-      const agentTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "claude-tmux");
-      expect(agentTab).toBeDefined();
-      expect(agentTab?.claudeTmuxData?.environmentId).toBe("env-hidden");
-      expect(agentTab?.initialPrompt).toBe("Recover after mobile reload");
-    });
-  });
-
   test("falls back to the global default agent when the environment has none", async () => {
     setupDurableLaunchEnvironment({
       agentSettings: { platforms: { opencode: { mode: "native" } } },
@@ -4995,35 +3772,6 @@ describe("TerminalContainer", () => {
           .getAllTabs("env-hidden")
           .some((tab) => tab.type === "agent-native"),
       ).toBe(true);
-    });
-  });
-
-  test("reconstructs a local environment launch with no container id", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-      environmentType: "local",
-      worktreePath: "/tmp/worktree-hidden",
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId={null}
-          isContainerRunning={false}
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const agentTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "agent-native");
-      expect(agentTab).toBeDefined();
-      expect(agentTab?.nativeAgentData?.isLocal).toBe(true);
-      expect(agentTab?.nativeAgentData?.containerId).toBeUndefined();
     });
   });
 
@@ -5095,203 +3843,7 @@ describe("TerminalContainer", () => {
     expect(useClaudeOptionsStore.getState().pendingNativeLaunches["env-hidden"]).toBeUndefined();
   });
 
-  test("does not treat a build or review tab as the launched startup agent", async () => {
-    setupDurableLaunchEnvironment({
-      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
-    });
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        [
-          "env-hidden",
-          {
-            root: {
-              kind: "leaf",
-              id: "default",
-              tabs: [
-                { id: "build-1", type: "claude-build" },
-                { id: "review-1", type: "looped-review" },
-                { id: "browser-1", type: "browser" },
-              ],
-              activeTabId: "build-1",
-            },
-            activePaneId: "default",
-            containerId: "container-hidden",
-          },
-        ],
-      ]),
-      hydration: new Map([["env-hidden", "done"]]),
-      activeEnvironmentId: null,
-    } as never);
-
-    renderHiddenTerminal();
-
-    // None of those tabs is the agent the launch asked for, so the launch must
-    // still be performed rather than considered already satisfied.
-    await waitFor(() => {
-      expect(
-        usePaneLayoutStore
-          .getState()
-          .getAllTabs("env-hidden")
-          .some((tab) => tab.type === "agent-native"),
-      ).toBe(true);
-    });
-  });
-
-  test("resumes a pending OpenCode native launch with container metadata", async () => {
-    usePaneLayoutStore.setState((state) => ({
-      environments: new Map(state.environments).set("env-hidden", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "setup", type: "plain", isSetupTab: true }],
-          activeTabId: "setup",
-        },
-        activePaneId: "default",
-        containerId: "container-hidden",
-      }),
-    }));
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-    }));
-    useClaudeOptionsStore.setState({
-      options: {},
-      pendingNativeLaunches: {
-        "env-hidden": {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          initialPrompt: "Resume OpenCode",
-          targetPaneId: "default",
-          agentType: "opencode",
-          launchMode: "native",
-        },
-      },
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const openCodeTab = usePaneLayoutStore
-        .getState()
-        .getAllTabs("env-hidden")
-        .find((tab) => tab.type === "agent-native");
-      expect(openCodeTab).toMatchObject({
-        initialPrompt: "Resume OpenCode",
-        nativeAgentData: {
-          containerId: "container-hidden",
-          environmentId: "env-hidden",
-          isLocal: false,
-        },
-      });
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-    });
-  });
-
-  test("launches Claude tmux after container setup when Claude native backend is tmux", async () => {
-    seedContainerSetupCommands();
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: true,
-      startedAt: "2024-01-01T00:00:00.000Z",
-      terminalRunning: true,
-    });
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "Continue in tmux",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("plain");
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toEqual({
-        containerId: "container-hidden",
-        environmentId: "env-hidden",
-        initialPrompt: "Continue in tmux",
-        targetPaneId: "default",
-        agentType: "claude",
-        launchMode: "native",
-        claudeNativeBackend: "tmux",
-        fastMode: true,
-      });
-    });
-
-    await act(async () => {
-      useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "ready" });
-    });
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      const tmuxTab = envHidden.root.tabs.find((tab) => tab.type === "claude-tmux");
-      expect(tmuxTab?.initialPrompt).toBe("Continue in tmux");
-      expect(tmuxTab?.initialFastMode).toBe(true);
-      expect(tmuxTab?.claudeTmuxData).toEqual({
-        containerId: "container-hidden",
-        environmentId: "env-hidden",
-        isLocal: false,
-      });
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
-      ).toBe(false);
-    });
-  });
-
-  test("clears a pending native launch when the container stops", async () => {
+  test("does not consume legacy renderer launch state when the container stops", async () => {
     useClaudeOptionsStore.getState().setPendingNativeLaunch("env-hidden", {
       containerId: "container-hidden",
       environmentId: "env-hidden",
@@ -5311,8 +3863,12 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
-    await waitFor(() => {
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toMatchObject({
+      initialPrompt: "Do not launch after stop",
+      agentType: "codex",
     });
   });
 
@@ -5454,85 +4010,6 @@ describe("TerminalContainer", () => {
         .getAllTabs("env-hidden")
         .map((tab) => tab.id),
     ).not.toContain("hidden-agent-tab");
-  });
-
-  test("clears a pending native launch when the container id changes", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "native" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Old container prompt",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-    ensureEnvironmentSetupMock.mockImplementationOnce(async (environmentId: string) => {
-      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
-      return {
-        setupStarted: true,
-        setupSessionId: `${environmentId}:setup`,
-        environment,
-      };
-    });
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: true,
-      startedAt: "2024-01-01T00:00:00.000Z",
-      terminalRunning: true,
-    });
-
-    const { rerender } = render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeDefined();
-    });
-
-    useClaudeOptionsStore.getState().clearOptions("env-hidden");
-
-    rerender(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-restarted"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-    });
   });
 
   test("renders the backend-owned setup session in a plain terminal", async () => {
@@ -6383,79 +4860,6 @@ describe("TerminalContainer", () => {
     expect(getSetupCommandsMock).not.toHaveBeenCalled();
   });
 
-  test("ignores stale legacy setup flags when the authoritative phase is ready", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          agentSettings: {
-            ...state.config.global.agentSettings,
-            platforms: {
-              ...state.config.global.agentSettings?.platforms,
-              codex: { mode: "native" },
-            },
-          },
-        },
-        repositories: {},
-      },
-    }));
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-              setupScriptsComplete: false,
-            }
-          : env,
-      ),
-    }));
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Review this build",
-          model: "gpt-5.6-sol",
-          reasoningEffort: "high",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive={false} />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      expect(envHidden?.root.kind).toBe("leaf");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-
-      expect(envHidden.root.tabs).toHaveLength(1);
-      expect(envHidden.root.tabs[0]?.type).toBe("agent-native");
-      expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
-      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this build");
-      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("gpt-5.6-sol");
-      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "running",
-      ).toBe(false);
-      expect(
-        useEnvironmentStore.getState().getEnvironmentById("env-hidden")?.setupPhase === "ready",
-      ).toBe(true);
-    });
-  });
-
   test("removes a stale blank setup placeholder after setup has completed", async () => {
     usePaneLayoutStore.setState((state) => {
       const environments = new Map(state.environments);
@@ -6551,116 +4955,6 @@ describe("TerminalContainer", () => {
 
     expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
   });
-
-  test("clears applied launch options without an initial prompt via the fallback timer", async () => {
-    // Local terminal-mode agent launch with NO initialPrompt and no setup
-    // commands: the agent tab is created directly, so no pending native launch
-    // exists and the immediate native-launch cleanup never runs. Before the
-    // cleanup guard was broadened to fire for any applied options (not only
-    // those with an initialPrompt), these options were never cleared.
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((env) =>
-        env.id === "env-hidden"
-          ? {
-              ...env,
-              containerId: null,
-              environmentType: "local",
-              worktreePath: "/tmp/env-hidden-worktree",
-            }
-          : env,
-      ),
-    }));
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "",
-          model: "sonnet",
-          reasoningEffort: "high",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer environmentId="env-hidden" containerId={null} isActive />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
-      if (!envHidden || envHidden.root.kind !== "leaf") {
-        throw new Error("env-hidden root should be a leaf");
-      }
-      expect(envHidden.root.tabs[0]?.type).toBe("claude");
-      expect(envHidden.root.tabs[0]?.initialAgentModel).toBe("sonnet");
-      expect(envHidden.root.tabs[0]?.initialReasoningEffort).toBe("high");
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
-    });
-
-    // The fallback timer (3s) clears the now-applied options.
-    await waitFor(
-      () => {
-        expect(useClaudeOptionsStore.getState().getOptions("env-hidden")).toBeUndefined();
-      },
-      { timeout: 6000 },
-    );
-  }, 12000);
-
-  test("keeps launch options while a pending native launch is still outstanding", async () => {
-    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: true,
-      startedAt: "2024-01-01T00:00:00.000Z",
-      terminalRunning: true,
-    });
-
-    useClaudeOptionsStore.setState({
-      options: {
-        "env-hidden": {
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "",
-        },
-      },
-      pendingNativeLaunches: {},
-    });
-
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive
-        />
-      </TerminalProvider>,
-    );
-
-    await waitFor(() => {
-      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toMatchObject({
-        agentType: "codex",
-        launchMode: "native",
-      });
-    });
-
-    // Wait past the fallback timer window; the launch is still outstanding.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 3500));
-    });
-
-    expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeDefined();
-    expect(useClaudeOptionsStore.getState().getOptions("env-hidden")).toMatchObject({
-      launchAgent: true,
-      agentType: "codex",
-    });
-  }, 12000);
 
   test("selects and closes tabs only in the active pane and ignores invalid indices", async () => {
     function TabCommandHarness() {

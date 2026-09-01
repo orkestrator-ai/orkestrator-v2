@@ -50,6 +50,31 @@ export interface BootstrapTerminalResult {
   duplicate: boolean;
 }
 
+export interface TerminalJobLaunchResult {
+  jobId: string;
+  environmentId: string;
+  tabId: string;
+  tabType: string;
+  sessionId?: string;
+  status: "started";
+}
+
+export async function launchTerminalJob(input: {
+  requestId: string;
+  environmentId: string;
+  tabId?: string;
+  tabType: "plain" | "claude" | "codex" | "grok" | "opencode" | "pi" | "claude-tmux";
+  data?: string;
+  initialPrompt?: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  activateTab?: boolean;
+}): Promise<TerminalJobLaunchResult> {
+  return invoke<TerminalJobLaunchResult>("launch_terminal_job", input);
+}
+
 export async function bootstrapTerminalSession(
   sessionId: string,
   data: string,

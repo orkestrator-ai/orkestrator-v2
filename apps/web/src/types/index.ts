@@ -175,6 +175,8 @@ export interface Environment {
    * backend owns this flag so mobile page eviction cannot lose the launch.
    */
   pendingAgentLaunch?: boolean;
+  /** One-shot agent selected for the backend-owned startup launch. */
+  initialAgentPlatform?: DefaultAgent;
   /** One-shot model for the agent tab created from pendingAgentLaunch. */
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */

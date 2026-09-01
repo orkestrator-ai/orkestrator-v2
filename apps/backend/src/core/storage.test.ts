@@ -10,7 +10,7 @@ import {
 } from "./storage.js";
 import type { AppConfig, ClaudeModelCatalogEntry, CodexModelCatalogEntry } from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
-import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { MAX_TABS_PER_ENVIRONMENT, PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
@@ -715,6 +715,181 @@ describe("backend-owned setup and build surfaces", () => {
           },
         ],
       });
+    });
+  });
+
+  test("publishes a backend-managed terminal job beside the setup terminal", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-terminal-startup";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+
+      const layout = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "startup-agent",
+        type: "codex",
+        activate: true,
+      });
+
+      expect(layout.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "startup-agent",
+        tabs: [
+          { id: "default", type: "plain", isSetupTab: true },
+          {
+            id: "startup-agent",
+            type: "codex",
+            backendManagedTerminal: true,
+          },
+        ],
+      });
+    });
+  });
+
+  test("publishes Claude tmux metadata for local and container environments", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const local = createEnvironment("project-1");
+      local.id = "env-local-tmux";
+      local.environmentType = "local";
+      local.containerId = null;
+      await storage.addEnvironment(local);
+
+      const container = createEnvironment("project-1");
+      container.id = "env-container-tmux";
+      container.environmentType = "containerized";
+      container.containerId = "container-1";
+      await storage.addEnvironment(container);
+
+      const localLayout = await storage.ensureTerminalJobTab({
+        environmentId: local.id,
+        tabId: "startup-agent",
+        type: "claude-tmux",
+      });
+      const containerLayout = await storage.ensureTerminalJobTab({
+        environmentId: container.id,
+        tabId: "startup-agent",
+        type: "claude-tmux",
+      });
+
+      expect(localLayout.root).toMatchObject({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "startup-agent",
+            claudeTmuxData: { environmentId: local.id, isLocal: true },
+          }),
+        ]),
+      });
+      expect(containerLayout.root).toMatchObject({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "startup-agent",
+            claudeTmuxData: {
+              environmentId: container.id,
+              isLocal: false,
+              containerId: "container-1",
+            },
+          }),
+        ]),
+      });
+    });
+  });
+
+  test("terminal job republication removes stale one-shot launch payloads", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-terminal-republish";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "codex",
+                initialPrompt: "stale",
+                initialCommands: ["echo stale"],
+                initialAgentModel: "stale-model",
+                initialReasoningEffort: "high",
+                initialConversationMode: "plan",
+                initialFastMode: true,
+                nativeAgentData: { platform: "codex" },
+                claudeTmuxData: { environmentId: environment.id, isLocal: true },
+              },
+            ],
+            activeTabId: "startup-agent",
+          },
+        },
+        0,
+      );
+
+      const layout = await storage.ensureTerminalJobTab({
+        environmentId: environment.id,
+        tabId: "startup-agent",
+        type: "codex",
+      });
+      const serialized = JSON.stringify(layout.root);
+      expect(serialized).not.toContain("initialPrompt");
+      expect(serialized).not.toContain("initialCommands");
+      expect(serialized).not.toContain("initialAgentModel");
+      expect(serialized).not.toContain("initialReasoningEffort");
+      expect(serialized).not.toContain("initialConversationMode");
+      expect(serialized).not.toContain("initialFastMode");
+      expect(serialized).not.toContain("nativeAgentData");
+      expect(serialized).not.toContain("claudeTmuxData");
+    });
+  });
+
+  test("terminal job publication rejects tab identity collisions and the layout cap", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-terminal-bounds";
+      environment.environmentType = "local";
+      environment.containerId = null;
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: Array.from({ length: MAX_TABS_PER_ENVIRONMENT }, (_, index) => ({
+              id: index === 0 ? "collision" : `tab-${index}`,
+              type: index === 0 ? "browser" : "plain",
+            })),
+            activeTabId: "collision",
+          },
+        },
+        0,
+      );
+
+      await expect(
+        storage.ensureTerminalJobTab({
+          environmentId: environment.id,
+          tabId: "collision",
+          type: "plain",
+        }),
+      ).rejects.toThrow("Tab ID is already in use");
+      await expect(
+        storage.ensureTerminalJobTab({
+          environmentId: environment.id,
+          tabId: "one-too-many",
+          type: "plain",
+        }),
+      ).rejects.toThrow(`maximum of ${MAX_TABS_PER_ENVIRONMENT} tabs`);
     });
   });
 

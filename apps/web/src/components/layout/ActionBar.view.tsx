@@ -3,6 +3,7 @@ import {
   createContext,
   lazy,
   useContext,
+  useEffect,
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
@@ -78,12 +79,14 @@ import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
-import { useActionBarController } from "./useActionBarController";
+import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { DEFAULT_MULTI_REVIEW_REVIEWER_COUNT } from "@orkestrator/protocol/agent-settings";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
   MULTI_REVIEW_MIN_REVIEWERS,
 } from "@orkestrator/protocol/multi-review";
+import { MAX_TABS } from "@/contexts";
+import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
@@ -208,6 +211,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const {
     dockerAvailable,
     isGrid,
+    selectedEnvironmentId,
     selectedProjectId,
     projectBoardTab,
     setProjectBoardTab,
@@ -219,6 +223,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     updateProject,
     config,
     createTab,
+    tabCount,
     filesPanelOpen,
     toggleFilesPanel,
     changes,
@@ -264,6 +269,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setPrLaunchError,
     prDialogOpen,
     createPrButtonRef,
+    createPrLaunchPending,
     resolveDialogTarget,
     setResolveDialogTarget,
     resolveLaunchError,
@@ -384,6 +390,79 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     },
   );
 
+  const multiReviewShortcutStateRef = useRef({
+    canCreateTab,
+    fixReviewIssuesLaunchDefaults,
+    handleMultiReview,
+    isRunning,
+    multiReviewLaunchPending,
+    multiReviewReviewerDefaults,
+    reviewLaunchDefaults,
+    reviewModelCatalog,
+    selectedEnvironmentId,
+    setupRunning,
+    tabCount,
+    workspaceReady,
+  });
+  multiReviewShortcutStateRef.current = {
+    canCreateTab,
+    fixReviewIssuesLaunchDefaults,
+    handleMultiReview,
+    isRunning,
+    multiReviewLaunchPending,
+    multiReviewReviewerDefaults,
+    reviewLaunchDefaults,
+    reviewModelCatalog,
+    selectedEnvironmentId,
+    setupRunning,
+    tabCount,
+    workspaceReady,
+  };
+
+  useEffect(() => {
+    const handleMultiReviewShortcut = (event: KeyboardEvent) => {
+      const state = multiReviewShortcutStateRef.current;
+      if (
+        event.defaultPrevented ||
+        isEditableShortcutTarget(event.target) ||
+        event.key.toLowerCase() !== "m" ||
+        !event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !state.selectedEnvironmentId ||
+        !state.isRunning ||
+        !state.workspaceReady ||
+        state.setupRunning ||
+        state.multiReviewLaunchPending
+      ) {
+        return;
+      }
+
+      if (state.tabCount >= MAX_TABS) {
+        event.preventDefault();
+        showTabLimitReachedToast(MAX_TABS);
+        return;
+      }
+      if (!state.canCreateTab) return;
+
+      event.preventDefault();
+      void state.handleMultiReview(
+        defaultMultiReviewLaunchSelection({
+          defaultAgent: state.reviewLaunchDefaults.defaultAgent,
+          catalog: state.reviewModelCatalog,
+          preferredModels: state.reviewLaunchDefaults.preferredModels,
+          preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
+          reviewerDefaults: state.multiReviewReviewerDefaults,
+          fixModelDefaults: state.fixReviewIssuesLaunchDefaults,
+        }),
+      );
+    };
+
+    window.addEventListener("keydown", handleMultiReviewShortcut);
+    return () => window.removeEventListener("keydown", handleMultiReviewShortcut);
+  }, []);
+
   /*
    * Declared once and placed twice. The desktop toolbar renders it on the
    * right, beside the file-panel toggle; the grid (mobile) toolbar is a single
@@ -395,13 +474,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       tooltip={
         !isRunning ? (
           "Container must be running"
+        ) : createPrLaunchPending ? (
+          "Pull request creation is already underway"
         ) : !canLaunchBackendJob ? (
           "Maximum tabs reached"
         ) : (
           <>
             <p>Launch agent to create a pull request</p>
             <p className="text-xs text-muted-foreground">
-              Right-click or long-press to choose agent, model, and reasoning
+              ⌘P · ⌘⇧U or right-click/long-press to configure
             </p>
           </>
         )
@@ -426,7 +507,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         }}
         {...prLongPress.handlers}
         data-toolbar-custom-context-menu="true"
-        disabled={!isRunning || !canLaunchBackendJob}
+        disabled={!isRunning || !canLaunchBackendJob || createPrLaunchPending}
         // The visible label is shortened to fit the toolbar, but "PR" on its own
         // names a noun rather than the action, so the accessible name keeps the
         // verb it is announced with.
@@ -704,7 +785,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           Commit changes and review code
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ⌘R · Right-click or long-press to configure
+                          ⌘R · ⌘⇧R or right-click/long-press to configure
                         </p>
                       </>
                     }
@@ -743,7 +824,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           Compare independent model reviews and consolidate every finding
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          Right-click or long-press to configure
+                          ⌘M · ⌘⇧M or right-click/long-press to configure
                         </p>
                       </>
                     }
@@ -834,7 +915,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                               : "Add 'run' array to orkestrator-ai.json to enable"}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ⌘P · Right-click or long-press to create a script
+                          ⌘G · ⌘⇧G or right-click/long-press to create a script
                         </p>
                       </>
                     }
@@ -1042,7 +1123,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           <>
                             <p>PR has merge conflicts - launch agent to resolve them</p>
                             <p className="text-xs text-muted-foreground">
-                              Right-click or long-press to choose agent, model, and reasoning
+                              ⌘⇧U or right-click/long-press to configure
                             </p>
                           </>
                         )

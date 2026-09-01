@@ -50,7 +50,7 @@ import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 
-function isEditableShortcutTarget(target: EventTarget | null): boolean {
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   return !!target.closest("input, textarea, select, [contenteditable='true'], .xterm");
@@ -130,6 +130,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
+  const createPrLaunchEnvironmentIdsRef = useRef(new Set<string>());
+  const [createPrLaunchEnvironmentIds, setCreatePrLaunchEnvironmentIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [resolveDialogTarget, setResolveDialogTarget] = useState<{
     environmentId: string;
     projectId: string;
@@ -211,6 +215,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   });
 
   const hasPR = !!prUrl;
+  const createPrLaunchPending = Boolean(
+    selectedEnvironmentId && createPrLaunchEnvironmentIds.has(selectedEnvironmentId),
+  );
   const isPRMerged = prState === "merged";
   const cleanupTargetIsMerged = cleanupTarget?.isMerged ?? isPRMerged;
   const isPRClosed = prState === "closed";
@@ -221,6 +228,17 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (selectedEnvironment.lifecycleOperation === "deleting" ||
       selectedEnvironment.deletionRequestedAt),
   );
+
+  const releaseCreatePrLaunch = useCallback((environmentId: string) => {
+    if (!createPrLaunchEnvironmentIdsRef.current.delete(environmentId)) return;
+    setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+  }, []);
+
+  useEffect(() => {
+    if (hasPR && selectedEnvironmentId) {
+      releaseCreatePrLaunch(selectedEnvironmentId);
+    }
+  }, [hasPR, releaseCreatePrLaunch, selectedEnvironmentId]);
   const canCreateTab = !!createTab && tabCount < MAX_TABS;
   // Workflow launches publish their own durable tab and start in the backend.
   // They must not depend on the active environment's renderer tab factory.
@@ -1113,6 +1131,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Keyboard shortcuts for terminal tabs
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+
       // Handle Ctrl+number for tab selection (1-9) - works on all platforms
       // Using Ctrl specifically to avoid conflicts with ⌘+number on Mac (used for other OS shortcuts)
       // Note: selectTab internally bounds-checks against the active pane's tab count
@@ -1148,6 +1168,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // ⌘ shortcuts on Mac only to avoid conflicts
       // (Ctrl+T/N/O are commonly used by browsers and other apps on Windows/Linux)
       if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (isEditableShortcutTarget(e.target)) return;
 
       const reportTabLimit = () => {
         if (tabCount < MAX_TABS || !createTab || !selectedEnvironment) return false;
@@ -1178,7 +1199,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             handleReview();
           }
           break;
-        case "p":
+        case "g":
           if (hasRunCommands && reportTabLimit()) break;
           if (canRunCommands) {
             e.preventDefault();
@@ -1225,7 +1246,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for PR creation - launches agent tab with PR workflow prompt
   const handleCreatePR = useCallback(
-    (
+    async (
       agentOverride?: AgentPlatform,
       launchOptions?: {
         agentLaunchMode?: AgentLaunchModeOverride;
@@ -1235,40 +1256,45 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       },
       targetBranchOverride?: string,
     ): Promise<boolean> => {
+      const operationEnvironmentId = selectedEnvironmentId;
       if (
-        !selectedEnvironmentId ||
+        !operationEnvironmentId ||
         !selectedProjectId ||
         tabCount >= MAX_TABS ||
         !isRunning ||
-        hasPR
+        hasPR ||
+        createPrLaunchEnvironmentIdsRef.current.has(operationEnvironmentId)
       )
-        return Promise.resolve(false);
+        return false;
 
-      const repoConfig = config.repositories[selectedProjectId];
-      // Falsy, not nullish: repository settings persist a cleared PR base branch
-      // as "", and an empty base would reach the agent as `gh pr create --base `.
-      const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
-      const prPrompt = createPRPrompt(targetBranch);
-      const actionDefault = actionDefaultFor("pr");
-      const agent = agentOverride || actionDefault.agent;
-      const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
-      // Resolved once so the queued path and the tab-owned path cannot disagree
-      // about which model a plain click asked for.
-      const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
-      const initialReasoningEffort =
-        launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
-      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
-      const configuredFastMode =
-        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
-      const initialFastMode =
-        typeof configuredFastMode === "boolean" &&
-        modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
-          ? configuredFastMode
-          : undefined;
-      return backend
-        .launchNativeAgentJob({
+      createPrLaunchEnvironmentIdsRef.current.add(operationEnvironmentId);
+      setCreatePrLaunchEnvironmentIds(new Set(createPrLaunchEnvironmentIdsRef.current));
+
+      try {
+        const repoConfig = config.repositories[selectedProjectId];
+        // Falsy, not nullish: repository settings persist a cleared PR base branch
+        // as "", and an empty base would reach the agent as `gh pr create --base `.
+        const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
+        const prPrompt = createPRPrompt(targetBranch);
+        const actionDefault = actionDefaultFor("pr");
+        const agent = agentOverride || actionDefault.agent;
+        const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+        // Resolved once so the queued path and the tab-owned path cannot disagree
+        // about which model a plain click asked for.
+        const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
+        const initialReasoningEffort =
+          launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+        const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
+        const configuredFastMode =
+          launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+        const initialFastMode =
+          typeof configuredFastMode === "boolean" &&
+          modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+            ? configuredFastMode
+            : undefined;
+        const result = await backend.launchNativeAgentJob({
           requestId: `create-pr-${createUuid()}`,
-          environmentId: selectedEnvironmentId,
+          environmentId: operationEnvironmentId,
           agent,
           prompt: prPrompt,
           title: "PR",
@@ -1277,24 +1303,26 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(requestedModel && requestedModel !== "default" ? { modelId: requestedModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
-        })
-        .then((result) => {
-          if (result.status === "rejected") {
-            toast.error("Could not start pull request creation", {
-              description: result.error || "The agent rejected the request.",
-            });
-            return false;
-          }
-          // Monitoring starts only after the backend owns the session and turn.
-          setModeCreatePending();
-          return true;
-        })
-        .catch((error) => {
+        });
+        if (result.status === "rejected") {
+          releaseCreatePrLaunch(operationEnvironmentId);
           toast.error("Could not start pull request creation", {
-            description: error instanceof Error ? error.message : String(error),
+            description: result.error || "The agent rejected the request.",
           });
           return false;
+        }
+        // Monitoring starts only after the backend owns the session and turn.
+        // Keep the local launch claim until a PR appears so a fast acknowledgement
+        // cannot reopen the duplicate-launch window while the agent is still working.
+        setModeCreatePending();
+        return true;
+      } catch (error) {
+        releaseCreatePrLaunch(operationEnvironmentId);
+        toast.error("Could not start pull request creation", {
+          description: error instanceof Error ? error.message : String(error),
         });
+        return false;
+      }
     },
     [
       actionDefaultFor,
@@ -1304,6 +1332,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
       reviewModelCatalog,
+      releaseCreatePrLaunch,
       selectedEnvironmentId,
       selectedProjectId,
       setModeCreatePending,
@@ -1311,8 +1340,52 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     ],
   );
 
+  useEffect(() => {
+    const handleCreatePRShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        isEditableShortcutTarget(event.target) ||
+        event.key.toLowerCase() !== "p" ||
+        !event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !selectedEnvironmentId ||
+        !selectedProjectId ||
+        !isRunning ||
+        hasPR
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.repeat || createPrLaunchPending) return;
+      if (tabCount >= MAX_TABS) {
+        showTabLimitReachedToast(MAX_TABS);
+        return;
+      }
+      void handleCreatePR();
+    };
+
+    window.addEventListener("keydown", handleCreatePRShortcut);
+    return () => window.removeEventListener("keydown", handleCreatePRShortcut);
+  }, [
+    createPrLaunchPending,
+    handleCreatePR,
+    hasPR,
+    isRunning,
+    selectedEnvironmentId,
+    selectedProjectId,
+    tabCount,
+  ]);
+
   const canConfigurePR = Boolean(
-    tabCount < MAX_TABS && isRunning && !hasPR && selectedEnvironmentId && selectedProjectId,
+    tabCount < MAX_TABS &&
+    isRunning &&
+    !hasPR &&
+    !createPrLaunchPending &&
+    selectedEnvironmentId &&
+    selectedProjectId,
   );
 
   const openPrDialog = useCallback(() => {
@@ -1334,14 +1407,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       ? "The selected environment changed. Close this dialog and reopen it from the intended environment."
       : hasPR
         ? "A pull request now exists for this environment."
-        : !isRunning
-          ? "The environment is no longer running."
-          : // `canCreateTab` folds two distinct causes together, so report them
-            // separately: an unregistered `createTab` means the environment's
-            // terminal is not ready, which the tab limit wording would misdescribe.
-            tabCount >= MAX_TABS
-            ? "The maximum number of tabs has been reached."
-            : null;
+        : createPrLaunchPending
+          ? "Pull request creation is already underway for this environment."
+          : !isRunning
+            ? "The environment is no longer running."
+            : // `canCreateTab` folds two distinct causes together, so report them
+              // separately: an unregistered `createTab` means the environment's
+              // terminal is not ready, which the tab limit wording would misdescribe.
+              tabCount >= MAX_TABS
+              ? "The maximum number of tabs has been reached."
+              : null;
 
   const handleConfiguredCreatePR = useCallback(
     async (selection: AgentLaunchSelection) => {
@@ -1523,6 +1598,72 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
     });
   }, [canConfigureResolve, config.repositories, selectedEnvironmentId, selectedProjectId]);
+
+  useEffect(() => {
+    const handleConfigureShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        isEditableShortcutTarget(event.target) ||
+        !event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        !event.shiftKey
+      ) {
+        return;
+      }
+
+      let openDialog: (() => void) | undefined;
+      switch (event.key.toLowerCase()) {
+        case "r":
+          if (selectedEnvironment && canCreateTab) openDialog = openReviewDialog;
+          break;
+        case "m":
+          if (
+            selectedEnvironment &&
+            canCreateTab &&
+            isRunning &&
+            workspaceReady &&
+            !setupRunning &&
+            !multiReviewLaunchPending
+          ) {
+            openDialog = openMultiReviewDialog;
+          }
+          break;
+        case "g":
+          if (selectedEnvironmentId) openDialog = openScriptDialog;
+          break;
+        case "u":
+          if (canConfigureResolve) {
+            openDialog = openResolveDialog;
+          } else if (canConfigurePR) {
+            openDialog = openPrDialog;
+          }
+          break;
+      }
+
+      if (!openDialog) return;
+      event.preventDefault();
+      openDialog();
+    };
+
+    window.addEventListener("keydown", handleConfigureShortcut);
+    return () => window.removeEventListener("keydown", handleConfigureShortcut);
+  }, [
+    canConfigurePR,
+    canConfigureResolve,
+    canCreateTab,
+    isRunning,
+    multiReviewLaunchPending,
+    openMultiReviewDialog,
+    openPrDialog,
+    openResolveDialog,
+    openReviewDialog,
+    openScriptDialog,
+    selectedEnvironment,
+    selectedEnvironmentId,
+    setupRunning,
+    workspaceReady,
+  ]);
 
   const resolveLongPress = useLongPressAction(openResolveDialog, canConfigureResolve);
 
@@ -1740,6 +1881,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setPrLaunchError,
     prDialogOpen,
     createPrButtonRef,
+    createPrLaunchPending,
     resolveDialogTarget,
     setResolveDialogTarget,
     resolveLaunchError,

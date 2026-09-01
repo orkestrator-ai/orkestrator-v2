@@ -22,6 +22,7 @@ import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
+import * as realUseFileSearch from "@/hooks/useFileSearch";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
@@ -46,6 +47,7 @@ const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
 const realMultiReviewPersistenceSnapshot = { ...realMultiReviewPersistence };
+const realUseFileSearchSnapshot = { ...realUseFileSearch };
 
 type MergeOutcome = {
   outcome: "merged" | "pending" | "unknown";
@@ -163,6 +165,7 @@ const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const viewPRMock = mock(() => {});
 const setModeCreatePendingMock = mock(() => {});
 const setModeMergePendingMock = mock(() => {});
+const refreshFileSearchMock = mock(async () => undefined);
 const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null> => "armed-at-1");
 const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
@@ -673,6 +676,16 @@ mock.module("@/hooks", () => ({
   }),
 }));
 
+mock.module("@/hooks/useFileSearch", () => ({
+  useFileSearch: () => ({
+    searchFiles: () => [],
+    isLoading: false,
+    error: null,
+    isAvailable: true,
+    refresh: refreshFileSearchMock,
+  }),
+}));
+
 mock.module("@/contexts", () => ({
   MAX_TABS: 10,
   useTerminalContext: () => ({
@@ -723,7 +736,10 @@ mock.module("@/stores/kanbanStore", () => ({
   findTaskForEnvironment: () => currentTaskAssociation,
 }));
 
-const { ActionBar } = await import("./ActionBar");
+const [{ ActionBar }, { OpenFileDialog }] = await Promise.all([
+  import("./ActionBar"),
+  import("./OpenFileDialog"),
+]);
 
 afterAll(() => {
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
@@ -741,6 +757,7 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
   mock.module("@/lib/multi-review-persistence", () => realMultiReviewPersistenceSnapshot);
+  mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
   usePaneLayoutStore.setState({
     clearTabInitialPrompt: realClearTabInitialPrompt,
   });
@@ -822,6 +839,7 @@ beforeEach(() => {
   viewPRMock.mockReset();
   setModeCreatePendingMock.mockReset();
   setModeMergePendingMock.mockReset();
+  refreshFileSearchMock.mockReset();
   armRefreshAfterAgentCompletionMock.mockReset();
   armRefreshAfterAgentCompletionMock.mockImplementation(async () => "armed-at-1");
   disarmRefreshAfterAgentCompletionMock.mockReset();
@@ -1938,7 +1956,6 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
-    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
 
     expect(createTabMock).toHaveBeenCalledWith("agent-native");
     expect(createTabMock).not.toHaveBeenCalledWith("claude");
@@ -1957,7 +1974,7 @@ describe("ActionBar toolbar interactions", () => {
       ).toBe("false");
     });
 
-    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
 
     await waitFor(() =>
@@ -2813,6 +2830,18 @@ describe("ActionBar workflow tabs", () => {
       expect.objectContaining({ agent: "opencode", title: "PR" }),
     );
 
+    currentEnvironment = {
+      ...currentEnvironment,
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    rerender(<ActionBar />);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Create PR" }) === null).toBe(true),
+    );
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    rerender(<ActionBar />);
+
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
     expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
@@ -3577,7 +3606,7 @@ describe("ActionBar workflow tabs", () => {
     );
     const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
     fireEvent.focus(multiReviewButton);
-    expect(screen.getByText("Right-click or long-press to configure")).toBeTruthy();
+    expect(screen.getByText("⌘M · ⌘⇧M or right-click/long-press to configure")).toBeTruthy();
     fireEvent.blur(multiReviewButton);
     fireEvent.contextMenu(multiReviewButton);
     expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
@@ -5571,6 +5600,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
 describe("ActionBar keyboard shortcuts and tab guards", () => {
   test("dispatches tab, workflow, editor, and panel shortcuts", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
     currentWorkspaceReady = true;
     currentTabCount = 1;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
@@ -5586,6 +5616,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true });
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
@@ -5604,12 +5635,306 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
         expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
       ),
     );
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "PR" }),
+      ),
+    );
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 
+  test("opens the code review configuration with Cmd+Shift+R", () => {
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true, shiftKey: true });
+
+    expect(screen.getByRole("heading", { name: "Configure code review" })).toBeTruthy();
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("opens Multi Review configuration with Cmd+Shift+M", () => {
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true, shiftKey: true });
+
+    expect(screen.getByRole("heading", { name: "Configure Multi Review" })).toBeTruthy();
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+  });
+
+  test("opens run-script configuration with Cmd+Shift+G", () => {
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true, shiftKey: true });
+
+    expect(screen.getByRole("heading", { name: "Configure run script" })).toBeTruthy();
+    expect(launchTerminalJobMock).not.toHaveBeenCalled();
+  });
+
+  test("opens pull-request configuration with Cmd+Shift+U", () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
+
+    expect(screen.getByRole("heading", { name: "Configure pull request" })).toBeTruthy();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  test("opens conflict-resolution configuration with Cmd+Shift+U when the PR conflicts", () => {
+    currentEnvironment = {
+      ...currentEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
+
+    expect(screen.getByRole("heading", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps Cmd+Shift+P exclusively owned by Open File", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    render(
+      <>
+        <OpenFileDialog />
+        <ActionBar />
+      </>,
+    );
+
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true, shiftKey: true });
+
+    expect(await screen.findByRole("heading", { name: "Open File" })).toBeTruthy();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "Configure pull request" }) === null).toBe(true);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  test("suppresses repeated PR launches, retries known failures, and unlocks after a PR appears", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    let rejectFirstLaunch!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          rejectFirstLaunch = () =>
+            resolve({
+              jobId: "pr-job",
+              environmentId: "env-1",
+              tabId: "agent-job-pr",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:agent-job-pr",
+              status: "rejected",
+              error: "retry allowed",
+            });
+        }),
+    );
+    const view = render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true, repeat: true });
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
+
+    rejectFirstLaunch();
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not start pull request creation",
+        expect.objectContaining({ description: "retry allowed" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2);
+    expect((screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    currentEnvironment = {
+      ...currentEnvironment,
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    view.rerender(<ActionBar />);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Create PR" }) === null).toBe(true),
+    );
+
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    view.rerender(<ActionBar />);
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Create PR" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(3));
+  });
+
+  test("does not create a PR from Cmd+P when one already exists", () => {
+    currentEnvironment = { ...currentEnvironment, prState: "open" };
+    render(<ActionBar />);
+
+    const event = createEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    fireEvent(window, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  });
+
+  test("ignores workflow shortcuts from editable targets and already-handled events", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    render(<ActionBar />);
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Run commands" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+
+    const input = document.createElement("input");
+    const editor = document.createElement("div");
+    editor.contentEditable = "true";
+    document.body.append(input, editor);
+
+    for (const target of [input, editor]) {
+      for (const key of ["m", "g", "p"]) {
+        fireEvent.keyDown(target, { key, metaKey: true });
+      }
+      for (const key of ["r", "m", "g", "u"]) {
+        fireEvent.keyDown(target, { key, metaKey: true, shiftKey: true });
+      }
+    }
+
+    for (const { key, shiftKey = false } of [
+      { key: "m" },
+      { key: "g" },
+      { key: "p" },
+      { key: "r", shiftKey: true },
+      { key: "m", shiftKey: true },
+      { key: "g", shiftKey: true },
+      { key: "u", shiftKey: true },
+    ]) {
+      const event = createEvent.keyDown(window, { key, metaKey: true, shiftKey });
+      event.preventDefault();
+      fireEvent(window, event);
+    }
+
+    input.remove();
+    editor.remove();
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    expect(launchTerminalJobMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog") === null).toBe(true);
+  });
+
+  test("keeps the Multi Review shortcut listener stable across rerenders", () => {
+    const originalAddEventListener = window.addEventListener;
+    let registrations = 0;
+    window.addEventListener = ((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      if (
+        type === "keydown" &&
+        typeof listener === "function" &&
+        listener.name === "handleMultiReviewShortcut"
+      ) {
+        registrations += 1;
+      }
+      return originalAddEventListener.call(window, type, listener, options);
+    }) as typeof window.addEventListener;
+
+    try {
+      const view = render(<ActionBar />);
+      expect(registrations).toBe(1);
+      view.rerender(<ActionBar presentation="grid" />);
+      view.rerender(<ActionBar presentation="bar" />);
+      expect(registrations).toBe(1);
+    } finally {
+      window.addEventListener = originalAddEventListener;
+    }
+  });
+
+  test("does not start Multi Review when any non-tab-limit launch guard fails", async () => {
+    const cases: Array<() => void> = [
+      () => {
+        currentEnvironment = { ...currentEnvironment, status: "stopped" };
+        currentWorkspaceReady = true;
+      },
+      () => {
+        currentWorkspaceReady = false;
+      },
+      () => {
+        currentWorkspaceReady = true;
+        currentSetupScriptsRunning = true;
+      },
+      () => {
+        currentWorkspaceReady = true;
+        currentCreateTabRegistered = false;
+      },
+      () => {
+        currentSelectedEnvironmentId = null;
+      },
+    ];
+
+    for (const configure of cases) {
+      cleanup();
+      findActiveMultiReviewWorkflowMock.mockClear();
+      startMultiReviewMock.mockClear();
+      currentEnvironment = { ...selectedEnvironment };
+      currentSelectedEnvironmentId = selectedEnvironment.id;
+      currentWorkspaceReady = false;
+      currentSetupScriptsRunning = false;
+      currentCreateTabRegistered = true;
+      configure();
+      render(<ActionBar />);
+
+      fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+      await Promise.resolve();
+
+      expect(findActiveMultiReviewWorkflowMock).not.toHaveBeenCalled();
+      expect(startMultiReviewMock).not.toHaveBeenCalled();
+    }
+  });
+
+  test("does not start a second Multi Review while the first shortcut launch is pending", async () => {
+    currentWorkspaceReady = true;
+    let finishLookup!: () => void;
+    findActiveMultiReviewWorkflowMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishLookup = () => resolve(null);
+        }),
+    );
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+
+    expect(findActiveMultiReviewWorkflowMock).toHaveBeenCalledTimes(1);
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    finishLookup();
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+  });
+
   test("reports the tab limit for every tab-creating shortcut", async () => {
+    currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
     currentTabCount = 9;
     currentWorkspaceReady = true;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
@@ -5628,7 +5953,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       ).toBe("true"),
     );
 
-    for (const key of ["t", "n", "r", "p"]) {
+    for (const key of ["t", "n", "r", "m", "g", "p"]) {
       toastErrorMock.mockClear();
       const event = createEvent.keyDown(window, {
         key,

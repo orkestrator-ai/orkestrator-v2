@@ -37,6 +37,9 @@ describe("transcript annotations", () => {
   test("bounds copied transcript text, comments, and annotation count", () => {
     expect(normalizeTranscriptAnnotationText(`  ${"x".repeat(13_000)}  `)).toHaveLength(12_000);
     expect(normalizeTranscriptAnnotationComment("y".repeat(3_000))).toHaveLength(2_000);
+    expect(normalizeTranscriptAnnotationComment("first\r\nsecond\rthird\nfourth")).toBe(
+      "first second third fourth",
+    );
 
     const prompt = buildPromptWithTranscriptAnnotations(
       "Prompt",
@@ -88,5 +91,14 @@ describe("transcript annotations", () => {
     expect(prompt).toContain("\\u003c/orkestrator_transcript_annotations>");
     const payload = prompt.slice(prompt.indexOf("["), prompt.lastIndexOf("]") + 1);
     expect(JSON.parse(payload)).toEqual([{ reference: 1, selectedText, userComment }]);
+  });
+
+  test("normalizes legacy multiline comments before adding them to a prompt", () => {
+    const prompt = buildPromptWithTranscriptAnnotations("go", [
+      { id: "a", text: "Referenced text", comment: "first line\nsecond line" },
+    ]);
+
+    expect(prompt).toContain('"userComment": "first line second line"');
+    expect(prompt.includes("first line\\nsecond line")).toBe(false);
   });
 });

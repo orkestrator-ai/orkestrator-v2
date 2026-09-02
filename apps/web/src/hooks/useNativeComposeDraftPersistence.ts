@@ -12,6 +12,7 @@ import {
 import {
   isTranscriptAnnotation,
   MAX_TRANSCRIPT_ANNOTATIONS,
+  normalizeTranscriptAnnotationComment,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
 
@@ -246,7 +247,13 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           isPersistedAttachment(attachmentNamespace, attachment),
         );
         const annotations = Array.isArray(value.annotations)
-          ? value.annotations.filter(isTranscriptAnnotation).slice(0, MAX_TRANSCRIPT_ANNOTATIONS)
+          ? value.annotations
+              .filter(isTranscriptAnnotation)
+              .slice(0, MAX_TRANSCRIPT_ANNOTATIONS)
+              .map((annotation) => ({
+                ...annotation,
+                comment: normalizeTranscriptAnnotationComment(annotation.comment),
+              }))
           : [];
         applyingHydration = true;
         try {

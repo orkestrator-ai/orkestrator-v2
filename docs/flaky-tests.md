@@ -10,6 +10,111 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `Files panel components > ChangedFileItem exposes revert and delete context actions` (`tests/unit/components/FilesPanel.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root group used six Bun workers.
+- **Failure:** test timeout after 5 seconds (reported duration: 15.80 s).
+- **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
+  and 2 between-test errors across 188 files in 97.17 s.
+- **Isolated rerun:** `bun test tests/unit/components/FilesPanel.test.tsx
+  --only-failures` -> 23 passed, 0 failed in 0.36 s.
+- **Hypothesis:** the same aggregate run produced several unrelated five-second
+  timeouts at approximately 16 seconds. The fast isolated pass supports host or
+  worker starvation, but the source of that starvation is not yet identified.
+
+## `Electron backend command registry > defaults a malformed in-container Codex thread limit before shell interpolation` (`tests/unit/electron/commands-registry-servers.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root group used six Bun workers.
+- **Failure:** test timeout after 5 seconds (reported duration: 15.88 s).
+- **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
+  and 2 between-test errors across 188 files in 97.17 s.
+- **Isolated rerun:** `bun test
+  tests/unit/electron/commands-registry-servers.test.ts --only-failures` -> 14
+  passed, 0 failed in 5.40 s.
+- **Hypothesis:** the aggregate run timed out several unrelated process-heavy
+  tests together. The owning file completed when isolated, but its 5.40-second
+  file duration leaves little headroom under aggregate contention.
+
+## `Electron backend command registry > replaces an in-container Codex bridge that has no usable persisted token` (`tests/unit/electron/commands-registry-servers.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root group used six Bun workers.
+- **Failure:** an unhandled bridge-startup rejection reached the real Docker
+  executable and reported `No such container: container-codex-legacy`
+  (reported duration: 0.52 s).
+- **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
+  and 2 between-test errors across 188 files in 97.17 s.
+- **Isolated rerun:** `bun test
+  tests/unit/electron/commands-registry-servers.test.ts --only-failures` -> 14
+  passed, 0 failed in 5.40 s.
+- **Hypothesis:** this followed a timeout in the same owning file, and the
+  missing fake-Docker interception is consistent with cleanup or fixture state
+  being disrupted by that timeout. Isolation did not reproduce the escape.
+
+## `Electron backend command registry > renames the live local git branch and advances stored branch on success` (`tests/unit/electron/commands-registry-environments.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root group used six Bun workers.
+- **Failure:** test timeout after 5 seconds (reported duration: 16.35 s), followed
+  by a late assertion observing `old-branch` instead of `review-oauth-flow`.
+- **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
+  and 2 between-test errors across 188 files in 97.17 s.
+- **Isolated rerun:** `bun test
+  tests/unit/electron/commands-registry-environments.test.ts --only-failures` ->
+  129 passed, 0 failed in 16.64 s.
+- **Hypothesis:** the full owning file already takes longer than the per-test
+  timeout and launches many fake Git/Docker processes. Aggregate contention
+  delayed this case past its timeout; the late assertion is a timeout cascade.
+
+## `Electron backend command registry > retains a failed pending rename so a later backend start can retry it` (`tests/unit/electron/commands-environment.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root group used six Bun workers.
+- **Failure:** `Timed out waiting for failed pending rename to settle` (reported
+  duration: 15.92 s).
+- **Suite counts:** root group — 3,991 total, 3,985 passed, 1 skipped, 5 failed,
+  and 2 between-test errors across 188 files in 97.17 s.
+- **Isolated rerun:** `bun test tests/unit/electron/commands-environment.test.ts
+  --only-failures` -> 8 passed, 0 failed in 0.78 s.
+- **Hypothesis:** the polling deadline expired during the same aggregate run
+  that starved several unrelated process-heavy tests. The isolated case settled
+  promptly; no product-code relationship to transcript annotations was found.
+
+## `ACP bridge > refuses to reattach when the agent cannot reload sessions` (`bridges/acp-bridge/src/acp-reconciliation.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-09-02
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the bridge group used six Bun workers.
+- **Failure:** `Timed out waiting for ACP state: false` while spawning the test
+  bridge (reported duration: 16.06 s).
+- **Suite counts:** bridge group — 3,196 total, 3,184 passed, 11 skipped, and 1
+  failed across 120 files in 75.17 s.
+- **Isolated rerun:** `bun --cwd=bridges/acp-bridge test
+  src/acp-reconciliation.test.ts --only-failures` -> 18 passed, 0 failed in
+  6.24 s.
+- **Hypothesis:** bridge startup missed its deadline under aggregate process
+  contention. The isolated pass confirms scheduling sensitivity but does not
+  identify a bridge-specific root cause.
+
 ## `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:5467`)
 
 - **Status:** open — recurring failure of the same assertion, after

@@ -90,6 +90,7 @@ import type { FileCandidate } from "@/types";
 import {
   buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
+  normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
   type TranscriptAnnotation,
 } from "@/lib/chat/transcript-annotations";
@@ -271,7 +272,9 @@ export function SharedNativeAgentController({
       const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
       updateDraft(sessionKey, {
         annotations: current.annotations.map((annotation) =>
-          annotation.id === annotationId ? { ...annotation, comment } : annotation,
+          annotation.id === annotationId
+            ? { ...annotation, comment: normalizeTranscriptAnnotationComment(comment) }
+            : annotation,
         ),
       });
     },

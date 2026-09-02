@@ -946,6 +946,7 @@ interface NativeState {
       previewUrl?: string;
     }>
   >;
+  annotations: Map<string, Array<{ id: string; text: string; comment: string }>>;
   draftMetadata: Map<string, unknown>;
   setDraftText: (key: string, value: string) => void;
   setDraftMentions: (
@@ -957,6 +958,10 @@ interface NativeState {
     key: string,
     value: NativeState["attachments"] extends Map<string, Array<infer T>> ? T : never,
   ) => void;
+  setAnnotations: (
+    key: string,
+    value: NativeState["annotations"] extends Map<string, infer T> ? T : never,
+  ) => void;
   setDraftMetadata: (key: string, value: unknown) => void;
 }
 
@@ -965,6 +970,7 @@ function createNativeStore() {
     draftText: new Map(),
     draftMentions: new Map(),
     attachments: new Map(),
+    annotations: new Map(),
     draftMetadata: new Map(),
     setDraftText: (key, value) =>
       set((state) => {
@@ -992,6 +998,13 @@ function createNativeStore() {
         attachments.set(key, [...(attachments.get(key) ?? []), value]);
         return { attachments };
       }),
+    setAnnotations: (key, value) =>
+      set((state) => {
+        const annotations = new Map(state.annotations);
+        if (value.length) annotations.set(key, value);
+        else annotations.delete(key);
+        return { annotations };
+      }),
     setDraftMetadata: (key, value) =>
       set((state) => {
         const draftMetadata = new Map(state.draftMetadata);
@@ -1002,6 +1015,130 @@ function createNativeStore() {
 }
 
 describe("useNativeComposeDraftPersistence", () => {
+  test("rehydrates transcript annotations with their comments", async () => {
+    const sessionKey = "env-native:tab-annotations";
+    const annotations = [
+      { id: "annotation-1", text: "Selected transcript text", comment: "Use this wording" },
+    ];
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: compose.composeDraftKey("claude", "env-native", sessionKey),
+      ownerType: "environment",
+      ownerId: "env-native",
+      value: { text: "Follow up", mentions: [], attachments: [], annotations },
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      revision: 2,
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() =>
+      useNativeComposeDraftPersistence("claude", "env-native", sessionKey, store),
+    );
+
+    await waitFor(() => expect(store.getState().draftText.get(sessionKey)).toBe("Follow up"));
+    expect(store.getState().annotations.get(sessionKey)).toEqual(annotations);
+
+    hook.unmount();
+  });
+
+  test("filters malformed persisted annotations and clamps their count", async () => {
+    const sessionKey = "env-native:tab-filtered-annotations";
+    const validAnnotations = Array.from({ length: 21 }, (_, index) => ({
+      id: `annotation-${index}`,
+      text: `Selected transcript text ${index}`,
+      comment: "",
+    }));
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: compose.composeDraftKey("claude", "env-native", sessionKey),
+      ownerType: "environment",
+      ownerId: "env-native",
+      value: {
+        text: "",
+        mentions: [],
+        attachments: [],
+        annotations: [
+          { id: "blank", text: "   ", comment: "" },
+          { id: "wrong-comment", text: "selected", comment: 42 },
+          ...validAnnotations,
+        ],
+      },
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      revision: 2,
+    });
+    const store = createNativeStore();
+    const hook = renderHook(() =>
+      useNativeComposeDraftPersistence("claude", "env-native", sessionKey, store),
+    );
+
+    await waitFor(() => expect(store.getState().annotations.get(sessionKey)).toHaveLength(20));
+    expect(store.getState().annotations.get(sessionKey)).toEqual(validAnnotations.slice(0, 20));
+    hook.unmount();
+  });
+
+  test("persists an annotation-only draft after an annotation edit", async () => {
+    const sessionKey = "env-native:tab-annotation-only";
+    const key = compose.composeDraftKey("codex", "env-native", sessionKey);
+    const annotations = [
+      { id: "annotation-1", text: "Selected transcript text", comment: "Explain this" },
+    ];
+    getComposeDraft.mockResolvedValueOnce(null);
+    const store = createNativeStore();
+    const hook = renderHook(() =>
+      useNativeComposeDraftPersistence("codex", "env-native", sessionKey, store),
+    );
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalledWith(key));
+
+    act(() => store.getState().setAnnotations(sessionKey, annotations));
+
+    await waitFor(() =>
+      expect(saveComposeDraft).toHaveBeenCalledWith(
+        key,
+        "environment",
+        "env-native",
+        { text: "", mentions: [], attachments: [], annotations },
+        0,
+      ),
+    );
+    hook.unmount();
+  });
+
+  test("preserves an annotation-only draft through conflict resolution", async () => {
+    const sessionKey = "env-native:tab-annotation-conflict";
+    const key = compose.composeDraftKey("codex", "env-native", sessionKey);
+    const annotations = [
+      { id: "annotation-1", text: "Selected transcript text", comment: "Explain this" },
+    ];
+    const stored = {
+      draftKey: key,
+      ownerType: "environment" as const,
+      ownerId: "env-native",
+      value: { text: "", mentions: [], attachments: [], annotations: [] },
+      updatedAt: "2026-09-02T00:00:00.000Z",
+      revision: 1,
+    };
+    getComposeDraft.mockResolvedValueOnce(stored).mockResolvedValueOnce({ ...stored, revision: 2 });
+    saveComposeDraft
+      .mockRejectedValueOnce(new Error("Compose draft revision conflict"))
+      .mockResolvedValueOnce({ ...stored, value: { ...stored.value, annotations }, revision: 3 });
+    const store = createNativeStore();
+    const hook = renderHook(() =>
+      useNativeComposeDraftPersistence("codex", "env-native", sessionKey, store),
+    );
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalledTimes(1));
+
+    act(() => store.getState().setAnnotations(sessionKey, annotations));
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(store.getState().annotations.get(sessionKey)).toEqual(annotations);
+    const options = toastError.mock.calls.at(-1)?.[1] as {
+      action?: { onClick?: () => void };
+    };
+    expect(typeof options.action?.onClick).toBe("function");
+
+    act(() => options.action?.onClick?.());
+    await waitFor(() => expect(saveComposeDraft).toHaveBeenCalledTimes(2));
+    expect(saveComposeDraft.mock.calls.map((call) => (call as unknown[])[4])).toEqual([1, 2]);
+    expect(store.getState().annotations.get(sessionKey)).toEqual(annotations);
+    hook.unmount();
+  });
+
   test("rehydrates a provider-neutral draft with its provisional platform controls", async () => {
     const sessionKey = "env-neutral:tab";
     const metadata = {

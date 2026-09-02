@@ -7,6 +7,7 @@ import {
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -459,14 +460,7 @@ export class PromptQueueDrainer {
    * the alternative is typing over what the user is writing.
    */
   private composeDraftHoldsQueue(value: unknown): boolean {
-    if (value === undefined || value === null) return false;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
-    const draft = value as Record<string, unknown>;
-    if (typeof draft.text !== "string") return true;
-    if (!Array.isArray(draft.mentions) || !Array.isArray(draft.attachments)) return true;
-    return (
-      draft.text.trim().length > 0 || draft.mentions.length > 0 || draft.attachments.length > 0
-    );
+    return composeDraftHoldsQueue(value);
   }
 
   private async renameEnvironmentFromFirstPrompt(

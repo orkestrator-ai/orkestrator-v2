@@ -21,6 +21,7 @@ import { formatElapsed } from "@/lib/format-elapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 
 export type NativeConnectionState = "connecting" | "connected" | "error";
 
@@ -112,6 +113,11 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    */
   topAccessory?: ReactNode;
 
+  annotations?: readonly TranscriptAnnotation[];
+  annotationInteractionEnabled?: boolean;
+  onAddAnnotation?: (text: string) => TranscriptAnnotation | null;
+  onUpdateAnnotationComment?: (id: string, comment: string) => void;
+
   centerCompose: boolean;
   composer: ReactNode;
   /** Rendered outside the dock, so its portal is not clipped. */
@@ -169,6 +175,10 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   loadToolDetails,
   stopBackgroundTask,
   topAccessory,
+  annotations = [],
+  annotationInteractionEnabled = true,
+  onAddAnnotation,
+  onUpdateAnnotationComment,
   centerCompose,
   composer,
   resumeDialog,
@@ -405,6 +415,16 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
             isActive: ownsGlobalShortcuts ?? isActive,
             getSearchText: getNativeMessageSearchText,
           }}
+          annotation={
+            onAddAnnotation && onUpdateAnnotationComment
+              ? {
+                  enabled: isActive && annotationInteractionEnabled,
+                  annotations,
+                  onAdd: onAddAnnotation,
+                  onUpdateComment: onUpdateAnnotationComment,
+                }
+              : undefined
+          }
         />
       </div>
 

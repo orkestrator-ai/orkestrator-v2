@@ -14,6 +14,8 @@ import {
   useAgentChatFind,
 } from "@/components/chat/AgentChatFind";
 import { cn } from "@/lib/utils";
+import { TranscriptAnnotationLayer } from "@/components/chat/TranscriptAnnotationLayer";
+import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 
 interface VirtuosoListContext {
   footer?: ReactNode;
@@ -48,6 +50,12 @@ interface VirtualizedMessageListProps<TMessage> {
   find?: {
     isActive: boolean;
     getSearchText: (message: TMessage) => string;
+  };
+  annotation?: {
+    enabled: boolean;
+    annotations: readonly TranscriptAnnotation[];
+    onAdd: (text: string) => TranscriptAnnotation | null;
+    onUpdateComment: (id: string, comment: string) => void;
   };
 }
 
@@ -139,6 +147,7 @@ export function VirtualizedMessageList<TMessage>({
   scrollProps,
   virtuosoRef,
   find,
+  annotation,
 }: VirtualizedMessageListProps<TMessage>) {
   const rootRef = useRef<HTMLDivElement>(null);
   const findInstanceId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
@@ -300,6 +309,15 @@ export function VirtualizedMessageList<TMessage>({
         matchHighlightName={matchHighlightName}
         currentHighlightName={currentHighlightName}
       />
+      {annotation ? (
+        <TranscriptAnnotationLayer
+          rootRef={rootRef}
+          enabled={annotation.enabled}
+          annotations={annotation.annotations}
+          onAddAnnotation={annotation.onAdd}
+          onUpdateAnnotationComment={annotation.onUpdateComment}
+        />
+      ) : null}
       <Virtuoso
         ref={virtuosoRef}
         data={messages}

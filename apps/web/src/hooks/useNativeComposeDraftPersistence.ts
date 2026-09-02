@@ -9,16 +9,23 @@ import {
   resolveComposeDraftDiscardConflict,
   resolveComposeDraftSaveConflict,
 } from "@/lib/compose-draft-persistence";
+import {
+  isTranscriptAnnotation,
+  MAX_TRANSCRIPT_ANNOTATIONS,
+  type TranscriptAnnotation,
+} from "@/lib/chat/transcript-annotations";
 
 interface NativeComposeDraftState<TMention, TAttachment> {
   draftText: Map<string, string>;
   draftMentions: Map<string, TMention[]>;
   attachments: Map<string, TAttachment[]>;
+  annotations?: Map<string, TranscriptAnnotation[]>;
   draftMetadata?: Map<string, unknown>;
   setDraftText: (sessionKey: string, text: string) => void;
   setDraftMentions: (sessionKey: string, mentions: TMention[]) => void;
   clearAttachments: (sessionKey: string) => void;
   addAttachment: (sessionKey: string, attachment: TAttachment) => void;
+  setAnnotations?: (sessionKey: string, annotations: TranscriptAnnotation[]) => void;
   setDraftMetadata?: (sessionKey: string, metadata: unknown) => void;
 }
 
@@ -36,6 +43,7 @@ interface PersistedNativeComposeDraft {
   text: string;
   mentions: unknown[];
   attachments: unknown[];
+  annotations?: unknown[];
   metadata?: unknown;
 }
 
@@ -109,6 +117,9 @@ function readDraft<TMention, TAttachment>(
     text: state.draftText.get(sessionKey) ?? "",
     mentions: state.draftMentions.get(sessionKey) ?? [],
     attachments: state.attachments.get(sessionKey) ?? [],
+    ...(state.annotations?.has(sessionKey)
+      ? { annotations: state.annotations.get(sessionKey) ?? [] }
+      : {}),
     ...(state.draftMetadata?.has(sessionKey)
       ? { metadata: state.draftMetadata.get(sessionKey) }
       : {}),
@@ -120,6 +131,7 @@ function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
     draft.text.length === 0 &&
     draft.mentions.length === 0 &&
     draft.attachments.length === 0 &&
+    (draft.annotations?.length ?? 0) === 0 &&
     draft.metadata === undefined
   );
 }
@@ -194,6 +206,8 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       const priorMentions = previous.draftMentions.get(sessionKey);
       const currentAttachments = state.attachments.get(sessionKey);
       const priorAttachments = previous.attachments.get(sessionKey);
+      const currentAnnotations = state.annotations?.get(sessionKey);
+      const priorAnnotations = previous.annotations?.get(sessionKey);
       const currentMetadata = state.draftMetadata?.get(sessionKey);
       const priorMetadata = previous.draftMetadata?.get(sessionKey);
       if (
@@ -201,6 +215,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         (currentText === priorText &&
           currentMentions === priorMentions &&
           currentAttachments === priorAttachments &&
+          currentAnnotations === priorAnnotations &&
           currentMetadata === priorMetadata)
       ) {
         return;
@@ -230,6 +245,9 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         const attachments = value.attachments.filter((attachment) =>
           isPersistedAttachment(attachmentNamespace, attachment),
         );
+        const annotations = Array.isArray(value.annotations)
+          ? value.annotations.filter(isTranscriptAnnotation).slice(0, MAX_TRANSCRIPT_ANNOTATIONS)
+          : [];
         applyingHydration = true;
         try {
           state.setDraftText(sessionKey, value.text);
@@ -238,6 +256,7 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
           for (const attachment of attachments) {
             state.addAttachment(sessionKey, attachment as TAttachment);
           }
+          state.setAnnotations?.(sessionKey, annotations);
           if (value.metadata !== undefined) {
             state.setDraftMetadata?.(sessionKey, value.metadata);
           }

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createRef, type RefObject } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef, useState, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { MAX_TRANSCRIPT_ANNOTATIONS } from "@/lib/chat/transcript-annotations";
 
 // Capture the props passed to Virtuoso so we can assert on them
 let lastVirtuosoProps: Record<string, any> = {};
@@ -95,6 +96,27 @@ function makeScrollProps() {
   };
 }
 
+function selectText(
+  textNode: Node,
+  endOffset: number,
+  getRect: () => DOMRect = () => new DOMRect(120, 180, 64, 20),
+): Range {
+  const range = document.createRange();
+  range.setStart(textNode, 0);
+  range.setEnd(textNode, endOffset);
+  Object.defineProperty(range, "getBoundingClientRect", {
+    configurable: true,
+    value: getRect,
+  });
+  const selection = window.getSelection()!;
+  act(() => {
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  return range;
+}
+
 describe("VirtualizedMessageList", () => {
   beforeEach(() => {
     cleanup();
@@ -137,6 +159,188 @@ describe("VirtualizedMessageList", () => {
 
     expect(screen.getByText("Hello")).toBeTruthy();
     expect(screen.getByText("World")).toBeTruthy();
+  });
+
+  test("offers selected transcript text as an annotation and opens its comment editor", () => {
+    const added: string[] = [];
+    function AnnotationHarness() {
+      const [annotations, setAnnotations] = useState<
+        Array<{ id: string; text: string; comment: string }>
+      >([]);
+      return (
+        <VirtualizedMessageList
+          messages={[{ id: "1", text: "Removed the coloured rail" }]}
+          computeItemKey={(_i, message) => message.id}
+          renderMessage={(_i, message) => <span>{message.text}</span>}
+          annotation={{
+            enabled: true,
+            annotations,
+            onAdd: (text) => {
+              added.push(text);
+              const annotation = { id: "annotation-1", text, comment: "" };
+              setAnnotations([annotation]);
+              return annotation;
+            },
+            onUpdateComment: (id, comment) =>
+              setAnnotations((current) =>
+                current.map((annotation) =>
+                  annotation.id === id ? { ...annotation, comment } : annotation,
+                ),
+              ),
+          }}
+          scrollProps={makeScrollProps()}
+          virtuosoRef={createRef<VirtuosoHandle>()}
+        />
+      );
+    }
+
+    render(<AnnotationHarness />);
+    const textNode = screen.getByText("Removed the coloured rail").firstChild!;
+    selectText(textNode, "Removed".length);
+
+    const addButton = screen.getByRole("button", { name: "Add to chat" });
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+
+    expect(added).toEqual(["Removed"]);
+    expect(screen.getByRole("dialog", { name: "Comment on transcript annotation 1" })).toBeTruthy();
+    const comment = screen.getByRole("textbox", { name: "Optional comment for annotation 1" });
+    fireEvent.change(comment, { target: { value: "Keep this change" } });
+    expect((comment as HTMLTextAreaElement).value).toBe("Keep this change");
+  });
+
+  test("delegates a full annotation list to the controller for visible cap feedback", () => {
+    const added: string[] = [];
+    render(
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "One more reference" }]}
+        computeItemKey={(_i, message) => message.id}
+        renderMessage={(_i, message) => <span>{message.text}</span>}
+        annotation={{
+          enabled: true,
+          annotations: Array.from({ length: MAX_TRANSCRIPT_ANNOTATIONS }, (_, index) => ({
+            id: String(index),
+            text: `reference-${index}`,
+            comment: "",
+          })),
+          onAdd: (text) => {
+            added.push(text);
+            return null;
+          },
+          onUpdateComment: () => {},
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />,
+    );
+
+    selectText(screen.getByText("One more reference").firstChild!, "One more".length);
+    fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+
+    expect(added).toEqual(["One more"]);
+    expect(screen.queryByRole("button", { name: "Add to chat" }) === null).toBe(true);
+  });
+
+  test("rejects selections outside transcript rows and ignored subtrees", () => {
+    render(
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "Ignored text" }]}
+        computeItemKey={(_i, message) => message.id}
+        renderMessage={(_i, message) => (
+          <span data-transcript-selection-ignore>{message.text}</span>
+        )}
+        annotation={{
+          enabled: true,
+          annotations: [],
+          onAdd: () => null,
+          onUpdateComment: () => {},
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />,
+    );
+
+    const outside = document.createElement("span");
+    outside.textContent = "Outside text";
+    document.body.append(outside);
+    selectText(outside.firstChild!, "Outside".length);
+    expect(screen.queryByRole("button", { name: "Add to chat" }) === null).toBe(true);
+
+    selectText(screen.getByText("Ignored text").firstChild!, "Ignored".length);
+    expect(screen.queryByRole("button", { name: "Add to chat" }) === null).toBe(true);
+    outside.remove();
+  });
+
+  test("clears pending and active anchors when annotation interaction is disabled", () => {
+    const annotation = { id: "annotation-1", text: "Selected text", comment: "" };
+    const renderList = (enabled: boolean) => (
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "Selected text" }]}
+        computeItemKey={(_i, message) => message.id}
+        renderMessage={(_i, message) => <span>{message.text}</span>}
+        annotation={{
+          enabled,
+          annotations: [annotation],
+          onAdd: () => annotation,
+          onUpdateComment: () => {},
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+    const view = render(renderList(true));
+    const textNode = screen.getByText("Selected text").firstChild!;
+
+    selectText(textNode, "Selected".length);
+    expect(screen.getByRole("button", { name: "Add to chat" })).toBeTruthy();
+    view.rerender(renderList(false));
+    expect(screen.queryByRole("button", { name: "Add to chat" }) === null).toBe(true);
+
+    view.rerender(renderList(true));
+    selectText(screen.getByText("Selected text").firstChild!, "Selected".length);
+    fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+    expect(screen.getByRole("dialog", { name: "Comment on transcript annotation 1" })).toBeTruthy();
+    view.rerender(renderList(false));
+    expect(
+      screen.queryByRole("dialog", { name: "Comment on transcript annotation 1" }) === null,
+    ).toBe(true);
+    expect(cssHighlights.size).toBe(0);
+  });
+
+  test("keeps the pending Add to chat action anchored while scrolling", () => {
+    render(
+      <VirtualizedMessageList
+        messages={[{ id: "1", text: "Track this selection" }]}
+        computeItemKey={(_i, message) => message.id}
+        renderMessage={(_i, message) => <span>{message.text}</span>}
+        annotation={{
+          enabled: true,
+          annotations: [],
+          onAdd: () => null,
+          onUpdateComment: () => {},
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />,
+    );
+    let top = 180;
+    const rangePrototype = Object.getPrototypeOf(document.createRange()) as Range;
+    const originalGetBoundingClientRect = rangePrototype.getBoundingClientRect;
+    rangePrototype.getBoundingClientRect = () => new DOMRect(120, top, 64, 20);
+    try {
+      selectText(
+        screen.getByText("Track this selection").firstChild!,
+        "Track".length,
+        () => new DOMRect(120, top, 64, 20),
+      );
+      expect(screen.getByRole("button", { name: "Add to chat" }).style.top).toBe("172px");
+
+      top = 260;
+      fireEvent.scroll(screen.getByTestId("virtuoso-mock"));
+      expect(screen.getByRole("button", { name: "Add to chat" }).style.top).toBe("252px");
+    } finally {
+      rangePrototype.getBoundingClientRect = originalGetBoundingClientRect;
+    }
   });
 
   test("passes previous message to renderMessage", () => {

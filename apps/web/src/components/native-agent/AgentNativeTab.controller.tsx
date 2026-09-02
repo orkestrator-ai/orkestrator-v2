@@ -87,6 +87,12 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { FileCandidate } from "@/types";
+import {
+  buildPromptWithTranscriptAnnotations,
+  MAX_TRANSCRIPT_ANNOTATIONS,
+  normalizeTranscriptAnnotationText,
+  type TranscriptAnnotation,
+} from "@/lib/chat/transcript-annotations";
 import { toast } from "sonner";
 import { getNativeAgentAdapter, type AgentNativeTabProps } from "./adapter";
 import {
@@ -242,6 +248,34 @@ export function SharedNativeAgentController({
     data.environmentId,
     sessionKey,
     nativeComposePersistenceStore,
+  );
+  const addTranscriptAnnotation = useCallback(
+    (selectedText: string): TranscriptAnnotation | null => {
+      if (submitInFlightRef.current || isDispatching) return null;
+      const text = normalizeTranscriptAnnotationText(selectedText);
+      if (!text) return null;
+      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      if (current.annotations.length >= MAX_TRANSCRIPT_ANNOTATIONS) {
+        toast.error(`A prompt can include up to ${MAX_TRANSCRIPT_ANNOTATIONS} annotations`);
+        return null;
+      }
+      const annotation = { id: crypto.randomUUID(), text, comment: "" };
+      updateDraft(sessionKey, { annotations: [...current.annotations, annotation] });
+      return annotation;
+    },
+    [isDispatching, sessionKey, updateDraft],
+  );
+  const updateTranscriptAnnotationComment = useCallback(
+    (annotationId: string, comment: string) => {
+      if (submitInFlightRef.current || isDispatching) return;
+      const current = nativeComposeDraft(useNativeComposeStore.getState(), sessionKey);
+      updateDraft(sessionKey, {
+        annotations: current.annotations.map((annotation) =>
+          annotation.id === annotationId ? { ...annotation, comment } : annotation,
+        ),
+      });
+    },
+    [isDispatching, sessionKey, updateDraft],
   );
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
@@ -695,12 +729,15 @@ export function SharedNativeAgentController({
         inputContainerRef.current?.contains(document.activeElement),
       );
       const submittedAttachments = [...draft.attachments];
-      const userPrompt = preparedPrompt
+      const basePrompt = preparedPrompt
         ? text.trim()
         : buildInitialPromptWithAttachmentReferences(
             serializeForLLM(text.trim(), draft.mentions),
             submittedAttachments.map(({ name, path }) => ({ name, path })),
           );
+      const userPrompt = preparedPrompt
+        ? basePrompt
+        : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
       if (!userPrompt) return false;
       if (submitInFlightRef.current) return false;
       if (
@@ -722,7 +759,7 @@ export function SharedNativeAgentController({
        * Capability-gated, so any provider that reports the action gets it.
        */
       const sessionAction = resolveSessionActionCommand(
-        userPrompt,
+        text.trim(),
         projection?.capabilities,
         isRunning && !recoverableDispatch,
       );
@@ -733,6 +770,10 @@ export function SharedNativeAgentController({
         }
         if (submittedAttachments.length > 0) {
           setSendError("/steer supports text only. Remove the attachments and retry.");
+          return false;
+        }
+        if (draft.annotations.length > 0) {
+          setSendError("/steer supports text only. Remove transcript annotations and retry.");
           return false;
         }
         setSendError(null);
@@ -888,6 +929,7 @@ export function SharedNativeAgentController({
       data.environmentId,
       discardProvisionalDraft,
       draft.attachments,
+      draft.annotations,
       draft.mentions,
       draft.requestId,
       enqueue,
@@ -1497,6 +1539,10 @@ export function SharedNativeAgentController({
           </div>
         ) : null
       }
+      annotations={draft.annotations}
+      annotationInteractionEnabled={!isSubmitting && !isDispatching}
+      onAddAnnotation={addTranscriptAnnotation}
+      onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       messageActions={
         adapter.capabilities.fork
           ? (message) => {
@@ -1546,6 +1592,8 @@ export function SharedNativeAgentController({
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
             })
           }
+          annotations={draft.annotations}
+          onClearAnnotations={() => updateDraft(sessionKey, { annotations: [] })}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft.text}
@@ -1754,7 +1802,7 @@ export function SharedNativeAgentController({
           sendDisabled={
             (sendLocked && !draftSessionAction) ||
             isDispatching ||
-            (!draft.text.trim() && draft.attachments.length === 0)
+            (!draft.text.trim() && draft.attachments.length === 0 && draft.annotations.length === 0)
           }
           sendTitle={
             draftSessionAction
@@ -1776,7 +1824,11 @@ export function SharedNativeAgentController({
                   // Editing loads the prompt into the composer, so anything
                   // already there would be destroyed. Refusing with a reason
                   // beats the silent overwrite.
-                  if (draft.text.trim().length > 0 || draft.attachments.length > 0) {
+                  if (
+                    draft.text.trim().length > 0 ||
+                    draft.attachments.length > 0 ||
+                    draft.annotations.length > 0
+                  ) {
                     throw composerOccupiedError();
                   }
                   await removeQueued(message.id);
@@ -1824,6 +1876,7 @@ export function SharedNativeAgentController({
                     text: message.text,
                     mentions: [],
                     attachments,
+                    annotations: [],
                   });
                   await updateControlsSafely({
                     ...(typeof queued.model === "string" ? { modelId: queued.model } : {}),

@@ -77,4 +77,28 @@ describe("nativeComposeStore", () => {
       "plan",
     );
   });
+
+  test("annotation edits invalidate dispatch ownership", () => {
+    const sessionKey = "env-env-1:tab-annotations";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      requestId: "request-1",
+      pendingTranscriptConfirmation: {
+        requestId: "request-1",
+        sessionId: "session-1",
+        priorMessageIds: ["older-message"],
+      },
+    });
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toMatchObject({
+      annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+    });
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined();
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
+    ).toBeUndefined();
+  });
 });

@@ -1238,7 +1238,7 @@ describe("claude usage snapshot", () => {
     expect(session.usage).toBeUndefined();
   });
 
-  test("publishes nothing when no context window can be determined", async () => {
+  test("keeps exact token totals when no context window can be determined", async () => {
     const { session } = await runPromptWithMessages([
       {
         type: "result",
@@ -1246,7 +1246,15 @@ describe("claude usage snapshot", () => {
         modelUsage: { "claude-opus-5": { inputTokens: 10, outputTokens: 5 } },
       },
     ]);
-    expect(session.usage).toBeUndefined();
+    expect(session.usage).toMatchObject({
+      usedTokens: 15,
+      inputTokens: 10,
+      outputTokens: 5,
+      lastTurnTokens: 15,
+      sessionTokens: 15,
+    });
+    expect(session.usage).not.toHaveProperty("totalTokens");
+    expect(session.usage).not.toHaveProperty("percentUsed");
   });
 
   test("prefers an exact context report over the token arithmetic", async () => {
@@ -1274,6 +1282,45 @@ describe("claude usage snapshot", () => {
       percentUsed: 25.6,
       estimated: false,
       contextCategories: [{ name: "System prompt", tokens: 1200, color: "#fff" }],
+    });
+  });
+
+  test("publishes a context control report when the turn has no token counters", async () => {
+    queryControlOverrides.getContextUsage = mock(async () => ({
+      totalTokens: 51_200,
+      maxTokens: 200_000,
+      percentage: 25.6,
+      model: "claude-opus-5",
+    }));
+
+    const { session } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 51_200,
+      totalTokens: 200_000,
+      percentUsed: 25.6,
+      lastTurnTokens: 0,
+      sessionTokens: 0,
+      estimated: false,
+    });
+  });
+
+  test("publishes a heuristic context report when raw turn counters are absent", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        usage: { total_tokens: 51_200, max_tokens: 200_000 },
+      },
+    ]);
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 51_200,
+      totalTokens: 200_000,
+      percentUsed: 25.6,
+      lastTurnTokens: 0,
+      sessionTokens: 0,
+      estimated: true,
     });
   });
 

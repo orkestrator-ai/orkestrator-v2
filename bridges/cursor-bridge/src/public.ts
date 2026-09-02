@@ -105,6 +105,15 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   if (!usage) return undefined;
   const turn = usage.turn;
   const spent = turnTokenTotal(turn);
+  const hasSessionTokens =
+    usage.sessionTokens !== undefined || usage.sessionTokenFloor !== undefined;
+  // The run result is already an exact provider reading. Publish the durable
+  // locally accumulated floor immediately so a completed workflow does not
+  // lose its token count while Cursor's eventually consistent account endpoint
+  // catches up. A later account total can only raise this value.
+  const sessionTokens = hasSessionTokens
+    ? Math.max(usage.sessionTokens ?? 0, usage.sessionTokenFloor ?? 0)
+    : undefined;
   // `usedTokens` is measured against the model's context window, so it has to
   // be an occupancy figure. `turn` is cumulative across every model call the
   // run made and can exceed the window several times over, which would peg the
@@ -124,7 +133,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     // What the turn cost, as opposed to what the window holds. The category
     // breakdown above is cumulative for the same reason.
     lastTurnTokens: spent,
-    ...(usage.sessionTokens !== undefined ? { sessionTokens: usage.sessionTokens } : {}),
+    ...(sessionTokens !== undefined ? { sessionTokens } : {}),
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     source: "provider",

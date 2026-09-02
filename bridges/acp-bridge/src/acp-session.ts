@@ -9,7 +9,7 @@ import {
   planComposerApply,
   type AcpComposerPatch,
 } from "./session-config.js";
-import { parseAcpTurnUsage } from "./usage.js";
+import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
   bumpCursorDiscoveryRevision,
@@ -265,6 +265,7 @@ export async function resumeSessionReserved(
       RPC_TIMEOUT_MS,
       signal,
     );
+    finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
     // session/load is a projection of work owned by another ACP process. Its
     // historical active markers cannot describe children of this new process.
@@ -415,6 +416,8 @@ export async function createSessionReserved(
 
 export function attachChild(state: SessionState, child: AcpProcess): void {
   state.child = child;
+  state.pendingLateTurnUsage = undefined;
+  state.ignoreUncorrelatedVendorUsage = undefined;
   child.onUpdate = (params) => applySessionUpdate(state, params);
   child.onVendor = (method, params) => {
     // Same generation rule as `onClose` below: a superseded child can emit long
@@ -523,6 +526,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
       },
       RPC_TIMEOUT_MS,
     );
+    finalizeHistoryReplayTurnUsage(state);
     state.historyReplay = false;
     if (hydratedHistory) reconcileStaleToolParts(state, true);
     state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
@@ -544,6 +548,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
   } catch (error) {
     if (state.child === child) state.child = null;
     state.historyReplay = false;
+    state.historyReplayTurnUsage = undefined;
     await child.close();
     throw error;
   }
@@ -722,6 +727,9 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   const text = contentText(update.content);
   if (!text) return;
   const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
+  if (role === "user" && state.historyReplay === "hydrate") {
+    finalizeHistoryReplayTurnUsage(state);
+  }
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   // A non-chunk update carries a complete message, so it always begins one.
   // Only chunks continue the message before them.
@@ -942,6 +950,21 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
   // Unlike a model update, this is scoped to one conversation, so a superseded
   // or unrelated child must not write another session's token counts.
   if (params.sessionId !== undefined && params.sessionId !== state.acpSessionId) return;
+  if (state.ignoreUncorrelatedVendorUsage === true) return;
+  const pendingLate = state.pendingLateTurnUsage;
+  if (pendingLate && pendingLate.promptSequence < state.promptSequence) {
+    // Vendor completion notifications have no turn/request id. A carrier that
+    // lands while the next prompt is active cannot safely be assigned to
+    // either turn, so prefer losing optional late metadata to corrupting the
+    // newer turn and its durable cumulative count. Once observed, the stream
+    // remains uncorrelated for this child generation; prompt results and
+    // standard ACP usage updates continue to provide safe accounting.
+    state.ignoreUncorrelatedVendorUsage = true;
+    state.pendingLateTurnUsage = undefined;
+    return;
+  }
+  if (state.turnStartedAt !== undefined) state.currentTurnSawVendorUsage = true;
+  else state.pendingLateTurnUsage = undefined;
   recordTurnUsage(state, update);
 }
 
@@ -958,24 +981,105 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
 export function recordTurnUsage(state: SessionState, payload: unknown): void {
   const turn = parseAcpTurnUsage(payload);
   if (!turn) return;
-  const accumulatedTurn =
-    state.turnStartedAt === undefined
-      ? { ...state.usage?.turn, ...turn }
-      : { ...state.currentTurnUsage, ...turn };
-  if (state.turnStartedAt !== undefined) state.currentTurnUsage = accumulatedTurn;
+  if (state.historyReplay === "hydrate") {
+    state.historyReplayTurnUsage = { ...state.historyReplayTurnUsage, ...turn };
+    return;
+  }
+  const turnInFlight = state.turnStartedAt !== undefined;
+  const previous = state.usage;
+  const accumulatedTurn = turnInFlight
+    ? { ...state.currentTurnUsage, ...turn }
+    : { ...previous?.turn, ...turn };
+  if (turnInFlight) state.currentTurnUsage = accumulatedTurn;
   const durationMs =
     state.turnStartedAt === undefined
-      ? state.usage?.durationMs
+      ? previous?.durationMs
       : Math.max(0, Date.now() - state.turnStartedAt);
   const modelId = state.sessionConfig.composer.selectedModelId;
+  const reportedTurnTokens = acpTurnTokenCount(accumulatedTurn);
+  const lateSessionTokens =
+    !turnInFlight && reportedTurnTokens !== undefined
+      ? previous?.sessionTokens === undefined
+        ? reportedTurnTokens
+        : Math.max(0, previous.sessionTokens - (previous.lastTurnTokens ?? 0)) + reportedTurnTokens
+      : previous?.sessionTokens;
   state.usage = {
     turn: accumulatedTurn,
+    ...(turnInFlight
+      ? previous?.lastTurnTokens === undefined
+        ? {}
+        : { lastTurnTokens: previous.lastTurnTokens }
+      : reportedTurnTokens === undefined
+        ? {}
+        : { lastTurnTokens: reportedTurnTokens }),
+    ...(lateSessionTokens === undefined ? {} : { sessionTokens: lateSessionTokens }),
     ...(modelId ? { modelId } : {}),
     ...(durationMs === undefined ? {} : { durationMs }),
     updatedAt: new Date().toISOString(),
   };
   state.revision += 1;
   schedulePersist();
+}
+
+/** Exact per-turn consumption when ACP or the vendor reports token counters. */
+export function acpTurnTokenCount(usage: AcpTurnUsage): number | undefined {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.cacheReadTokens === undefined &&
+    usage.cacheWriteTokens === undefined
+      ? undefined
+      : (usage.inputTokens ?? 0) +
+        (usage.outputTokens ?? 0) +
+        (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWriteTokens ?? 0))
+  );
+}
+
+/** Commit the usage collected for one completed turn replayed by session/load. */
+export function finalizeHistoryReplayTurnUsage(state: SessionState): void {
+  const turn = state.historyReplayTurnUsage;
+  state.historyReplayTurnUsage = undefined;
+  if (!turn) return;
+  const previous = state.usage;
+  const lastTurnTokens = acpTurnTokenCount(turn);
+  const modelId = state.sessionConfig.composer.selectedModelId;
+  state.usage = {
+    turn,
+    ...(lastTurnTokens === undefined ? {} : { lastTurnTokens }),
+    ...(lastTurnTokens === undefined
+      ? previous?.sessionTokens === undefined
+        ? {}
+        : { sessionTokens: previous.sessionTokens }
+      : { sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens }),
+    ...(modelId ? { modelId } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Commit one completed turn exactly once after all synchronous carriers merge. */
+export function finalizeTurnUsage(state: SessionState): void {
+  const lastTurnTokens = state.currentTurnUsage
+    ? acpTurnTokenCount(state.currentTurnUsage)
+    : undefined;
+  if (!state.usage || lastTurnTokens === undefined) return;
+  state.usage.lastTurnTokens = lastTurnTokens;
+  state.usage.sessionTokens = (state.usage.sessionTokens ?? 0) + lastTurnTokens;
+}
+
+/** Mark a completed turn as eligible for one bounded, uncorrelated late carrier. */
+export function rememberPendingLateTurnUsage(state: SessionState, promptSequence: number): void {
+  const hasReportedTokens = state.currentTurnUsage
+    ? acpTurnTokenCount(state.currentTurnUsage) !== undefined
+    : false;
+  if (
+    hasReportedTokens &&
+    state.currentTurnSawVendorUsage !== true &&
+    state.pendingLateTurnUsage === undefined
+  ) {
+    state.pendingLateTurnUsage = { promptSequence };
+  }
 }
 
 /**

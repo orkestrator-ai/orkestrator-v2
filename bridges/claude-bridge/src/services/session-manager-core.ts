@@ -785,15 +785,22 @@ export async function buildClaudeUsageSnapshot(
     context?.maxTokens ??
     heuristic?.totalTokens ??
     Math.max(...modelEntries.map(([, usage]) => usage.contextWindow ?? 0), 0);
-  if (usedTokens <= 0 || contextWindow <= 0) return undefined;
-
   const previous = session.usage;
   const lastTurnTokens = cacheInclusiveTurnTotal;
+  // Claude's result counters are exact even when the SDK omits the model's
+  // context-window capacity. Keep that token-only snapshot so workflow callers
+  // can report consumption without manufacturing a percentage or denominator.
+  if (usedTokens <= 0 || (contextWindow <= 0 && lastTurnTokens <= 0)) return undefined;
+  const hasContextWindow = contextWindow > 0;
   return {
     usedTokens,
-    totalTokens: contextWindow,
-    percentUsed:
-      context?.percentage ?? Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100)),
+    ...(hasContextWindow
+      ? {
+          totalTokens: contextWindow,
+          percentUsed:
+            context?.percentage ?? Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100)),
+        }
+      : {}),
     modelId: context?.model ?? modelEntries.at(-1)?.[0] ?? fallbackModel,
     inputTokens: (previous?.inputTokens ?? 0) + totals.input,
     outputTokens: (previous?.outputTokens ?? 0) + totals.output,

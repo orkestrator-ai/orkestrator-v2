@@ -1394,6 +1394,62 @@ export function handlePromptTools(
     write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
     return true;
   }
+  // A completed turn with no usage carrier must not count the previous turn
+  // again merely because its snapshot is still retained on the session.
+  if (prompt.startsWith("USAGE_NONE")) {
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "No count available." },
+        },
+      },
+    });
+    write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    return true;
+  }
+  // Usage reported before a terminal JSON-RPC error is still consumed spend
+  // and must be finalized by the bridge's rejection path.
+  if (prompt.startsWith("USAGE_FAIL")) {
+    write({
+      jsonrpc: "2.0",
+      method: "_x.ai/session_notification",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "turn_completed",
+          usage: { inputTokens: 300, outputTokens: 33, totalTokens: 333 },
+        },
+      },
+    });
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: { code: -32603, message: "fake turn failed after consuming tokens" },
+    });
+    return true;
+  }
+  // Hold the prompt after reporting usage so the test can cancel it. The
+  // session/cancel handler answers this request with stopReason=cancelled.
+  if (prompt.startsWith("USAGE_CANCEL")) {
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "state_update",
+          state: "running",
+          usage: { inputTokens: 400, outputTokens: 44, totalTokens: 444 },
+        },
+      },
+    });
+    state.promptRequestId = message.id as number;
+    return true;
+  }
   // A later turn that intentionally omits the optional breakdown from the
   // full USAGE carrier below. Its missing fields must stay missing instead of
   // leaking forward from an earlier turn.
@@ -1454,21 +1510,24 @@ export function handlePromptTools(
         _meta: { totalTokens: 900, usage: { inputTokens: 850, outputTokens: 50 } },
       },
     });
-    setTimeout(() => {
-      write({
-        jsonrpc: "2.0",
-        method: "_x.ai/session_notification",
-        params: {
-          sessionId: "fake-session",
-          update: {
-            sessionUpdate: "turn_completed",
-            usage: { reasoningTokens: 77 },
+    setTimeout(
+      () => {
+        write({
+          jsonrpc: "2.0",
+          method: "_x.ai/session_notification",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "turn_completed",
+              usage: { reasoningTokens: 77 },
+            },
           },
-        },
-      });
-      // Long enough that a caller polling every 20ms reliably observes the
-      // turn settle first, so the test can assert both halves of the merge.
-    }, 250);
+        });
+        // Long enough that a caller polling every 20ms reliably observes the
+        // turn settle first, so the test can assert both halves of the merge.
+      },
+      prompt.startsWith("USAGE_LATE_OVERLAP") ? 750 : 250,
+    );
     return true;
   }
   // v2 turn-complete usage rides idle `state_update.usage`; session/prompt

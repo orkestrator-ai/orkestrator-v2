@@ -1,7 +1,7 @@
 export interface ContextUsageSnapshot {
   usedTokens: number;
-  totalTokens: number;
-  percentUsed: number;
+  totalTokens?: number;
+  percentUsed?: number;
   modelId?: string;
   /** Exact provider token counters when the native API exposes them. */
   inputTokens?: number;

@@ -170,6 +170,12 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
   }
   return {
     turn,
+    ...(Number.isSafeInteger(value.lastTurnTokens) && Number(value.lastTurnTokens) >= 0
+      ? { lastTurnTokens: Number(value.lastTurnTokens) }
+      : {}),
+    ...(Number.isSafeInteger(value.sessionTokens) && Number(value.sessionTokens) >= 0
+      ? { sessionTokens: Number(value.sessionTokens) }
+      : {}),
     ...(typeof value.modelId === "string" ? { modelId: value.modelId.slice(0, 1_024) } : {}),
     ...(Number.isSafeInteger(value.durationMs) && Number(value.durationMs) >= 0
       ? { durationMs: Number(value.durationMs) }

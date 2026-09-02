@@ -1304,6 +1304,7 @@ describe("HTTP bridge provider", () => {
   test.each([
     ["claude" as const, claudeConnection, "http://claude.test/session/session-1"],
     ["codex" as const, codexConnection, "http://codex.test/session/session-1/status"],
+    ["grok" as const, grokConnection, "http://grok.test/session/session-1/status"],
   ])("reads %s status and cumulative usage in one request", async (_agent, connection, url) => {
     const { provider, requests } = httpProvider(
       () =>

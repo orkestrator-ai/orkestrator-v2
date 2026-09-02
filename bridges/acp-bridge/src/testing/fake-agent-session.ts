@@ -245,6 +245,45 @@ export function handleSessionMessage(message: JsonObject): boolean {
         usage: { totalTokens: 4_321, inputTokens: 4_000, outputTokens: 321 },
       });
     }
+    if (process.env.FAKE_ACP_REPLAY_USAGE_TURNS === "2") {
+      replay({
+        sessionUpdate: "user_message_chunk",
+        messageId: "usage-user-1",
+        content: { type: "text", text: "First counted question" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "usage-agent-1",
+        content: { type: "text", text: "First counted answer" },
+      });
+      replay({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+        usage: { totalTokens: 100, inputTokens: 90, outputTokens: 10 },
+      });
+      replay({
+        sessionUpdate: "user_message_chunk",
+        messageId: "usage-user-2",
+        content: { type: "text", text: "Second counted question" },
+      });
+      replay({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "usage-agent-2",
+        content: { type: "text", text: "Second counted answer" },
+      });
+      replay({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: 200,
+          outputTokens: 20,
+          cachedReadTokens: 30,
+          cachedWriteTokens: 5,
+        },
+      });
+    }
     if (process.env.FAKE_ACP_REPLAY_ACTIVE_SUBAGENT === "1") {
       replay({
         sessionUpdate: "tool_call",

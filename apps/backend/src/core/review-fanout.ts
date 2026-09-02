@@ -648,6 +648,7 @@ export class ReviewFanoutRunner {
         }
         reviewer.status = "failed";
         reviewer.error = reviewFanoutErrorMessage(error).slice(0, 4_096);
+        reviewer.completedAt = nowIso();
         delete reviewer.idleResultPolls;
         delete reviewer.stalledSince;
         await this.host.save();
@@ -825,6 +826,7 @@ export class ReviewFanoutRunner {
     }
     if (status === "error" || status === "missing") {
       reviewer.status = "failed";
+      reviewer.completedAt = nowIso();
       reviewer.error =
         status === "missing"
           ? "The reviewer session no longer exists"

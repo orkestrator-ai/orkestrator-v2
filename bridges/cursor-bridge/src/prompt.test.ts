@@ -274,6 +274,34 @@ describe("terminal run usage", () => {
     });
   });
 
+  test("publishes Cursor Grok tokens before account usage catches up", async () => {
+    const state = runningSession();
+    state.composer.selectedModelId = "grok-4.6";
+
+    await followRun(
+      state,
+      finishedRun({
+        inputTokens: 80,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 100,
+      }),
+      state.promptSequence,
+      { prompt: "review", images: [] },
+    );
+
+    // The slower account endpoint has not supplied a billed total, but the
+    // completed run's exact cumulative floor is already usable by Multi Review.
+    expect(state.usage?.sessionTokens).toBeUndefined();
+    expect(state.usage?.sessionTokenFloor).toBe(100);
+    expect(publicContextUsage(state)).toMatchObject({
+      modelId: "grok-4.6",
+      lastTurnTokens: 100,
+      sessionTokens: 100,
+    });
+  });
+
   test("sums multiple streamed SDK usage messages when the terminal result omits usage", async () => {
     const state = runningSession();
     const run: FollowableRun = {
@@ -1031,11 +1059,11 @@ describe("billed usage across successive turns", () => {
     answer = false;
     await runTurn(state, 250);
 
-    // Cumulative account figures, not per-turn ones: blanking them would take
-    // a number the user could already see off the panel until billing answers.
+    // The exact local floor advances immediately instead of leaving the panel
+    // on the prior account snapshot while billing catches up.
     expect(publicContextUsage(state)).toMatchObject({
       lastTurnTokens: 250,
-      sessionTokens: 1_000,
+      sessionTokens: 1_250,
       costUsd: 0.4,
     });
   });

@@ -656,6 +656,28 @@ describe("claude-client", () => {
       expect(parseClaudeContextUsage(usage)).toEqual(usage);
     });
 
+    test("accepts exact token counters without a context-window meter", () => {
+      expect(
+        parseClaudeContextUsage({
+          usedTokens: 25,
+          inputTokens: 20,
+          outputTokens: 5,
+          lastTurnTokens: 25,
+          sessionTokens: 25,
+          source: "claude",
+        }),
+      ).toEqual({
+        usedTokens: 25,
+        inputTokens: 20,
+        outputTokens: 5,
+        lastTurnTokens: 25,
+        sessionTokens: 25,
+        source: "claude",
+      });
+      expect(parseClaudeContextUsage({ usedTokens: 25, totalTokens: 100 })).toBeUndefined();
+      expect(parseClaudeContextUsage({ usedTokens: 25, percentUsed: 25 })).toBeUndefined();
+    });
+
     test("accepts every optional usage metadata branch", () => {
       const complete = {
         usedTokens: 25,
@@ -723,7 +745,7 @@ describe("claude-client", () => {
       expect(dropped.sort()).toEqual(["contextCategories", "estimated", "modelId", "updatedAt"]);
     });
 
-    test("rejects only the required numeric triple", () => {
+    test("rejects only the required count and malformed context meter", () => {
       expect(
         parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }),
       ).toBeUndefined();

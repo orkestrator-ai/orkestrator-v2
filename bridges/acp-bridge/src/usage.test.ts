@@ -251,6 +251,28 @@ describe("parseAcpTurnUsage", () => {
 });
 
 describe("acpContextUsage", () => {
+  test("counts cache tokens when a carrier omits totalTokens", () => {
+    expect(
+      acpContextUsage(
+        {
+          inputTokens: 200,
+          outputTokens: 20,
+          cacheReadTokens: 30,
+          cacheWriteTokens: 5,
+        },
+        { updatedAt: UPDATED_AT, lastTurnTokens: 255, sessionTokens: 355 },
+      ),
+    ).toMatchObject({
+      usedTokens: 255,
+      inputTokens: 200,
+      outputTokens: 20,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 5,
+      lastTurnTokens: 255,
+      sessionTokens: 355,
+    });
+  });
+
   test("projects a full turn onto the neutral snapshot", () => {
     expect(
       acpContextUsage(
@@ -262,7 +284,13 @@ describe("acpContextUsage", () => {
           reasoningTokens: 31,
           apiDurationMs: 1_448,
         },
-        { modelId: "grok-4.6", durationMs: 3_200, updatedAt: UPDATED_AT },
+        {
+          modelId: "grok-4.6",
+          durationMs: 3_200,
+          lastTurnTokens: 15_675,
+          sessionTokens: 20_000,
+          updatedAt: UPDATED_AT,
+        },
       ),
     ).toEqual({
       usedTokens: 15_675,
@@ -270,6 +298,8 @@ describe("acpContextUsage", () => {
       outputTokens: 36,
       cacheReadTokens: 5_888,
       reasoningTokens: 31,
+      lastTurnTokens: 15_675,
+      sessionTokens: 20_000,
       apiDurationMs: 1_448,
       durationMs: 3_200,
       modelId: "grok-4.6",

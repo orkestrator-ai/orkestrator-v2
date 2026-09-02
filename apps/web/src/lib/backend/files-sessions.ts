@@ -190,6 +190,19 @@ export async function deleteContainerFile(
   return invoke<string>("delete_container_file", { environmentId, filePath });
 }
 
+/** Move a container file into an existing workspace directory. */
+export async function moveContainerFile(
+  environmentId: string,
+  sourcePath: string,
+  destinationDirectory: string,
+): Promise<string> {
+  return invoke<string>("move_container_file", {
+    environmentId,
+    sourcePath,
+    destinationDirectory,
+  });
+}
+
 // --- Local Environment File Commands ---
 
 /** Get git changes for a local environment (worktree path) */
@@ -332,6 +345,19 @@ export async function revertLocalFile(
 /** Delete a local file and stage the deletion when it is tracked by Git. */
 export async function deleteLocalFile(environmentId: string, filePath: string): Promise<string> {
   return invoke<string>("delete_local_file", { environmentId, filePath });
+}
+
+/** Move a local-worktree file into an existing workspace directory. */
+export async function moveLocalFile(
+  environmentId: string,
+  sourcePath: string,
+  destinationDirectory: string,
+): Promise<string> {
+  return invoke<string>("move_local_file", {
+    environmentId,
+    sourcePath,
+    destinationDirectory,
+  });
 }
 
 // --- Port Mapping Commands ---

@@ -4,10 +4,12 @@ import * as realBackend from "@/lib/backend";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const realConsoleError = console.error;
@@ -79,6 +81,16 @@ const mockRevertLocalFile = mock<
 const mockDeleteLocalFile = mock<(environmentId: string, filePath: string) => Promise<string>>(
   (_environmentId, filePath) => Promise.resolve(filePath),
 );
+const mockMoveContainerFile = mock<
+  (environmentId: string, sourcePath: string, destinationDirectory: string) => Promise<string>
+>((_environmentId, sourcePath, destinationDirectory) =>
+  Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+);
+const mockMoveLocalFile = mock<
+  (environmentId: string, sourcePath: string, destinationDirectory: string) => Promise<string>
+>((_environmentId, sourcePath, destinationDirectory) =>
+  Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -94,6 +106,8 @@ mock.module("@/lib/backend", () => ({
   deleteContainerFile: mockDeleteContainerFile,
   revertLocalFile: mockRevertLocalFile,
   deleteLocalFile: mockDeleteLocalFile,
+  moveContainerFile: mockMoveContainerFile,
+  moveLocalFile: mockMoveLocalFile,
 }));
 
 const { useFilesPanel } = await import("../../../apps/web/src/hooks/useFilesPanel");
@@ -153,6 +167,12 @@ function resetStores(
     targetBranch: "main",
   });
 
+  usePaneLayoutStore.setState({
+    environments: new Map(),
+    hydration: new Map(),
+    activeEnvironmentId: null,
+  });
+
   useConfigStore.setState({
     config: {
       version: "1.0",
@@ -197,6 +217,10 @@ describe("useFilesPanel", () => {
     mockDeleteContainerFile.mockClear();
     mockRevertLocalFile.mockClear();
     mockDeleteLocalFile.mockClear();
+    mockMoveContainerFile.mockClear();
+    mockMoveLocalFile.mockClear();
+    mockToastError.mockClear();
+    mockToastSuccess.mockClear();
     mockGetGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetFileTree.mockImplementation(() => Promise.resolve([]));
@@ -221,6 +245,12 @@ describe("useFilesPanel", () => {
     );
     mockRevertLocalFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
     mockDeleteLocalFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
+    mockMoveContainerFile.mockImplementation((_environmentId, sourcePath, destinationDirectory) =>
+      Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+    );
+    mockMoveLocalFile.mockImplementation((_environmentId, sourcePath, destinationDirectory) =>
+      Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+    );
   });
 
   afterEach(() => {
@@ -1017,6 +1047,128 @@ describe("useFilesPanel", () => {
     expect(mockDeleteLocalFile).toHaveBeenCalledWith("env-local", "src/App.tsx");
   });
 
+  test("routes local and container moves and refreshes authoritative snapshots", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(containerEnvironment);
+    const containerHook = renderHook(() => useFilesPanel());
+    mockMoveContainerFile.mockResolvedValueOnce("App.tsx");
+    await act(async () => {
+      await containerHook.result.current.moveFile("src/App.tsx", ".");
+    });
+    expect(mockMoveContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx", ".");
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(mockToastSuccess).toHaveBeenCalledWith("File moved", { description: "App.tsx" });
+    expect(containerHook.result.current.fileActionPending).toBeNull();
+    containerHook.unmount();
+
+    const localEnvironment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(localEnvironment);
+    const localHook = renderHook(() => useFilesPanel());
+    await act(async () => {
+      await localHook.result.current.moveFile("src/App.tsx", "archive");
+    });
+    expect(mockMoveLocalFile).toHaveBeenCalledWith("env-local", "src/App.tsx", "archive");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
+    expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+  });
+
+  test("clears move pending state after failure and does not refresh stale data", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    let rejectMove: (error: Error) => void = () => {};
+    mockMoveContainerFile.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectMove = reject;
+        }),
+    );
+    const { result } = renderHook(() => useFilesPanel());
+
+    let mutation: Promise<void>;
+    act(() => {
+      mutation = result.current.moveFile("src/App.tsx", "archive");
+    });
+    await waitFor(() => expect(result.current.fileActionPending).toBe("src/App.tsx"));
+    await act(async () => {
+      rejectMove(new Error("move failed"));
+      await expect(mutation).rejects.toThrow("move failed");
+    });
+    expect(result.current.fileActionPending).toBeNull();
+    expect(mockGetGitStatus).not.toHaveBeenCalled();
+    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to move file", {
+      description: "move failed",
+    });
+  });
+
+  test("blocks moving files that are open in any pane", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-local",
+      environments: new Map([
+        [
+          "env-local",
+          {
+            containerId: null,
+            activePaneId: "pane",
+            root: {
+              kind: "leaf",
+              id: "pane",
+              activeTabId: "file-tab",
+              tabs: [
+                {
+                  id: "file-tab",
+                  type: "file",
+                  fileData: {
+                    filePath: "src/App.tsx",
+                    isLocalEnvironment: true,
+                    worktreePath: "/tmp/worktree",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+    });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await expect(result.current.moveFile("src/App.tsx", "archive")).rejects.toThrow(
+      "Close the file's editor tab before moving it",
+    );
+    expect(mockMoveLocalFile).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Cannot move an open file", {
+      description: "Close the file's editor tab before moving it",
+    });
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
   test("keeps pending state while a mutation runs and clears it after failure", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
@@ -1080,6 +1232,9 @@ describe("useFilesPanel", () => {
       "The selected environment is not available",
     );
     await expect(result.current.deleteFile("src/App.tsx")).rejects.toThrow(
+      "The selected environment is not available",
+    );
+    await expect(result.current.moveFile("src/App.tsx", "archive")).rejects.toThrow(
       "The selected environment is not available",
     );
     expect(mockRevertContainerFile).not.toHaveBeenCalled();

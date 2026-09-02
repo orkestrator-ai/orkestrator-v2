@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
-import { useFilesPanelStore, useConfigStore } from "@/stores";
+import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
 import { useUIStore, useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { resolveComparisonRef } from "@/lib/diff-baseline";
@@ -383,6 +383,45 @@ export function useFilesPanel() {
     ],
   );
 
+  const moveFile = useCallback(
+    async (sourcePath: string, destinationDirectory: string) => {
+      if (!isAvailable || !selectedEnvironmentId) {
+        throw new Error("The selected environment is not available");
+      }
+
+      const isOpenInEditor = usePaneLayoutStore
+        .getState()
+        .getAllTabs(selectedEnvironmentId)
+        .some((tab) => tab.type === "file" && tab.fileData?.filePath === sourcePath);
+      if (isOpenInEditor) {
+        const error = new Error("Close the file's editor tab before moving it");
+        toast.error("Cannot move an open file", { description: error.message });
+        throw error;
+      }
+
+      setFileActionPending(sourcePath);
+      try {
+        const destination =
+          isLocalEnvironment && worktreePath
+            ? await backend.moveLocalFile(selectedEnvironmentId, sourcePath, destinationDirectory)
+            : await backend.moveContainerFile(
+                selectedEnvironmentId,
+                sourcePath,
+                destinationDirectory,
+              );
+        await refreshAllFilesData();
+        toast.success("File moved", { description: destination });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Failed to move file", { description: message });
+        throw error;
+      } finally {
+        setFileActionPending(null);
+      }
+    },
+    [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
+  );
+
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
     if (isOpen && isAvailable) {
@@ -424,6 +463,7 @@ export function useFilesPanel() {
     environmentId: selectedEnvironmentId,
     revertFile,
     deleteFile,
+    moveFile,
     fileActionPending,
   };
 }

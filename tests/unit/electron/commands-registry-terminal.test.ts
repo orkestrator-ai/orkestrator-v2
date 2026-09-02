@@ -978,6 +978,29 @@ exit 1
     expect(await gitOutput(worktree, ["diff", "--cached", "--name-status"])).toBe("D\ttracked.txt");
   });
 
+  test("moves local files through the environment-scoped command", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.mkdir(path.join(worktree, "archive"));
+    const commands = createCommandRegistry();
+    const environment = createEnvironment({ worktreePath: worktree });
+    const context = createContext(environment).context;
+
+    await expect(
+      commands.get("move_local_file")?.(
+        {
+          environmentId: environment.id,
+          sourcePath: "tracked.txt",
+          destinationDirectory: "archive",
+        },
+        context,
+      ),
+    ).resolves.toBe("archive/tracked.txt");
+    await expect(fs.readFile(path.join(worktree, "archive", "tracked.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(existsSync(path.join(worktree, "tracked.txt"))).toBe(false);
+  });
+
   test("rejects unsafe paths for local file mutations", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const commands = createCommandRegistry();
@@ -1122,6 +1145,32 @@ exit 1
         context,
       ),
     ).rejects.toThrow("not a local worktree");
+    await expect(
+      commands.get("move_local_file")?.(
+        { environmentId: "missing", sourcePath: "tracked.txt", destinationDirectory: "." },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("move_local_file")?.(
+        {
+          environmentId: containerEnvironment.id,
+          sourcePath: "tracked.txt",
+          destinationDirectory: ".",
+        },
+        context,
+      ),
+    ).rejects.toThrow("not a local worktree");
+    await expect(
+      commands.get("move_local_file")?.(
+        {
+          environmentId: localEnvironment.id,
+          sourcePath: "tracked.txt",
+          destinationDirectory: undefined,
+        },
+        context,
+      ),
+    ).rejects.toThrow("Expected destinationDirectory to be a string");
 
     await expect(fs.readFile(path.join(worktree, "tracked.txt"), "utf8")).resolves.toBe("base\n");
   });
@@ -1642,6 +1691,16 @@ exit 0
             context,
           ),
         ).resolves.toBe("src/file name.ts");
+        await expect(
+          commands.get("move_container_file")?.(
+            {
+              environmentId: environment.id,
+              sourcePath: "src/file name.ts",
+              destinationDirectory: ".",
+            },
+            context,
+          ),
+        ).resolves.toBe("file name.ts");
 
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("set -euo pipefail");
@@ -1653,6 +1712,9 @@ exit 0
         expect(dockerExec).toContain('git rm -f --ignore-unmatch -- "$candidate"');
         expect(dockerExec).toContain('git clean -f -x -- "$candidate"');
         expect(dockerExec).toContain("Symlink ancestor is not allowed");
+        expect(dockerExec).toContain("renameat2");
+        expect(dockerExec).toContain("bun -e");
+        expect(dockerExec).not.toContain('mv -- "$source" "$destination"');
       },
     );
 
@@ -1674,6 +1736,26 @@ exit 0
         context,
       ),
     ).rejects.toThrow("Git metadata cannot be modified");
+    await expect(
+      commands.get("move_container_file")?.(
+        {
+          environmentId: environment.id,
+          sourcePath: "src/file.ts",
+          destinationDirectory: "../outside",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Invalid destinationDirectory");
+    await expect(
+      commands.get("move_container_file")?.(
+        {
+          environmentId: environment.id,
+          sourcePath: "src/file.ts",
+          destinationDirectory: undefined,
+        },
+        context,
+      ),
+    ).rejects.toThrow("Expected destinationDirectory to be a string");
   });
 
   test("binds destructive container commands to a stored container environment", async () => {
@@ -1695,6 +1777,22 @@ exit 0
     await expect(
       commands.get("delete_container_file")?.(
         { environmentId: localEnvironment.id, filePath: "tracked.txt" },
+        context,
+      ),
+    ).rejects.toThrow("not containerized");
+    await expect(
+      commands.get("move_container_file")?.(
+        { environmentId: "missing", sourcePath: "tracked.txt", destinationDirectory: "." },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("move_container_file")?.(
+        {
+          environmentId: localEnvironment.id,
+          sourcePath: "tracked.txt",
+          destinationDirectory: ".",
+        },
         context,
       ),
     ).rejects.toThrow("not containerized");
@@ -1732,6 +1830,8 @@ exit 0
         git commit -m base
         git mv original.txt renamed.txt
         printf 'delete me\\n' > delete-me.txt
+        mkdir archive
+        printf 'move me\\n' > move-me.txt
         mkdir -p /tmp/orkestrator-outside
         printf 'keep me\\n' > /tmp/orkestrator-outside/victim.txt
         ln -s /tmp/orkestrator-outside escape
@@ -1760,6 +1860,16 @@ exit 0
           ),
         ).resolves.toBe("delete-me.txt");
         await expect(
+          commands.get("move_container_file")?.(
+            {
+              environmentId: environment.id,
+              sourcePath: "move-me.txt",
+              destinationDirectory: "archive",
+            },
+            context,
+          ),
+        ).resolves.toBe("archive/move-me.txt");
+        await expect(
           commands.get("delete_container_file")?.(
             { environmentId: environment.id, filePath: "escape/victim.txt" },
             context,
@@ -1776,6 +1886,8 @@ exit 0
               "test -f /workspace/original.txt",
               "test ! -e /workspace/renamed.txt",
               "test ! -e /workspace/delete-me.txt",
+              "test ! -e /workspace/move-me.txt",
+              "test -f /workspace/archive/move-me.txt",
               "test -f /tmp/orkestrator-outside/victim.txt",
             ].join(" && "),
           ]),

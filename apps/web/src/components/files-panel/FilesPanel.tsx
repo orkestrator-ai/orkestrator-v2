@@ -24,11 +24,19 @@ export function FilesPanel() {
     refresh,
     revertFile,
     deleteFile,
+    moveFile,
     fileActionPending,
     environmentId,
     isLocalEnvironment,
     worktreePath,
   } = useFilesPanel();
+
+  const moveFileInTree = useCallback(
+    (sourcePath: string, destinationDirectory: string) => {
+      void moveFile(sourcePath, destinationDirectory).catch(() => undefined);
+    },
+    [moveFile],
+  );
 
   useEffect(() => {
     setPendingAction(null);
@@ -83,6 +91,8 @@ export function FilesPanel() {
             onReveal={isLocalEnvironment && worktreePath ? revealFile : undefined}
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
+            onMove={moveFileInTree}
+            movePending={fileActionPending !== null}
           />
         )}
       </ScrollArea>

@@ -138,6 +138,7 @@ export {
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
   MAX_BINARY_FILE_BYTES,
+  moveConfinedFile,
   removeConfinedDirectory,
   validateRelativeFilePath,
   workspaceFilePath,

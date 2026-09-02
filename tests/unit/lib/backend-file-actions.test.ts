@@ -5,6 +5,8 @@ import {
   deleteContainerFile,
   deleteLocalFile,
   getEnvironmentDiffStats,
+  moveContainerFile,
+  moveLocalFile,
   refreshEnvironmentDiffStats,
   revertContainerFile,
   revertLocalFile,
@@ -30,6 +32,9 @@ describe("file action backend wrappers", () => {
       "src/App.tsx",
     );
     await expect(deleteContainerFile("env-container", "src/App.tsx")).resolves.toBe("src/App.tsx");
+    await expect(moveContainerFile("env-container", "src/App.tsx", "archive")).resolves.toBe(
+      "src/App.tsx",
+    );
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "revert_container_file", {
       environmentId: "env-container",
@@ -40,6 +45,11 @@ describe("file action backend wrappers", () => {
       environmentId: "env-container",
       filePath: "src/App.tsx",
     });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "move_container_file", {
+      environmentId: "env-container",
+      sourcePath: "src/App.tsx",
+      destinationDirectory: "archive",
+    });
   });
 
   test("binds local mutations to an environment id", async () => {
@@ -47,6 +57,7 @@ describe("file action backend wrappers", () => {
       "src/App.tsx",
     );
     await expect(deleteLocalFile("env-local", "src/App.tsx")).resolves.toBe("src/App.tsx");
+    await expect(moveLocalFile("env-local", "src/App.tsx", ".")).resolves.toBe("src/App.tsx");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "revert_local_file", {
       environmentId: "env-local",
@@ -56,6 +67,11 @@ describe("file action backend wrappers", () => {
     expect(invokeMock).toHaveBeenNthCalledWith(2, "delete_local_file", {
       environmentId: "env-local",
       filePath: "src/App.tsx",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "move_local_file", {
+      environmentId: "env-local",
+      sourcePath: "src/App.tsx",
+      destinationDirectory: ".",
     });
   });
 

@@ -87,10 +87,13 @@ import {
   writeConfinedLocalArtifact,
   revertLocalFile,
   deleteLocalFile,
+  moveLocalFile,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
   containerRevertFileCommand,
   containerDeleteFileCommand,
+  resolveWorkspaceFileMove,
+  containerMoveFileCommand,
   readLocalFileAtBranch,
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
@@ -672,6 +675,21 @@ export function registerTerminalCommands(
     diffStatsService.refresh(id);
     return result;
   });
+  register(
+    "move_local_file",
+    async ({ environmentId, sourcePath, destinationDirectory }, context) => {
+      const id = asString(environmentId, "environmentId");
+      const environment = await requireLocalMutationEnvironment(context.storage, id);
+      const result = await moveLocalFile(
+        environment.worktreePath!,
+        asString(sourcePath, "sourcePath"),
+        asString(destinationDirectory, "destinationDirectory"),
+      );
+      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+      diffStatsService.refresh(id);
+      return result;
+    },
+  );
 
   register(
     "get_git_status",
@@ -847,6 +865,25 @@ export function registerTerminalCommands(
     diffStatsService.refresh(environmentIdString);
     return target;
   });
+  register(
+    "move_container_file",
+    async ({ environmentId, sourcePath, destinationDirectory }, context) => {
+      const environmentIdString = asString(environmentId, "environmentId");
+      const environment = await requireContainerMutationEnvironment(
+        context.storage,
+        environmentIdString,
+      );
+      const id = environment.containerId!;
+      const move = resolveWorkspaceFileMove(
+        asString(sourcePath, "sourcePath"),
+        asString(destinationDirectory, "destinationDirectory"),
+      );
+      await dockerExec(id, containerMoveFileCommand(move.source, move.directory, move.destination));
+      diffStatsService.invalidateChanges({ containerId: id });
+      diffStatsService.refresh(environmentIdString);
+      return move.destination;
+    },
+  );
 
   register("write_initial_prompt_attachments", async ({ environmentId, attachments }, context) => {
     const environmentIdString = asString(environmentId, "environmentId");

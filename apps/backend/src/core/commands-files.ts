@@ -8,6 +8,7 @@ import {
   MAX_BINARY_FILE_BYTES,
   validateRelativeFilePath,
   writeConfinedFile,
+  moveConfinedFile,
   INITIAL_PROMPT_STAGING_DIRECTORY,
 } from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
@@ -1057,6 +1058,39 @@ export async function deleteLocalFile(worktreePath: string, relativePath: string
   return target;
 }
 
+export function resolveWorkspaceFileMove(
+  relativePath: string,
+  destinationDirectory: string,
+): { source: string; directory: string; destination: string } {
+  const source = validateWorkspaceMutationPath(relativePath, "sourcePath");
+  const directory =
+    destinationDirectory === "."
+      ? "."
+      : validateWorkspaceMutationPath(destinationDirectory, "destinationDirectory");
+  const destination = validateWorkspaceMutationPath(
+    path.posix.join(directory, path.posix.basename(source)),
+    "destinationPath",
+  );
+  return { source, directory, destination };
+}
+
+/** Move one regular file between directories without replacing an existing path. */
+export async function moveLocalFile(
+  worktreePath: string,
+  relativePath: string,
+  destinationDirectory: string,
+): Promise<string> {
+  const move = resolveWorkspaceFileMove(relativePath, destinationDirectory);
+
+  if (move.source === move.destination) {
+    throw new Error(
+      `File is already in ${move.directory === "." ? "the workspace root" : move.directory}`,
+    );
+  }
+  await moveConfinedFile(worktreePath, move.source, move.destination);
+  return move.destination;
+}
+
 export async function requireLocalMutationEnvironment(
   storage: StorageService,
   environmentId: string,
@@ -1190,6 +1224,108 @@ export function containerDeleteFileCommand(target: string): string {
     target=${quoteShell(target)}
     ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
     remove_path "$target"
+  `;
+}
+
+export const CONTAINER_PINNED_FILE_MOVE = String.raw`
+const fs = require("node:fs"), path = require("node:path");
+const { dlopen, FFIType, ptr, read } = require("bun:ffi");
+const [rootPath, source, directory, destination] = process.argv.slice(1);
+const sourceParent = path.posix.dirname(source), destinationParent = path.posix.dirname(destination);
+const sourceName = path.posix.basename(source), destinationName = path.posix.basename(destination);
+const encoded = value => Buffer.from(value + "\0");
+const isMac = process.platform === "darwin";
+const commonSymbols = {
+  openat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+  close: { args: [FFIType.i32], returns: FFIType.i32 },
+};
+const renameSymbol = { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 };
+const library = isMac
+  ? dlopen("/usr/lib/libSystem.B.dylib", { ...commonSymbols, renameatx_np: renameSymbol, __error: { args: [], returns: FFIType.ptr } })
+  : dlopen("libc.so.6", { ...commonSymbols, renameat2: renameSymbol, __errno_location: { args: [], returns: FFIType.ptr } });
+const fds = [];
+const errno = () => read.i32(isMac ? library.symbols.__error() : library.symbols.__errno_location(), 0);
+const directoryFlags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW | fs.constants.O_CLOEXEC;
+const fileFlags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+const openAt = (parentFd, name, flags) => {
+  const nameBytes = encoded(name);
+  const fd = library.symbols.openat(parentFd, ptr(nameBytes), flags, 0);
+  if (fd >= 0) fds.push(fd);
+  return fd;
+};
+const fail = message => { throw new Error(message); };
+const openDirectory = (rootFd, relativeDirectory, label) => {
+  let current = openAt(rootFd, ".", directoryFlags);
+  if (current < 0) fail(label + " is not available");
+  const segments = relativeDirectory === "." ? [] : relativeDirectory.split("/");
+  for (const segment of segments) {
+    const next = openAt(current, segment, directoryFlags);
+    if (next < 0) fail(errno() === 2 ? label + " no longer exists" : label + " is not a directory");
+    current = next;
+  }
+  return current;
+};
+const assertStillNamed = (relativeDirectory, fd) => {
+  const namedPath = relativeDirectory === "." ? rootPath : path.join(rootPath, relativeDirectory);
+  let named;
+  try { named = fs.lstatSync(namedPath); }
+  catch { fail("Workspace directory changed while the file was being moved; please try again"); }
+  const pinned = fs.fstatSync(fd);
+  if (named.isSymbolicLink() || !named.isDirectory() || named.dev !== pinned.dev || named.ino !== pinned.ino) {
+    fail("Workspace directory changed while the file was being moved; please try again");
+  }
+};
+let rootFd;
+try {
+  rootFd = fs.openSync(rootPath, directoryFlags);
+  const sourceParentFd = openDirectory(rootFd, sourceParent, "Source directory");
+  const destinationParentFd = openDirectory(rootFd, destinationParent, "Destination directory");
+  const sourceFd = openAt(sourceParentFd, sourceName, fileFlags);
+  if (sourceFd < 0) fail(errno() === 2 ? "Source no longer exists: " + source : "Source is not a regular file: " + source);
+  if (!fs.fstatSync(sourceFd).isFile()) fail("Source is not a regular file: " + source);
+  assertStillNamed(sourceParent, sourceParentFd);
+  assertStillNamed(destinationParent, destinationParentFd);
+  const sourceBytes = encoded(sourceName), destinationBytes = encoded(destinationName);
+  const result = isMac
+    ? library.symbols.renameatx_np(sourceParentFd, ptr(sourceBytes), destinationParentFd, ptr(destinationBytes), 0x00000004)
+    : library.symbols.renameat2(sourceParentFd, ptr(sourceBytes), destinationParentFd, ptr(destinationBytes), 1);
+  if (result !== 0) {
+    const code = errno();
+    if (code === 17) fail("A file already exists at " + destination);
+    if (code === 2) fail("Source no longer exists: " + source);
+    if (code === 18) fail("Source and destination must be on the same filesystem");
+    fail("Unable to move file safely: " + source);
+  }
+  assertStillNamed(destinationParent, destinationParentFd);
+} catch (error) {
+  process.stderr.write(error && error.message ? error.message : "Unable to move file safely");
+  process.exitCode = 1;
+} finally {
+  for (const fd of fds.reverse()) library.symbols.close(fd);
+  if (rootFd !== undefined) fs.closeSync(rootFd);
+  library.close();
+}
+`.trim();
+
+export function containerMoveFileCommand(
+  source: string,
+  directory: string,
+  destination: string,
+): string {
+  return `
+    set -euo pipefail
+    cd /workspace
+    source=${quoteShell(source)}
+    directory=${quoteShell(directory)}
+    destination=${quoteShell(destination)}
+    ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
+    assert_safe_path "$source"
+    assert_safe_path "$destination"
+    if [ "$source" = "$destination" ]; then
+      echo "File is already in $directory" >&2
+      exit 1
+    fi
+    bun -e ${quoteShell(CONTAINER_PINNED_FILE_MOVE)} -- /workspace "$source" "$directory" "$destination"
   `;
 }
 

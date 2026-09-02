@@ -52,7 +52,40 @@ const fileTree: FileNode[] = [
       },
     ],
   },
+  {
+    name: "archive",
+    path: "archive",
+    isDirectory: true,
+    children: [],
+  },
 ];
+
+function createDataTransfer(): DataTransfer {
+  const values = new Map<string, string>();
+  return {
+    dropEffect: "none",
+    effectAllowed: "uninitialized",
+    files: [] as unknown as FileList,
+    items: [] as unknown as DataTransferItemList,
+    types: [],
+    clearData: (type?: string) => {
+      if (type) values.delete(type);
+      else values.clear();
+    },
+    getData: (type: string) => values.get(type) ?? "",
+    setData(type: string, value: string) {
+      values.set(type, value);
+      (this.types as string[]).splice(0, this.types.length, ...values.keys());
+    },
+    setDragImage: () => undefined,
+  } as DataTransfer;
+}
+
+function fireDrag(target: Element, type: string, dataTransfer: DataTransfer): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  fireEvent(target, event);
+}
 
 describe("files panel views", () => {
   beforeEach(() => {
@@ -91,7 +124,9 @@ describe("files panel views", () => {
       }),
     );
     await waitFor(() => expect(screen.getByText("App.tsx")).toBeTruthy());
-    fireEvent.click(screen.getByText("App.tsx"));
+    const fileButton = screen.getByRole("button", { name: "App.tsx" });
+    expect(fileButton.getAttribute("draggable")).toBe("false");
+    fireEvent.click(fileButton);
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
     view.unmount();
   });
@@ -143,6 +178,104 @@ describe("files panel views", () => {
     fireEvent.contextMenu(fileButton);
     fireEvent.click(await screen.findByText("Delete file"));
     expect(onDelete).toHaveBeenCalledWith("src/App.tsx");
+  });
+
+  test("FileTreeNode drags a file onto a destination folder", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onMove={onMove} onDelete={() => undefined} />);
+
+    const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    const destination = screen.getByRole("button", { name: "archive" });
+    const dataTransfer = createDataTransfer();
+
+    expect(fileButton.getAttribute("draggable")).toBe("true");
+    fireDrag(fileButton, "dragstart", dataTransfer);
+    expect(dataTransfer.effectAllowed).toBe("move");
+    fireDrag(destination, "dragover", dataTransfer);
+    expect(destination.className).toContain("ring-primary/60");
+    fireDrag(destination, "drop", dataTransfer);
+
+    expect(onMove).toHaveBeenCalledWith("src/App.tsx", "archive");
+    expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
+  });
+
+  test("offers an explicit Move to dialog for keyboard and touch users", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onMove={onMove} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move App.tsx to another folder" }));
+    expect(await screen.findByRole("dialog", { name: "Move file" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "archive" }));
+    expect(onMove).toHaveBeenCalledWith("src/App.tsx", "archive");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(await screen.findByText("Move to…"));
+    expect(screen.getByRole("option", { name: "src" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("option", { name: "Workspace root" }));
+    expect(onMove).toHaveBeenLastCalledWith("src/App.tsx", ".");
+  });
+
+  test("moves nested files to the root and suppresses same-parent drops", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onMove={onMove} />);
+    const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    const sourceFolder = screen.getByRole("button", { name: "src" });
+    const rootTarget = screen.getByLabelText("Workspace root drop target");
+
+    const sameParentTransfer = createDataTransfer();
+    fireDrag(fileButton, "dragstart", sameParentTransfer);
+    fireDrag(sourceFolder, "drop", sameParentTransfer);
+    expect(onMove).not.toHaveBeenCalled();
+
+    const rootTransfer = createDataTransfer();
+    fireDrag(fileButton, "dragstart", rootTransfer);
+    fireDrag(rootTarget, "dragover", rootTransfer);
+    expect(rootTarget.className).toContain("ring-primary/60");
+    fireDrag(rootTarget, "drop", rootTransfer);
+    expect(onMove).toHaveBeenCalledWith("src/App.tsx", ".");
+  });
+
+  test("ignores foreign drags, clears hover state, and disables moves while pending", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    const view = renderWithTerminal(<AllFilesView onMove={onMove} />);
+    const destination = screen.getByRole("button", { name: "archive" });
+    const foreignTransfer = createDataTransfer();
+    foreignTransfer.setData("text/plain", "src/App.tsx");
+    fireDrag(destination, "dragover", foreignTransfer);
+    expect(destination.className).not.toContain("ring-primary/60");
+    fireDrag(destination, "drop", foreignTransfer);
+    expect(onMove).not.toHaveBeenCalled();
+
+    const emptyWorkspaceTransfer = createDataTransfer();
+    emptyWorkspaceTransfer.setData("application/x-orkestrator-workspace-file", "");
+    fireDrag(destination, "drop", emptyWorkspaceTransfer);
+    expect(onMove).not.toHaveBeenCalled();
+
+    const workspaceTransfer = createDataTransfer();
+    workspaceTransfer.setData("application/x-orkestrator-workspace-file", "src/App.tsx");
+    fireDrag(destination, "dragover", workspaceTransfer);
+    expect(destination.className).toContain("ring-primary/60");
+    fireDrag(destination, "dragleave", workspaceTransfer);
+    expect(destination.className).not.toContain("ring-primary/60");
+
+    view.rerender(
+      <TerminalProvider>
+        <RegisterFileTab />
+        <AllFilesView onMove={onMove} movePending />
+      </TerminalProvider>,
+    );
+    expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("draggable")).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: "Move App.tsx to another folder" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    fireDrag(screen.getByRole("button", { name: "archive" }), "drop", workspaceTransfer);
+    expect(onMove).not.toHaveBeenCalled();
   });
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {

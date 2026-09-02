@@ -1,7 +1,9 @@
 import { constants, promises as fs, type Stats } from "node:fs";
+import fsSync from "node:fs";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
 import { APP_SLUG } from "./constants.js";
 
 export const MAX_BINARY_FILE_BYTES = 10 * 1024 * 1024;
@@ -9,6 +11,219 @@ export const MAX_WRITE_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_BASE64_PAYLOAD_BYTES = Math.ceil(MAX_WRITE_FILE_BYTES / 3) * 4 + 4;
 
 const CONTROL_PATH_CHARS = /[\0\r\n]/;
+
+const ERRNO_ENOENT = 2;
+const ERRNO_EEXIST = 17;
+const ERRNO_EXDEV = 18;
+
+type ConfinedMoveTestHooks = {
+  /** Tests use this to replace a checked pathname after both parent handles are pinned. */
+  afterDirectoriesOpened?: () => void | Promise<void>;
+};
+
+function nulTerminated(value: string): Buffer {
+  return Buffer.from(`${value}\0`);
+}
+
+function directorySegments(relativeDirectory: string): string[] {
+  return relativeDirectory === "." ? [] : relativeDirectory.split("/");
+}
+
+function assertPinnedDirectoryStillNamed(
+  canonicalRoot: string,
+  relativeDirectory: string,
+  fd: number,
+): void {
+  const namedPath =
+    relativeDirectory === "." ? canonicalRoot : path.join(canonicalRoot, relativeDirectory);
+  let named;
+  try {
+    named = fsSync.lstatSync(namedPath);
+  } catch {
+    throw new Error("Workspace directory changed while the file was being moved; please try again");
+  }
+  const pinned = fsSync.fstatSync(fd);
+  if (
+    named.isSymbolicLink() ||
+    !named.isDirectory() ||
+    named.dev !== pinned.dev ||
+    named.ino !== pinned.ino
+  ) {
+    throw new Error("Workspace directory changed while the file was being moved; please try again");
+  }
+}
+
+/**
+ * Atomically moves a regular file without re-resolving mutable ancestors.
+ *
+ * Every parent directory is opened relative to an already-pinned descriptor
+ * with O_NOFOLLOW, then the platform no-replace rename primitive operates on
+ * those descriptors. A repository process may rename or replace a pathname,
+ * but it cannot redirect the final operation outside the pinned directories.
+ */
+export async function moveConfinedFile(
+  rootPath: string,
+  sourcePath: string,
+  destinationPath: string,
+  testHooks: ConfinedMoveTestHooks = {},
+): Promise<void> {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Safe workspace file moves are not supported on this platform");
+  }
+
+  const source = validateRelativeFilePath(sourcePath, "sourcePath");
+  const destination = validateRelativeFilePath(destinationPath, "destinationPath");
+  const sourceParent = path.posix.dirname(source);
+  const destinationParent = path.posix.dirname(destination);
+  const sourceName = path.posix.basename(source);
+  const destinationName = path.posix.basename(destination);
+  const canonicalRoot = await fs.realpath(rootPath);
+  const rootStats = await fs.lstat(canonicalRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error("Workspace root is not a directory");
+  }
+
+  const libraryPath = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6";
+  const commonSymbols = {
+    openat: {
+      args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32],
+      returns: FFIType.i32,
+    },
+    close: { args: [FFIType.i32], returns: FFIType.i32 },
+  } as const;
+  const library =
+    process.platform === "darwin"
+      ? dlopen(libraryPath, {
+          ...commonSymbols,
+          renameatx_np: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32],
+            returns: FFIType.i32,
+          },
+          __error: { args: [], returns: FFIType.ptr },
+        })
+      : dlopen(libraryPath, {
+          ...commonSymbols,
+          renameat2: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32],
+            returns: FFIType.i32,
+          },
+          __errno_location: { args: [], returns: FFIType.ptr },
+        });
+  const nativeFds: number[] = [];
+  const directoryFlags =
+    constants.O_RDONLY |
+    (constants.O_DIRECTORY ?? 0) |
+    (constants.O_NOFOLLOW ?? 0) |
+    ((constants as Record<string, number>).O_CLOEXEC ?? 0);
+  const fileFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+  const errno = (): number => {
+    const errnoPointer =
+      process.platform === "darwin"
+        ? (library.symbols as { __error(): Pointer }).__error()
+        : (library.symbols as { __errno_location(): Pointer }).__errno_location();
+    return read.i32(errnoPointer, 0);
+  };
+  const openAt = (parentFd: number, name: string, flags: number): number => {
+    const encoded = nulTerminated(name);
+    const fd = library.symbols.openat(parentFd, ptr(encoded), flags, 0);
+    if (fd >= 0) nativeFds.push(fd);
+    return fd;
+  };
+  const openDirectory = (rootFd: number, relativeDirectory: string, label: string): number => {
+    let current = openAt(rootFd, ".", directoryFlags);
+    if (current < 0) throw new Error(`${label} is not available`);
+    for (const segment of directorySegments(relativeDirectory)) {
+      const next = openAt(current, segment, directoryFlags);
+      if (next < 0) {
+        if (errno() === ERRNO_ENOENT) throw new Error(`${label} no longer exists`);
+        throw new Error(`${label} is not a directory`);
+      }
+      current = next;
+    }
+    return current;
+  };
+
+  let rootHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    rootHandle = await fs.open(canonicalRoot, directoryFlags);
+    const openedRoot = await rootHandle.stat();
+    if (openedRoot.dev !== rootStats.dev || openedRoot.ino !== rootStats.ino) {
+      throw new Error("Workspace root changed while the file was being moved; please try again");
+    }
+    const sourceParentFd = openDirectory(rootHandle.fd, sourceParent, "Source directory");
+    const destinationParentFd = openDirectory(
+      rootHandle.fd,
+      destinationParent,
+      "Destination directory",
+    );
+    const sourceFd = openAt(sourceParentFd, sourceName, fileFlags);
+    if (sourceFd < 0) {
+      if (errno() === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
+      throw new Error(`Source is not a regular file: ${source}`);
+    }
+    const sourceStats = fsSync.fstatSync(sourceFd);
+    if (!sourceStats.isFile()) throw new Error(`Source is not a regular file: ${source}`);
+
+    await testHooks.afterDirectoriesOpened?.();
+    assertPinnedDirectoryStillNamed(canonicalRoot, sourceParent, sourceParentFd);
+    assertPinnedDirectoryStillNamed(canonicalRoot, destinationParent, destinationParentFd);
+
+    const encodedSource = nulTerminated(sourceName);
+    const encodedDestination = nulTerminated(destinationName);
+    const result =
+      process.platform === "darwin"
+        ? (
+            library.symbols as {
+              renameatx_np(
+                sourceFd: number,
+                sourceName: Pointer,
+                destinationFd: number,
+                destinationName: Pointer,
+                flags: number,
+              ): number;
+            }
+          ).renameatx_np(
+            sourceParentFd,
+            ptr(encodedSource),
+            destinationParentFd,
+            ptr(encodedDestination),
+            0x00000004,
+          )
+        : (
+            library.symbols as {
+              renameat2(
+                sourceFd: number,
+                sourceName: Pointer,
+                destinationFd: number,
+                destinationName: Pointer,
+                flags: number,
+              ): number;
+            }
+          ).renameat2(
+            sourceParentFd,
+            ptr(encodedSource),
+            destinationParentFd,
+            ptr(encodedDestination),
+            1,
+          );
+    if (result !== 0) {
+      const code = errno();
+      if (code === ERRNO_EEXIST) {
+        throw new Error(`A file already exists at ${destination}`);
+      }
+      if (code === ERRNO_ENOENT) throw new Error(`Source no longer exists: ${source}`);
+      if (code === ERRNO_EXDEV) {
+        throw new Error("Source and destination must be on the same filesystem");
+      }
+      throw new Error(`Unable to move file safely: ${source}`);
+    }
+    assertPinnedDirectoryStillNamed(canonicalRoot, destinationParent, destinationParentFd);
+  } finally {
+    for (const fd of nativeFds.reverse()) library.symbols.close(fd);
+    library.close();
+    await rootHandle?.close();
+  }
+}
 
 function defaultReadableHostRoots(): string[] {
   return [path.join(os.homedir(), APP_SLUG, "workspaces")];

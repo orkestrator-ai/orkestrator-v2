@@ -160,15 +160,18 @@ export function reviewerRuntimeSummary(
   const startedAt = Date.parse(reviewer.startedAt);
   if (!Number.isFinite(startedAt)) return null;
   const running = reviewer.status === "running";
-  if (!running && reviewer.tokenCount === undefined) return null;
   const completedAt = reviewer.completedAt ? Date.parse(reviewer.completedAt) : Number.NaN;
-  const end = running || !Number.isFinite(completedAt) ? now : completedAt;
-  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  const tokens =
-    reviewer.tokenCount === undefined
-      ? "Tokens pending"
+  if (!running && !Number.isFinite(completedAt)) {
+    return reviewer.tokenCount === undefined
+      ? null
       : `${formatTokenCount(reviewer.tokenCount)} tokens`;
-  return `${elapsed} · ${tokens}`;
+  }
+  const end = running ? now : completedAt;
+  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
+  if (reviewer.tokenCount === undefined) {
+    return running ? `${elapsed} · Tokens pending` : elapsed;
+  }
+  return `${elapsed} · ${formatTokenCount(reviewer.tokenCount)} tokens`;
 }
 
 const NOTE_TONE_CLASS = {
@@ -537,7 +540,7 @@ function MultiReviewOverviewTab({
                             </p>
                             {runtimeSummary ? (
                               <p
-                                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-cyan-300/75"
+                                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
                                 aria-label={`Reviewer ${index + 1} runtime and token usage`}
                               >
                                 {runtimeSummary}

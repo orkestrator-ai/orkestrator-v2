@@ -71,6 +71,12 @@ export function publicContextUsage(state: SessionState) {
     ? acpContextUsage(state.usage.turn, {
         ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
         ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
+        ...(state.usage.lastTurnTokens === undefined
+          ? {}
+          : { lastTurnTokens: state.usage.lastTurnTokens }),
+        ...(state.usage.sessionTokens === undefined
+          ? {}
+          : { sessionTokens: state.usage.sessionTokens }),
         updatedAt: state.usage.updatedAt,
       })
     : null;

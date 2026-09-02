@@ -3091,7 +3091,11 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
       const current = await snapshot(started.id);
       expect(current?.phase).toBe("failed");
       expect(current?.error).toBe(`No reviewer produced a valid report: ${message}`);
-      expect(current?.reviewers[0]).toMatchObject({ status: "failed", error: message });
+      expect(current?.reviewers[0]).toMatchObject({
+        status: "failed",
+        error: message,
+        completedAt: expect.any(String),
+      });
     });
   }
 });
@@ -3116,6 +3120,7 @@ test("MultiReviewService fails a reviewer on a terminal turn error and reports i
     expect(current?.reviewers[0]).toMatchObject({
       status: "failed",
       error: `The reviewer session failed: ${detail}`,
+      completedAt: expect.any(String),
     });
     expect(current?.error).toContain(detail);
   });

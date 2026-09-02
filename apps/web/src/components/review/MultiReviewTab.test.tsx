@@ -184,6 +184,15 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T01:00:00.000Z"))).toBe(
       "1m 40s · 12k tokens",
     );
+    delete reviewer.tokenCount;
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T01:00:00.000Z"))).toBe("1m 40s");
+    delete reviewer.completedAt;
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T01:00:00.000Z"))).toBeNull();
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T02:00:00.000Z"))).toBeNull();
+    reviewer.tokenCount = 12_345;
+    expect(reviewerRuntimeSummary(reviewer, Date.parse("2026-08-14T02:00:00.000Z"))).toBe(
+      "12k tokens",
+    );
     reviewer.startedAt = "not-a-date";
     expect(reviewerRuntimeSummary(reviewer)).toBeNull();
   });
@@ -230,9 +239,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Reviewer 1 runtime and token usage").textContent).toBe(
-      "2m 0s · 23k tokens",
-    );
+    const runtime = screen.getByLabelText("Reviewer 1 runtime and token usage");
+    expect(runtime.textContent).toBe("2m 0s · 23k tokens");
+    expect(runtime.className).toContain("text-muted-foreground");
+    expect(runtime.className).not.toContain("text-cyan");
   });
 
   test("freezes the clock while inactive, reanchors on activation, and clears its timer", async () => {

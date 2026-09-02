@@ -186,7 +186,8 @@ export function parseClaudeRateLimits(
  * boundary into Zustand. UI formatters assume finite numeric fields.
  *
  * Same policy as the sibling `parseContextUsage` in codex-client.ts: rejection
- * is reserved for the required numeric triple, and every optional decoration is
+ * is reserved for the required token count and internally consistent optional
+ * context meter, and every optional decoration is
  * kept only when it is the right shape — one malformed extra (a rate-limit
  * window the bridge forwarded unclamped, a stray string where a count belongs)
  * never costs the reading itself. Dropped optional fields are reported by name
@@ -200,19 +201,24 @@ export function parseClaudeContextUsage(
   if (!isRecord(value)) return undefined;
   const { usedTokens, totalTokens, percentUsed } = value;
 
-  // The required triple: anything wrong here means there is no usable reading.
+  // The token count is required. Claude can report exact turn/session counters
+  // without a context-window capacity; in that case the optional meter pair is
+  // omitted rather than discarding the useful counters with it.
   if (
     typeof usedTokens !== "number" ||
     !Number.isFinite(usedTokens) ||
     usedTokens < 0 ||
-    typeof totalTokens !== "number" ||
-    !Number.isFinite(totalTokens) ||
-    totalTokens <= 0 ||
-    usedTokens > totalTokens ||
-    typeof percentUsed !== "number" ||
-    !Number.isFinite(percentUsed) ||
-    percentUsed < 0 ||
-    percentUsed > 100
+    (totalTokens === undefined) !== (percentUsed === undefined) ||
+    (totalTokens !== undefined &&
+      (typeof totalTokens !== "number" ||
+        !Number.isFinite(totalTokens) ||
+        totalTokens <= 0 ||
+        usedTokens > totalTokens)) ||
+    (percentUsed !== undefined &&
+      (typeof percentUsed !== "number" ||
+        !Number.isFinite(percentUsed) ||
+        percentUsed < 0 ||
+        percentUsed > 100))
   ) {
     return undefined;
   }
@@ -220,7 +226,10 @@ export function parseClaudeContextUsage(
   const drop = (field: string) => {
     if (droppedFields && !droppedFields.includes(field)) droppedFields.push(field);
   };
-  const result: ContextUsageSnapshot = { usedTokens, totalTokens, percentUsed };
+  const result: ContextUsageSnapshot = {
+    usedTokens,
+    ...(totalTokens !== undefined ? { totalTokens, percentUsed } : {}),
+  };
   const extras = result as unknown as Record<string, unknown>;
 
   for (const key of OPTIONAL_USAGE_NUMBER_KEYS) {

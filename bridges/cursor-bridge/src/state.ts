@@ -128,9 +128,10 @@ export interface PersistedUsage {
   /**
    * Lowest cumulative total that can include every locally measured turn.
    *
-   * Kept separately from `sessionTokens`: the displayed provider snapshot can
-   * lag, while this floor must survive a newer turn and a bridge restart so an
-   * older account report is never mistaken for the latest one.
+   * Kept separately from `sessionTokens`: the account snapshot can lag, while
+   * this floor must survive a newer turn and a bridge restart so an older
+   * account report is never mistaken for the latest one. Public projections
+   * use the greater of the two.
    */
   sessionTokenFloor?: number;
   /** Amount actually charged by Cursor, including discounts, in US dollars. */

@@ -13,9 +13,11 @@ import {
   applyComposerPatch,
   createSession,
   ensureSessionProcess,
+  finalizeTurnUsage,
   listResumableSessions,
   parseComposerPatch,
   recordTurnUsage,
+  rememberPendingLateTurnUsage,
   resumeSession,
 } from "./acp-session.js";
 import {
@@ -365,6 +367,7 @@ export async function route(
     const promptSequence = state.promptSequence;
     state.turnStartedAt = Date.now();
     state.currentTurnUsage = {};
+    state.currentTurnSawVendorUsage = false;
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
     boundTranscript(state);
@@ -408,8 +411,11 @@ export async function route(
         // numbers under `_meta`. Parse the whole result so either spelling lands
         // before `turnStartedAt` is cleared and the elapsed time is lost.
         recordTurnUsage(state, result);
+        finalizeTurnUsage(state);
+        rememberPendingLateTurnUsage(state, promptSequence);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        state.currentTurnSawVendorUsage = undefined;
         if (schema && requestId) {
           const output = state.currentTurnOutput?.trim() ?? "";
           if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
@@ -474,8 +480,10 @@ export async function route(
       (error: unknown) => {
         state.status = "error";
         state.error = error instanceof Error ? error.message : String(error);
+        finalizeTurnUsage(state);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        state.currentTurnSawVendorUsage = undefined;
         // A turn that failed gets no final pass, so a live timer armed moments
         // before the failure has nothing left to complete. Drop it here for the
         // same reason `DELETE` and `shutdown` do: enrichment is display-only

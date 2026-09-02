@@ -214,6 +214,8 @@ describe("ACP bridge", () => {
     );
     expect(session.contextUsage).toMatchObject({
       usedTokens: 15_675,
+      lastTurnTokens: 15_675,
+      sessionTokens: 15_675,
       inputTokens: 15_639,
       outputTokens: 36,
       // Only `response_completed` reported the cache split. A later, sparser
@@ -248,6 +250,8 @@ describe("ACP bridge", () => {
     );
     expect(sparseSession.contextUsage).toMatchObject({
       usedTokens: 222,
+      lastTurnTokens: 222,
+      sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
       source: "provider",
@@ -256,12 +260,31 @@ describe("ACP bridge", () => {
     expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
     expect(sparseSession.contextUsage).not.toHaveProperty("apiDurationMs");
 
+    expect(
+      (
+        await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers: first.headers,
+          body: JSON.stringify({ prompt: "USAGE_NONE: no count available" }),
+        })
+      ).status,
+    ).toBe(202);
+    const noUsageSession = await waitFor(
+      () => readSession(first.base, first.headers),
+      (value) => value.status === "idle",
+    );
+    // Finalizing a later turn with no usage must not count the prior turn a
+    // second time.
+    expect(noUsageSession.contextUsage?.sessionTokens).toBe(15_897);
+
     first.child.kill("SIGTERM");
     await Bun.sleep(200);
     const second = await spawnBridge({ stateDirectory });
     const restored = await readSession(second.base, second.headers);
     expect(restored.contextUsage).toMatchObject({
       usedTokens: 222,
+      lastTurnTokens: 222,
+      sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
       source: "provider",
@@ -316,6 +339,8 @@ describe("ACP bridge", () => {
     // gap instead of being dropped or opening a new snapshot.
     expect(late.contextUsage).toMatchObject({
       usedTokens: 900,
+      lastTurnTokens: 900,
+      sessionTokens: 900,
       inputTokens: 850,
       outputTokens: 50,
       reasoningTokens: 77,
@@ -324,6 +349,117 @@ describe("ACP bridge", () => {
     // No turn was in flight, so the elapsed time must be carried over rather
     // than measured again from a clock this turn no longer owns.
     expect(late.contextUsage?.durationMs).toBe(settledDurationMs);
+  });
+
+  test("does not assign a previous turn's late carrier to a newer turn", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
+        (response) => response.json(),
+      ) as Promise<{ status: string; contextUsage?: Record<string, unknown> }>;
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_LATE_OVERLAP: report after the next turn" }),
+    });
+    await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage?.sessionTokens === 900,
+    );
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_NONE: no count available" }),
+    });
+    await waitFor(readSession, (value) => value.status === "idle");
+    await Bun.sleep(850);
+
+    const afterLateCarrier = await readSession();
+    expect(afterLateCarrier.contextUsage).toMatchObject({
+      usedTokens: 900,
+      lastTurnTokens: 900,
+      sessionTokens: 900,
+      inputTokens: 850,
+      outputTokens: 50,
+    });
+    expect(afterLateCarrier.contextUsage).not.toHaveProperty("reasoningTokens");
+  });
+
+  test("finalizes reported usage when a prompt fails", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
+        (response) => response.json(),
+      ) as Promise<{ status: string; contextUsage?: Record<string, unknown> }>;
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_SPARSE: establish the previous turn" }),
+    });
+    await waitFor(
+      readSession,
+      (value) => value.status === "idle" && value.contextUsage?.sessionTokens === 222,
+    );
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_FAIL: consume tokens and fail" }),
+    });
+    const failed = await waitFor(readSession, (value) => value.status === "error");
+    expect(failed.contextUsage).toMatchObject({
+      usedTokens: 333,
+      lastTurnTokens: 333,
+      sessionTokens: 555,
+      inputTokens: 300,
+      outputTokens: 33,
+    });
+  });
+
+  test("finalizes reported usage when a prompt is cancelled", async () => {
+    const bridge = await spawnBridge({ stateDirectory: await temporaryDirectory() });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+    const readSession = async () =>
+      nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
+        (response) => response.json(),
+      ) as Promise<{ status: string; contextUsage?: Record<string, unknown> }>;
+
+    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ prompt: "USAGE_CANCEL: consume tokens until cancelled" }),
+    });
+    await waitFor(
+      readSession,
+      (value) => value.status === "running" && value.contextUsage?.usedTokens === 444,
+    );
+    await nativeFetch(`${bridge.base}/session/${created.id}/cancel`, {
+      method: "POST",
+      headers: bridge.headers,
+    });
+
+    const cancelled = await waitFor(readSession, (value) => value.status === "idle");
+    expect(cancelled.contextUsage).toMatchObject({
+      usedTokens: 444,
+      lastTurnTokens: 444,
+      sessionTokens: 444,
+      inputTokens: 400,
+      outputTokens: 44,
+    });
   });
 
   test("reads occupancy from a usage_update that uses type instead of sessionUpdate", async () => {
@@ -390,6 +526,33 @@ describe("ACP bridge", () => {
       usedTokens: 4_321,
       inputTokens: 4_000,
       outputTokens: 321,
+      source: "provider",
+    });
+  });
+
+  test("accumulates distinct usage-bearing turns replayed by session/load", async () => {
+    const bridge = await spawnBridge({ env: { FAKE_ACP_REPLAY_USAGE_TURNS: "2" } });
+    const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work");
+
+    const resumed = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: external!.id }),
+    });
+    expect(resumed.status).toBe(201);
+    const session = (await resumed.json()) as { contextUsage?: Record<string, unknown> };
+
+    expect(session.contextUsage).toMatchObject({
+      usedTokens: 255,
+      lastTurnTokens: 255,
+      sessionTokens: 355,
+      inputTokens: 200,
+      outputTokens: 20,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 5,
       source: "provider",
     });
   });

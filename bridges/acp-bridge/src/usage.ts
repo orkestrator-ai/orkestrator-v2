@@ -156,14 +156,26 @@ export function parseAcpTurnUsage(value: unknown): AcpTurnUsage | null {
  */
 export function acpContextUsage(
   usage: AcpTurnUsage,
-  details: { modelId?: string; durationMs?: number; updatedAt: string },
+  details: {
+    modelId?: string;
+    durationMs?: number;
+    lastTurnTokens?: number;
+    sessionTokens?: number;
+    updatedAt: string;
+  },
 ): NativeAgentContextUsage | null {
   const usedTokens =
     usage.contextUsedTokens ??
     usage.totalTokens ??
-    (usage.inputTokens === undefined && usage.outputTokens === undefined
+    (usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.cacheReadTokens === undefined &&
+    usage.cacheWriteTokens === undefined
       ? undefined
-      : (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0));
+      : (usage.inputTokens ?? 0) +
+        (usage.outputTokens ?? 0) +
+        (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWriteTokens ?? 0));
   if (usedTokens === undefined) return null;
   const durationMs = count(details.durationMs);
   const contextWindow =
@@ -181,6 +193,8 @@ export function acpContextUsage(
     ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
     ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
     ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
+    ...(details.lastTurnTokens === undefined ? {} : { lastTurnTokens: details.lastTurnTokens }),
+    ...(details.sessionTokens === undefined ? {} : { sessionTokens: details.sessionTokens }),
     ...(usage.apiDurationMs === undefined ? {} : { apiDurationMs: usage.apiDurationMs }),
     ...(usage.costUsd === undefined ? {} : { costUsd: usage.costUsd }),
     ...(durationMs === undefined ? {} : { durationMs }),

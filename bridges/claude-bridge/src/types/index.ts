@@ -420,8 +420,10 @@ export type StopBackgroundTaskResult =
 
 export interface SessionUsageSnapshot {
   usedTokens: number;
-  totalTokens: number;
-  percentUsed: number;
+  /** Context-window capacity, when Claude reports it. */
+  totalTokens?: number;
+  /** Context-window utilization, present only with `totalTokens`. */
+  percentUsed?: number;
   modelId?: string;
   inputTokens?: number;
   outputTokens?: number;

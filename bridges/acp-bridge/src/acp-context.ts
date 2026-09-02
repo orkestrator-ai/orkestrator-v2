@@ -297,6 +297,18 @@ export interface SessionState {
   usage?: PersistedUsage;
   /** Usage carriers collected for the in-flight turn. Never persisted. */
   currentTurnUsage?: AcpTurnUsage;
+  /** Whether the active turn already received a vendor terminal usage carrier. */
+  currentTurnSawVendorUsage?: boolean;
+  /** Usage carriers for one completed turn while session/load replays history. */
+  historyReplayTurnUsage?: AcpTurnUsage;
+  /**
+   * A just-completed turn that may still emit an uncorrelated vendor carrier.
+   * If another turn starts before that carrier arrives, the stream becomes
+   * ambiguous and must no longer update turn accounting in this generation.
+   */
+  pendingLateTurnUsage?: { promptSequence: number };
+  /** Fatal ambiguity latch for vendor usage notifications without a turn id. */
+  ignoreUncorrelatedVendorUsage?: boolean;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
@@ -309,6 +321,10 @@ export interface SessionState {
 
 export interface PersistedUsage {
   turn: AcpTurnUsage;
+  /** Tokens consumed by the most recently completed turn. */
+  lastTurnTokens?: number;
+  /** Cumulative tokens consumed by completed turns in this session. */
+  sessionTokens?: number;
   modelId?: string;
   durationMs?: number;
   updatedAt: string;

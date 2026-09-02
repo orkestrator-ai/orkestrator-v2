@@ -71,6 +71,9 @@ import {
   isTerminalSessionAttachable,
   dockerExec,
   buildFileTree,
+  CONTAINER_FILE_TREE_LISTER,
+  MAX_FILE_TREE_NODES,
+  parseContainerFileTree,
   buildContainerGitStatusScript,
   isMissingTargetRefResponse,
   parseContainerGitStatusResponse,
@@ -762,20 +765,9 @@ export function registerTerminalCommands(
   register("get_file_tree", async ({ containerId, knownDigest }) => {
     const output = await dockerExec(
       asString(containerId, "containerId"),
-      "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000",
+      `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
     );
-    return conditionalSnapshot(
-      output
-        .split("\n")
-        .filter(Boolean)
-        .map((filePath) => ({
-          name: path.basename(filePath),
-          path: filePath,
-          isDirectory: false,
-          extension: path.extname(filePath),
-        })),
-      knownDigest,
-    );
+    return conditionalSnapshot(parseContainerFileTree(output), knownDigest);
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));

@@ -30,7 +30,7 @@ import {
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 
-export const MAX_LOCAL_FILE_TREE_NODES = 5_000;
+export const MAX_FILE_TREE_NODES = 5_000;
 
 export type FileTreeNode = {
   name: string;
@@ -40,10 +40,120 @@ export type FileTreeNode = {
   extension?: string;
 };
 
+function sortFileTreeLevel(nodes: FileTreeNode[]): FileTreeNode[] {
+  return nodes.sort(
+    (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
+  );
+}
+
+function sortFileTree(nodes: FileTreeNode[]): FileTreeNode[] {
+  for (const node of nodes) {
+    if (node.children) sortFileTree(node.children);
+  }
+  return sortFileTreeLevel(nodes);
+}
+
+/**
+ * Enumerates one container workspace without giving filenames control over the
+ * record framing. The container already ships Node for the safe base64 reader,
+ * so using it here also makes the production traversal directly testable
+ * without a Docker daemon or host-specific GNU find extensions.
+ */
+export const CONTAINER_FILE_TREE_LISTER = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(process.argv[1]);
+const limit = Number(process.argv[2]);
+const records = [];
+let count = 0;
+
+function visit(directory, relativeDirectory) {
+  let entries;
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (count >= limit) return;
+    if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
+    const relativePath = relativeDirectory
+      ? path.posix.join(relativeDirectory, entry.name)
+      : entry.name;
+    if (entry.isDirectory()) {
+      records.push("d\t" + relativePath + "\0");
+      count += 1;
+      visit(path.join(directory, entry.name), relativePath);
+    } else if (entry.isFile()) {
+      records.push("f\t" + relativePath + "\0");
+      count += 1;
+    }
+  }
+}
+
+if (Number.isSafeInteger(limit) && limit > 0) visit(root, "");
+process.stdout.write(records.join(""));
+`.trim();
+
+const UNSAFE_CONTAINER_TREE_PATH_CHARS = /[\u0000-\u001f\u007f]/;
+
+/** Build the shared tree shape from the bounded, NUL-framed container listing. */
+export function parseContainerFileTree(output: string): FileTreeNode[] {
+  if (!output) return [];
+  if (!output.endsWith("\0")) {
+    throw new Error("Malformed container file tree: missing NUL terminator");
+  }
+
+  const roots: FileTreeNode[] = [];
+  const directories = new Map<string, FileTreeNode>();
+
+  for (const record of output.slice(0, -1).split("\0")) {
+    const separator = record.indexOf("\t");
+    const entryType = separator === -1 ? "" : record.slice(0, separator);
+    const relativePath = separator === -1 ? "" : record.slice(separator + 1);
+    if ((entryType !== "d" && entryType !== "f") || !relativePath) {
+      throw new Error("Malformed container file tree entry");
+    }
+
+    // A cloned repository controls filenames. Keep paths that normalize to a
+    // different target, or contain UI-spoofing control characters, out of the
+    // tree without letting one such name erase every other entry.
+    let validatedPath: string;
+    try {
+      validatedPath = validateRelativeFilePath(relativePath, "container file tree path");
+    } catch {
+      continue;
+    }
+    if (validatedPath !== relativePath || UNSAFE_CONTAINER_TREE_PATH_CHARS.test(relativePath)) {
+      continue;
+    }
+
+    const parentPath = path.posix.dirname(relativePath);
+    const siblings = parentPath === "." ? roots : directories.get(parentPath)?.children;
+    if (!siblings) {
+      throw new Error(
+        `Malformed container file tree: missing parent directory for ${relativePath}`,
+      );
+    }
+
+    const isDirectory = entryType === "d";
+    const node: FileTreeNode = {
+      name: path.posix.basename(relativePath),
+      path: relativePath,
+      isDirectory,
+      ...(isDirectory ? { children: [] } : { extension: path.posix.extname(relativePath) }),
+    };
+    siblings.push(node);
+    if (isDirectory) directories.set(relativePath, node);
+  }
+
+  return sortFileTree(roots);
+}
+
 /**
  * Build a bounded local file tree.
  *
- * The container equivalent already stops at 5,000 files. Without the shared
+ * The container equivalent already stops at 5,000 nodes. Without the shared
  * budget here, opening the files panel on a generated or dependency-heavy
  * worktree recursively read every directory and retained an unbounded response
  * object before any bytes crossed IPC.
@@ -51,7 +161,7 @@ export type FileTreeNode = {
 export async function buildFileTree(
   rootPath: string,
   relativePath = "",
-  budget: { remaining: number } = { remaining: MAX_LOCAL_FILE_TREE_NODES },
+  budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
 ): Promise<FileTreeNode[]> {
   if (budget.remaining <= 0) return [];
   const fullPath = path.join(rootPath, relativePath);
@@ -81,9 +191,7 @@ export async function buildFileTree(
       });
     }
   }
-  return nodes.sort(
-    (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
-  );
+  return sortFileTreeLevel(nodes);
 }
 
 export type GitFileChange = {

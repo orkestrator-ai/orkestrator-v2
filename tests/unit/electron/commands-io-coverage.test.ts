@@ -63,9 +63,11 @@ const realPtySnapshot = { ...realPty };
 mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty }));
 
 const {
+  CONTAINER_FILE_TREE_LISTER,
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
   createCommandRegistry,
+  parseContainerFileTree,
   __testing: commandTesting,
 } = await import("../../../apps/backend/src/core/commands");
 
@@ -200,10 +202,16 @@ describe("backend command I/O coverage", () => {
   test("builds a local tree and reads and writes local file payloads safely", async () => {
     const root = await createTempDir("ork-commands-io-local-");
     await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.mkdir(path.join(root, "src", "alpha"), { recursive: true });
+    await fs.mkdir(path.join(root, "src", "zeta"), { recursive: true });
     await fs.mkdir(path.join(root, ".git"), { recursive: true });
     await fs.mkdir(path.join(root, "node_modules", "ignored"), { recursive: true });
     await fs.writeFile(path.join(root, "README.md"), "hello\n");
+    await fs.writeFile(path.join(root, "src", "a-first.ts"), "");
     await fs.writeFile(path.join(root, "src", "app.ts"), "export const value = 1;\n");
+    await fs.writeFile(path.join(root, "src", "z-last.ts"), "");
+    await fs.writeFile(path.join(root, "src", "alpha", "nested-z.ts"), "");
+    await fs.writeFile(path.join(root, "src", "alpha", "nested-a.ts"), "");
     await fs.writeFile(path.join(root, ".git", "config"), "ignored");
     await fs.writeFile(path.join(root, "node_modules", "ignored", "index.js"), "ignored");
     await fs.symlink(path.join(root, "README.md"), path.join(root, "readme-link.md"));
@@ -220,8 +228,45 @@ describe("backend command I/O coverage", () => {
         isDirectory: true,
         children: [
           {
+            name: "alpha",
+            path: path.join("src", "alpha"),
+            isDirectory: true,
+            children: [
+              {
+                name: "nested-a.ts",
+                path: path.join("src", "alpha", "nested-a.ts"),
+                isDirectory: false,
+                extension: ".ts",
+              },
+              {
+                name: "nested-z.ts",
+                path: path.join("src", "alpha", "nested-z.ts"),
+                isDirectory: false,
+                extension: ".ts",
+              },
+            ],
+          },
+          {
+            name: "zeta",
+            path: path.join("src", "zeta"),
+            isDirectory: true,
+            children: [],
+          },
+          {
+            name: "a-first.ts",
+            path: path.join("src", "a-first.ts"),
+            isDirectory: false,
+            extension: ".ts",
+          },
+          {
             name: "app.ts",
             path: path.join("src", "app.ts"),
+            isDirectory: false,
+            extension: ".ts",
+          },
+          {
+            name: "z-last.ts",
+            path: path.join("src", "z-last.ts"),
             isDirectory: false,
             extension: ".ts",
           },
@@ -303,6 +348,141 @@ describe("backend command I/O coverage", () => {
 
     expect(countNodes(tree)).toBe(5_000);
   }, 15_000);
+
+  test("parses, validates, and recursively sorts NUL-framed container tree records", () => {
+    expect(parseContainerFileTree("")).toEqual([]);
+    expect(
+      parseContainerFileTree(
+        [
+          "d\tzeta",
+          "f\tzeta/last.ts",
+          "d\talpha",
+          "f\troot-z.ts",
+          "d\talpha/nested",
+          "f\talpha/z-last.ts",
+          "f\talpha/a-first.ts",
+          "f\talpha/nested/child.ts",
+          "d\t..",
+          "f\talpha/line\nbreak.ts",
+          "f\talpha/tab\tname.ts",
+        ].join("\0") + "\0",
+      ),
+    ).toEqual([
+      {
+        name: "alpha",
+        path: "alpha",
+        isDirectory: true,
+        children: [
+          {
+            name: "nested",
+            path: "alpha/nested",
+            isDirectory: true,
+            children: [
+              {
+                name: "child.ts",
+                path: "alpha/nested/child.ts",
+                isDirectory: false,
+                extension: ".ts",
+              },
+            ],
+          },
+          {
+            name: "a-first.ts",
+            path: "alpha/a-first.ts",
+            isDirectory: false,
+            extension: ".ts",
+          },
+          {
+            name: "z-last.ts",
+            path: "alpha/z-last.ts",
+            isDirectory: false,
+            extension: ".ts",
+          },
+        ],
+      },
+      {
+        name: "zeta",
+        path: "zeta",
+        isDirectory: true,
+        children: [
+          {
+            name: "last.ts",
+            path: "zeta/last.ts",
+            isDirectory: false,
+            extension: ".ts",
+          },
+        ],
+      },
+      { name: "root-z.ts", path: "root-z.ts", isDirectory: false, extension: ".ts" },
+    ]);
+
+    expect(() => parseContainerFileTree("f\tfile.ts")).toThrow("missing NUL terminator");
+    expect(() => parseContainerFileTree("x\tfile.ts\0")).toThrow(
+      "Malformed container file tree entry",
+    );
+    expect(() => parseContainerFileTree("file.ts\0")).toThrow(
+      "Malformed container file tree entry",
+    );
+    expect(() => parseContainerFileTree("f\t\0")).toThrow("Malformed container file tree entry");
+    expect(() => parseContainerFileTree("f\torphan/file.ts\0")).toThrow("missing parent directory");
+  });
+
+  test("runs the production container tree lister with pruning, safe framing, and a hard cap", async () => {
+    const root = await createTempDir("ork-container-tree-lister-");
+    await fs.mkdir(path.join(root, "src", "nested"), { recursive: true });
+    await fs.mkdir(path.join(root, "src", "node_modules", "ignored"), { recursive: true });
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "nested", "app.ts"), "");
+    await fs.writeFile(path.join(root, "src", "node_modules", "ignored", "index.js"), "");
+    await fs.writeFile(path.join(root, ".git", "config"), "");
+    await fs.writeFile(path.join(root, "line\nbreak.ts"), "");
+    await fs.symlink(path.join(root, "src"), path.join(root, "src-link"));
+
+    const fullListing = await runCommand("node", [
+      "-e",
+      CONTAINER_FILE_TREE_LISTER,
+      "--",
+      root,
+      "5000",
+    ]);
+    expect(fullListing.stdout).toContain("f\tline\nbreak.ts\0");
+    expect(parseContainerFileTree(fullListing.stdout)).toEqual([
+      {
+        name: "src",
+        path: "src",
+        isDirectory: true,
+        children: [
+          {
+            name: "nested",
+            path: "src/nested",
+            isDirectory: true,
+            children: [
+              {
+                name: "app.ts",
+                path: "src/nested/app.ts",
+                isDirectory: false,
+                extension: ".ts",
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const cappedRoot = await createTempDir("ork-container-tree-cap-");
+    await fs.mkdir(path.join(cappedRoot, "folder"));
+    await fs.writeFile(path.join(cappedRoot, "folder", "child.ts"), "");
+    const cappedListing = await runCommand("node", [
+      "-e",
+      CONTAINER_FILE_TREE_LISTER,
+      "--",
+      cappedRoot,
+      "1",
+    ]);
+    const cappedTree = parseContainerFileTree(cappedListing.stdout);
+    expect(cappedTree).toHaveLength(1);
+    expect(cappedTree[0]).toMatchObject({ isDirectory: true, children: [] });
+  });
 
   test("reads base64 only from regular files in workspace storage", async () => {
     const workspaceStorage = path.join(os.homedir(), APP_SLUG, "workspaces");
@@ -441,7 +621,7 @@ describe("backend command I/O coverage", () => {
     const dockerScript = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
-  *"find /workspace"*) printf 'src/app.ts\\nREADME.md\\n' ;;
+  *"-- /workspace 5000"*) printf 'd\\tsrc\\000f\\tsrc/app.ts\\000f\\tREADME.md\\000' ;;
   *"cat '/workspace/src/app.ts'"*) printf 'export const value = 2;\\n' ;;
   *"git show 'main':'src/app.ts'"*) printf 'export const value = 1;\\n' ;;
   *"git show 'missing':'src/app.ts'"*) ;;
@@ -459,7 +639,12 @@ esac
       await expect(
         commands.get("get_file_tree")?.({ containerId: "container-1" }, context),
       ).resolves.toEqual([
-        { name: "app.ts", path: "src/app.ts", isDirectory: false, extension: ".ts" },
+        {
+          name: "src",
+          path: "src",
+          isDirectory: true,
+          children: [{ name: "app.ts", path: "src/app.ts", isDirectory: false, extension: ".ts" }],
+        },
         { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
       ]);
       const changedTree = (await commands.get("get_file_tree")?.(
@@ -524,34 +709,44 @@ esac
 
       expect(await fs.readFile(stdinPath, "utf8")).toBe("AAEC");
       const dockerLog = await fs.readFile(logPath, "utf8");
-      expect(dockerLog).toContain("-type l -prune");
+      expect(dockerLog).toContain("-- /workspace 5000");
       expect(dockerLog).toContain(
         "exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'",
       );
     });
   });
 
-  test("returns exactly the configured 5000-file container tree boundary", async () => {
+  test("returns a hierarchical container tree at the configured 5000-node boundary", async () => {
     await withFakeDocker(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+printf 'd\\tgenerated\\000'
 i=1
-while [ "$i" -le 5000 ]; do
-  printf 'generated/file-%s.ts\\n' "$i"
+while [ "$i" -le 4999 ]; do
+  printf 'f\\tgenerated/file-%s.ts\\000' "$i"
   i=$((i + 1))
 done
 `,
       async ({ logPath }) => {
         const commands = createCommandRegistry();
-        const files = (await commands.get("get_file_tree")?.(
+        const tree = (await commands.get("get_file_tree")?.(
           { containerId: "container-tree-cap" },
           createContext(),
-        )) as Array<{ path: string }>;
+        )) as Array<{ path: string; children?: unknown[] }>;
+        const countNodes = (nodes: Array<{ children?: unknown[] }>): number =>
+          nodes.reduce(
+            (total, node) =>
+              total + 1 + countNodes((node.children ?? []) as Array<{ children?: unknown[] }>),
+            0,
+          );
 
-        expect(files).toHaveLength(5_000);
-        expect(files[0]?.path).toBe("generated/file-1.ts");
-        expect(files.at(-1)?.path).toBe("generated/file-5000.ts");
-        expect(await fs.readFile(logPath, "utf8")).toContain("head -5000");
+        expect(countNodes(tree)).toBe(5_000);
+        const generated = tree[0];
+        expect(generated?.path).toBe("generated");
+        const generatedChildren = (generated?.children ?? []) as Array<{ path: string }>;
+        expect(generatedChildren).toHaveLength(4_999);
+        expect(generatedChildren.some((node) => node.path === "generated/file-4999.ts")).toBe(true);
+        expect(await fs.readFile(logPath, "utf8")).toContain("-- /workspace 5000");
       },
     );
   });

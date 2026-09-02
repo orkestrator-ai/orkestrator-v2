@@ -1015,16 +1015,25 @@ function createNativeStore() {
 }
 
 describe("useNativeComposeDraftPersistence", () => {
-  test("rehydrates transcript annotations with their comments", async () => {
+  test("rehydrates transcript annotations with normalized single-line comments", async () => {
     const sessionKey = "env-native:tab-annotations";
-    const annotations = [
-      { id: "annotation-1", text: "Selected transcript text", comment: "Use this wording" },
+    const persistedAnnotations = [
+      {
+        id: "annotation-1",
+        text: "Selected transcript text",
+        comment: "Use this\r\nwording",
+      },
     ];
     getComposeDraft.mockResolvedValueOnce({
       draftKey: compose.composeDraftKey("claude", "env-native", sessionKey),
       ownerType: "environment",
       ownerId: "env-native",
-      value: { text: "Follow up", mentions: [], attachments: [], annotations },
+      value: {
+        text: "Follow up",
+        mentions: [],
+        attachments: [],
+        annotations: persistedAnnotations,
+      },
       updatedAt: "2026-09-02T00:00:00.000Z",
       revision: 2,
     });
@@ -1034,7 +1043,9 @@ describe("useNativeComposeDraftPersistence", () => {
     );
 
     await waitFor(() => expect(store.getState().draftText.get(sessionKey)).toBe("Follow up"));
-    expect(store.getState().annotations.get(sessionKey)).toEqual(annotations);
+    expect(store.getState().annotations.get(sessionKey)).toEqual([
+      { id: "annotation-1", text: "Selected transcript text", comment: "Use this wording" },
+    ]);
 
     hook.unmount();
   });

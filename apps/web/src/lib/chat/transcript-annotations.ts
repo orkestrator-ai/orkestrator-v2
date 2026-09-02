@@ -13,7 +13,7 @@ export function normalizeTranscriptAnnotationText(text: string): string {
 }
 
 export function normalizeTranscriptAnnotationComment(comment: string): string {
-  return comment.slice(0, MAX_TRANSCRIPT_ANNOTATION_COMMENT_LENGTH);
+  return comment.replace(/\r\n?|\n/g, " ").slice(0, MAX_TRANSCRIPT_ANNOTATION_COMMENT_LENGTH);
 }
 
 export function isTranscriptAnnotation(value: unknown): value is TranscriptAnnotation {
@@ -50,7 +50,7 @@ export function buildPromptWithTranscriptAnnotations(
     .map((annotation, index) => ({
       reference: index + 1,
       selectedText: annotation.text,
-      userComment: annotation.comment.trim() || null,
+      userComment: normalizeTranscriptAnnotationComment(annotation.comment).trim() || null,
     }));
   if (validAnnotations.length === 0) return prompt;
 

@@ -1438,6 +1438,15 @@ describe("NativeAgentService", () => {
     ["text", { text: "draft", mentions: [], attachments: [] }],
     ["mentions", { text: "", mentions: [{ id: "m" }], attachments: [] }],
     ["attachments", { text: "", mentions: [], attachments: [{ id: "a" }] }],
+    [
+      "annotations",
+      {
+        text: "",
+        mentions: [],
+        attachments: [],
+        annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+      },
+    ],
   ])("holds queued work for persisted compose draft %s", async (_label, value) => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-draft-"));
     const storage = await createStorage(dataDir);

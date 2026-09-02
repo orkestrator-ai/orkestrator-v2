@@ -1,6 +1,7 @@
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
-import { AlertCircle, ArrowUp, FileText, Square, X } from "lucide-react";
+import { AlertCircle, ArrowUp, FileText, MessageSquareText, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -8,6 +9,7 @@ import {
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { cn } from "@/lib/utils";
 import type { FileMention } from "@/types";
+import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 
 export interface NativeComposeAttachment {
   id: string;
@@ -28,6 +30,8 @@ export interface NativeComposeBarProps {
   layout?: "bottom" | "centered";
   attachments: readonly NativeComposeAttachment[];
   onRemoveAttachment: (id: string) => void;
+  annotations?: readonly TranscriptAnnotation[];
+  onClearAnnotations?: () => void;
   inputRef: RefObject<MentionableInputRef | null>;
   inputContainerRef: RefObject<HTMLDivElement | null>;
   text: string;
@@ -63,6 +67,8 @@ export function NativeComposeBar({
   layout = "bottom",
   attachments,
   onRemoveAttachment,
+  annotations = [],
+  onClearAnnotations,
   inputRef,
   inputContainerRef,
   text,
@@ -95,8 +101,69 @@ export function NativeComposeBar({
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
-        {attachments.length > 0 ? (
+        {attachments.length > 0 || annotations.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-2">
+            {annotations.length > 0 ? (
+              <Tooltip delayDuration={250}>
+                <TooltipTrigger asChild>
+                  <div
+                    data-testid="compose-annotation-count"
+                    className="flex h-9 items-center gap-1.5 rounded-full border border-blue-400/30 bg-blue-500/10 px-3 text-sm text-blue-100 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.04)]"
+                  >
+                    <MessageSquareText className="h-4 w-4 text-blue-300" aria-hidden="true" />
+                    <span>
+                      {annotations.length} annotation{annotations.length === 1 ? "" : "s"}
+                    </span>
+                    {onClearAnnotations ? (
+                      <button
+                        type="button"
+                        onClick={onClearAnnotations}
+                        disabled={disabled || isSending}
+                        className="-mr-1 ml-0.5 rounded-full p-0.5 text-blue-200/70 transition-colors hover:bg-blue-400/15 hover:text-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label="Remove all transcript annotations"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  align="start"
+                  sideOffset={8}
+                  className="w-[min(28rem,calc(100vw-2rem))] max-w-none p-4 text-left text-sm text-pretty"
+                >
+                  <ol className="space-y-3">
+                    {annotations.map((annotation, index) => (
+                      <li
+                        key={annotation.id}
+                        className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2"
+                      >
+                        <span className="text-muted-foreground">{index + 1}.</span>
+                        <div className="min-w-0 space-y-1.5">
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground">
+                              Selected text
+                            </p>
+                            <p className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap break-words text-foreground">
+                              {annotation.text}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium text-muted-foreground">
+                              User comment
+                            </p>
+                            <p className="mt-0.5 whitespace-pre-wrap break-words text-foreground">
+                              {annotation.comment.trim() || "No comment added"}
+                            </p>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             {attachments.map((attachment) => (
               <div
                 key={attachment.id}

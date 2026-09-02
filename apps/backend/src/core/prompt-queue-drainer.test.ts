@@ -291,6 +291,26 @@ describe("PromptQueueDrainer", () => {
     }
   });
 
+  test("never types over an annotation-only draft", async () => {
+    const context = await harness();
+    try {
+      await enqueue(context.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);
+      await context.storage.saveComposeDraft(DRAFT_KEY, "environment", ENVIRONMENT_ID, {
+        text: "",
+        mentions: [],
+        attachments: [],
+        annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+      });
+
+      await context.drainer.drainAll();
+
+      expect(context.submits()).toHaveLength(0);
+      expect((await context.queue())?.messages).toHaveLength(1);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("fails closed for malformed or unreadable durable drafts", async () => {
     const malformed = await harness();
     try {

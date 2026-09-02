@@ -3139,7 +3139,12 @@ describe("NativeAgentService", () => {
           `claude:env-1:${encodeURIComponent(logicalSessionKey)}`,
           "environment",
           "env-1",
-          { text: "user draft", mentions: [], attachments: [] },
+          {
+            text: "",
+            mentions: [],
+            attachments: [],
+            annotations: [{ id: "reference-1", text: "selected text", comment: "" }],
+          },
         );
 
         expect(

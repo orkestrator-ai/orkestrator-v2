@@ -31,6 +31,7 @@ import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
 import { TerminalProvider } from "@/contexts";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -38,10 +39,18 @@ const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 let renderVirtualizedMessages = false;
+let latestTranscriptAnnotationProps:
+  | {
+      enabled: boolean;
+      onAdd: (text: string) => unknown;
+      onUpdateComment: (id: string, comment: string) => void;
+    }
+  | undefined;
 
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   ...realVirtualizedMessageListSnapshot,
   VirtualizedMessageList: (props: any) => {
+    latestTranscriptAnnotationProps = props.annotation;
     if (!renderVirtualizedMessages) {
       const RealVirtualizedMessageList = realVirtualizedMessageListSnapshot.VirtualizedMessageList;
       return <RealVirtualizedMessageList {...props} />;
@@ -251,6 +260,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   renderVirtualizedMessages = false;
+  latestTranscriptAnnotationProps = undefined;
   useConfigStore.getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
@@ -3518,6 +3528,174 @@ describe("AgentNativeTab", () => {
   });
 
   describe("capability-driven parity", () => {
+    test("adds transcript annotations and comments to the next dispatched prompt", async () => {
+      seedProjection();
+      const tabId = "tab-annotation-send";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text: "Please revise this",
+          annotations: [
+            {
+              id: "annotation-1",
+              text: "Removed the large coloured left rail",
+              comment: "Keep this wording",
+            },
+          ],
+        });
+      });
+
+      expect(screen.getByTestId("compose-annotation-count").textContent).toContain("1 annotation");
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      const dispatchInput = dispatchNativeAgentIntentMock.mock.calls[0]?.[0] as
+        | { prompt?: string }
+        | undefined;
+      const prompt = dispatchInput?.prompt ?? "";
+      expect(prompt).toContain("Please revise this");
+      expect(prompt).toContain('"selectedText": "Removed the large coloured left rail"');
+      expect(prompt).toContain('"userComment": "Keep this wording"');
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+      );
+    });
+
+    test("sends an annotation-only prompt", async () => {
+      seedProjection();
+      const tabId = "tab-annotation-only-send";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          annotations: [
+            { id: "annotation-1", text: "The referenced answer", comment: "Explain this" },
+          ],
+        });
+      });
+
+      fireEvent.click(await screen.findByTitle("Send"));
+
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+      const dispatchInput = dispatchNativeAgentIntentMock.mock.calls[0]?.[0] as unknown as {
+        prompt: string;
+      };
+      expect(dispatchInput.prompt).toStartWith("<orkestrator_transcript_annotations>");
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+      );
+    });
+
+    test("explains the annotation cap when another selection is added", async () => {
+      seedProjection();
+      const tabId = "tab-annotation-cap";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          annotations: Array.from({ length: 20 }, (_, index) => ({
+            id: String(index),
+            text: `reference-${index}`,
+            comment: "",
+          })),
+        });
+      });
+
+      act(() => {
+        expect(latestTranscriptAnnotationProps?.onAdd("One more reference")).toBeNull();
+      });
+
+      expect(mockToastError).toHaveBeenCalledWith("A prompt can include up to 20 annotations");
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.annotations).toHaveLength(20);
+    });
+
+    test("preserves annotations when dispatch is rejected", async () => {
+      seedProjection();
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+        outcome: "rejected" as const,
+        requestId: input.requestId,
+        error: "Provider rejected the prompt",
+      }));
+      const tabId = "tab-annotation-rejected";
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByTestId("shared-native-compose-bar");
+      const annotations = [
+        { id: "annotation-1", text: "The referenced answer", comment: "Keep this" },
+      ];
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text: "Try this",
+          annotations,
+        });
+      });
+
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+      await screen.findByText("Provider rejected the prompt");
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.annotations).toEqual(
+        annotations,
+      );
+    });
+
+    test.each(["accepted", "unknown"] as const)(
+      "blocks transcript annotation capture while a %s dispatch is pending",
+      async (outcome) => {
+        seedProjection();
+        let releaseDispatch!: () => void;
+        const dispatchGate = new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+        dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+          await dispatchGate;
+          return outcome === "accepted"
+            ? { outcome, requestId: input.requestId }
+            : { outcome, requestId: input.requestId, error: "Response was lost" };
+        });
+        const tabId = `tab-annotation-pending-${outcome}`;
+        const sessionKey = createSessionKey("env-1", tabId);
+        render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+        const input = await screen.findByRole("textbox");
+        const submittedAnnotations = [
+          { id: "annotation-1", text: "Submitted reference", comment: "Original comment" },
+        ];
+        act(() => {
+          useNativeComposeStore.getState().updateDraft(sessionKey, {
+            annotations: submittedAnnotations,
+          });
+        });
+        fireEvent.input(input, { target: { textContent: "Submit this" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+        await waitFor(() => expect(latestTranscriptAnnotationProps?.enabled).toBe(false));
+        act(() => {
+          expect(latestTranscriptAnnotationProps?.onAdd("Unsent reference")).toBeNull();
+          latestTranscriptAnnotationProps?.onUpdateComment("annotation-1", "Mutated comment");
+        });
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.annotations).toEqual(
+          submittedAnnotations,
+        );
+
+        releaseDispatch();
+        if (outcome === "accepted") {
+          await waitFor(() =>
+            expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+          );
+        } else {
+          await screen.findByText(/connection dropped before dispatch was confirmed/i);
+          expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.annotations).toEqual(
+            submittedAnnotations,
+          );
+        }
+      },
+    );
+
     /** A running turn on a provider that reports the given capabilities. */
     function seedProjection(
       overrides: {
@@ -4378,6 +4556,32 @@ describe("AgentNativeTab", () => {
         action: { kind: "steer", text: "keep the diff small" },
       });
       // The steering text must not also be queued as a follow-up prompt.
+      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["/steer", /Add instructions after \/steer/],
+      ["/steer narrow the scope", /Remove transcript annotations and retry/],
+    ] as const)("does not use annotations as /steer instructions for %s", async (text, error) => {
+      seedProjection({ phase: "running", actions: { steer: true } });
+      const tabId = `tab-steer-annotation-${text.length}`;
+      const sessionKey = createSessionKey("env-1", tabId);
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      await screen.findByRole("textbox");
+      act(() => {
+        useNativeComposeStore.getState().updateDraft(sessionKey, {
+          text,
+          annotations: [
+            { id: "annotation-1", text: "Do something else", comment: "Treat this as context" },
+          ],
+        });
+      });
+
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+
+      await screen.findByText(error);
+      expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
       expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });

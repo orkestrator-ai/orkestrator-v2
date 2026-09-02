@@ -3,11 +3,13 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentConversationMode } from "@orkestrator/protocol/native-agent";
 import type { FileMention } from "@/types";
 import type { WorkspaceAttachment } from "@/components/chat/NativeAttachmentMenu";
+import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 
 export interface NativeComposeDraft {
   text: string;
   mentions: FileMention[];
   attachments: WorkspaceAttachment[];
+  annotations: TranscriptAnnotation[];
   platform?: AgentPlatform;
   modelId?: string;
   reasoningId?: string;
@@ -39,6 +41,7 @@ const EMPTY_DRAFT: NativeComposeDraft = {
   text: "",
   mentions: [],
   attachments: [],
+  annotations: [],
   fastMode: false,
   mode: "build",
 };
@@ -53,10 +56,12 @@ interface NativeComposePersistenceState {
   draftText: Map<string, string>;
   draftMentions: Map<string, FileMention[]>;
   attachments: Map<string, WorkspaceAttachment[]>;
+  annotations?: Map<string, TranscriptAnnotation[]>;
   setDraftText: (sessionKey: string, text: string) => void;
   setDraftMentions: (sessionKey: string, mentions: FileMention[]) => void;
   clearAttachments: (sessionKey: string) => void;
   addAttachment: (sessionKey: string, attachment: WorkspaceAttachment) => void;
+  setAnnotations?: (sessionKey: string, annotations: TranscriptAnnotation[]) => void;
   draftMetadata?: Map<string, unknown>;
   setDraftMetadata?: (sessionKey: string, metadata: unknown) => void;
 }
@@ -152,8 +157,9 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
         update.text !== undefined ||
         update.mentions !== undefined ||
         update.attachments !== undefined;
+      const annotationContentChanged = update.annotations !== undefined;
       const next = { ...EMPTY_DRAFT, ...existing, ...update };
-      if (contentChanged && update.requestId === undefined) {
+      if ((contentChanged || annotationContentChanged) && update.requestId === undefined) {
         delete next.requestId;
         delete next.pendingTranscriptConfirmation;
       }
@@ -174,6 +180,7 @@ function persistenceState(state: NativeComposeState): NativeComposePersistenceSt
     draftText: new Map([...state.drafts].map(([key, draft]) => [key, draft.text])),
     draftMentions: new Map([...state.drafts].map(([key, draft]) => [key, draft.mentions])),
     attachments: new Map([...state.drafts].map(([key, draft]) => [key, draft.attachments])),
+    annotations: new Map([...state.drafts].map(([key, draft]) => [key, draft.annotations])),
     setDraftText: (sessionKey, text) =>
       useNativeComposeStore.getState().updateDraft(sessionKey, { text }),
     setDraftMentions: (sessionKey, mentions) =>
@@ -186,6 +193,8 @@ function persistenceState(state: NativeComposeState): NativeComposePersistenceSt
         attachments: [...current.attachments, attachment],
       });
     },
+    setAnnotations: (sessionKey, annotations) =>
+      useNativeComposeStore.getState().updateDraft(sessionKey, { annotations }),
   };
 }
 

@@ -98,7 +98,6 @@ describe("Cursor usage tolerant parsing", () => {
           usedCents: 23_222,
           remainingCents: 16_778,
           limitCents: 40_000,
-          usedPercent: 58.055,
         },
         buckets: [
           {
@@ -164,7 +163,6 @@ describe("Cursor usage tolerant parsing", () => {
         included: {
           usedCents: 2_000,
           limitCents: 2_000,
-          usedPercent: 100,
         },
         internalPercentages: { autoPercentUsed: 50, apiPercentUsed: 0, totalPercentUsed: 50 },
         buckets: [
@@ -175,7 +173,7 @@ describe("Cursor usage tolerant parsing", () => {
     });
   });
 
-  test("derives included usage from totalSpend when the reported percentage is absent", () => {
+  test("normalizes included usage from totalSpend when includedSpend is absent", () => {
     const result = normalizeCursorAccountUsage(
       {
         planUsage: {
@@ -193,13 +191,12 @@ describe("Cursor usage tolerant parsing", () => {
         included: {
           usedCents: 10_000,
           limitCents: 40_000,
-          usedPercent: 25,
         },
       },
     });
   });
 
-  test("omits the derived percentage when the included limit is zero", () => {
+  test("preserves a zero included limit without deriving a percentage", () => {
     const result = normalizeCursorAccountUsage(
       {
         planUsage: {
@@ -217,6 +214,14 @@ describe("Cursor usage tolerant parsing", () => {
     });
     if (!result.ok) return;
     expect(result.data.included).not.toHaveProperty("usedPercent");
+  });
+
+  test("rejects responses whose only recognized fields are hidden included balances", () => {
+    for (const planUsage of [{ remaining: -1_000 }, { limit: 40_000 }]) {
+      expect(
+        normalizeCursorAccountUsage({ planUsage }, undefined, "2026-08-27T12:32:54.000Z"),
+      ).toMatchObject({ ok: false, code: "INVALID_RESPONSE" });
+    }
   });
 
   test("reports an over-allowance account even when Cursor's quota is below 100 percent", () => {
@@ -242,7 +247,6 @@ describe("Cursor usage tolerant parsing", () => {
       remainingCents: -6_000,
       limitCents: 40_000,
     });
-    expect(result.data.included.usedPercent).toBeCloseTo(115, 6);
     expect(result.data.buckets[0]).toMatchObject({
       usedPercent: 112.5,
       remainingPercent: 0,

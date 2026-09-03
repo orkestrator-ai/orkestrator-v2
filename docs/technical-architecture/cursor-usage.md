@@ -34,11 +34,13 @@ are separate from transport parsing and can be overridden with
 
 Four parsing rules are easy to get backwards:
 
-- **The two headline percentages have different denominators.** Cursor's
-  `totalPercentUsed` is its reported quota meter. The included-allowance meter
-  is derived from `(includedSpend ?? totalSpend) / limit`, so it remains
-  consistent with the dollar figures displayed beside it. The panel labels and
-  renders both when Cursor supplies both; neither silently replaces the other.
+- **Included spend does not feed into an allowance percentage.** Included spend
+  is reported as a dollar figure ("Included used") without synthesizing an
+  allowance percentage against the plan's dollar limit. Cursor's `limit` is not
+  the denominator behind its reported percentages, so the panel also omits that
+  limit and the corresponding remainder. Progress meters prefer Cursor's model
+  pool buckets ("Cursor Models" and "Other Models") and fall back to its
+  `totalPercentUsed` quota only when no buckets are available.
 - **Percentages above 100 are kept, not discarded.** An account past its included
   allowance is the case the readout exists for. Dropping the value there removed
   the bar, and for a response carrying only percentages removed every field and
@@ -47,8 +49,10 @@ Four parsing rules are easy to get backwards:
   render an over-quota account as an *empty* track; the numeric label stays
   truthful.
 - **`remaining` may be negative.** An overdrawn allowance reports a negative
-  remainder, and the panel shows it as a signed amount. Omitting it would read
-  as "no data" and clamping it to zero as "exactly used up".
+  remainder. The normalizer preserves that signed value instead of treating it
+  as missing or clamping it to zero, but the account panel does not display the
+  remainder or plan limit because those dollar fields do not explain Cursor's
+  reported quota percentages.
 - **Billing-cycle timestamps are range-checked.** Cursor reports epoch
   milliseconds, but `0` and second- or microsecond-scale values all parse as a
   valid `Date`. Anything outside 2020–2100 is treated as unreadable and omitted,
@@ -59,9 +63,11 @@ Four parsing rules are easy to get backwards:
 A read-only check against a locally authenticated individual account confirmed
 numeric billing-cycle timestamps, both historical percentage buckets, an
 included limit and used amount, and on-demand data. That response omitted
-`planUsage.remaining`, despite returning the other included fields. The UI
-therefore intentionally omits “Included left” for that shape instead of deriving
-or displaying a zero balance.
+`planUsage.remaining`, despite returning the other included fields. The
+normalizer never derives a missing balance. The UI displays “Included used” but
+intentionally omits “Included left” and “Included limit” for every response,
+whether or not Cursor supplies those fields, because they do not share the
+denominator used by Cursor's quota meters.
 
 This account-level quota is independent of Cursor SDK `agent.getUsage()`. The
 latter remains a per-agent billed token/cost metric and is displayed as session

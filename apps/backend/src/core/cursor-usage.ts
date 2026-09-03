@@ -238,13 +238,6 @@ export function normalizeCursorAccountUsage(
   const remainingCents = signedNumberish(planUsage.remaining);
   const limitCents = numberish(planUsage.limit);
   const totalPercentUsed = percent(planUsage.totalPercentUsed);
-  // Keep the included percentage on the same denominator as its neighboring
-  // money fields. Cursor's reported total percentage measures a separate quota
-  // and is retained below so the renderer can label both values explicitly.
-  const includedUsedPercent =
-    usedCents !== undefined && limitCents !== undefined && limitCents > 0
-      ? (usedCents / limitCents) * 100
-      : undefined;
   const startsAt = unixMsToIso(currentPeriod.billingCycleStart);
   const endsAt = unixMsToIso(currentPeriod.billingCycleEnd);
   const autoPercentUsed = percent(planUsage.autoPercentUsed);
@@ -273,14 +266,7 @@ export function normalizeCursorAccountUsage(
     });
   }
 
-  if (
-    usedCents === undefined &&
-    remainingCents === undefined &&
-    limitCents === undefined &&
-    includedUsedPercent === undefined &&
-    totalPercentUsed === undefined &&
-    buckets.length === 0
-  ) {
+  if (usedCents === undefined && totalPercentUsed === undefined && buckets.length === 0) {
     return errorResult(
       "INVALID_RESPONSE",
       "Cursor returned plan usage without any recognizable quota fields.",
@@ -330,7 +316,6 @@ export function normalizeCursorAccountUsage(
         ...(usedCents !== undefined ? { usedCents } : {}),
         ...(remainingCents !== undefined ? { remainingCents } : {}),
         ...(limitCents !== undefined ? { limitCents } : {}),
-        ...(includedUsedPercent !== undefined ? { usedPercent: includedUsedPercent } : {}),
       },
       buckets,
       ...(hasOnDemand ? { onDemand } : {}),

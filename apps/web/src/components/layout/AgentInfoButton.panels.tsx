@@ -566,24 +566,15 @@ export function CursorAccountUsagePanel({
 
   const account = result.data;
   const limits: AgentRateLimitWindow[] = [
-    ...(account.internalPercentages?.totalPercentUsed === undefined
-      ? []
-      : [
+    ...(account.buckets.length === 0 && account.internalPercentages?.totalPercentUsed !== undefined
+      ? [
           {
             label: "Cursor quota",
             usedPercent: account.internalPercentages.totalPercentUsed,
             ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
           },
-        ]),
-    ...(account.included.usedPercent === undefined
-      ? []
-      : [
-          {
-            label: "Included allowance",
-            usedPercent: account.included.usedPercent,
-            ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
-          },
-        ]),
+        ]
+      : []),
     ...account.buckets.flatMap((bucket) =>
       bucket.usedPercent === undefined
         ? []
@@ -598,8 +589,6 @@ export function CursorAccountUsagePanel({
   ];
   const hasMoney =
     account.included.usedCents !== undefined ||
-    account.included.remainingCents !== undefined ||
-    account.included.limitCents !== undefined ||
     account.onDemand?.usedCents !== undefined ||
     account.onDemand?.individualLimitCents !== undefined ||
     account.onDemand?.pooledLimitCents !== undefined;
@@ -627,16 +616,6 @@ export function CursorAccountUsagePanel({
           {account.included.usedCents !== undefined ? (
             <Metric label="Included used" value={formatCents(account.included.usedCents)} />
           ) : null}
-          {account.included.remainingCents !== undefined ? (
-            <Metric
-              label="Included left"
-              value={formatCents(account.included.remainingCents)}
-              {...(account.included.remainingCents < 0 ? { detail: "over allowance" } : {})}
-            />
-          ) : null}
-          {account.included.limitCents !== undefined ? (
-            <Metric label="Included limit" value={formatCents(account.included.limitCents)} />
-          ) : null}
           {account.onDemand?.usedCents !== undefined ? (
             <Metric label="On-demand" value={formatCents(account.onDemand.usedCents)} />
           ) : null}
@@ -657,6 +636,11 @@ export function CursorAccountUsagePanel({
       ) : null}
 
       {limits.length > 0 ? <RateLimitsSection rateLimits={limits} /> : null}
+      {!hasMoney && limits.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border/70 px-4 py-4 text-sm text-muted-foreground">
+          No usage figures reported.
+        </div>
+      ) : null}
       <div className="border-t border-border/60 pt-3 text-right text-[10px] text-muted-foreground">
         Cursor dashboard · refreshed {new Date(account.source.retrievedAt).toLocaleTimeString()}
       </div>

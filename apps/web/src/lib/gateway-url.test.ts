@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   getGatewayBaseUrl,
   isGatewayBrowserPreviewSupported,
+  isRemoteGatewayConnection,
   resolveGatewayApiUrl,
   resolveGatewayBrowserPreviewUrl,
   resolveGatewayLoopbackBaseUrl,
@@ -9,6 +10,47 @@ import {
 
 afterEach(() => {
   delete window.orkestratorGateway;
+});
+
+describe("isRemoteGatewayConnection", () => {
+  test("identifies an Electron desktop connected to a remote backend", () => {
+    expect(isRemoteGatewayConnection()).toBe(false);
+
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    expect(isRemoteGatewayConnection()).toBe(true);
+  });
+
+  test("identifies browser clients using a non-loopback gateway", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    expect(isRemoteGatewayConnection()).toBe(true);
+  });
+
+  test("keeps loopback browser gateways local", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "http://127.0.0.1:5173/",
+    };
+    expect(isRemoteGatewayConnection()).toBe(false);
+
+    window.orkestratorGateway = { enabled: true };
+    expect(isRemoteGatewayConnection()).toBe(false);
+  });
+
+  test("ignores disabled gateway metadata", () => {
+    window.orkestratorGateway = {
+      enabled: false,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    expect(isRemoteGatewayConnection()).toBe(false);
+  });
 });
 
 describe("isGatewayBrowserPreviewSupported", () => {

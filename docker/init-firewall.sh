@@ -89,6 +89,9 @@ else
         "npmjs.org"
         "nodejs.org"
         "bun.sh"
+        "mise.jdx.dev"
+        "mise-versions.jdx.dev"
+        "aube.jdx.dev"
 
         # AI providers
         "opencode.ai"

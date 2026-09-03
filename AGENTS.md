@@ -623,6 +623,11 @@ Prebuilt bridge servers, so a container never builds them at runtime:
 Developer tooling:
 - Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host
   keys already known.
+- `mise`, installed from a pinned, checksum-verified release. `/workspace` is a
+  trusted mise config path because repository setup already runs inside the
+  container boundary. The `node` user's interactive zsh loads the hook, and
+  backend-launched processes promote mise shims through the shared runtime-env
+  helper; root terminals have the CLI but do not load the interactive hook.
 - Playwright CLI plus its pinned Chromium build (see below).
 - ripgrep, fzf, jq, tmux, nano, vim, less, curl, wget, and `en_US.UTF-8`.
 

@@ -77,6 +77,25 @@ ${body}
 }
 
 describe("container runtime environment wiring", () => {
+  test("Docker image installs and activates a pinned mise release", () => {
+    const dockerfile = read("docker/Dockerfile");
+
+    expect(dockerfile).toMatch(/^ARG MISE_VERSION=\d{4}\.\d+\.\d+$/m);
+    expect(dockerfile).toContain(
+      "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/${MISE_TARBALL}",
+    );
+    expect(dockerfile).toMatch(/amd64\) MISE_ARCH=x64; MISE_SHA=[a-f0-9]{64} ;;/);
+    expect(dockerfile).toMatch(/arm64\) MISE_ARCH=arm64; MISE_SHA=[a-f0-9]{64} ;;/);
+    expect(dockerfile).toContain("sha256sum -c -");
+    expect(dockerfile).toContain("ln -s /opt/mise/bin/mise /usr/local/bin/mise");
+    expect(dockerfile).toContain(`'eval "$(/usr/local/bin/mise activate zsh)"'`);
+    expect(dockerfile).toContain("ENV MISE_TRUSTED_CONFIG_PATHS=/workspace");
+    expect(dockerfile).toContain("typeset -f _mise_hook >/dev/null");
+    expect(dockerfile.indexOf("ARG MISE_VERSION=")).toBeGreaterThan(
+      dockerfile.indexOf("# Build the Cursor SDK bridge"),
+    );
+  });
+
   test("Docker image includes the shared runtime environment helper", () => {
     const dockerfile = read("docker/Dockerfile");
 
@@ -93,6 +112,7 @@ describe("container runtime environment wiring", () => {
     expect(setup).toContain("capture_runtime_env_snapshot");
     expect(setup).toContain("orkestrator_capture_runtime_env");
     expect(helper).toContain("for name in PATH BUN_INSTALL CARGO_HOME GOPATH PNPM_HOME");
+    expect(helper).toContain("MISE_DATA_DIR MISE_SHIMS_DIR");
     expect(helper).not.toContain("env >");
     expect(helper).not.toContain("printenv");
   });
@@ -1898,6 +1918,41 @@ eval "$opencode_setup"
     });
   });
 
+  test("runtime helper puts mise shims before image binaries without displacing caller paths", () => {
+    withTempDir((dir) => {
+      const helper = join(repoRoot, "docker/runtime-env.sh");
+      const home = join(dir, "home");
+      const callerBin = join(dir, "project", "node_modules", ".bin");
+      const miseData = join(home, ".local", "share", "mise");
+      const miseShims = join(miseData, "shims");
+      mkdirSync(callerBin, { recursive: true });
+      mkdirSync(miseShims, { recursive: true });
+
+      const result = runShell(
+        `
+          . ${shellQuote(helper)}
+          export MISE_DATA_DIR=${shellQuote(miseData)}
+          export PATH=${shellQuote(`${callerBin}:/usr/local/bin:/usr/bin:/bin`)}
+          orkestrator_source_runtime_env
+          printf "%s" "$PATH"
+        `,
+        {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      const entries = result.stdout.split(":");
+      expect(entries.indexOf(callerBin)).toBeLessThan(entries.indexOf(miseShims));
+      expect(entries.indexOf(miseShims)).toBeLessThan(entries.indexOf("/usr/local/bin"));
+      expect(entries.filter((entry) => entry === miseShims)).toHaveLength(1);
+    });
+  });
+
   test("runtime helper captures and sources only whitelisted path variables", () => {
     withTempDir((dir) => {
       const helper = join(repoRoot, "docker/runtime-env.sh");
@@ -1905,21 +1960,26 @@ eval "$opencode_setup"
       const snapshot = join(dir, "runtime-env.sh");
       const cargoHome = join(home, "cargo home's");
       const bunInstall = join(home, ".bun");
+      const miseData = join(home, "mise-data");
+      const miseShims = join(home, "mise shims");
       mkdirSync(join(cargoHome, "bin"), { recursive: true });
       mkdirSync(join(bunInstall, "bin"), { recursive: true });
+      mkdirSync(miseShims, { recursive: true });
 
       const result = runShell(
         `
           . ${shellQuote(helper)}
           export CARGO_HOME=${shellQuote(cargoHome)}
           export BUN_INSTALL=${shellQuote(bunInstall)}
+          export MISE_DATA_DIR=${shellQuote(miseData)}
+          export MISE_SHIMS_DIR=${shellQuote(miseShims)}
           export SECRET_TOKEN="do-not-capture"
           export PATH="/usr/bin:/bin"
           orkestrator_capture_runtime_env
-          unset CARGO_HOME BUN_INSTALL SECRET_TOKEN
+          unset CARGO_HOME BUN_INSTALL MISE_DATA_DIR MISE_SHIMS_DIR SECRET_TOKEN
           export PATH="/usr/bin:/bin"
           orkestrator_source_runtime_env
-          printf "cargo=%s\\nbun=%s\\npath=%s\\nsecret=%s\\n" "$CARGO_HOME" "$BUN_INSTALL" "$PATH" "\${SECRET_TOKEN:-}"
+          printf "cargo=%s\\nbun=%s\\nmise_data=%s\\nmise_shims=%s\\npath=%s\\nsecret=%s\\n" "$CARGO_HOME" "$BUN_INSTALL" "$MISE_DATA_DIR" "$MISE_SHIMS_DIR" "$PATH" "\${SECRET_TOKEN:-}"
         `,
         {
           HOME: home,
@@ -1933,18 +1993,25 @@ eval "$opencode_setup"
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain(`cargo=${cargoHome}`);
       expect(result.stdout).toContain(`bun=${bunInstall}`);
+      expect(result.stdout).toContain(`mise_data=${miseData}`);
+      expect(result.stdout).toContain(`mise_shims=${miseShims}`);
       expect(result.stdout).toContain(`${cargoHome}/bin`);
       expect(result.stdout).toContain(`${bunInstall}/bin`);
+      expect(result.stdout).toContain(miseShims);
       expect(result.stdout).toContain("secret=");
 
       const captured = readFileSync(snapshot, "utf8");
-      expect(captured).toContain("# orkestrator-runtime-env: v2");
+      expect(captured).toContain("# orkestrator-runtime-env: v3");
       expect(captured).toContain("orkestrator_append_path ");
       expect(captured).not.toContain("export PATH=");
       expect(captured).toContain('if [ -z "${CARGO_HOME:-}" ]; then');
       expect(captured).toContain("    export CARGO_HOME");
       expect(captured).toContain('if [ -z "${BUN_INSTALL:-}" ]; then');
       expect(captured).toContain("    export BUN_INSTALL");
+      expect(captured).toContain('if [ -z "${MISE_DATA_DIR:-}" ]; then');
+      expect(captured).toContain("    export MISE_DATA_DIR");
+      expect(captured).toContain('if [ -z "${MISE_SHIMS_DIR:-}" ]; then');
+      expect(captured).toContain("    export MISE_SHIMS_DIR");
       expect(captured).toContain('if [ -z "${BASH_ENV:-}" ]; then');
       expect(captured).toContain("    export BASH_ENV");
       expect(captured).not.toContain("SECRET_TOKEN");
@@ -2160,7 +2227,7 @@ eval "$opencode_setup"
       expect(result.stdout).toBe(`${oldTool}\nbun=/override-bun\n`);
 
       const migrated = readFileSync(snapshot, "utf8");
-      expect(migrated).toContain("# orkestrator-runtime-env: v2");
+      expect(migrated).toContain("# orkestrator-runtime-env: v3");
       expect(migrated).not.toContain("export PATH=");
     });
   });
@@ -2200,7 +2267,7 @@ eval "$opencode_setup"
       expect(result.stdout).toBe(`${bunPath}\nFALLBACK_BUN`);
 
       const snapshotContents = readFileSync(snapshot, "utf8");
-      expect(snapshotContents).not.toContain("# orkestrator-runtime-env: v2");
+      expect(snapshotContents).not.toContain("# orkestrator-runtime-env: v3");
     });
   });
 

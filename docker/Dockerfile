@@ -313,8 +313,40 @@ RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
  && mv /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge \
  && mv /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge \
  && rm -rf /opt/bridge-build
+
+# Install mise after the expensive CLI, browser and bridge-build layers so a
+# mise-only version bump does not invalidate them. Host installations cannot be
+# reused here: their binaries target macOS and the container runs Linux. Keep
+# both supported image architectures pinned to config/mise-version.json.
+ARG MISE_VERSION=2026.9.1
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) MISE_ARCH=x64; MISE_SHA=063dda9149ab6be53da877c2d176afe0eac68e64cf8ca295bd0528720701c65d ;; \
+    arm64) MISE_ARCH=arm64; MISE_SHA=98d2ea7b82dd966afdb8a9f4e9edbca771acf2a30d2842bfc0efdb7b61c886a3 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  MISE_TARBALL="mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" && \
+  curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/${MISE_TARBALL}" -o "/tmp/${MISE_TARBALL}" && \
+  printf '%s  %s\n' "$MISE_SHA" "/tmp/${MISE_TARBALL}" | sha256sum -c - && \
+  mkdir -p /opt/mise && \
+  tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
+  ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
+  chmod 755 /opt/mise/bin/mise && \
+  printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
+  chown node:node /home/node/.zshrc && \
+  rm -f "/tmp/${MISE_TARBALL}" && \
+  mise --version
+
+# Repository-controlled setup commands already execute inside this isolated
+# workspace, so its mise configuration follows the same trust boundary. Disable
+# self-update hints because the image pin, not mise, owns binary upgrades.
+ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
+ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
+RUN printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
+ && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
+ && rm mise.toml
 
 # Copy and set up firewall scripts
 COPY docker/init-firewall.sh docker/update-firewall.sh /usr/local/bin/

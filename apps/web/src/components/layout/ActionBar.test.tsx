@@ -5343,6 +5343,56 @@ describe("ActionBar editor actions", () => {
     expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
     expect(screen.getByText(/Make sure you have the Cursor CLI/)).toBeTruthy();
   });
+
+  test("disables editor actions and explains why for remote gateway clients", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    try {
+      const { rerender } = render(<ActionBar />);
+      const containerEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
+      expect((containerEditorButton as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.mouseEnter(containerEditorButton.parentElement!);
+      await waitFor(() => {
+        expect(screen.getByText("Unavailable for remote connections")).toBeTruthy();
+        expect(screen.queryByText("⌘O") === null).toBe(true);
+      });
+
+      fireEvent.click(containerEditorButton);
+      fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
+
+      currentEnvironment = {
+        ...selectedEnvironment,
+        environmentType: "local",
+        containerId: null,
+        worktreePath: "/tmp/remote-worktree",
+      };
+      rerender(<ActionBar />);
+
+      const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
+      expect((localEditorButton as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(localEditorButton);
+
+      expect(openInEditorMock).not.toHaveBeenCalled();
+      expect(openLocalInEditorMock).not.toHaveBeenCalled();
+    } finally {
+      delete window.orkestratorGateway;
+    }
+  });
+
+  test("shows the editor shortcut tooltip for local connections", async () => {
+    render(<ActionBar />);
+
+    const editorButton = screen.getByRole("button", { name: "Open in VS Code" });
+    fireEvent.mouseEnter(editorButton.parentElement!);
+
+    await waitFor(() => {
+      expect(screen.getByText("⌘O")).toBeTruthy();
+      expect(screen.queryByText("Unavailable for remote connections") === null).toBe(true);
+    });
+  });
 });
 
 describe("ActionBar successful cleanup and merge actions", () => {

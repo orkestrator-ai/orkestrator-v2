@@ -50,6 +50,25 @@ export function isGatewayBrowserPreviewSupported(): boolean {
   return !gateway?.enabled || gateway.desktop === true;
 }
 
+/** Whether renderer commands are routed through a non-local Orkestrator gateway. */
+export function isRemoteGatewayConnection(): boolean {
+  if (typeof window === "undefined") return false;
+  const gateway = window.orkestratorGateway;
+  if (!gateway?.enabled) return false;
+
+  // The Electron preload only publishes this flag for configured remote
+  // connections. Browser clients do not have the flag, so classify those from
+  // the gateway origin instead.
+  if (gateway.desktop === true) return true;
+
+  try {
+    const url = new URL(gateway.baseUrl ?? window.location.origin);
+    return !isLoopbackHost(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve a loopback page through the gateway's browser-preview namespace. */
 export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
   if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;

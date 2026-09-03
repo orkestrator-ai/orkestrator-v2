@@ -33,7 +33,7 @@ import {
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
-import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
+import { isGatewayBrowserPreviewSupported, isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
 import { type MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
@@ -260,8 +260,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Workflow launches publish their own durable tab and start in the backend.
   // They must not depend on the active environment's renderer tab factory.
   const canLaunchBackendJob = Boolean(selectedEnvironmentId && tabCount < MAX_TABS);
+  const editorUnavailableOnRemoteConnection = isRemoteGatewayConnection();
   // For containers, we need containerId; for local environments, we need worktreePath
   const canOpenEditor =
+    !editorUnavailableOnRemoteConnection &&
     isRunning &&
     ((isLocalEnvironment && !!selectedEnvironment?.worktreePath) ||
       (!isLocalEnvironment && !!selectedEnvironment?.containerId));
@@ -293,6 +295,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {
+    if (editorUnavailableOnRemoteConnection) return;
+
     // Extract values for type safety
     const worktreePath = selectedEnvironment?.worktreePath;
     const containerId = selectedEnvironment?.containerId;
@@ -320,6 +324,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [
     selectedEnvironment?.containerId,
     selectedEnvironment?.worktreePath,
+    editorUnavailableOnRemoteConnection,
     isLocalEnvironment,
     config.global.preferredEditor,
   ]);
@@ -1247,6 +1252,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     tabCount,
     canCreateTab,
     canLaunchBackendJob,
+    editorUnavailableOnRemoteConnection,
     canOpenEditor,
     handleOpenInEditor,
     canCopyEnvironmentUrl,
@@ -1939,6 +1945,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     isSelectedEnvironmentDeleting,
     canCreateTab,
     canLaunchBackendJob,
+    editorUnavailableOnRemoteConnection,
     canOpenEditor,
     environmentPortAddress,
     environmentBrowserUrl,

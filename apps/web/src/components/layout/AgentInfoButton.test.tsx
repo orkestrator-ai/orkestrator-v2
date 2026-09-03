@@ -706,7 +706,7 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
-  test("loads Cursor account quota and renders included and bucket usage bars", async () => {
+  test("renders model buckets and suppresses the aggregate Cursor quota", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command !== "get_cursor_account_usage") return undefined;
       return {
@@ -719,7 +719,6 @@ describe("AgentInfoButton usage panel", () => {
             usedCents: 23_222,
             remainingCents: 16_778,
             limitCents: 40_000,
-            usedPercent: 58.055,
           },
           buckets: [
             {
@@ -763,15 +762,14 @@ describe("AgentInfoButton usage panel", () => {
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
     expect(screen.getByText("Ultra")).toBeTruthy();
     expect(metricValue("Included used")).toBe("$232.22");
-    expect(metricValue("Included left")).toBe("$167.78");
-    expect(metricValue("Included limit")).toBe("$400.00");
+    expect(screen.queryByText("Included left") === null).toBe(true);
+    expect(screen.queryByText("Included limit") === null).toBe(true);
     expect(metricValue("On-demand")).toBe("$0.00");
-    expect(screen.getByText("Cursor quota")).toBeTruthy();
-    expect(screen.getByText("Included allowance")).toBeTruthy();
+    expect(screen.queryByText("Cursor quota") === null).toBe(true);
+    expect(screen.queryByText("Included allowance") === null).toBe(true);
     expect(screen.getByText("Cursor Models")).toBeTruthy();
     expect(screen.getByText("Other Models")).toBeTruthy();
-    expect(screen.getByText("15% used")).toBeTruthy();
-    expect(screen.getByText("58% used")).toBeTruthy();
+    expect(screen.getByText("0% used")).toBeTruthy();
     expect(screen.getByText("46% used")).toBeTruthy();
     expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage");
   });
@@ -806,7 +804,7 @@ describe("AgentInfoButton usage panel", () => {
             data: {
               provider: "cursor",
               cycle: { endsAt: "2026-09-01T00:00:00.000Z" },
-              included: { usedCents: 23_222, limitCents: 40_000, usedPercent: 58.055 },
+              included: { usedCents: 23_222, limitCents: 40_000 },
               buckets: [],
               onDemand: { pooledLimitCents: 50_000, limitType: "team" },
               source: {
@@ -826,16 +824,46 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("Current billing cycle")).toBeTruthy();
     expect(metricValue("Included used")).toBe("$232.22");
     expect(screen.queryByText("Included left") === null).toBe(true);
+    expect(screen.queryByText("Included limit") === null).toBe(true);
     // `individualLimitCents` is absent, so the pooled limit is shown instead.
     expect(metricValue("Pooled limit")).toBe("$500.00");
     expect(screen.getByText("team")).toBeTruthy();
-    // The included bar still renders; there are simply no bucket bars.
-    expect(screen.getByText("Included allowance")).toBeTruthy();
+    expect(screen.queryByText("Included allowance") === null).toBe(true);
     expect(screen.queryByText("Cursor quota") === null).toBe(true);
     expect(screen.queryByText("Cursor Models") === null).toBe(true);
   });
 
-  test("omits the money grid entirely when the response carries only percentages", async () => {
+  test("explains when a normalized response has no displayable usage figures", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: true,
+            data: {
+              provider: "cursor",
+              plan: "Pro",
+              cycle: {},
+              included: { remainingCents: -1_000, limitCents: 40_000 },
+              buckets: [],
+              source: {
+                kind: "internal-dashboard-api",
+                retrievedAt: "2026-08-26T16:00:00.000Z",
+              },
+            },
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Pro")).toBeTruthy());
+    expect(screen.getByText("No usage figures reported.")).toBeTruthy();
+    expect(screen.queryByText("Included left") === null).toBe(true);
+    expect(screen.queryByText("Included limit") === null).toBe(true);
+    expect(screen.queryByText("over allowance") === null).toBe(true);
+  });
+
+  test("uses the aggregate Cursor quota when no model buckets are reported", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -868,7 +896,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("42% used")).toBeTruthy();
   });
 
-  test("distinguishes an over-allowance account from its lower reported quota", async () => {
+  test("clamps an over-quota bucket while hiding balances and the aggregate quota", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -881,7 +909,6 @@ describe("AgentInfoButton usage panel", () => {
                 usedCents: 46_000,
                 remainingCents: -6_000,
                 limitCents: 40_000,
-                usedPercent: 115,
               },
               buckets: [
                 {
@@ -909,20 +936,20 @@ describe("AgentInfoButton usage panel", () => {
     open();
 
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
-    expect(metricValue("Included left")).toBe("-$60.00");
-    expect(screen.getByText("over allowance")).toBeTruthy();
-    expect(screen.getByText("Cursor quota")).toBeTruthy();
-    expect(screen.getByText("Included allowance")).toBeTruthy();
-    expect(screen.getByText("50% used")).toBeTruthy();
+    expect(metricValue("Included used")).toBe("$460.00");
+    expect(screen.queryByText("Included left") === null).toBe(true);
+    expect(screen.queryByText("Included limit") === null).toBe(true);
+    expect(screen.queryByText("over allowance") === null).toBe(true);
+    expect(screen.queryByText("Cursor quota") === null).toBe(true);
+    expect(screen.queryByText("Included allowance") === null).toBe(true);
     // The label stays truthful while the bar saturates: `Progress` positions its
     // fill with translateX, so an unclamped value would leave an empty track.
-    expect(screen.getByText("115% used")).toBeTruthy();
     expect(screen.getByText("113% used")).toBeTruthy();
     const bars = popover().querySelectorAll('[role="progressbar"] > div');
     const transforms = Array.from(bars).map((bar) => (bar as HTMLElement).style.transform);
-    // Unclamped, `100 - 115` produced `translateX(--15%)`, which the browser
+    // Unclamped, `100 - 112.5` produced `translateX(--12.5%)`, which the browser
     // drops as invalid and leaves the track empty.
-    expect(transforms.filter((transform) => transform === "translateX(-0%)")).toHaveLength(2);
+    expect(transforms.filter((transform) => transform === "translateX(-0%)")).toHaveLength(1);
     expect(transforms.some((transform) => transform === "")).toBe(false);
   });
 

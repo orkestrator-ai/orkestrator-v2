@@ -25,8 +25,6 @@ export interface CursorNormalizedUsage {
     usedCents?: number;
     remainingCents?: number;
     limitCents?: number;
-    /** Percentage of the monetary included allowance: usedCents / limitCents. */
-    usedPercent?: number;
   };
   buckets: CursorUsageBucket[];
   onDemand?: {

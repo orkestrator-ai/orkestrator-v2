@@ -39,6 +39,19 @@ import { GlobalSettingsSections } from "./GlobalSettings.sections";
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+const MAX_SSH_AGENT_SOCKET_PATH_CHARS = 4_096;
+
+export function getSshAgentSocketPathValidationError(value: string): string | null {
+  const candidate = value.trim();
+  if (!candidate) return null;
+  if (candidate.length > MAX_SSH_AGENT_SOCKET_PATH_CHARS) {
+    return "SSH agent socket path is too long.";
+  }
+  if (candidate.includes("\0") || !candidate.startsWith("/")) {
+    return "SSH agent socket path must be an absolute path.";
+  }
+  return null;
+}
 
 function getSavedReviewInstruction(value: unknown): string {
   return typeof value === "string" && getReviewInstructionValidationError(value) === null
@@ -62,6 +75,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.containerResources.memoryGb,
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
+    global.sshAgentSocketPath ?? "",
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
     global.preferredEditor ?? "vscode",
@@ -102,6 +116,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true,
   );
+  const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
   const [useHostClaudeCredentials, setUseHostClaudeCredentials] = useState(
     global.useHostClaudeCredentials ?? true,
   );
@@ -217,6 +232,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCursorApiKey(pendingCursorCredentialEditRef.current?.apiKey ?? "");
     setClearCursorApiKey(pendingCursorCredentialEditRef.current?.clear ?? false);
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
+    setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken(pendingGitHubCredentialEditRef.current?.token ?? "");
     setClearGithubToken(pendingGitHubCredentialEditRef.current?.clear ?? false);
@@ -359,6 +375,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       cursorApiKey.trim().length > 0 ||
       clearCursorApiKey ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
+      sshAgentSocketPath !== (global.sshAgentSocketPath ?? "") ||
       useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true) ||
       githubToken.trim().length > 0 ||
       clearGithubToken ||
@@ -397,6 +414,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     cursorApiKey,
     clearCursorApiKey,
     useHostGitHubCredentials,
+    sshAgentSocketPath,
     useHostClaudeCredentials,
     githubToken,
     clearGithubToken,
@@ -503,6 +521,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: string[];
         allowedDomains: string[];
         useHostGitHubCredentials: boolean;
+        sshAgentSocketPath?: string;
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
@@ -522,6 +541,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: patterns,
         allowedDomains: domains,
         useHostGitHubCredentials,
+        ...(sshAgentSocketPath.trim() ? { sshAgentSocketPath: sshAgentSocketPath.trim() } : {}),
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,
@@ -704,6 +724,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClearCursorApiKey(false);
     pendingCursorCredentialEditRef.current = null;
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
+    setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
@@ -741,6 +762,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     ? getGatewayTokenValidationError(gatewayToken)
     : null;
   const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
+  const sshAgentSocketPathValidationError =
+    getSshAgentSocketPathValidationError(sshAgentSocketPath);
 
   const sectionSettings = {
     global,
@@ -760,6 +783,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClearCursorApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
+    sshAgentSocketPath,
+    setSshAgentSocketPath,
+    sshAgentSocketPathValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -876,6 +902,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (reviewInstructionValidationError) {
       blockers.push({ section: "review", message: reviewInstructionValidationError });
     }
+    if (sshAgentSocketPathValidationError) {
+      blockers.push({ section: "general", message: sshAgentSocketPathValidationError });
+    }
     return blockers[0] ?? null;
   }, [
     domainErrors,
@@ -883,6 +912,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     debugLogRetentionDays,
     gatewayTokenValidationError,
     reviewInstructionValidationError,
+    sshAgentSocketPathValidationError,
   ]);
   // The owning section already renders its own inline message; repeating it
   // here would show the same error twice.

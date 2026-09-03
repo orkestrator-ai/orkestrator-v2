@@ -55,7 +55,7 @@ const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 if [ "$1" = "info" ]; then
-  [ "\${FAKE_DOCKER_FAIL_INFO:-}" = "1" ] && { echo "docker unavailable" >&2; exit 19; }
+  [ -n "\${FAKE_DOCKER_FAIL_INFO:-}" ] && { echo "$FAKE_DOCKER_FAIL_INFO" >&2; exit 19; }
   exit 0
 fi
 if [ "$1" = "version" ]; then
@@ -518,14 +518,21 @@ afterAll(async () => {
 
 describe("process and platform command behavior", () => {
   test("checks Docker availability, version, and base image failures", async () => {
-    expect(await invoke("check_docker")).toBe(true);
+    expect(await invoke("check_docker")).toEqual({ available: true, reason: null });
     expect(await invoke("docker_version")).toBe("26.1.4");
     expect(await invoke("check_base_image")).toBe(true);
 
     process.env.FAKE_DOCKER_FAIL_INFO = "1";
     process.env.FAKE_DOCKER_FAIL_IMAGE = "1";
-    expect(await invoke("check_docker")).toBe(false);
+    expect(await invoke("check_docker")).toEqual({ available: false, reason: "unknown" });
     expect(await invoke("check_base_image")).toBe(false);
+
+    process.env.FAKE_DOCKER_FAIL_INFO =
+      "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock";
+    expect(await invoke("check_docker")).toEqual({
+      available: false,
+      reason: "permission-denied",
+    });
   });
 
   test("provisions and controls a container with validated arguments", async () => {

@@ -19,6 +19,7 @@
     "./codex-background-task": "./src/codex-background-task.ts",
     "./diff-stats": "./src/diff-stats.ts",
     "./debug-logging": "./src/debug-logging.ts",
+    "./docker-availability": "./src/docker-availability.ts",
     "./feature-build": "./src/feature-build.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",

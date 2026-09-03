@@ -16,6 +16,7 @@ import { useUIStore } from "@/stores/uiStore";
 import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import type { AppConfig, Environment } from "@/types";
+import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
 import { mockToastError } from "../../../tests/mocks/sonner";
 
@@ -217,7 +218,7 @@ mock.module("@/hooks", () => ({
   }),
 }));
 
-const mockCheckDocker = mock(async () => true);
+const mockCheckDocker = mock<() => Promise<boolean | DockerAvailability>>(async () => true);
 const mockSyncAllEnvironmentsWithDocker = mock(async () => [] as string[]);
 const mockCheckClaudeCli = mock(async () => true);
 const mockCheckClaudeConfig = mock(async () => true);
@@ -1429,6 +1430,20 @@ describe("App Docker availability", () => {
       expect(mockCheckDocker).toHaveBeenCalledTimes(2);
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     });
+  });
+
+  test("explains when Docker is installed but daemon access is denied", async () => {
+    mockCheckDocker.mockImplementationOnce(async () => ({
+      available: false,
+      reason: "permission-denied",
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Docker Permission Required")).toBeTruthy();
+    expect(screen.getByText(/your user account cannot access the Docker daemon/i)).toBeTruthy();
+    expect(screen.getByText(/sudo usermod -aG docker/)).toBeTruthy();
   });
 
   test("treats startup check failures as unavailable and keeps sync failures non-fatal", async () => {

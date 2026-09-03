@@ -492,6 +492,8 @@ export interface GlobalConfig {
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */
   useHostGitHubCredentials?: boolean;
+  /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
+  sshAgentSocketPath?: string;
   /** Deliver the host's Claude Code OAuth credential into containers. */
   useHostClaudeCredentials?: boolean;
   /** Domains allowed when environments are in restricted network mode */

@@ -253,6 +253,14 @@ describe("monorepo orchestration scripts", () => {
     expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 
+  test("the development desktop inherits the user's SSH agent through Turbo", () => {
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { passThroughEnv?: string[] }>;
+    };
+
+    expect(turbo.tasks?.dev?.passThroughEnv).toContain("SSH_AUTH_SOCK");
+  });
+
   test("iOS development and test scripts use Bun entrypoints", () => {
     const rootPackage = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
     expect(rootPackage.scripts?.["dev:ios"]).toBe("bun scripts/run-ios-simulator.ts");

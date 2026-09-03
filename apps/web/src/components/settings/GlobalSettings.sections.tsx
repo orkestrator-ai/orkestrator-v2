@@ -152,6 +152,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setClearCursorApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
+    sshAgentSocketPath,
+    setSshAgentSocketPath,
+    sshAgentSocketPathValidationError,
     useHostClaudeCredentials,
     setUseHostClaudeCredentials,
     githubToken,
@@ -605,6 +608,40 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               </p>
             </div>
           )}
+        </div>
+
+        <div className="space-y-3 border-t border-zinc-800 pt-4">
+          <div className="space-y-1">
+            <Label htmlFor="ssh-agent-socket" className="text-sm font-medium">
+              SSH agent socket
+            </Label>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Used by local worktrees when an SSH remote needs a key from your desktop session.
+            </p>
+          </div>
+          <Input
+            id="ssh-agent-socket"
+            aria-label="SSH agent socket"
+            aria-invalid={sshAgentSocketPathValidationError ? true : undefined}
+            aria-describedby="ssh-agent-socket-help"
+            value={sshAgentSocketPath}
+            onChange={(event) => setSshAgentSocketPath(event.target.value)}
+            placeholder="Auto-detect from desktop session"
+            disabled={isSaving}
+            spellCheck={false}
+            className="font-mono"
+          />
+          {sshAgentSocketPathValidationError && (
+            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              {sshAgentSocketPathValidationError}
+            </p>
+          )}
+          <p id="ssh-agent-socket-help" className="text-xs leading-relaxed text-muted-foreground">
+            Leave blank to discover the agent from the current desktop session. Set an absolute
+            socket path only when auto-detection is unavailable. Changes apply after restarting
+            Orkestrator.
+          </p>
         </div>
       </div>
 

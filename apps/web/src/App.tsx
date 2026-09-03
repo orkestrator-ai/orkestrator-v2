@@ -3,7 +3,7 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
@@ -61,6 +61,10 @@ import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { rendererDebugLog } from "@/lib/debug-log";
+import type {
+  DockerAvailability,
+  DockerUnavailableReason,
+} from "@orkestrator/protocol/docker-availability";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 
@@ -72,17 +76,69 @@ export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_UNAVAILABLE_CONFIRMATIONS = 2;
 
 /**
- * A single daemon probe, normalised to a boolean. A thrown error and a `false`
- * answer mean the same thing to every caller, and neither may reject - the
- * poll would otherwise leave an unhandled rejection behind.
+ * A single daemon probe, normalised to a structured result. It never rejects -
+ * the poll would otherwise leave an unhandled rejection behind. The boolean
+ * fallback keeps the renderer compatible with an older backend during a dev
+ * hot reload.
  */
-async function probeDocker(source: "startup" | "retry" | "poll"): Promise<boolean> {
+async function probeDocker(source: "startup" | "retry" | "poll"): Promise<DockerAvailability> {
   try {
-    return await checkDocker();
+    const result: DockerAvailability | boolean = await checkDocker();
+    if (typeof result === "boolean") {
+      return result
+        ? { available: true, reason: null }
+        : { available: false, reason: "daemon-unavailable" };
+    }
+    return result;
   } catch (error) {
     console.error(`[App] Docker ${source} check failed:`, error);
-    return false;
+    return { available: false, reason: "daemon-unavailable" };
   }
+}
+
+function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
+  title: string;
+  description: ReactNode;
+} {
+  if (reason === "permission-denied") {
+    return {
+      title: "Docker Permission Required",
+      description: (
+        <>
+          Orkestrator found Docker, but your user account cannot access the Docker daemon. On Linux,
+          add your user to the Docker group with{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+            sudo usermod -aG docker &quot;$USER&quot;
+          </code>
+          , then sign out and back in before restarting Orkestrator.
+        </>
+      ),
+    };
+  }
+  if (reason === "not-installed") {
+    return {
+      title: "Docker Is Not Installed",
+      description: "Install Docker, then restart Orkestrator to use container environments.",
+    };
+  }
+  if (reason === "timed-out") {
+    return {
+      title: "Docker Check Timed Out",
+      description:
+        "Docker did not respond within 10 seconds. Check the Docker service and try again.",
+    };
+  }
+  if (reason === "unknown") {
+    return {
+      title: "Docker Is Unavailable",
+      description:
+        "Orkestrator found Docker, but `docker info` failed. Run `docker info` in a terminal for more details, then try again.",
+    };
+  }
+  return {
+    title: "Docker Is Not Running",
+    description: "Start the Docker service or Docker Desktop, then try again.",
+  };
 }
 
 /**
@@ -118,6 +174,8 @@ function App() {
     listenForRenameEvents: false,
   });
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null);
+  const [dockerUnavailableReason, setDockerUnavailableReason] =
+    useState<DockerUnavailableReason | null>(null);
   const [isCheckingDocker, setIsCheckingDocker] = useState(false);
   const [dockerWarningDismissed, setDockerWarningDismissed] = useState(false);
   const dockerAvailableRef = useRef<boolean | null>(null);
@@ -204,7 +262,8 @@ function App() {
 
     const check = (async () => {
       const previous = dockerAvailableRef.current;
-      let available = await probeDocker(source);
+      let result = await probeDocker(source);
+      let available = result.available;
 
       // A single failed probe is not evidence of an outage. `check_docker`
       // shells out to `docker info` with a 10s timeout and reports any failure
@@ -217,12 +276,14 @@ function App() {
         !available && previous === true && attempt < DOCKER_UNAVAILABLE_CONFIRMATIONS;
         attempt++
       ) {
-        available = await probeDocker(source);
+        result = await probeDocker(source);
+        available = result.available;
       }
 
       rendererDebugLog(`[App] Docker ${source} check:`, available);
       dockerAvailableRef.current = available;
       setDockerAvailable(available);
+      setDockerUnavailableReason(result.reason);
 
       // Reconcile container identities on startup and when Docker comes back,
       // but not on every healthy poll.
@@ -681,6 +742,8 @@ function App() {
     ],
   );
 
+  const dockerWarning = dockerUnavailableMessage(dockerUnavailableReason);
+
   return (
     <TooltipProvider>
       <TerminalProvider>
@@ -758,13 +821,14 @@ function App() {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Docker Is Not Running</AlertDialogTitle>
+              <AlertDialogTitle>{dockerWarning.title}</AlertDialogTitle>
               <AlertDialogDescription>
+                {dockerWarning.description}
+                <br />
+                <br />
                 Container functionality is currently disabled. You can continue using local worktree
-                environments while Docker is unavailable.
-                <br />
-                <br />
-                Start Docker, or install Docker Desktop from{" "}
+                environments while Docker is unavailable. Orkestrator will check again automatically
+                every 60 seconds. Docker is available from{" "}
                 <a
                   href="https://docker.com"
                   className="text-primary underline"
@@ -773,7 +837,7 @@ function App() {
                 >
                   docker.com
                 </a>
-                . Orkestrator will check again automatically every 60 seconds.
+                .
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

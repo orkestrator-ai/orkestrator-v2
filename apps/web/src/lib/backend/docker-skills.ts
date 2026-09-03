@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import type { DockerAvailability } from "@orkestrator/protocol/docker-availability";
 import type {
   Environment,
   EnvironmentStatus,
@@ -8,8 +9,8 @@ import type {
 } from "@/types";
 /** PR detection result containing URL, state, and merge conflict status */
 
-export async function checkDocker(): Promise<boolean> {
-  return invoke<boolean>("check_docker");
+export async function checkDocker(): Promise<DockerAvailability> {
+  return invoke<DockerAvailability>("check_docker");
 }
 
 export async function dockerVersion(): Promise<string> {

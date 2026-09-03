@@ -1572,6 +1572,13 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.codexMaxConcurrentThreads,
   );
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
+  const sshAgentSocketPath =
+    typeof global.sshAgentSocketPath === "string" &&
+    global.sshAgentSocketPath.trim().length <= 4_096 &&
+    !global.sshAgentSocketPath.includes("\0") &&
+    path.isAbsolute(global.sshAgentSocketPath.trim())
+      ? global.sshAgentSocketPath.trim()
+      : undefined;
   const agentMessaging = normalizeAgentMessagingSettings(
     global.agentMessaging,
     config.schemaVersion === 2
@@ -1668,6 +1675,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
+    global.sshAgentSocketPath === sshAgentSocketPath &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
@@ -1687,6 +1695,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ...nextGlobal,
       codexMaxConcurrentThreads,
       debugLogRetentionDays,
+      sshAgentSocketPath,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       favoriteModels,

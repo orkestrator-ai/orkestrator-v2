@@ -133,6 +133,45 @@ describe("first-run agent platform selection", () => {
   });
 });
 
+describe("SSH agent socket configuration", () => {
+  test("persists a trimmed absolute override and clears it in auto mode", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const base = (await storage.loadConfig()).global;
+      const configured = await storage.updateGlobalConfig({
+        ...base,
+        sshAgentSocketPath: "  /run/user/501/agent.sock  ",
+      });
+      expect(configured.global.sshAgentSocketPath).toBe("/run/user/501/agent.sock");
+
+      const automatic = await storage.updateGlobalConfig({
+        ...configured.global,
+        sshAgentSocketPath: "  ",
+      });
+      expect(automatic.global.sshAgentSocketPath).toBeUndefined();
+    });
+  });
+
+  test("rejects an invalid override without changing the stored value", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const base = (await storage.loadConfig()).global;
+      await storage.updateGlobalConfig({
+        ...base,
+        sshAgentSocketPath: "/run/user/501/agent.sock",
+      });
+
+      await expect(
+        storage.updateGlobalConfig({
+          ...base,
+          sshAgentSocketPath: "relative/agent.sock",
+        }),
+      ).rejects.toThrow("SSH agent socket path must be an absolute path");
+      expect((await storage.loadConfig()).global.sshAgentSocketPath).toBe(
+        "/run/user/501/agent.sock",
+      );
+    });
+  });
+});
+
 describe("Claude mode normalization", () => {
   /** A pre-agent-settings global block, i.e. what an existing install has on disk. */
   const legacyGlobal = (overrides: Record<string, unknown> = {}) => {

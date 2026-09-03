@@ -101,6 +101,7 @@ import {
 } from "./commands-files.js";
 import { createDockerContainer } from "./commands-containers.js";
 import {
+  ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
   logEnvironmentLifecycleFailure,
 } from "./commands-error-text.js";
@@ -1031,6 +1032,7 @@ export async function startEnvironmentOnce(
     return result;
   } catch (error) {
     logEnvironmentLifecycleFailure("start", environment.id, error);
+    const lifecycleError = environmentLifecycleErrorMessage(error);
     if (unpersistedContainerId) {
       await runCommand("docker", ["rm", "-f", unpersistedContainerId], { timeoutMs: 60_000 }).catch(
         () => undefined,
@@ -1049,13 +1051,16 @@ export async function startEnvironmentOnce(
     await storage
       .updateEnvironment(environment.id, {
         status: "error",
-        lifecycleError: environmentLifecycleErrorMessage(error),
+        lifecycleError,
         // A start that never reached "running" cannot honour a post-setup agent
         // launch, and the durable intent would otherwise fire on some later
         // successful transition the user never connected to this attempt.
         ...clearPendingAgentLaunchUpdates(),
       })
       .catch(() => undefined);
+    if (lifecycleError === ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication) {
+      throw new Error(lifecycleError);
+    }
     throw error;
   }
 }

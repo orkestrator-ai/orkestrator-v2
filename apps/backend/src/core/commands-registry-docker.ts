@@ -1,5 +1,10 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import type {
+  DockerAvailability,
+  DockerUnavailableReason,
+} from "@orkestrator/protocol/docker-availability";
 import {
+  CommandFailedError,
   os,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
@@ -33,21 +38,37 @@ import {
   createDockerContainer,
 } from "./commands-helpers.js";
 
+export function dockerUnavailableReason(error: unknown): DockerUnavailableReason {
+  if (error instanceof CommandFailedError && error.timedOut) return "timed-out";
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/permission denied|access (?:is )?denied/i.test(message)) return "permission-denied";
+  if (
+    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|failed to connect to the docker api|connect: no such file or directory/i.test(
+      message,
+    )
+  ) {
+    return "daemon-unavailable";
+  }
+  return "unknown";
+}
+
 export function registerDockerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { commands } = dependencies;
-  register("check_docker", () =>
-    commandExists("docker").then(
-      async (exists) =>
-        exists &&
-        runCommand("docker", ["info"], { timeoutMs: 10_000 }).then(
-          () => true,
-          () => false,
-        ),
-    ),
-  );
+  register("check_docker", async (): Promise<DockerAvailability> => {
+    if (!(await commandExists("docker"))) {
+      return { available: false, reason: "not-installed" };
+    }
+    try {
+      await runCommand("docker", ["info"], { timeoutMs: 10_000 });
+      return { available: true, reason: null };
+    } catch (error) {
+      return { available: false, reason: dockerUnavailableReason(error) };
+    }
+  });
   register("docker_version", async () =>
     (
       await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], {

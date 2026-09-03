@@ -186,6 +186,13 @@ exit 1
         new Error("failed to register layer: write /var/lib/docker/x: no space left on device"),
       ),
     ).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.diskFull);
+    expect(
+      classify(
+        new Error(
+          "ssh_askpass: exec(/usr/lib/ssh/ssh-askpass): No such file or directory\ngit@github.com: Permission denied (publickey).",
+        ),
+      ),
+    ).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication);
 
     expect(classify(new Error("Project has no local path - cannot create a local worktree"))).toBe(
       ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.noLocalPath,

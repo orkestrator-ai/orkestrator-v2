@@ -13,7 +13,9 @@ import {
   createBackendProcessEnvironment,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
+  readConfiguredSshAgentSocket,
   removeAgentTestHostKeychainLink,
+  resolveSshAgentSocket,
   seedAgentTestDockerConfig,
 } from "../../../apps/desktop/electron/backend-process";
 
@@ -106,6 +108,88 @@ afterEach(async () => {
 const SPAWN_TIMEOUT_MS = 30_000;
 
 describe("Electron backend process supervisor", () => {
+  test("resolves SSH agent sockets by explicit override, inherited environment, then session", async () => {
+    const checked: string[] = [];
+    const discoverSessionSockets = mock(async () => [
+      "/run/user/501/stale-session-agent.sock",
+      "/run/user/501/session-agent.sock",
+    ]);
+    const isUsableSocket = mock(async (candidate: string) => {
+      checked.push(candidate);
+      return !candidate.includes("stale");
+    });
+
+    expect(
+      await resolveSshAgentSocket(
+        {
+          configuredPath: "/run/user/501/configured-agent.sock",
+          inheritedPath: "/run/user/501/inherited-agent.sock",
+        },
+        { isUsableSocket, discoverSessionSockets },
+      ),
+    ).toEqual({ path: "/run/user/501/configured-agent.sock", source: "configured" });
+    expect(checked).toEqual(["/run/user/501/configured-agent.sock"]);
+    expect(discoverSessionSockets).not.toHaveBeenCalled();
+
+    checked.length = 0;
+    expect(
+      await resolveSshAgentSocket(
+        { inheritedPath: "/run/user/501/stale-agent.sock", platform: "linux" },
+        { isUsableSocket, discoverSessionSockets },
+      ),
+    ).toEqual({ path: "/run/user/501/session-agent.sock", source: "session" });
+    expect(checked).toEqual([
+      "/run/user/501/stale-agent.sock",
+      "/run/user/501/stale-session-agent.sock",
+      "/run/user/501/session-agent.sock",
+    ]);
+    expect(discoverSessionSockets).toHaveBeenCalledWith("linux");
+  });
+
+  test("does not silently ignore an unavailable configured SSH agent socket", async () => {
+    const discoverSessionSockets = mock(async () => "/run/user/501/session-agent.sock");
+    expect(
+      await resolveSshAgentSocket(
+        { configuredPath: "/run/user/501/missing-agent.sock" },
+        {
+          isUsableSocket: async () => false,
+          discoverSessionSockets,
+        },
+      ),
+    ).toBeNull();
+    expect(discoverSessionSockets).not.toHaveBeenCalled();
+  });
+
+  test("rejects relative SSH agent paths before probing the filesystem", async () => {
+    const isUsableSocket = mock(async () => true);
+    const discoverSessionSockets = mock(async () => undefined);
+    expect(
+      await resolveSshAgentSocket(
+        { inheritedPath: "relative/agent.sock" },
+        { isUsableSocket, discoverSessionSockets },
+      ),
+    ).toBeNull();
+    expect(isUsableSocket).not.toHaveBeenCalled();
+  });
+
+  test("reads the persisted SSH agent override without exposing other config values", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-config-"));
+    directories.push(directory);
+    await writeFile(
+      path.join(directory, "config.json"),
+      JSON.stringify({
+        global: {
+          sshAgentSocketPath: " /run/user/501/configured-agent.sock ",
+          githubToken: "must-not-be-returned",
+        },
+      }),
+    );
+
+    expect(await readConfiguredSshAgentSocket(directory)).toBe(
+      "/run/user/501/configured-agent.sock",
+    );
+  });
+
   test("isolates the child from remote gateway and Tailscale Serve shell settings", () => {
     const parent = {
       PATH: "/bin",

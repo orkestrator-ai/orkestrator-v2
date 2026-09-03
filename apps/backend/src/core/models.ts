@@ -683,6 +683,8 @@ export interface AppConfig {
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;
+    /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
+    sshAgentSocketPath?: string;
     /**
      * Deliver the host's Claude Code OAuth credential into containers.
      *

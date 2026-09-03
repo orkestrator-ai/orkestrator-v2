@@ -11,7 +11,11 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { copyAppBundle } from "../../scripts/install-packaged-app";
+import {
+  assertMacInstallerPlatform,
+  copyAppBundle,
+  findAppBundle,
+} from "../../scripts/install-packaged-app-mac";
 
 const temporaryRoots: string[] = [];
 
@@ -22,6 +26,24 @@ afterEach(async () => {
 });
 
 describe("packaged app installer", () => {
+  test("rejects non-macOS hosts before installation", () => {
+    expect(() => assertMacInstallerPlatform("linux")).toThrow(
+      "The macOS package installer must be run on macOS.",
+    );
+    expect(() => assertMacInstallerPlatform("darwin")).not.toThrow();
+  });
+
+  test("finds nested bundles and returns null for missing release output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-app-discovery-"));
+    temporaryRoots.push(root);
+    const releaseDirectory = path.join(root, "release");
+    const source = path.join(releaseDirectory, "mac-arm64", "OrkestratorV2.app");
+
+    expect(await findAppBundle(releaseDirectory)).toBeNull();
+    await mkdir(source, { recursive: true });
+    expect(await findAppBundle(releaseDirectory)).toBe(source);
+  });
+
   test("preserves relative framework symlinks inside the installed app", async () => {
     if (process.platform === "win32") return;
 

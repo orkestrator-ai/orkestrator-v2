@@ -16,7 +16,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { createBackendWebClientControls, registerBackendShutdown } from "./backend-lifecycle.js";
-import { PRODUCT_NAME, userDataDirectoryName } from "./app-constants.js";
+import {
+  LINUX_DESKTOP_ENTRY_FILENAME,
+  PRODUCT_NAME,
+  userDataDirectoryName,
+} from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
@@ -59,6 +63,7 @@ const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "produc
 const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
 
 app.setName(productName);
+if (process.platform === "linux") app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME);
 app.setPath(
   "userData",
   runtimeProfile?.dataDir ?? path.join(app.getPath("appData"), userDataDirectoryName(isDev)),

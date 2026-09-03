@@ -1,5 +1,6 @@
 export const APP_SLUG = "orkestrator-v2";
 export const PRODUCT_NAME = "Orkestrator AI";
+export const LINUX_DESKTOP_ENTRY_FILENAME = `${APP_SLUG}.desktop`;
 
 /**
  * Directory name under Electron's appData path.

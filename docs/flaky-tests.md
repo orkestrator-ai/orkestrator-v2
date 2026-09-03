@@ -10,6 +10,32 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `create_project_from_scratch > rolls back when GitHub CLI is definitely missing` (`apps/backend/src/core/commands-project-creation.test.ts:288`)
+
+- **Status:** open
+- **Date observed:** 2026-09-03
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the workspace group ran six Turbo packages, and the backend package used two
+  Bun workers.
+- **Failure:** after project creation correctly rejected with the missing-GitHub-
+  CLI error, `expect(fs.access(projectPath)).rejects.toThrow()` received a
+  resolved promise because the temporary project directory was still present
+  (reported duration: 30.21 ms).
+- **Suite counts:** backend package — 2,414 total, 2,413 passed, 1 failed, and
+  8,931 assertions across 100 files in 49.45 s.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts
+  src/core/commands-project-creation.test.ts --only-failures` from
+  `apps/backend` -> 39 passed, 0 failed, and 107 assertions in 1.44 s.
+- **Hypothesis:** `createProjectFromScratch` awaits its best-effort rollback
+  before rejecting, but the rollback deliberately swallows failures and first
+  abandons deletion if the directory identity changed. The aggregate output
+  records neither the retained directory contents nor which guard/failure path
+  left it behind, so it does not yet distinguish filesystem contention from an
+  identity-guard mismatch. A recurrence should capture both before changing
+  production rollback behavior; the package-install change does not load this
+  backend path.
+
 ## `Files panel components > ChangedFileItem exposes revert and delete context actions` (`tests/unit/components/FilesPanel.test.tsx`)
 
 - **Status:** open

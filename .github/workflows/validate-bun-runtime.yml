@@ -14,6 +14,7 @@ on:
       - "bun.lock"
       - "package.json"
       - "scripts/download-bun.sh"
+      - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
   pull_request:
     paths:
@@ -26,6 +27,7 @@ on:
       - "bun.lock"
       - "package.json"
       - "scripts/download-bun.sh"
+      - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
   workflow_dispatch:
 
@@ -76,6 +78,23 @@ jobs:
 
       - name: Build an unpacked Electron application
         run: bunx electron-builder --dir
+
+      - name: Install and validate the unpacked Linux application
+        if: runner.os == 'Linux'
+        env:
+          HOME: ${{ runner.temp }}/orkestrator-linux-home
+          XDG_DATA_HOME: ${{ runner.temp }}/orkestrator-linux-home/.local/share
+        run: |
+          mkdir -p "$HOME"
+          bun scripts/install-packaged-app-linux.ts
+          test -x "$XDG_DATA_HOME/orkestrator-v2/orkestrator-v2"
+          test -L "$HOME/.local/bin/orkestrator-v2"
+          test "$(readlink "$HOME/.local/bin/orkestrator-v2")" = "$XDG_DATA_HOME/orkestrator-v2/orkestrator-v2"
+          if ! command -v desktop-file-validate >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y desktop-file-utils
+          fi
+          desktop-file-validate "$XDG_DATA_HOME/applications/orkestrator-v2.desktop"
 
       - name: Verify the packaged backend and native Sharp runtime
         run: bun run verify:packaged-backend

@@ -33,7 +33,7 @@ describe("Electron packaging configuration", () => {
           target: string[];
         };
         win?: { icon: string };
-        linux: { icon: string };
+        linux: { category: string; executableName: string; icon: string };
       };
     }>("package.json");
     const electronTsconfig = await readJson<{
@@ -55,12 +55,16 @@ describe("Electron packaging configuration", () => {
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts.build).toContain("turbo");
-    expect(packageJson.scripts.package).toStartWith("bun install --frozen-lockfile && ");
-    expect(packageJson.scripts.package).toContain("bun run download:bun");
-    expect(packageJson.scripts.package).toContain("bun run build:all");
-    expect(packageJson.scripts.package).toContain("electron-builder");
-    expect(packageJson.scripts.package).toContain("electron-builder --dir");
+    expect(packageJson.scripts.package).toBeUndefined();
+    expect(packageJson.scripts["package:mac"]).toStartWith("bun install --frozen-lockfile && ");
+    expect(packageJson.scripts["package:mac"]).toContain("bun run download:bun");
+    expect(packageJson.scripts["package:mac"]).toContain("bun run build:all");
+    expect(packageJson.scripts["package:mac"]).toContain("electron-builder --mac --dir");
+    expect(packageJson.scripts["package:mac"]).toContain("install-packaged-app-mac.ts");
+    expect(packageJson.scripts["package:linux"]).toContain("electron-builder --linux --dir");
+    expect(packageJson.scripts["package:linux"]).toContain("install-packaged-app-linux.ts");
     expect(packageJson.scripts["package:release"]).toContain("electron-builder.release.config.ts");
+    expect(packageJson.scripts["package:release"]).toContain("electron-builder --mac");
     expect(packageJson.scripts.setup).not.toContain("download:binaries");
     expect(packageJson.scripts["build:all"]).not.toContain("download:binaries");
     expect(packageJson.scripts["docker:build"]).not.toContain("--no-cache");
@@ -76,6 +80,8 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.build.mac.notarize).toBe(false);
     expect(packageJson.build.mac.target).toEqual(["dmg"]);
     expect(packageJson.build.win).toBeUndefined();
+    expect(packageJson.build.linux.category).toBe("Development");
+    expect(packageJson.build.linux.executableName).toBe("orkestrator-v2");
     expect(packageJson.build.linux.icon).toBe("icons");
     expect(packageJson.build.files).toEqual(
       expect.arrayContaining(["apps/desktop/dist/**", "package.json"]),
@@ -104,6 +110,7 @@ describe("Electron packaging configuration", () => {
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
+    expect(desktopMain).toContain("app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME)");
     expect(desktopMain).toContain("createToolchainProgressController");
     expect(desktopMain).toContain("await toolchainProgress.close()");
     expect(desktopMain).toContain("initializeBrowserPreviews");

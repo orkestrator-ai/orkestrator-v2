@@ -1419,6 +1419,7 @@ describe("App Docker availability", () => {
     await waitFor(() => {
       expect(mockCheckDocker).toHaveBeenCalledTimes(1);
     });
+    expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
     // Startup check should NOT have triggered sync because Docker was unavailable.
     expect(mockSyncAllEnvironmentsWithDocker).not.toHaveBeenCalled();
 
@@ -1443,7 +1444,23 @@ describe("App Docker availability", () => {
 
     expect(await screen.findByText("Docker Permission Required")).toBeTruthy();
     expect(screen.getByText(/your user account cannot access the Docker daemon/i)).toBeTruthy();
+    expect(screen.getByText(/Docker group membership grants root-level host access/i)).toBeTruthy();
     expect(screen.getByText(/sudo usermod -aG docker/)).toBeTruthy();
+  });
+
+  test.each([
+    ["not-installed", "Docker Is Not Installed", /Install Docker/i],
+    ["timed-out", "Docker Check Timed Out", /did not respond within 10 seconds/i],
+    ["unknown", "Docker Is Unavailable", /docker info.*failed/i],
+    ["daemon-unavailable", "Docker Is Not Running", /Start the Docker service/i],
+  ] as const)("renders the %s Docker diagnostic", async (reason, title, description) => {
+    mockCheckDocker.mockImplementationOnce(async () => ({ available: false, reason }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText(title)).toBeTruthy();
+    expect(screen.getByText(description)).toBeTruthy();
   });
 
   test("treats startup check failures as unavailable and keeps sync failures non-fatal", async () => {

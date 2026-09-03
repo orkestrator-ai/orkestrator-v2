@@ -52,6 +52,7 @@ import {
   DEFAULT_DEBUG_LOG_RETENTION_DAYS,
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
+import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
@@ -1574,7 +1575,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const sshAgentSocketPath =
     typeof global.sshAgentSocketPath === "string" &&
-    global.sshAgentSocketPath.trim().length <= 4_096 &&
+    global.sshAgentSocketPath.trim().length <= MAX_SSH_AGENT_SOCKET_PATH_CHARS &&
     !global.sshAgentSocketPath.includes("\0") &&
     path.isAbsolute(global.sshAgentSocketPath.trim())
       ? global.sshAgentSocketPath.trim()

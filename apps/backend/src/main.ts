@@ -9,6 +9,7 @@ import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
+import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 
 assertSupportedPlatform();
 fixPath();
@@ -22,6 +23,15 @@ if (
   throw new Error(`${mode} requires --host 127.0.0.1`);
 }
 await mkdir(options.dataDir, { recursive: true });
+const sshAgentSocket = await configureSshAgentSocketEnvironment({
+  dataDir: options.dataDir,
+  runtimeFlavor: options.runtimeFlavor,
+});
+if (sshAgentSocket) {
+  console.info(`[Backend] SSH agent socket resolved from ${sshAgentSocket.source}`);
+} else if (options.runtimeFlavor !== "agent-test") {
+  console.warn("[Backend] No usable SSH agent socket was found");
+}
 
 let gateway: OrkestratorGateway;
 let tailscaleServe: TailscaleServeManager | null = null;

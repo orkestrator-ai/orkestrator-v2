@@ -33,24 +33,33 @@ import {
   isValidDebugLogRetentionDays,
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
+import {
+  MAX_SSH_AGENT_SOCKET_PATH_CHARS,
+  SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
+} from "@orkestrator/protocol/ssh-agent-socket";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
-const MAX_SSH_AGENT_SOCKET_PATH_CHARS = 4_096;
-
 export function getSshAgentSocketPathValidationError(value: string): string | null {
   const candidate = value.trim();
   if (!candidate) return null;
   if (candidate.length > MAX_SSH_AGENT_SOCKET_PATH_CHARS) {
-    return "SSH agent socket path is too long.";
+    return SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.tooLong;
   }
-  if (candidate.includes("\0") || !candidate.startsWith("/")) {
-    return "SSH agent socket path must be an absolute path.";
+  if (candidate.includes("\0")) {
+    return SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.containsNull;
+  }
+  if (!candidate.startsWith("/")) {
+    return SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.notAbsolute;
   }
   return null;
+}
+
+export function sshAgentSocketPathForSave(value: string): string | undefined {
+  return value.trim() || undefined;
 }
 
 function getSavedReviewInstruction(value: unknown): string {
@@ -515,6 +524,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         seenDomains.add(domain.toLowerCase());
         domains.push(domain);
       }
+      const savedSshAgentSocketPath = sshAgentSocketPathForSave(sshAgentSocketPath);
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -541,7 +551,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: patterns,
         allowedDomains: domains,
         useHostGitHubCredentials,
-        ...(sshAgentSocketPath.trim() ? { sshAgentSocketPath: sshAgentSocketPath.trim() } : {}),
+        ...(savedSshAgentSocketPath ? { sshAgentSocketPath: savedSshAgentSocketPath } : {}),
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,

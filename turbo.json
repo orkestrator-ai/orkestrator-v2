@@ -26,19 +26,19 @@
     "dev:web": {
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["ORKESTRATOR_*", "VITE_DEV_HOST"]
+      "passThroughEnv": ["ORKESTRATOR_*", "SSH_AUTH_SOCK", "VITE_DEV_HOST"]
     },
     "start:web": {
       "dependsOn": ["build", "@orkestrator/web#build"],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["ORKESTRATOR_*"]
+      "passThroughEnv": ["ORKESTRATOR_*", "SSH_AUTH_SOCK"]
     },
     "start:web-public": {
       "dependsOn": ["build"],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["ORKESTRATOR_*"]
+      "passThroughEnv": ["ORKESTRATOR_*", "SSH_AUTH_SOCK"]
     }
   }
 }

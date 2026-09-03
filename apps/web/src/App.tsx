@@ -106,7 +106,8 @@ function dockerUnavailableMessage(reason: DockerUnavailableReason | null): {
       description: (
         <>
           Orkestrator found Docker, but your user account cannot access the Docker daemon. On Linux,
-          add your user to the Docker group with{" "}
+          prefer rootless Docker when available. Otherwise, be aware that Docker group membership
+          grants root-level host access. To grant that access, run{" "}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
             sudo usermod -aG docker &quot;$USER&quot;
           </code>

@@ -124,6 +124,15 @@ function getShellVar(scriptRel: string, varName: string): string {
   return match[1];
 }
 
+function getMiseToolVersion(tool: string): string {
+  const config = read("mise.toml");
+  const match = config.match(new RegExp(`^${tool}\\s*=\\s*"([^"]+)"`, "m"));
+  if (!match) {
+    throw new Error(`Expected ${tool} in mise.toml [tools]`);
+  }
+  return match[1];
+}
+
 function getDockerfileBaseImageTag(): string {
   const dockerfile = read("docker/Dockerfile");
   const match = dockerfile.match(/^FROM\s+oven\/bun:(\S+)/m);
@@ -368,6 +377,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(rootPackage.packageManager).toBe(`bun@${hostPin}`);
     expect(cliPackage.engines?.bun).toBe(`>=${hostPin}`);
+    expect(getMiseToolVersion("bun")).toBe(hostPin);
   });
 
   test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {

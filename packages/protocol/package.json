@@ -41,6 +41,7 @@
     "./review-prompt": "./src/review-prompt.ts",
     "./review-workflow": "./src/review-workflow.ts",
     "./startup-launch": "./src/startup-launch.ts",
+    "./ssh-agent-socket": "./src/ssh-agent-socket.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",

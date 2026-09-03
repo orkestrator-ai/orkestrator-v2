@@ -1075,18 +1075,20 @@ exec '${realGit}' "$@"
   async function withFailingGitSubcommand(
     subcommand: string,
     run: () => Promise<void>,
+    message = `forced ${subcommand} failure`,
   ): Promise<void> {
     const root = await createTempDir("ork-electron-fake-git-");
     const binDir = path.join(root, "bin");
     const { stdout } = await execFileAsync("which", ["git"]);
     const realGit = stdout.trim().replaceAll("'", "'\\''");
     await fs.mkdir(binDir, { recursive: true });
+    const escapedMessage = message.replaceAll("'", "'\\''");
     await fs.writeFile(
       path.join(binDir, "git"),
       `#!/bin/sh
 for arg in "$@"; do
   if [ "$arg" = '${subcommand.replaceAll("'", "'\\''")}' ]; then
-    echo "forced ${subcommand} failure" >&2
+    printf '%s\\n' '${escapedMessage}' >&2
     exit 42
   fi
 done

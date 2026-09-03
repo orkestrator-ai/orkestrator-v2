@@ -293,6 +293,21 @@ describe("FullscreenSettingsLayout", () => {
     expect(screen.getByText("section:network")).toBeTruthy();
   });
 
+  test("falls back to the first section when an external default is invalid", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+        defaultSection="missing"
+      >
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
+    expect(screen.getByText("section:general")).toBeTruthy();
+  });
+
   test("handles an empty menu", () => {
     render(
       <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={[]}>

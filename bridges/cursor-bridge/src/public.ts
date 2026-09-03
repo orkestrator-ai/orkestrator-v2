@@ -8,6 +8,7 @@
  */
 import type {
   NativeAgentContextUsage,
+  NativeAgentReadiness,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
@@ -33,13 +34,14 @@ export function publicSession(state: SessionState): JsonObject {
   };
 }
 
-export function publicStatus(state: SessionState): JsonObject {
+export function publicStatus(state: SessionState, readiness?: NativeAgentReadiness): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
     status: state.status,
     error: state.error,
     revision: state.revision,
     composer: state.composer,
+    ...(readiness ? { readiness } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };

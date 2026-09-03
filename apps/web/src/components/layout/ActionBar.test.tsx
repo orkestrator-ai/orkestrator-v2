@@ -28,6 +28,7 @@ import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { KanbanTask } from "@/lib/backend";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import {
   mockToastError as toastErrorMock,
   mockToastInfo as toastInfoMock,
@@ -471,7 +472,22 @@ mock.module("@/components/settings", () => ({
         </button>
       </div>
     ) : null,
-  SettingsPage: ({ open }: { open: boolean }) => (open ? <div>Global settings dialog</div> : null),
+  SettingsPage: ({
+    open,
+    onOpenChange,
+    defaultSection,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    defaultSection?: string;
+  }) =>
+    open ? (
+      <div>
+        Global settings dialog
+        {defaultSection ? <span>Default settings section: {defaultSection}</span> : null}
+        <button onClick={() => onOpenChange(false)}>Close global settings</button>
+      </div>
+    ) : null,
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
@@ -1718,6 +1734,24 @@ describe("ActionBar toolbar interactions", () => {
       asyncDialogOptions,
     );
   }, 60_000);
+
+  test("opens a requested global settings section from another tree", async () => {
+    render(<ActionBar />);
+
+    act(() => requestGlobalSettings("cursor"));
+
+    expect(await screen.findByText("Default settings section: cursor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
+    expect(screen.queryByText("Global settings dialog") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+    expect(await screen.findByText("Global settings dialog")).toBeTruthy();
+    expect(screen.queryByText(/Default settings section:/) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Close global settings" }));
+
+    act(() => requestGlobalSettings("grok"));
+    expect(await screen.findByText("Default settings section: grok")).toBeTruthy();
+  });
 
   test("closes Docker configuration and preserves local controls when Docker stops", async () => {
     const renderActionBar = (available: boolean) => (

@@ -6,12 +6,13 @@
  * too, so a field or status code that drifts here is a Cursor tab that stops
  * working while every unit test still passes.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
 import { authToken } from "./config.js";
 import { route } from "./http.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
+import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, credentialStore } from "./credentials.js";
 
 let server: Server;
 let baseUrl: string;
@@ -73,6 +74,71 @@ describe("authentication", () => {
     expect((await call("/global/auth-check", { token: null })).status).toBe(401);
     expect((await call("/global/auth-check", { token: "wrong" })).status).toBe(401);
     expect((await call("/global/auth-check")).status).toBe(200);
+  });
+
+  test("reports missing Cursor credentials as authoritative session readiness", async () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    delete process.env.CURSOR_API_KEY;
+    const load = spyOn(credentialStore, "load").mockResolvedValue(undefined);
+    try {
+      const state = await createSession();
+      const status = (await (await call(`/session/${state.id}/status`)).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(status.readiness).toEqual({
+        state: "authentication-required",
+        message: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+      });
+
+      const prompt = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hello", requestId: "missing-auth" }),
+      });
+      expect(prompt.status).toBe(401);
+      expect(await prompt.json()).toEqual({
+        error: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+        kind: "authentication-required",
+      });
+    } finally {
+      load.mockRestore();
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    }
+  });
+
+  test("reports an authenticated credential as ready", async () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "status-test-key";
+    try {
+      const state = await createSession();
+      const status = (await (await call(`/session/${state.id}/status`)).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(status.readiness).toEqual({ state: "ready" });
+    } finally {
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    }
+  });
+
+  test("an attached agent is ready without reading credentials", async () => {
+    const state = await createSession();
+    attachFake(state);
+    const load = spyOn(credentialStore, "load").mockRejectedValue(
+      new Error("attached sessions must not load credentials"),
+    );
+    try {
+      const status = (await (await call(`/session/${state.id}/status`)).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(status.readiness).toEqual({ state: "ready" });
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
+    }
   });
 });
 

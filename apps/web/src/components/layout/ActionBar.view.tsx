@@ -229,6 +229,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     changes,
     setRepoSettingsProjectId,
     globalSettingsOpen,
+    globalSettingsDefaultSection,
     setGlobalSettingsOpen,
     setEnvSettingsEnvironmentId,
     dockerStatsOpen,
@@ -1557,7 +1558,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         <LazyLoadBoundary
           loadingFallback={<LazyDialogLoadingFallback label="Loading global settings…" />}
         >
-          <LazySettingsPage open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />
+          <LazySettingsPage
+            open={globalSettingsOpen}
+            onOpenChange={setGlobalSettingsOpen}
+            defaultSection={globalSettingsDefaultSection}
+          />
         </LazyLoadBoundary>
       )}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />

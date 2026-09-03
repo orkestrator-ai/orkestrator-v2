@@ -14,6 +14,9 @@ import { credentialFile, LOGIN_TIMEOUT_MS } from "./config.js";
 
 export type CredentialSource = "api-key-env" | "stored-login" | "none";
 
+export const CURSOR_AUTHENTICATION_REQUIRED_MESSAGE =
+  "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.";
+
 export interface CredentialResolution {
   apiKey?: string;
   source: CredentialSource;

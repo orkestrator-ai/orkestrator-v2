@@ -5,6 +5,8 @@ import { writeText } from "@/lib/native/clipboard";
 import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
+import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
+import { isClaudeAuthenticationFailureMessage } from "@/lib/claude-auth";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
@@ -59,6 +61,7 @@ export const NativeMessage = memo(function NativeMessage({
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
   const isPeerMail = message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX);
+  const isClaudeAuthError = platform === "claude" && isClaudeAuthenticationFailureMessage(message);
   const isContinuation =
     !isUser &&
     !isSystem &&
@@ -143,20 +146,25 @@ export const NativeMessage = memo(function NativeMessage({
   // Render system messages with distinct info styling
   if (isSystem) {
     return (
-      <div className="px-2 @sm:px-4 py-2">
-        <div className="max-w-3xl mx-auto min-w-0">
-          <div
-            data-agent-chat-search-content="true"
-            // Most system messages are one-line markers, for which
-            // `whitespace-pre-line` changes nothing. Multi-paragraph ones — the
-            // build pipeline's auto-decline record — would otherwise collapse
-            // into a single centred run of text.
-            className="text-xs text-muted-foreground italic text-center py-1 break-words whitespace-pre-line"
-          >
-            {message.content}
+      <>
+        <div className="px-2 @sm:px-4 py-2">
+          <div className="max-w-3xl mx-auto min-w-0">
+            <div
+              data-agent-chat-search-content="true"
+              // Most system messages are one-line markers, for which
+              // `whitespace-pre-line` changes nothing. Multi-paragraph ones — the
+              // build pipeline's auto-decline record — would otherwise collapse
+              // into a single centred run of text.
+              className="text-xs text-muted-foreground italic text-center py-1 break-words whitespace-pre-line"
+            >
+              {message.content}
+            </div>
           </div>
         </div>
-      </div>
+        {isClaudeAuthError ? (
+          <ClaudeAuthRecoveryCard error={message.content} containerId={containerId} />
+        ) : null}
+      </>
     );
   }
 

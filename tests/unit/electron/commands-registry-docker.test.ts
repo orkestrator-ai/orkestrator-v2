@@ -582,6 +582,37 @@ exit 1
     ASYNC_TEST_BUDGET_MS,
   );
 
+  test(
+    "refreshes the host Claude credential for another container and after restart",
+    async () => {
+      const { context } = claudeCredentialSyncContext();
+      const commands = createCommandRegistry();
+      const expired = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-expired"}}';
+      const refreshed = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-refreshed"}}';
+
+      await withFakeDocker(
+        CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT,
+        async (logs) => {
+          await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+
+          await fs.writeFile(path.join(logs.home, ".claude", ".credentials.json"), refreshed);
+          await commands.get("docker_start_container")?.({ containerId: "container-2" }, context);
+          await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+
+          const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+          expect(input.match(/sk-ant-oat01-expired/g)).toHaveLength(1);
+          expect(input.match(/sk-ant-oat01-refreshed/g)).toHaveLength(2);
+          const calls = await fs.readFile(logs.all, "utf8");
+          expect(calls.match(/start container-1/g)).toHaveLength(2);
+          expect(calls.match(/start container-2/g)).toHaveLength(1);
+        },
+        '#!/bin/sh\ncat "$HOME/.claude/.credentials.json"\n',
+        expired,
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
   test("does not read or deliver the host credential when the user opted out", async () => {
     const { context } = claudeCredentialSyncContext({ useHostClaudeCredentials: false });
     const commands = createCommandRegistry();

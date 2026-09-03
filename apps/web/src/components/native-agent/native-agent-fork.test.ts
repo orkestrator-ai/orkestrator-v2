@@ -178,4 +178,38 @@ describe("native agent fork boundaries", () => {
       messageId: "claude-1",
     });
   });
+
+  test("Claude forks use the final source id in a coalesced tool block", () => {
+    const rows = normalizeNativeMessages([
+      message("claude-1", "assistant", {
+        content: "",
+        parts: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+        createdAt: "2026-07-27T12:00:01.000Z",
+      }),
+      message("claude-2", "assistant", {
+        content: "",
+        parts: [{ type: "tool-invocation", content: "Grep", toolName: "Grep" }],
+        createdAt: "2026-07-27T12:00:20.000Z",
+      }),
+    ]);
+    expect(rows).toHaveLength(1);
+
+    const messages = [message("user-1", "user"), ...rows, message("user-2", "user")];
+    const plan = buildMessageForkPlan(messages, {
+      responseInProgress: false,
+      resolvePromptBoundary: (candidate, all) =>
+        resolveNativeAgentPromptBoundary("claude", candidate, all),
+      resolveResponseBoundary: (candidate, all) =>
+        resolveNativeAgentResponseBoundary("claude", candidate, all),
+    });
+
+    expect(plan.get("claude-1")?.boundary).toEqual({
+      type: "message",
+      messageId: "claude-2",
+    });
+    expect(plan.get("user-2")?.boundary).toEqual({
+      type: "message",
+      messageId: "claude-2",
+    });
+  });
 });

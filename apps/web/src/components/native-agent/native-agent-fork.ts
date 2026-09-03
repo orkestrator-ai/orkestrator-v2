@@ -4,7 +4,10 @@ import {
   findPreviousForkMessage,
   type MessageForkBoundary,
 } from "@/components/chat/message-fork";
-import { getNativeSourceMessageId } from "@/lib/chat/native-message-adapters";
+import {
+  getNativeMessageBoundarySourceId,
+  getNativeSourceMessageId,
+} from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 /**
@@ -41,9 +44,7 @@ export function resolveNativeAgentPromptBoundary(
   if (!previous) return { type: "session-start" };
   return {
     type: "message",
-    messageId:
-      previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId ??
-      getNativeSourceMessageId(previous.id),
+    messageId: getNativeMessageBoundarySourceId(previous),
   };
 }
 
@@ -77,8 +78,6 @@ export function resolveNativeAgentResponseBoundary(
   }
   return {
     type: "message",
-    messageId:
-      message.parts.find((part) => part.sourceMessageId)?.sourceMessageId ??
-      getNativeSourceMessageId(message.id),
+    messageId: getNativeMessageBoundarySourceId(message),
   };
 }

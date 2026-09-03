@@ -3,6 +3,7 @@ import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
   applyClaudeBackgroundTaskStates,
+  coalesceAdjacentToolMessages,
   collectRenderedBackgroundTaskIds,
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
@@ -3248,5 +3249,204 @@ describe("findPreviousNativeMessage", () => {
     };
     const messages = [systemMessage, assistant("content", [])];
     expect(findPreviousNativeMessage(messages, 1)).toBe(systemMessage);
+  });
+});
+
+describe("coalesceAdjacentToolMessages", () => {
+  const toolMessage = (
+    id: string,
+    createdAt: string,
+    toolNames: string[] = ["Read"],
+    extra: Partial<NativeMessage> = {},
+  ): NativeMessage => ({
+    id,
+    role: "assistant",
+    content: "",
+    createdAt,
+    parts: toolNames.map((toolName) => ({
+      type: "tool-invocation" as const,
+      content: toolName,
+      toolName,
+      createdAt,
+    })),
+    ...extra,
+  });
+
+  test("merges consecutive tool-only messages in the same minute into one tool group", () => {
+    const rows = normalizeNativeMessages([
+      toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read", "Read"]),
+      toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Todo Write"]),
+      toolMessage("m3", "2026-09-03T10:43:30.000Z", ["Read"]),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("m1");
+    expect(rows[0]?.createdAt).toBe("2026-09-03T10:43:30.000Z");
+    expect(rows[0]?.settleAnchorCreatedAt).toBe("2026-09-03T10:43:01.000Z");
+    expect(rows[0]?.latestSourceMessageId).toBe("m3");
+    expect(rows[0]?.parts.map((part) => part.type)).toEqual(["tool-group"]);
+    const group = rows[0]?.parts[0];
+    expect(group?.type).toBe("tool-group");
+    if (group?.type === "tool-group") {
+      expect(group.parts).toHaveLength(4);
+    }
+  });
+
+  test("does not merge across a text message", () => {
+    const rows = normalizeNativeMessages([
+      toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read"]),
+      {
+        id: "text",
+        role: "assistant",
+        content: "Plan is set",
+        createdAt: "2026-09-03T10:43:40.000Z",
+        parts: [{ type: "text", content: "Plan is set" }],
+      },
+      toolMessage("m2", "2026-09-03T10:43:50.000Z", ["Grep"]),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["m1", "text", "m2"]);
+  });
+
+  test("does not merge tool messages in different minutes", () => {
+    const rows = normalizeNativeMessages([
+      toolMessage("m1", "2026-09-03T10:43:50.000Z", ["Grep"]),
+      toolMessage("m2", "2026-09-03T10:44:05.000Z", ["Read"]),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("does not merge when models differ", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read"], { modelId: "a/1" }),
+      toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Read"], { modelId: "a/2" }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("does not merge when turn ids differ", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read"], { turnId: "turn-1" }),
+      toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Read"], { turnId: "turn-2" }),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["m1", "m2"]);
+  });
+
+  test("does not merge plan-review rows", () => {
+    const rows = coalesceAdjacentToolMessages([
+      toolMessage("plan", "2026-09-03T10:43:01.000Z", ["Read"], { planReview: true }),
+      toolMessage("tool", "2026-09-03T10:43:20.000Z", ["Read"]),
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual(["plan", "tool"]);
+    expect(rows[0]?.planReview).toBe(true);
+  });
+
+  test("flattens and regroups adjacent agent activity", () => {
+    const rows = coalesceAdjacentToolMessages([
+      {
+        ...toolMessage("m1", "2026-09-03T10:43:01.000Z"),
+        parts: [
+          {
+            type: "agent-group",
+            content: "",
+            parts: [
+              {
+                type: "subagent",
+                content: "Research",
+                subagentId: "agent-1",
+                toolState: "success",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        ...toolMessage("m2", "2026-09-03T10:43:20.000Z"),
+        parts: [
+          {
+            type: "task-group",
+            content: "Agent",
+            task: {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolUseId: "task-2",
+              toolState: "success",
+            },
+            childTools: [],
+          },
+        ],
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.parts.map((part) => part.type)).toEqual(["agent-group"]);
+    const group = rows[0]?.parts[0];
+    expect(group?.type).toBe("agent-group");
+    if (group?.type === "agent-group") {
+      expect(group.parts.map((part) => part.type)).toEqual(["subagent", "task-group"]);
+    }
+  });
+
+  test("coalesces adjacent Claude tool messages", () => {
+    const rows = normalizeClaudeMessagesForDisplay([
+      {
+        id: "claude-1",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-09-03T10:43:01.000Z",
+        parts: [{ type: "tool-invocation", content: "Read", toolName: "Read" }],
+      },
+      {
+        id: "claude-2",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-09-03T10:43:20.000Z",
+        parts: [{ type: "tool-invocation", content: "Grep", toolName: "Grep" }],
+      },
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "claude-1",
+      latestSourceMessageId: "claude-2",
+      settleAnchorCreatedAt: "2026-09-03T10:43:01.000Z",
+      createdAt: "2026-09-03T10:43:20.000Z",
+    });
+    expect(rows[0]?.parts.map((part) => part.type)).toEqual(["tool-group"]);
+  });
+
+  test("preserves merged row identity for an unchanged source prefix", () => {
+    const messages = [
+      toolMessage("m1", "2026-09-03T10:43:01.000Z"),
+      toolMessage("m2", "2026-09-03T10:43:20.000Z"),
+      toolMessage("m3", "2026-09-03T10:43:30.000Z"),
+    ];
+
+    const first = normalizeNativeMessages(messages);
+    const second = normalizeNativeMessages(messages);
+
+    expect(first[0]).toBe(second[0]!);
+  });
+
+  test("drops invisible assistant messages without breaking a tool run", () => {
+    const rows = normalizeNativeMessages([
+      toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read"]),
+      {
+        id: "empty",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-09-03T10:43:10.000Z",
+        parts: [],
+      },
+      toolMessage("m2", "2026-09-03T10:43:20.000Z", ["Read"]),
+    ]);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("m1");
   });
 });

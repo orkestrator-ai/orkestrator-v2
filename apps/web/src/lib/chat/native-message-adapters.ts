@@ -548,9 +548,124 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
 }
 
 export function normalizeNativeMessages(messages: readonly NativeMessage[]): NativeMessage[] {
-  return messages.flatMap((message) =>
+  const rows = messages.flatMap((message) =>
     splitAssistantTranscriptBlocks(normalizeNativeMessage(message)),
   );
+  return coalesceAdjacentToolMessages(rows);
+}
+
+function isMergeableToolPart(part: NativeMessagePart): boolean {
+  return (
+    part.type === "thinking" ||
+    part.type === "tool-invocation" ||
+    part.type === "tool-group" ||
+    part.type === "subagent" ||
+    part.type === "task-group" ||
+    part.type === "agent-group"
+  );
+}
+
+function isToolOnlyAssistantMessage(message: NativeMessage): boolean {
+  if (message.role !== "assistant") return false;
+  if (message.planReview === true) return false;
+  if (message.content.trim().length > 0) return false;
+  if (message.parts.length === 0) return false;
+  if (!messageHasVisibleContent(message)) return false;
+  return message.parts.every(isMergeableToolPart);
+}
+
+function isSameMinuteStamp(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const first = new Date(a);
+  const second = new Date(b);
+  if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) return false;
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate() &&
+    first.getHours() === second.getHours() &&
+    first.getMinutes() === second.getMinutes()
+  );
+}
+
+function flattenMergeableParts(parts: readonly NativeMessagePart[]): NativeMessagePart[] {
+  const flat: NativeMessagePart[] = [];
+  for (const part of parts) {
+    if (part.type === "tool-group" || part.type === "agent-group") {
+      flat.push(...part.parts);
+    } else {
+      flat.push(part);
+    }
+  }
+  return flat;
+}
+
+function latestMessageCreatedAt(a: string, b: string): string {
+  const aMs = new Date(a).getTime();
+  const bMs = new Date(b).getTime();
+  if (Number.isFinite(aMs) && Number.isFinite(bMs)) {
+    return bMs >= aMs ? b : a;
+  }
+  return b || a;
+}
+
+const coalescedMessageCache = new WeakMap<NativeMessage, WeakMap<NativeMessage, NativeMessage>>();
+
+function mergeAdjacentToolMessages(previous: NativeMessage, message: NativeMessage): NativeMessage {
+  const cachedForPrevious = coalescedMessageCache.get(previous);
+  const cached = cachedForPrevious?.get(message);
+  if (cached) return cached;
+
+  const regrouped = groupNativeAgentActivity(
+    groupNativeToolActivity(
+      flattenMergeableParts(previous.parts).concat(flattenMergeableParts(message.parts)),
+    ),
+  );
+  const result: NativeMessage = {
+    ...previous,
+    parts: regrouped,
+    content: "",
+    createdAt: latestMessageCreatedAt(previous.createdAt, message.createdAt),
+    latestSourceMessageId: getNativeMessageBoundarySourceId(message),
+    settleAnchorCreatedAt: previous.settleAnchorCreatedAt ?? previous.createdAt,
+  };
+  const resultCache = cachedForPrevious ?? new WeakMap<NativeMessage, NativeMessage>();
+  resultCache.set(message, result);
+  if (!cachedForPrevious) coalescedMessageCache.set(previous, resultCache);
+  return result;
+}
+
+/**
+ * Merge consecutive tool-only assistant rows in the same minute into one block.
+ *
+ * OpenCode (and other bridges) can emit each tool call as its own backend
+ * message. Within a message tools are already grouped into a single
+ * `tool-group` card, but across messages each row renders its own card — so a
+ * burst of Reads shows as several one-row blocks. When there is no text in
+ * between and the clocks agree to the minute, readers experience it as one
+ * block, so display it as one.
+ */
+export function coalesceAdjacentToolMessages(messages: readonly NativeMessage[]): NativeMessage[] {
+  const merged: NativeMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant" && !messageHasVisibleContent(message)) {
+      continue;
+    }
+    const previous = merged.at(-1);
+    if (
+      previous &&
+      isToolOnlyAssistantMessage(previous) &&
+      isToolOnlyAssistantMessage(message) &&
+      isSameMinuteStamp(previous.createdAt, message.createdAt) &&
+      previous.modelId === message.modelId &&
+      previous.turnId === message.turnId
+    ) {
+      merged[merged.length - 1] = mergeAdjacentToolMessages(previous, message);
+      continue;
+    }
+    merged.push(message);
+  }
+  return merged;
 }
 
 export function normalizeOpenCodeNativeMessage(message: NativeMessage): NativeMessage {
@@ -1211,8 +1326,8 @@ function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeM
  * rows so each text and tool section receives its own timestamp and copy action.
  */
 export function normalizeClaudeMessagesForDisplay(messages: ClaudeMessage[]): NativeMessage[] {
-  return messages.flatMap((message) =>
-    splitAssistantTranscriptBlocks(normalizeClaudeMessage(message)),
+  return coalesceAdjacentToolMessages(
+    messages.flatMap((message) => splitAssistantTranscriptBlocks(normalizeClaudeMessage(message))),
   );
 }
 
@@ -1220,6 +1335,30 @@ export function normalizeClaudeMessagesForDisplay(messages: ClaudeMessage[]): Na
 export function getNativeSourceMessageId(messageId: string): string {
   const splitMarker = messageId.indexOf(":text-block:");
   return splitMarker < 0 ? messageId : messageId.slice(0, splitMarker);
+}
+
+function lastPartSourceMessageId(parts: readonly NativeMessagePart[]): string | undefined {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]!;
+    if (part.type === "tool-group" || part.type === "agent-group") {
+      const nested = lastPartSourceMessageId(part.parts);
+      if (nested) return nested;
+    } else if (part.type === "task-group") {
+      const nested = lastPartSourceMessageId([part.task, ...part.childTools]);
+      if (nested) return nested;
+    }
+    if (part.sourceMessageId) return part.sourceMessageId;
+  }
+  return undefined;
+}
+
+/** Resolve a display row to the last persisted provider message it contains. */
+export function getNativeMessageBoundarySourceId(message: NativeMessage): string {
+  return (
+    message.latestSourceMessageId ??
+    lastPartSourceMessageId(message.parts) ??
+    getNativeSourceMessageId(message.id)
+  );
 }
 
 /** @deprecated Use {@link getNativeSourceMessageId}. */

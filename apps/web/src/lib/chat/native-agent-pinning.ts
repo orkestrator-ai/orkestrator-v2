@@ -194,7 +194,7 @@ export function createNativeAgentSettleAnchors(
   const ids: string[] = [];
   const clocks: number[] = [];
   for (const message of timeline) {
-    const createdAt = timestampOf(message.createdAt);
+    const createdAt = timestampOf(message.settleAnchorCreatedAt ?? message.createdAt);
     // A row with no readable clock cannot vouch for where anything settled, so
     // it is not offered as a position.
     if (createdAt === undefined) continue;

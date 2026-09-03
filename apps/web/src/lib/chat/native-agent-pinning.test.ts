@@ -576,6 +576,39 @@ describe("pinNativeAgentParts", () => {
     expect(pinned[2]?.createdAt).not.toBe(pinned[0]?.createdAt);
   });
 
+  test("anchors a mid-block settlement after a coalesced tool row", () => {
+    const messages = normalizeNativeMessages([
+      at("assistant-launch", "2026-06-28T12:00:00.000Z", [
+        { type: "text", content: "Delegating" },
+        settledWorker("2026-06-28T12:01:15.000Z"),
+      ]),
+      at("assistant-tool-1", "2026-06-28T12:01:00.000Z", [
+        { type: "tool-invocation", content: "Read", toolName: "Read" },
+      ]),
+      at("assistant-tool-2", "2026-06-28T12:01:30.000Z", [
+        { type: "tool-invocation", content: "Grep", toolName: "Grep" },
+      ]),
+      at("assistant-after", "2026-06-28T12:02:00.000Z", [{ type: "text", content: "Afterwards" }]),
+    ]);
+
+    expect(messages.map((message) => message.id)).toEqual([
+      "assistant-launch",
+      "assistant-launch:text-block:1",
+      "assistant-tool-1",
+      "assistant-after",
+    ]);
+    expect(messages[2]?.createdAt).toBe("2026-06-28T12:01:30.000Z");
+    expect(messages[2]?.settleAnchorCreatedAt).toBe("2026-06-28T12:01:00.000Z");
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-launch",
+      "assistant-tool-1",
+      "assistant-tool-1:settled-agents",
+      "assistant-after",
+    ]);
+  });
+
   test("does not collect tasks after the final API error", () => {
     const messages = [
       at("assistant-launch", "2026-08-18T17:00:00.000Z", [

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { FullscreenSettingsLayout } from "./FullscreenSettingsLayout";
+import { FullscreenSettingsLayout, SettingsHeaderActions } from "./FullscreenSettingsLayout";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,7 +75,7 @@ describe("FullscreenSettingsLayout", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  test("switches sections, renders the footer, and closes from Escape and the close button", () => {
+  test("switches sections, renders actions next to close, and closes from Escape and the close button", () => {
     const onOpenChange = mock(() => undefined);
     render(
       <FullscreenSettingsLayout
@@ -83,7 +83,7 @@ describe("FullscreenSettingsLayout", () => {
         onOpenChange={onOpenChange}
         title="Settings"
         menuItems={menuItems}
-        footer={<button>Save</button>}
+        headerActions={<button>Save</button>}
       >
         {(section) => <div>section:{section}</div>}
       </FullscreenSettingsLayout>,
@@ -98,12 +98,151 @@ describe("FullscreenSettingsLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: /Network/ }));
     expect(screen.getByText("section:network")).toBeTruthy();
     expect(sectionSelector.textContent).toContain("Network");
-    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    const headerActions = saveButton.closest('[data-slot="settings-header-actions"]');
+    expect(headerActions).toBeTruthy();
+    expect(headerActions?.nextElementSibling).toBe(
+      screen.getByRole("button", { name: "Close settings" }),
+    );
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(onOpenChange).toHaveBeenCalledTimes(2);
+  });
+
+  test("renders section-owned actions in the header", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
+        {() => (
+          <div>
+            Section content
+            <SettingsHeaderActions>
+              <button>Reset</button>
+              <button>Save changes</button>
+            </SettingsHeaderActions>
+          </div>
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    const resetButton = screen.getByRole("button", { name: "Reset" });
+    const saveButton = screen.getByRole("button", { name: "Save changes" });
+    const headerActions = resetButton.closest('[data-slot="settings-header-actions"]');
+    expect(headerActions).toBeTruthy();
+    expect(headerActions?.contains(saveButton)).toBe(true);
+    expect(screen.getByText("Section content").contains(resetButton)).toBe(false);
+  });
+
+  test("renders section-owned actions in place without a layout provider", () => {
+    render(
+      <div data-testid="standalone-section">
+        Section content
+        <SettingsHeaderActions>
+          <button>Standalone save</button>
+        </SettingsHeaderActions>
+      </div>,
+    );
+
+    expect(
+      screen
+        .getByTestId("standalone-section")
+        .contains(screen.getByRole("button", { name: "Standalone save" })),
+    ).toBe(true);
+  });
+
+  test("keeps direct and portaled actions in separately owned containers", () => {
+    const props = {
+      open: true,
+      onOpenChange: () => undefined,
+      title: "Settings",
+      menuItems,
+      headerActions: <button>Direct action</button>,
+    };
+    const { rerender } = render(
+      <FullscreenSettingsLayout {...props}>
+        {() => (
+          <SettingsHeaderActions>
+            <button>Section action</button>
+          </SettingsHeaderActions>
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    const directAction = screen.getByRole("button", { name: "Direct action" });
+    const sectionAction = screen.getByRole("button", { name: "Section action" });
+    const actionGroup = directAction.closest('[data-slot="settings-header-actions"]');
+    expect(actionGroup).toBeTruthy();
+    expect(actionGroup).toBe(sectionAction.closest('[data-slot="settings-header-actions"]'));
+    expect(directAction.parentElement).not.toBe(sectionAction.parentElement);
+
+    rerender(
+      <FullscreenSettingsLayout {...props}>
+        {() => <div>Section content</div>}
+      </FullscreenSettingsLayout>,
+    );
+    expect(screen.getByRole("button", { name: "Direct action" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Section action" }) === null).toBe(true);
+  });
+
+  test("restores section-owned actions after the layout closes and reopens", () => {
+    const props = { onOpenChange: () => undefined, title: "Settings", menuItems };
+    const children = () => (
+      <SettingsHeaderActions>
+        <button>Persistent action</button>
+      </SettingsHeaderActions>
+    );
+    const { rerender } = render(
+      <FullscreenSettingsLayout open {...props}>
+        {children}
+      </FullscreenSettingsLayout>,
+    );
+    expect(screen.getByRole("button", { name: "Persistent action" })).toBeTruthy();
+
+    rerender(
+      <FullscreenSettingsLayout open={false} {...props}>
+        {children}
+      </FullscreenSettingsLayout>,
+    );
+    expect(screen.queryByRole("button", { name: "Persistent action" }) === null).toBe(true);
+
+    rerender(
+      <FullscreenSettingsLayout open {...props}>
+        {children}
+      </FullscreenSettingsLayout>,
+    );
+    const restoredAction = screen.getByRole("button", { name: "Persistent action" });
+    expect(restoredAction.closest('[data-slot="settings-header-actions"]')).toBeTruthy();
+  });
+
+  test("allows the mobile section selector to shrink beside persistent actions", () => {
+    render(
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+        headerActions={<button>Save</button>}
+      >
+        {(section) => <div>{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
+
+    const selector = screen.getByRole("combobox", { name: "Settings section" });
+    const actions = screen
+      .getByRole("button", { name: "Save" })
+      .closest('[data-slot="settings-header-actions"]');
+    expect(selector.className).toContain("min-w-0");
+    expect(selector.className).toContain("flex-1");
+    expect(actions?.className).toContain("min-w-0");
+    expect(actions?.nextElementSibling).toBe(
+      screen.getByRole("button", { name: "Close settings" }),
+    );
   });
 
   test("portals the fullscreen layer outside its triggering container", () => {

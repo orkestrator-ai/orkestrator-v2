@@ -32,6 +32,7 @@ mock.module("../../../apps/web/src/components/settings/SkillsSettings", () => ({
   SkillsSettings: () => <div data-testid="skills-settings">Skills browser</div>,
 }));
 mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => ({
+  SettingsHeaderActions: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   FullscreenSettingsLayout: ({
     open,
     menuItems,

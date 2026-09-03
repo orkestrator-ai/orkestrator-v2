@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { useSortable } from "@dnd-kit/sortable";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -25,6 +26,7 @@ import {
 import {
   FolderInput,
   FolderMinus,
+  Github,
   Trash2,
   ChevronRight,
   Plus,
@@ -33,6 +35,8 @@ import {
 } from "lucide-react";
 import type { Project, Environment } from "@/types";
 import { cn } from "@/lib/utils";
+import { openInBrowser } from "@/lib/backend";
+import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -100,6 +104,7 @@ export function SortableProjectGroup({
     transform: CSS.Transform.toString(transform),
     transition,
   };
+  const githubRepositoryUrl = getGitHubRepositoryUrl(project.gitUrl);
 
   const confirmDelete = async (event: React.MouseEvent) => {
     // Radix closes alert dialogs on action clicks by default. Defer closing
@@ -231,6 +236,18 @@ export function SortableProjectGroup({
                   <LayoutGrid className="h-4 w-4 mr-2" />
                   Open Board
                 </ContextMenuItem>
+                {githubRepositoryUrl && (
+                  <ContextMenuItem
+                    onClick={() => {
+                      void openInBrowser(githubRepositoryUrl).catch(() => {
+                        toast.error("Could not open repository in browser.");
+                      });
+                    }}
+                  >
+                    <Github className="h-4 w-4 mr-2" />
+                    Open Repo on GitHub
+                  </ContextMenuItem>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={onOpenSettings}>
                   <Settings2 className="h-4 w-4 mr-2" />

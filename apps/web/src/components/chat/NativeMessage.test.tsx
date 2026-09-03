@@ -3,6 +3,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/re
 import { MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT } from "@orkestrator/protocol/review-evidence-frames";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
 import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -19,7 +20,7 @@ function makeMessage(
   parts: Array<NativeMessagePart>,
   overrides?: Partial<{
     id: string;
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "system";
     content: string;
     createdAt: string;
     modelId: string;
@@ -382,6 +383,121 @@ describe("NativeMessage assistant attribution", () => {
 
     expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
     expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+  });
+});
+
+describe("NativeMessage Claude authentication recovery", () => {
+  afterEach(() => {
+    cleanup();
+    toastErrorMock.mockClear();
+  });
+
+  test("adds recovery beside an authoritative terminal error without making it a live alert", () => {
+    const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+    render(
+      <NativeMessage
+        platform="claude"
+        message={makeMessage([{ type: "text", content: error }], {
+          id: "native-terminal:error:auth-failure",
+          role: "system",
+          content: error,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Claude needs you to sign in again. After signing in, return here and resend your message.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByText(error)).toHaveLength(2);
+    expect(screen.getByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
+  test("preserves an assistant reply that merely discusses authentication text and tools", () => {
+    const reply =
+      "The integration test failed to authenticate against the mock IdP, so I updated the header.";
+
+    render(
+      <NativeMessage
+        platform="claude"
+        actions={<button type="button">Fork response</button>}
+        message={makeMessage(
+          [
+            { type: "text", content: reply },
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "Bash",
+              toolState: "success",
+            },
+          ],
+          { content: reply, modelId: "claude-sonnet-5" },
+        )}
+      />,
+    );
+
+    expect(screen.getByText(reply)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Fork response" })).toBeTruthy();
+    expect(screen.getByText("claude-sonnet-5")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
+  });
+
+  test("keeps a client-only error row on the generic error path", () => {
+    const error = "authentication_error: Invalid authentication credentials";
+
+    render(
+      <NativeMessage
+        platform="claude"
+        message={makeMessage([{ type: "text", content: error }], {
+          id: `${ERROR_MESSAGE_PREFIX}auth-failure`,
+          content: error,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(error)).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
+  });
+
+  test("does not reinterpret another provider's authoritative terminal error", () => {
+    const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+    render(
+      <NativeMessage
+        platform="codex"
+        message={makeMessage([{ type: "text", content: error }], {
+          id: "native-terminal:error:auth-failure",
+          role: "system",
+          content: error,
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("region", { name: "Sign in to Claude" }) === null).toBe(true);
+    expect(screen.getByText(error)).toBeTruthy();
+  });
+
+  test("keeps a manual fallback when terminal controls are unavailable", () => {
+    const error = "authentication_error: Invalid authentication credentials";
+
+    render(
+      <NativeMessage
+        platform="claude"
+        message={makeMessage([{ type: "text", content: error }], {
+          id: "native-terminal:error:auth-failure",
+          role: "system",
+          content: error,
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Sign in to Claude" }) === null).toBe(true);
+    expect(screen.getByText("claude auth login")).toBeTruthy();
   });
 });
 

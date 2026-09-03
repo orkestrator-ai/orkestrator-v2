@@ -4,7 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { StrictMode } from "react";
+import { StrictMode, useEffect, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -29,7 +29,8 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
-import { TerminalProvider } from "@/contexts";
+import { TerminalProvider, useTerminalContext } from "@/contexts";
+import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 
@@ -428,6 +429,21 @@ function freshTab(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
   };
 }
 
+function TerminalTabHarness({
+  createTab,
+  children,
+}: {
+  createTab: NonNullable<ReturnType<typeof useTerminalContext>["createTab"]>;
+  children: ReactNode;
+}) {
+  const { setCreateTab } = useTerminalContext();
+  useEffect(() => {
+    setCreateTab(createTab);
+    return () => setCreateTab(null);
+  }, [createTab, setCreateTab]);
+  return children;
+}
+
 function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) {
   const tab = usePaneLayoutStore((state) => {
     const root = state.environments.get("env-1")?.root;
@@ -660,6 +676,144 @@ describe("AgentNativeTab", () => {
     expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  test("opens an interactive Claude sign-in terminal for an isolated-container failure", async () => {
+    renderVirtualizedMessages = true;
+    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+    const createTab = mock(() => true);
+    const error = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "native-terminal:error:auth-failure",
+          role: "system",
+          content: error,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text", content: error }],
+        },
+      ],
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab tabId="tab-auth-recovery" data={identity("claude")} isActive />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "Claude sign-in",
+      initialCommands: [CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND],
+    });
+  });
+
+  test("uses a local environment terminal to repair the host Claude login", async () => {
+    renderVirtualizedMessages = true;
+    const createTab = mock(() => true);
+    const error = "authentication_error: Invalid authentication credentials";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "native-terminal:error:auth-local",
+          role: "system",
+          content: error,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text", content: error }],
+        },
+      ],
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab
+            tabId="tab-auth-recovery-local"
+            data={{ ...identity("claude"), containerId: undefined, isLocal: true }}
+            isActive
+          />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "Claude sign-in",
+      initialCommands: [CLAUDE_AUTH_LOGIN_COMMAND],
+    });
+  });
+
+  test("directs shared Docker credential recovery to the host", async () => {
+    renderVirtualizedMessages = true;
+    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: true });
+    const createTab = mock(() => true);
+    const error = "API Error: 401 unauthorized";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "native-terminal:error:auth-shared-docker",
+          role: "system",
+          content: error,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text", content: error }],
+        },
+      ],
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab tabId="tab-auth-recovery-shared" data={identity("claude")} isActive />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText(/This container uses your host Claude login/)).toBeTruthy();
+    expect(screen.getByText(/restart this environment/i)).toBeTruthy();
+    expect(screen.getByText(CLAUDE_AUTH_LOGIN_COMMAND)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in to Claude" }) === null).toBe(true);
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("does not duplicate createTab's own failure notification", async () => {
+    renderVirtualizedMessages = true;
+    useConfigStore.getState().updateGlobalConfig({ useHostClaudeCredentials: false });
+    mockToastError.mockClear();
+    const createTab = mock(() => {
+      mockToastError("Maximum tab limit reached");
+      return false;
+    });
+    const error = "Failed to authenticate";
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "native-terminal:error:auth-tab-limit",
+          role: "system",
+          content: error,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text", content: error }],
+        },
+      ],
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab tabId="tab-auth-recovery-refused" data={identity("claude")} isActive />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Claude" }));
+    expect(createTab).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith("Maximum tab limit reached");
   });
 
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {

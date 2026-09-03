@@ -64,10 +64,12 @@ import {
   forkNativeAgentSession,
   getCursorAccountUsage,
   getNativeAgentProjection,
+  getSystemUsage,
   performNativeAgentSessionAction,
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import type { SystemUsageSnapshot } from "@/lib/backend";
 import {
   normalizeClaudeMessagesForDisplay,
   normalizeCodexNativeMessage,
@@ -141,6 +143,7 @@ import {
   CursorAccountUsagePanel,
   type AgentInfoUsageSnapshot,
   Metric,
+  SystemUsagePanel,
   UsagePanel,
   codexLimitsFromHealth,
   describeRewindTarget,
@@ -164,6 +167,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const [codexHealth, setCodexHealth] = useState<unknown>(null);
   const [cursorAccountUsage, setCursorAccountUsage] = useState<CursorUsageResult | null>(null);
   const [cursorAccountUsageLoading, setCursorAccountUsageLoading] = useState(false);
+  const [systemUsage, setSystemUsage] = useState<SystemUsageSnapshot | null>(null);
+  const [systemUsageCheckedAt, setSystemUsageCheckedAt] = useState(() => Date.now());
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
     sessionIdentity: null,
     value: "",
@@ -926,6 +931,38 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    let requestPending = false;
+    let refreshTimer: number | undefined;
+    const refresh = async () => {
+      if (requestPending) return;
+      requestPending = true;
+      try {
+        const snapshot = await getSystemUsage();
+        if (active && snapshot) {
+          setSystemUsage(snapshot);
+          setSystemUsageCheckedAt(Date.now());
+        }
+      } catch {
+        // Resource meters are supplementary. Keep the last authoritative
+        // snapshot if a transient backend request fails.
+        if (active) setSystemUsageCheckedAt(Date.now());
+      } finally {
+        requestPending = false;
+        if (active) {
+          refreshTimer = window.setTimeout(refresh, 3_000);
+        }
+      }
+    };
+    void refresh();
+    return () => {
+      active = false;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+    };
+  }, [open]);
+
   /*
    * Escape must be *claimed*, not merely observed. All three chat tabs bind a
    * window-level Escape handler that aborts the running turn, guarded only by
@@ -1010,6 +1047,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         </header>
 
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
+          <SystemUsagePanel usage={systemUsage} checkedAt={systemUsageCheckedAt} />
           {activeSession ? (
             <div className="space-y-5">
               {activeSession.provider === "cursor" ? (

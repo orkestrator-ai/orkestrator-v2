@@ -306,6 +306,13 @@ describe("bounded test diagnostics", () => {
   }, 10_000);
 
   test("assigns the browser and Node-only preload stacks to the intended workspaces", async () => {
+    expect(path.basename(path.dirname(process.env.GIT_CONFIG_GLOBAL ?? ""))).toMatch(
+      /^orkestrator-test-git-config-/,
+    );
+    for (const setup of ["tests/setup.ts", "tests/setup-node.ts"]) {
+      const source = await readFile(path.join(root, setup), "utf8");
+      expect(source).toContain('import "./isolate-git-config"');
+    }
     for (const config of ["bunfig.toml", "apps/web/bunfig.toml", "apps/web-public/bunfig.toml"]) {
       const source = await readFile(path.join(root, config), "utf8");
       expect(source).toContain("register-dom.ts");

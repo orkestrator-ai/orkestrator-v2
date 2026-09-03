@@ -89,6 +89,7 @@ function createHarness(
     ],
   };
   const listConnections = mock(() => connectionList);
+  const probeConnection = mock(async () => true);
   const connectToRemote = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
   const forgetConnection = mock(async () => connectionList);
@@ -129,6 +130,7 @@ function createHarness(
     getGatewayTokenSettings,
     setGatewayToken,
     listConnections,
+    probeConnection,
     connectToRemote,
     useConnection,
     forgetConnection,
@@ -179,6 +181,7 @@ function createHarness(
     getGatewayTokenSettings,
     setGatewayToken,
     listConnections,
+    probeConnection,
     connectToRemote,
     useConnection,
     forgetConnection,
@@ -400,6 +403,8 @@ describe("main IPC registration", () => {
       activeConnectionId: "local",
     });
     expect(harness.listConnections).toHaveBeenCalledTimes(2);
+    await expect(harness.invoke("orkestrator:connections:probe", "remote-1")).resolves.toBe(true);
+    expect(harness.probeConnection).toHaveBeenCalledWith("remote-1");
     await harness.invoke("orkestrator:connections:connect", {
       address: "https://desk.example",
       token: "gateway-token-123456",
@@ -423,6 +428,9 @@ describe("main IPC registration", () => {
       harness.invoke("orkestrator:connections:connect", { address: 42, token: "token" }),
     ).rejects.toThrow("address and gateway token");
     await expect(harness.invoke("orkestrator:connections:use", 42)).rejects.toThrow(
+      "connection ID",
+    );
+    await expect(harness.invoke("orkestrator:connections:probe", null)).rejects.toThrow(
       "connection ID",
     );
     await expect(harness.invoke("orkestrator:connections:forget", null)).rejects.toThrow(

@@ -87,6 +87,7 @@ export type MainIpcDependencies = {
   // Preload bootstrap reads this through sendSync, so this dependency must
   // remain synchronous even though the invoke-based handler also accepts it.
   listConnections: () => ConnectionList;
+  probeConnection: (connectionId: string) => Promise<boolean>;
   connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
   useConnection: (connectionId: string) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string) => Promise<ConnectionList>;
@@ -133,6 +134,7 @@ export function registerMainIpc({
   getGatewayTokenSettings,
   setGatewayToken,
   listConnections,
+  probeConnection,
   connectToRemote,
   useConnection,
   forgetConnection,
@@ -244,6 +246,10 @@ export function registerMainIpc({
   });
 
   handle("orkestrator:connections:list", () => listConnections());
+  handle("orkestrator:connections:probe", (_event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return probeConnection(connectionId);
+  });
   on("orkestrator:connections:list-sync", (event) => {
     event.returnValue = listConnections();
   });

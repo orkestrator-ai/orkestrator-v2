@@ -325,6 +325,7 @@ describe("HierarchicalSidebar", () => {
             },
           ],
         })),
+        probe: mock(async () => true),
         connect: mock(async () => ({ activeConnectionId: "local", connections: [] })),
         use: mock(async () => ({ activeConnectionId: "local", connections: [] })),
         forget: mock(async () => ({ activeConnectionId: "local", connections: [] })),

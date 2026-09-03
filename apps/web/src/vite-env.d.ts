@@ -48,6 +48,7 @@ interface Window {
     };
     connections?: {
       list(): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      probe(connectionId: string): Promise<boolean>;
       connect(
         input: import("@orkestrator/protocol/connections").ConnectToRemoteInput,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;

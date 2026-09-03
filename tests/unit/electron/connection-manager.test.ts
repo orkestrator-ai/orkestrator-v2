@@ -189,7 +189,7 @@ describe("Electron connection manager", () => {
     ).toBeNull();
   });
 
-  test("requires HTTPS and falls back to a session-only token when secure storage is unavailable", async () => {
+  test("requires HTTPS and keeps session-only tokens available until restart", async () => {
     const local = localBackendHarness();
     globalThis.fetch = mock(async (input, init) => {
       if (String(input).endsWith("/__orkestrator/events")) {
@@ -214,10 +214,258 @@ describe("Electron connection manager", () => {
     await manager.connect({ address: "https://desk.tailnet.ts.net", token });
     expect(local.getStored().connections[0]?.encryptedToken).toBe("");
     expect(manager.getList().credentialStorage).toBe("session-only");
+    const remoteId = local.getStored().connections[0]?.id ?? "missing";
     await manager.use("local");
-    await expect(manager.use(local.getStored().connections[0]?.id ?? "missing")).rejects.toThrow(
-      "Enter the gateway token",
+    expect(
+      manager.getList().connections.find((connection) => connection.id === remoteId),
+    ).toMatchObject({
+      requiresToken: false,
+    });
+    await expect(manager.use(remoteId)).resolves.toBeDefined();
+  });
+
+  test("expands a bare machine name with the most recent saved tailnet suffix", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "laptop.bagrid-gobline.ts.net",
+          address: "https://laptop.bagrid-gobline.ts.net",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await manager.connect({ address: "workstation", token });
+
+    expect(manager.getList().connections.find((connection) => connection.active)).toMatchObject({
+      address: "https://workstation.bagrid-gobline.ts.net",
+      name: "workstation.bagrid-gobline.ts.net",
+    });
+  });
+
+  test("rejects a bare machine name until a tailnet suffix has been saved", async () => {
+    const local = localBackendHarness();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await expect(manager.connect({ address: "workstation", token })).rejects.toThrow(
+      "Enter the full Tailscale HTTPS address once",
     );
+  });
+
+  test("replaces a saved connection token without selecting that server", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await manager.updateToken("remote-1", "replacement-token-123456");
+
+    expect(manager.getList().activeConnectionId).toBe("local");
+    expect(local.getStored().activeConnectionId).toBe("local");
+    expect(local.getStored().connections[0]?.encryptedToken).toBe(
+      encrypted("replacement-token-123456"),
+    );
+  });
+
+  test("keeps the previous saved token when replacement verification is rejected", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    globalThis.fetch = mock(
+      async () => new Response("{}", { status: 401 }),
+    ) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await expect(manager.updateToken("remote-1", "rejected-token-123456")).rejects.toThrow(
+      "token was rejected",
+    );
+    expect(local.getStored().connections[0]?.encryptedToken).toBe(encrypted(token));
+  });
+
+  test("keeps a verified replacement token session-only when encryption fails", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    installHealthyRemoteFetch();
+    const storage = secureStorage();
+    storage.encryptStringAsync = mock(async () => {
+      throw new Error("keychain unavailable");
+    });
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: storage,
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await expect(
+      manager.updateToken("remote-1", "replacement-token-123456"),
+    ).resolves.toBeDefined();
+
+    expect(local.getStored().connections[0]?.encryptedToken).toBe("");
+    expect(manager.getList().credentialStorage).toBe("session-only");
+    expect(
+      manager.getList().connections.find((connection) => connection.id === "remote-1"),
+    ).toMatchObject({ requiresToken: false });
+    await expect(manager.use("remote-1")).resolves.toBeDefined();
+    expect(
+      manager.getRendererRequestAuthorization("https://desk.example/__orkestrator/status"),
+    ).toBe("Bearer replacement-token-123456");
+  });
+
+  test("preserves stored and live credentials when replacement persistence fails", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "remote-1",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    local.failNextSave();
+
+    await expect(manager.updateToken("remote-1", "replacement-token-123456")).rejects.toThrow(
+      "disk full",
+    );
+
+    expect(local.getStored().connections[0]?.encryptedToken).toBe(encrypted(token));
+    expect(
+      manager.getRendererRequestAuthorization("https://desk.example/__orkestrator/status"),
+    ).toBe(`Bearer ${token}`);
+  });
+
+  test("replaces the active client and authorization after a token update", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "remote-1",
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    const eventSignals: AbortSignal[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).endsWith("/__orkestrator/events")) {
+        if (init?.signal) eventSignals.push(init.signal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await Promise.resolve();
+    const previousEventSignal = eventSignals[0];
+
+    await manager.updateToken("remote-1", "replacement-token-123456");
+
+    expect(previousEventSignal?.aborted).toBe(true);
+    expect(
+      manager.getRendererRequestAuthorization("https://desk.example/__orkestrator/status"),
+    ).toBe("Bearer replacement-token-123456");
+    expect(local.getStored().connections[0]?.encryptedToken).toBe(
+      encrypted("replacement-token-123456"),
+    );
+  });
+
+  test("uses a live session token without decrypting a stale stored blob", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const storage = secureStorage();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: storage,
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.connect({ address: "https://desk.example", token });
+    const remoteId = manager.getList().activeConnectionId;
+    await manager.use("local");
+    storage.decryptStringAsync = mock(async () => {
+      throw new Error("stale keychain blob");
+    });
+
+    await expect(manager.use(remoteId)).resolves.toBeDefined();
+
+    expect(storage.decryptStringAsync).not.toHaveBeenCalled();
+    expect(
+      manager.getRendererRequestAuthorization("https://desk.example/__orkestrator/status"),
+    ).toBe(`Bearer ${token}`);
   });
 
   test("does not persist credentials with Linux plaintext fallback storage", async () => {
@@ -513,7 +761,7 @@ describe("Electron connection manager", () => {
       local.getStored().connections.find((connection) => connection.id === remoteId)
         ?.encryptedToken,
     ).toBe("");
-    await expect(manager.use(remoteId)).rejects.toThrow("Enter the gateway token");
+    await expect(manager.use(remoteId)).resolves.toBeDefined();
   });
 
   test("forwards active remote events and stops them after returning to Local", async () => {

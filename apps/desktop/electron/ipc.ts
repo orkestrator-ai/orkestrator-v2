@@ -88,6 +88,7 @@ export type MainIpcDependencies = {
   // remain synchronous even though the invoke-based handler also accepts it.
   listConnections: () => ConnectionList;
   connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
+  updateConnectionToken: (connectionId: string, token: string) => Promise<ConnectionList>;
   useConnection: (connectionId: string) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string) => Promise<ConnectionList>;
   browserPreviews?: BrowserPreviewController;
@@ -134,6 +135,7 @@ export function registerMainIpc({
   setGatewayToken,
   listConnections,
   connectToRemote,
+  updateConnectionToken,
   useConnection,
   forgetConnection,
   browserPreviews,
@@ -261,6 +263,15 @@ export function registerMainIpc({
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return useConnection(connectionId);
   });
+  handle(
+    "orkestrator:connections:update-token",
+    (_event, connectionId: unknown, token: unknown) => {
+      if (typeof connectionId !== "string" || typeof token !== "string") {
+        throw new Error("Expected a connection ID and gateway token");
+      }
+      return updateConnectionToken(connectionId, token);
+    },
+  );
   handle("orkestrator:connections:forget", (_event, connectionId: unknown) => {
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return forgetConnection(connectionId);

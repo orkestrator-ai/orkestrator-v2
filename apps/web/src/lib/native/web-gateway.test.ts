@@ -415,16 +415,17 @@ describe("web gateway browser API", () => {
     expect(sessionCalls("POST")).toHaveLength(1);
   });
 
-  test("passes through an optional server-connections API", async () => {
+  test("exposes an optional server-connections API", async () => {
     const connectionList = { activeConnectionId: "remote-1", connections: [] };
     const connections = {
       list: mock(async () => connectionList),
       connect: mock(async () => connectionList),
+      updateToken: mock(async () => connectionList),
       use: mock(async () => connectionList),
       forget: mock(async () => connectionList),
     };
     const api = createBrowserGatewayApi({ connections });
-    expect(api.connections).toBe(connections);
+    expect(api.connections).toBeDefined();
     await expect(api.connections?.list()).resolves.toBe(connectionList);
     expect(createBrowserGatewayApi().connections).toBeUndefined();
   });
@@ -1896,6 +1897,54 @@ describe("web gateway browser API", () => {
     const second = MockWebSocket.instances[1]!;
     second.open();
     expect(sentControlFrames(second)[0]?.token).toBe("rotated-token-654321");
+    stop();
+  });
+
+  test("applies a verified active connection token to HTTP and terminal WebSocket transport", async () => {
+    const authorization: Array<string | null> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      authorization.push(new Headers(init?.headers).get("authorization"));
+      if (String(input).endsWith("/__orkestrator/invoke")) {
+        return new Response(JSON.stringify({ result: [] }), { status: 200 });
+      }
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const connectionList = {
+      activeConnectionId: "remote-1",
+      credentialStorage: "session-only" as const,
+      connections: [],
+    };
+    const connections = {
+      list: mock(async () => connectionList),
+      connect: mock(async () => connectionList),
+      updateToken: mock(async () => connectionList),
+      use: mock(async () => connectionList),
+      forget: mock(async () => connectionList),
+    };
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      token: "initial-token-123456",
+      connections,
+      terminalTransport: "websocket",
+      terminalWebSocketReconnectDelayMs: 0,
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-token", () => undefined);
+    const first = MockWebSocket.instances[0]!;
+    first.open();
+    expect(sentControlFrames(first)[0]?.token).toBe("initial-token-123456");
+
+    await api.connections?.updateToken("remote-1", "replacement-token-123456");
+    await api.invoke("get_projects");
+
+    expect(connections.updateToken).toHaveBeenCalledWith("remote-1", "replacement-token-123456");
+    expect(authorization.at(-1)).toBe("Bearer replacement-token-123456");
+    expect(first.closeReason).toBe("Gateway credential changed");
+    await waitForCondition(() => MockWebSocket.instances.length === 2);
+    const second = MockWebSocket.instances[1]!;
+    second.open();
+    expect(sentControlFrames(second)[0]?.token).toBe("replacement-token-123456");
     stop();
   });
 

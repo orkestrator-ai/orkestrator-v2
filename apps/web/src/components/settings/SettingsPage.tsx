@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   Cable,
   MessagesSquare,
+  RadioTower,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
@@ -23,9 +24,11 @@ import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
+import { ConnectionsSettings } from "./ConnectionsSettings";
 
 const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
@@ -112,6 +115,8 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
         // config form, so it bypasses GlobalSettings and its Reset/Save bar.
         activeSection === "skills" ? (
           <SkillsSettings />
+        ) : activeSection === "connections" ? (
+          <ConnectionsSettings />
         ) : activeSection === "mcp" ? (
           <McpSettings />
         ) : activeSection === "messaging" ? (

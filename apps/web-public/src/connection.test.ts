@@ -10,6 +10,7 @@ import {
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
+  updateBrowserConnectionToken,
 } from "./connection";
 
 const originalFetch = globalThis.fetch;
@@ -30,6 +31,19 @@ describe("public backend address", () => {
       "https://workstation.tailnet.ts.net",
     );
     expect(normalizeBackendAddress(" http://127.0.0.1:34121/ ")).toBe("http://127.0.0.1:34121");
+  });
+
+  test("expands a bare machine name with a saved tailnet suffix", () => {
+    saveConnection({ address: "https://laptop.bagrid-gobline.ts.net", token });
+    expect(normalizeBackendAddress("workstation")).toBe(
+      "https://workstation.bagrid-gobline.ts.net",
+    );
+  });
+
+  test("requires one full tailnet address before accepting a bare machine name", () => {
+    expect(() => normalizeBackendAddress("workstation")).toThrow(
+      "Enter the full Tailscale HTTPS address once",
+    );
   });
 
   test("rejects empty, malformed, credentialed, non-HTTP, and non-origin addresses", () => {
@@ -96,6 +110,25 @@ describe("saved public connection", () => {
     forgetConnection();
     expect(loadSavedConnection()).toEqual({ address: "", token: "" });
     expect(listBrowserConnections().connections).toEqual([]);
+  });
+
+  test("verifies and replaces the token for a saved server without selecting it", async () => {
+    saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
+    saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
+    const one = listBrowserConnections().connections.find(
+      (connection) => connection.address === "https://one.example",
+    );
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await updateBrowserConnectionToken(one?.id ?? "missing", "replacement-token-123456");
+    selectBrowserConnection(one?.id ?? "missing");
+
+    expect(loadSavedConnection()).toEqual({
+      address: "https://one.example",
+      token: "replacement-token-123456",
+    });
   });
 
   test("switches between recent servers using their tab-scoped tokens", () => {

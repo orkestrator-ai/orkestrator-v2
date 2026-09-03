@@ -178,6 +178,12 @@ describe("preload API factory", () => {
       channel: "orkestrator:connections:connect",
       args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
     });
+    await expect(
+      api.connections.updateToken("remote-1", "replacement-token-123456"),
+    ).resolves.toEqual({
+      channel: "orkestrator:connections:update-token",
+      args: ["remote-1", "replacement-token-123456"],
+    });
     await expect(api.connections.use("remote-1")).resolves.toEqual({
       channel: "orkestrator:connections:use",
       args: ["remote-1"],

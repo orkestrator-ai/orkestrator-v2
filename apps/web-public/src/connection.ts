@@ -3,6 +3,7 @@ import {
   normalizeGatewayToken,
 } from "@orkestrator/protocol/gateway-token";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
+import { expandTailscaleMachineName } from "@orkestrator/protocol/connections";
 
 const ADDRESS_KEY = "orkestrator.public.backend-address";
 const SESSION_TOKENS_KEY = "orkestrator.public.gateway-tokens";
@@ -26,6 +27,24 @@ interface RecentConnection {
 
 function connectionId(address: string): string {
   return `remote:${address}`;
+}
+
+function storedConnectionAddresses(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONNECTIONS_KEY) ?? "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const addresses = parsed.flatMap((entry) =>
+      entry && typeof entry === "object" && typeof (entry as RecentConnection).address === "string"
+        ? [(entry as RecentConnection).address]
+        : [],
+    );
+    const activeAddress = localStorage.getItem(ADDRESS_KEY);
+    return activeAddress
+      ? [activeAddress, ...addresses.filter((address) => address !== activeAddress)]
+      : addresses;
+  } catch {
+    return [];
+  }
 }
 
 function loadSessionTokens(): Record<string, string> {
@@ -76,8 +95,17 @@ function saveSessionTokens(tokens: Record<string, string>): void {
 }
 
 export function normalizeBackendAddress(value: string): string {
-  const candidate = value.trim();
+  const candidate = expandTailscaleMachineName(value, storedConnectionAddresses());
   if (!candidate) throw new Error("Enter the backend address.");
+  if (
+    candidate === value.trim() &&
+    /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(candidate) &&
+    candidate.toLowerCase() !== "localhost"
+  ) {
+    throw new Error(
+      "Enter the full Tailscale HTTPS address once. Saved machines on that tailnet can then use a short name.",
+    );
+  }
 
   let url: URL;
   try {
@@ -209,6 +237,17 @@ export function forgetBrowserConnection(id: string): ConnectionList {
   ) {
     localStorage.removeItem(ADDRESS_KEY);
   }
+  return listBrowserConnections();
+}
+
+export async function updateBrowserConnectionToken(
+  id: string,
+  token: string,
+): Promise<ConnectionList> {
+  const connection = loadRecentConnections().find((entry) => entry.id === id);
+  if (!connection) throw new Error("That saved connection no longer exists.");
+  await checkBackendConnection(connection.address, token);
+  saveSessionTokens({ ...loadSessionTokens(), [id]: normalizeGatewayToken(token) });
   return listBrowserConnections();
 }
 

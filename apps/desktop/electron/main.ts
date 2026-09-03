@@ -147,6 +147,10 @@ function registerIpc(): void {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.connect(input);
     },
+    updateConnectionToken: (connectionId, token) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.updateToken(connectionId, token);
+    },
     useConnection: (connectionId) => {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.use(connectionId);

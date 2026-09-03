@@ -13,6 +13,7 @@ import {
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
+  updateBrowserConnectionToken,
   type SavedConnection,
 } from "./connection";
 
@@ -28,6 +29,7 @@ const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
     return listBrowserConnections();
   },
   use: async (connectionId) => selectBrowserConnection(connectionId),
+  updateToken: updateBrowserConnectionToken,
   forget: async (connectionId) => forgetBrowserConnection(connectionId),
 };
 
@@ -211,11 +213,11 @@ export function PublicApp() {
             <label htmlFor="backend-address">Backend address</label>
             <input
               id="backend-address"
-              type="url"
+              type="text"
               inputMode="url"
               value={address}
               onChange={(event) => setAddress(event.target.value)}
-              placeholder="https://workstation.tailnet.ts.net"
+              placeholder="workstation or https://workstation.tailnet.ts.net"
               autoComplete="url"
               disabled={connecting}
               aria-describedby={warning ? "backend-warning" : "backend-hint"}
@@ -227,7 +229,7 @@ export function PublicApp() {
               </p>
             ) : (
               <p id="backend-hint" className="field-hint">
-                Use the HTTPS origin exposed inside your tailnet.
+                Use the full HTTPS origin once. Saved tailnets also accept a machine name.
               </p>
             )}
 

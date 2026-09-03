@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Check, Loader2 } from "lucide-react";
+import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
@@ -38,6 +38,7 @@ import {
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
+import { SettingsHeaderActions } from "./FullscreenSettingsLayout";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -924,29 +925,34 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     reviewInstructionValidationError,
     sshAgentSocketPathValidationError,
   ]);
-  // The owning section already renders its own inline message; repeating it
-  // here would show the same error twice.
+  // The owning section already renders its own inline message; repeat only
+  // cross-section blockers beside the pinned Save action.
   const saveBlockedReason =
     saveBlocker && saveBlocker.section !== activeSection ? saveBlocker.message : null;
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1">
-        <GlobalSettingsSections activeSection={activeSection} settings={sectionSettings} />
-      </div>
-
-      {/* Sticky save bar */}
-      <div className="flex items-center justify-end gap-3 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+    <>
+      <SettingsHeaderActions>
         {saveBlockedReason && (
-          <p role="alert" className="text-xs text-destructive text-right">
-            {saveBlockedReason}
-          </p>
+          <span className="flex min-w-0 items-center text-destructive" title={saveBlockedReason}>
+            <AlertTriangle className="h-4 w-4 shrink-0 lg:hidden" aria-hidden="true" />
+            <span
+              id="global-settings-save-blocked-reason"
+              role="alert"
+              className="sr-only text-xs lg:not-sr-only lg:block lg:max-w-64 lg:truncate"
+            >
+              {saveBlockedReason}
+            </span>
+          </span>
         )}
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
         <Button
+          aria-label="Save Changes"
           onClick={handleSave}
           disabled={!hasChanges || isSaving || saveSuccess || saveBlocker !== null}
+          aria-describedby={saveBlockedReason ? "global-settings-save-blocked-reason" : undefined}
+          title={saveBlockedReason ?? undefined}
         >
           {saveSuccess ? (
             <>
@@ -959,10 +965,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               Saving...
             </>
           ) : (
-            "Save Changes"
+            <>
+              <span className="sm:hidden">Save</span>
+              <span className="hidden sm:inline">Save Changes</span>
+            </>
           )}
         </Button>
-      </div>
-    </div>
+      </SettingsHeaderActions>
+      <GlobalSettingsSections activeSection={activeSection} settings={sectionSettings} />
+    </>
   );
 }

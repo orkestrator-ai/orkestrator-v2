@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { MAX_TEXT_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -901,6 +902,43 @@ exit 1
       ),
     ).rejects.toThrow("Invalid filePath");
   });
+
+  test("validates local branch blobs before returning editor text", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "empty.txt"), "");
+    await fs.writeFile(path.join(worktree, "nul.dat"), Buffer.from([65, 0, 66]));
+    await fs.writeFile(path.join(worktree, "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
+    await fs.writeFile(path.join(worktree, "latin1.dat"), Buffer.alloc(2 * 1024 * 1024, 0xe9));
+    await fs.writeFile(
+      path.join(worktree, "oversized.txt"),
+      Buffer.alloc(MAX_TEXT_FILE_BYTES + 1, 97),
+    );
+    await runGit(worktree, [
+      "add",
+      "empty.txt",
+      "nul.dat",
+      "invalid.txt",
+      "latin1.dat",
+      "oversized.txt",
+    ]);
+    await runGit(worktree, ["commit", "-m", "editor-read-fixtures"]);
+    const fixtureCommit = await currentGitCommit(worktree);
+    const commands = createCommandRegistry();
+    const context = createContext(createEnvironment()).context;
+    const read = (filePath: string) =>
+      commands.get("read_local_file_at_branch")?.(
+        { worktreePath: worktree, filePath, branch: fixtureCommit },
+        context,
+      );
+
+    await expect(read("empty.txt")).resolves.toMatchObject({ content: "" });
+    await expect(read("nul.dat")).rejects.toThrow(
+      "Binary files cannot be opened in the text editor",
+    );
+    await expect(read("invalid.txt")).rejects.toThrow("File is not valid UTF-8 text");
+    await expect(read("latin1.dat")).rejects.toThrow("File is not valid UTF-8 text");
+    await expect(read("oversized.txt")).rejects.toThrow("File is too large to open in the editor");
+  }, 30_000);
 
   test("reverts tracked and newly added local files to the target branch", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();

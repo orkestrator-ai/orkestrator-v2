@@ -5,6 +5,9 @@ import {
   path,
   inferLanguage,
   runCommand,
+  runCommandBuffer,
+  assertEditorTextFileSize,
+  decodeEditorTextFile,
   MAX_BINARY_FILE_BYTES,
   validateRelativeFilePath,
   writeConfinedFile,
@@ -1345,11 +1348,21 @@ export async function readLocalFileAtBranch(
 ): Promise<{ path: string; content: string; language: string } | null> {
   const target = validateRelativeFilePath(filePath, "filePath");
   const base = await resolveLocalGitBase(worktreePath, branch);
+  const object = `${base}:${target}`;
   try {
-    const { stdout } = await runCommand("git", ["-C", worktreePath, "show", `${base}:${target}`], {
+    const { stdout: rawSize } = await runCommand("git", [
+      "-C",
+      worktreePath,
+      "cat-file",
+      "-s",
+      object,
+    ]);
+    assertEditorTextFileSize(Number(rawSize.trim()));
+    const { stdout } = await runCommandBuffer("git", ["-C", worktreePath, "show", object], {
       timeoutMs: 30_000,
     });
-    return { path: target, content: stdout, language: inferLanguage(target) };
+    const content = decodeEditorTextFile(stdout);
+    return { path: target, content, language: inferLanguage(target) };
   } catch (error) {
     if (isGitShowMissingPathError(error)) return null;
     throw error;

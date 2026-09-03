@@ -7,11 +7,15 @@ import {
   pathExists,
   readFileBase64,
   readTextFile,
+  assertEditorTextFileSize,
+  decodeEditorTextFile,
   spawnCommand,
   writeFileBase64,
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
   MAX_BINARY_FILE_BYTES,
+  MAX_TEXT_FILE_BYTES,
+  MAX_TEXT_FILE_SIZE_LABEL,
   removeConfinedDirectory,
   validateRelativeFilePath,
   workspaceFilePath,
@@ -789,19 +793,28 @@ export function registerTerminalCommands(
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const content = await dockerExec(
+    const encoded = await dockerExec(
       asString(containerId, "containerId"),
-      `cat ${quoteShell(workspaceFilePath(target))}`,
+      `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(workspaceFilePath(target))} ${MAX_TEXT_FILE_BYTES} editor ${quoteShell(MAX_TEXT_FILE_SIZE_LABEL)}`,
     );
+    const content = decodeEditorTextFile(Buffer.from(encoded.trim(), "base64"));
     return { path: target, content, language: path.extname(target).slice(1) };
   });
   register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const content = await dockerExec(
-      asString(containerId, "containerId"),
-      `git show ${quoteShell(asString(branch, "branch"))}:${quoteShell(target)} 2>/dev/null || true`,
+    const object = `${asString(branch, "branch")}:${target}`;
+    const id = asString(containerId, "containerId");
+    const rawSize = (
+      await dockerExec(id, `git cat-file -s ${quoteShell(object)} 2>/dev/null || true`)
+    ).trim();
+    if (!rawSize) return null;
+    assertEditorTextFileSize(Number(rawSize));
+    const encoded = await dockerExec(
+      id,
+      `set -o pipefail; git show ${quoteShell(object)} | base64`,
     );
-    return content ? { path: target, content, language: path.extname(target).slice(1) } : null;
+    const content = decodeEditorTextFile(Buffer.from(encoded, "base64"));
+    return { path: target, content, language: path.extname(target).slice(1) };
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {
     const fullPath = workspaceFilePath(asString(filePath, "filePath"));

@@ -12,6 +12,7 @@ type ProgressWindow = Pick<BrowserWindow, "close" | "isDestroyed" | "once">;
 export function createToolchainProgressController(options: {
   createWindow(): Promise<ProgressWindow>;
   reportProgress(window: ProgressWindow, progress: ToolchainProgress): void;
+  onUnexpectedClose(): void;
   logError(error: unknown): void;
 }) {
   let progressWindow: ProgressWindow | null = null;
@@ -35,6 +36,14 @@ export function createToolchainProgressController(options: {
         window.once("closed", () => {
           if (progressWindow === window) progressWindow = null;
           if (progressWindowPromise === tracked) progressWindowPromise = null;
+          if (!closed) {
+            // The controller closes its own window only after setting `closed`.
+            // Any other close is the user's request to abort first-run setup.
+            // Make the controller terminal before notifying the application so
+            // a late progress event cannot recreate an invisible/rejected UI.
+            closed = true;
+            options.onUnexpectedClose();
+          }
         });
         return window;
       })

@@ -6,7 +6,16 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindowType;
 
-const BOOTSTRAP_HTML = `<!doctype html>
+// Both pages below centre their content with `margin: auto` on a flex child.
+// The fixed size these windows ask for is only a request: a tiling compositor
+// (Hyprland, sway) ignores it and hands the window the whole tile, which left a
+// narrow column of content stranded at the top of an otherwise empty screen and
+// the button far from where anyone would look for it. Auto margins centre in
+// whatever surface actually arrives, and — unlike `place-items: center` —
+// degrade to top-aligned instead of clipping the top out of reach when the
+// surface is shorter than the content.
+
+export const BOOTSTRAP_HTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -16,8 +25,8 @@ const BOOTSTRAP_HTML = `<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; color: #f4f4f5; background: #111113; }
-    main { width: min(430px, calc(100vw - 56px)); }
+    body { margin: 0; min-height: 100vh; display: flex; padding: 28px; color: #f4f4f5; background: #111113; }
+    main { width: min(430px, 100%); margin: auto; }
     .eyebrow { margin: 0 0 12px; color: #a1a1aa; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
     h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.025em; }
     #message { min-height: 22px; margin: 20px 0 10px; color: #d4d4d8; font-size: 14px; }
@@ -37,7 +46,7 @@ const BOOTSTRAP_HTML = `<!doctype html>
 </body>
 </html>`;
 
-const PLATFORM_SELECTION_HTML = `<!doctype html>
+export const PLATFORM_SELECTION_HTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -47,8 +56,8 @@ const PLATFORM_SELECTION_HTML = `<!doctype html>
   <style>
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; color: #f4f4f5; background: #101012; }
-    main { width: min(570px, calc(100vw - 56px)); margin: 44px auto; }
+    body { margin: 0; min-height: 100vh; display: flex; padding: 44px 28px; color: #f4f4f5; background: #101012; }
+    main { width: min(570px, 100%); margin: auto; }
     .eyebrow { margin: 0 0 10px; color: #67e8f9; font: 650 11px ui-monospace, SFMono-Regular, monospace; letter-spacing: .14em; text-transform: uppercase; }
     h1 { margin: 0; font-size: 27px; font-weight: 680; letter-spacing: -.03em; }
     .intro { margin: 10px 0 24px; color: #a1a1aa; font-size: 14px; line-height: 1.55; }

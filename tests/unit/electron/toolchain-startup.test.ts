@@ -32,17 +32,31 @@ function fakeWindow() {
       closedListener = listener;
       return undefined as never;
     }),
+    closeFromWindowManager() {
+      destroyed = true;
+      closedListener?.();
+    },
+  };
+}
+
+function progressControllerOptions(
+  overrides: Partial<Parameters<typeof createToolchainProgressController>[0]> = {},
+) {
+  return {
+    createWindow: mock(async () => fakeWindow()),
+    reportProgress: mock(() => undefined),
+    onUnexpectedClose: mock(() => undefined),
+    logError: mock(() => undefined),
+    ...overrides,
   };
 }
 
 describe("toolchain startup orchestration", () => {
   test("does not open a progress window for a verified cache", async () => {
     const createWindow = mock(async () => fakeWindow());
-    const controller = createToolchainProgressController({
-      createWindow,
-      reportProgress: mock(() => undefined),
-      logError: mock(() => undefined),
-    });
+    const controller = createToolchainProgressController(
+      progressControllerOptions({ createWindow }),
+    );
 
     controller.report(progress("checking"));
     controller.report(progress("ready"));
@@ -53,11 +67,12 @@ describe("toolchain startup orchestration", () => {
   test("shares a pending window, forwards progress, and closes it even when creation resolves late", async () => {
     const pendingWindow = deferred<ReturnType<typeof fakeWindow>>();
     const reportProgress = mock(() => undefined);
-    const controller = createToolchainProgressController({
-      createWindow: mock(() => pendingWindow.promise),
-      reportProgress,
-      logError: mock(() => undefined),
-    });
+    const controller = createToolchainProgressController(
+      progressControllerOptions({
+        createWindow: mock(() => pendingWindow.promise),
+        reportProgress,
+      }),
+    );
 
     controller.report(progress("downloading"));
     controller.report(progress("verifying"));
@@ -76,11 +91,13 @@ describe("toolchain startup orchestration", () => {
     const createWindow = mock().mockRejectedValueOnce(error).mockResolvedValueOnce(window);
     const logError = mock(() => undefined);
     const reportProgress = mock(() => undefined);
-    const controller = createToolchainProgressController({
-      createWindow,
-      reportProgress,
-      logError,
-    });
+    const controller = createToolchainProgressController(
+      progressControllerOptions({
+        createWindow,
+        reportProgress,
+        logError,
+      }),
+    );
 
     controller.report(progress("downloading"));
     await Bun.sleep(0);
@@ -91,6 +108,28 @@ describe("toolchain startup orchestration", () => {
     expect(createWindow).toHaveBeenCalledTimes(2);
     expect(reportProgress).toHaveBeenCalledTimes(1);
     await controller.close();
+  });
+
+  test("quits after the user closes progress and never recreates the window", async () => {
+    const window = fakeWindow();
+    const createWindow = mock(async () => window);
+    const onUnexpectedClose = mock(() => undefined);
+    const reportProgress = mock(() => undefined);
+    const controller = createToolchainProgressController(
+      progressControllerOptions({ createWindow, onUnexpectedClose, reportProgress }),
+    );
+
+    controller.report(progress("downloading"));
+    await Bun.sleep(0);
+    window.closeFromWindowManager();
+    controller.report(progress("verifying"));
+    await Bun.sleep(0);
+
+    expect(onUnexpectedClose).toHaveBeenCalledTimes(1);
+    expect(createWindow).toHaveBeenCalledTimes(1);
+    expect(reportProgress).toHaveBeenCalledTimes(1);
+    await controller.close();
+    expect(onUnexpectedClose).toHaveBeenCalledTimes(1);
   });
 
   test("retries tool preparation and returns the verified bin directory", async () => {

@@ -23,6 +23,7 @@
     "./feature-build": "./src/feature-build.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./github-repository": "./src/github-repository.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
     "./model-id": "./src/model-id.ts",
     "./multi-review": "./src/multi-review.ts",

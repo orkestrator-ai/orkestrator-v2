@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 import { Check, ChevronDown, Eye, EyeOff, Link2, Loader2, RadioTower } from "lucide-react";
 import { toast } from "sonner";
@@ -23,6 +23,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
+type Readiness = "checking" | "ready" | "unavailable";
+type DisplayReadiness = Readiness | "needs-token" | "unchecked";
+
+const ACTIVE_PROBE_INTERVAL_MS = 30_000;
+const INACTIVE_PROBE_CACHE_MS = 10_000;
 
 function getConnectionsApi(): ConnectionsApi | null {
   return window.orkestrator?.connections ?? null;
@@ -30,6 +35,12 @@ function getConnectionsApi(): ConnectionsApi | null {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readinessLabel(readiness: DisplayReadiness): string {
+  if (readiness === "needs-token") return "token required";
+  if (readiness === "unchecked") return "not checked";
+  return readiness;
 }
 
 export function ServerConnectionSwitcher() {
@@ -41,17 +52,94 @@ export function ServerConnectionSwitcher() {
   const [connecting, setConnecting] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<Record<string, Readiness>>({});
+  const probeGenerations = useRef<Record<string, number>>({});
+  const lastProbeAt = useRef<Record<string, number>>({});
+  const inFlightProbes = useRef(new Set<string>());
+  const skipNextMenuFocus = useRef(false);
+  const mounted = useRef(true);
 
   useEffect(() => {
+    mounted.current = true;
+    const inFlight = inFlightProbes.current;
     const api = getConnectionsApi();
     if (!api) return;
     void api
       .list()
-      .then(setConnections)
+      .then((list) => {
+        if (mounted.current) setConnections(list);
+      })
       .catch((caught) => {
         toast.error("Could not load saved connections", { description: errorMessage(caught) });
       });
+    return () => {
+      mounted.current = false;
+      inFlight.clear();
+    };
   }, []);
+
+  const probeConnection = useCallback(
+    (connection: ConnectionSummary, options: { supersede?: boolean } = {}) => {
+      const api = getConnectionsApi();
+      if (!api || connection.requiresToken) return;
+      if (inFlightProbes.current.has(connection.id) && !options.supersede) return;
+      if (
+        !options.supersede &&
+        Date.now() - (lastProbeAt.current[connection.id] ?? 0) < INACTIVE_PROBE_CACHE_MS
+      ) {
+        return;
+      }
+
+      const generation = (probeGenerations.current[connection.id] ?? 0) + 1;
+      probeGenerations.current[connection.id] = generation;
+      lastProbeAt.current[connection.id] = Date.now();
+      inFlightProbes.current.add(connection.id);
+      setReadiness((current) => ({ ...current, [connection.id]: "checking" }));
+
+      void api
+        .probe(connection.id)
+        .then((ready) => {
+          if (!mounted.current || probeGenerations.current[connection.id] !== generation) return;
+          setReadiness((current) => ({
+            ...current,
+            [connection.id]: ready ? "ready" : "unavailable",
+          }));
+        })
+        .catch(() => {
+          if (!mounted.current || probeGenerations.current[connection.id] !== generation) return;
+          setReadiness((current) => ({ ...current, [connection.id]: "unavailable" }));
+        })
+        .finally(() => {
+          if (probeGenerations.current[connection.id] === generation) {
+            inFlightProbes.current.delete(connection.id);
+          }
+        });
+    },
+    [],
+  );
+
+  const handleMenuOpenChange = (open: boolean) => {
+    skipNextMenuFocus.current = open;
+    if (!open) return;
+    if (connections) {
+      const activeConnection = connections.connections.find((connection) => connection.active);
+      if (activeConnection) probeConnection(activeConnection, { supersede: true });
+      return;
+    }
+    const api = getConnectionsApi();
+    if (!api) return;
+    void api
+      .list()
+      .then((list) => {
+        if (!mounted.current) return;
+        setConnections(list);
+        const activeConnection = list.connections.find((connection) => connection.active);
+        if (activeConnection) probeConnection(activeConnection, { supersede: true });
+      })
+      .catch((caught) => {
+        toast.error("Could not load saved connections", { description: errorMessage(caught) });
+      });
+  };
 
   const active = useMemo(
     () => connections?.connections.find((connection) => connection.active) ?? null,
@@ -62,6 +150,30 @@ export function ServerConnectionSwitcher() {
     (connections?.connections.some((connection) => connection.kind === "local")
       ? "secure"
       : "session-only");
+  const activeReadiness = active ? readiness[active.id] : undefined;
+
+  useEffect(() => {
+    if (!active || active.requiresToken) return;
+    const refresh = () => probeConnection(active, { supersede: true });
+    refresh();
+    window.addEventListener("focus", refresh);
+    const interval = window.setInterval(refresh, ACTIVE_PROBE_INTERVAL_MS);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(interval);
+    };
+  }, [active, probeConnection]);
+
+  const displayReadiness = (connection: ConnectionSummary): DisplayReadiness =>
+    connection.requiresToken ? "needs-token" : (readiness[connection.id] ?? "unchecked");
+
+  const probeFocusedConnection = (connection: ConnectionSummary) => {
+    if (skipNextMenuFocus.current) {
+      skipNextMenuFocus.current = false;
+      return;
+    }
+    probeConnection(connection);
+  };
 
   const openConnectionDialog = (connection?: ConnectionSummary) => {
     setAddress(connection?.address ?? "");
@@ -111,7 +223,7 @@ export function ServerConnectionSwitcher() {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={handleMenuOpenChange}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -120,7 +232,21 @@ export function ServerConnectionSwitcher() {
           >
             <span className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 ring-1 ring-white/[0.06]">
               <RadioTower className="h-3 w-3 text-zinc-300" aria-hidden="true" />
-              <span className="absolute -right-0.5 -bottom-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-2 ring-[#212124]" />
+              <span
+                aria-hidden="true"
+                data-status={
+                  active?.requiresToken ? "needs-token" : (activeReadiness ?? "unchecked")
+                }
+                className={`absolute -right-0.5 -bottom-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-[#212124] ${
+                  active?.requiresToken
+                    ? "bg-amber-400"
+                    : activeReadiness === "ready"
+                      ? "bg-emerald-400"
+                      : activeReadiness === "checking"
+                        ? "animate-pulse bg-zinc-500"
+                        : "bg-zinc-600"
+                }`}
+              />
             </span>
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
               {active?.name ?? "Loading…"}
@@ -140,16 +266,16 @@ export function ServerConnectionSwitcher() {
               key={connection.id}
               className="min-h-11 items-start py-2"
               disabled={switchingId !== null}
+              onFocus={() => probeFocusedConnection(connection)}
+              onPointerMove={() => probeConnection(connection)}
               onSelect={() => void switchConnection(connection)}
             >
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
                 {switchingId === connection.id ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : connection.active ? (
-                  <Check className="h-3.5 w-3.5 text-emerald-400" />
-                ) : (
-                  <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />
-                )}
+                  <Check className="h-3.5 w-3.5 text-zinc-300" />
+                ) : null}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm text-zinc-100">{connection.name}</span>
@@ -158,6 +284,29 @@ export function ServerConnectionSwitcher() {
                     {connection.requiresToken ? "Token required · " : ""}
                     {connection.address}
                   </span>
+                )}
+              </span>
+              <span className="sr-only">
+                , status: {readinessLabel(displayReadiness(connection))}
+              </span>
+              <span
+                className="flex h-5 w-5 shrink-0 items-center justify-center"
+                aria-hidden="true"
+                data-status={displayReadiness(connection)}
+              >
+                {displayReadiness(connection) === "checking" ? (
+                  <Loader2 className="h-3 w-3 animate-spin text-zinc-500" aria-hidden="true" />
+                ) : (
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      displayReadiness(connection) === "ready"
+                        ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.45)]"
+                        : displayReadiness(connection) === "needs-token"
+                          ? "bg-amber-400"
+                          : "bg-zinc-600"
+                    }`}
+                    aria-hidden="true"
+                  />
                 )}
               </span>
             </DropdownMenuItem>

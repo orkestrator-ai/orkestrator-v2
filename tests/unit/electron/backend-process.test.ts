@@ -757,7 +757,9 @@ sleep 5
         ? (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>)
         : {};
       response.setHeader("content-type", "application/json");
-      if (request.url === "/__orkestrator/invoke" && body.command === "fail") {
+      if (request.url === "/__orkestrator/status") {
+        response.end(JSON.stringify({ ok: true }));
+      } else if (request.url === "/__orkestrator/invoke" && body.command === "fail") {
         response.statusCode = 500;
         response.end(JSON.stringify({ error: "command failed" }));
       } else if (request.url === "/__orkestrator/invoke") {
@@ -789,6 +791,7 @@ sleep 5
 
     await expect(client.invoke("echo", { value: 1 })).resolves.toEqual({ value: 1 });
     await expect(client.invoke("fail")).rejects.toThrow("command failed");
+    await expect(client.probe(3_000)).resolves.toBe(true);
     await expect(client.getTokenSettings()).resolves.toMatchObject({
       token: "initial-client-token-123456",
     });

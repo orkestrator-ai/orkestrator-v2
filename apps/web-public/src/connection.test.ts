@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import {
   checkBackendConnection,
   forgetBrowserConnection,
@@ -7,6 +7,7 @@ import {
   listBrowserConnections,
   loadSavedConnection,
   normalizeBackendAddress,
+  probeBrowserConnection,
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
@@ -21,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  jest.useRealTimers();
   globalThis.fetch = originalFetch;
 });
 
@@ -196,6 +198,54 @@ describe("saved public connection", () => {
   test("does not create an orphan token entry without an active address", () => {
     updateSavedToken(token);
     expect(sessionStorage.getItem("orkestrator.public.gateway-tokens")).toBeNull();
+  });
+
+  test("probes a remembered server with its tab-scoped token", async () => {
+    saveConnection({ address: "https://ready.example", token });
+    const id = listBrowserConnections().activeConnectionId;
+    globalThis.fetch = mock(async (_input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+      return new Response(JSON.stringify({ ok: true }));
+    }) as unknown as typeof fetch;
+
+    await expect(probeBrowserConnection(id)).resolves.toBe(true);
+    sessionStorage.clear();
+    await expect(probeBrowserConnection(id)).resolves.toBe(false);
+    await expect(probeBrowserConnection("missing")).resolves.toBe(false);
+  });
+
+  test("maps rejected and unauthorized browser probes to unavailable", async () => {
+    saveConnection({ address: "https://ready.example", token });
+    const id = listBrowserConnections().activeConnectionId;
+    globalThis.fetch = mock()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 })) as unknown as typeof fetch;
+
+    await expect(probeBrowserConnection(id)).resolves.toBe(false);
+    await expect(probeBrowserConnection(id)).resolves.toBe(false);
+  });
+
+  test("aborts browser probes at the three-second probe budget", async () => {
+    jest.useFakeTimers();
+    saveConnection({ address: "https://slow.example", token });
+    const id = listBrowserConnections().activeConnectionId;
+    let signal: AbortSignal | undefined;
+    globalThis.fetch = mock(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+        }),
+    ) as unknown as typeof fetch;
+
+    const pending = probeBrowserConnection(id);
+    await Promise.resolve();
+    expect(signal?.aborted).toBe(false);
+    jest.advanceTimersByTime(2_999);
+    expect(signal?.aborted).toBe(false);
+    jest.advanceTimersByTime(1);
+    await expect(pending).resolves.toBe(false);
+    expect(signal?.aborted).toBe(true);
   });
 });
 

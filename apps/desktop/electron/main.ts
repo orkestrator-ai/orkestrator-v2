@@ -143,6 +143,10 @@ function registerIpc(): void {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.getList();
     },
+    probeConnection: (connectionId) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.probe(connectionId);
+    },
     connectToRemote: (input) => {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.connect(input);

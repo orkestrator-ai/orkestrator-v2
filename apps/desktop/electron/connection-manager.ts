@@ -14,6 +14,7 @@ import { BackendHttpClient } from "./backend-process.js";
 type LocalBackend = Pick<
   BackendHttpClient,
   | "invoke"
+  | "probe"
   | "getWebClientStatus"
   | "setWebClientEnabled"
   | "resetWebClientServe"
@@ -37,6 +38,7 @@ export type ConnectionManagerOptions = {
 };
 
 const CONNECTION_TIMEOUT_MS = 10_000;
+const CONNECTION_PROBE_TIMEOUT_MS = 3_000;
 
 function normalizeRemoteAddress(value: string): string {
   const candidate = value.trim();
@@ -214,6 +216,37 @@ export class ConnectionManager {
     });
   }
 
+  async probe(connectionId: string): Promise<boolean> {
+    const timeoutMs = Math.min(this.connectionTimeoutMs, CONNECTION_PROBE_TIMEOUT_MS);
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      try {
+        return await this.localBackend.probe(timeoutMs);
+      } catch {
+        return false;
+      }
+    }
+
+    const record = this.stored.connections.find((connection) => connection.id === connectionId);
+    if (!record) return false;
+
+    try {
+      let token: string;
+      if (this.activeRemote?.record.id === connectionId) {
+        token = this.activeRemote.token;
+      } else {
+        if (!record.encryptedToken || !this.secureStorageAvailable) return false;
+        const decrypted = await this.secureStorage.decryptStringAsync(
+          Buffer.from(record.encryptedToken, "base64"),
+        );
+        token = normalizeGatewayToken(decrypted.result);
+      }
+      await this.checkRemote(record.address, token, timeoutMs);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
     return this.currentBackend().invoke<T>(command, args);
   }
@@ -348,9 +381,13 @@ export class ConnectionManager {
     );
   }
 
-  private async checkRemote(address: string, token: string): Promise<void> {
+  private async checkRemote(
+    address: string,
+    token: string,
+    timeoutMs = this.connectionTimeoutMs,
+  ): Promise<void> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.connectionTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(new URL("/__orkestrator/status", address), {
         headers: { authorization: `Bearer ${token}` },
@@ -363,7 +400,7 @@ export class ConnectionManager {
       }
     } catch (error) {
       if (controller.signal.aborted) {
-        const seconds = this.connectionTimeoutMs / 1_000;
+        const seconds = timeoutMs / 1_000;
         throw new Error(
           `The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`,
         );

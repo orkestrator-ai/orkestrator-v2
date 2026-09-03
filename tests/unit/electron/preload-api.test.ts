@@ -172,6 +172,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:connections:list",
       args: [],
     });
+    await expect(api.connections.probe("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:probe",
+      args: ["remote-1"],
+    });
     await expect(
       api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" }),
     ).resolves.toEqual({

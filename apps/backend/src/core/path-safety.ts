@@ -7,6 +7,9 @@ import { dlopen, FFIType, ptr, read, type Pointer } from "bun:ffi";
 import { APP_SLUG } from "./constants.js";
 
 export const MAX_BINARY_FILE_BYTES = 10 * 1024 * 1024;
+/** Keep whole-file editor payloads small enough for IPC and Monaco to handle safely. */
+export const MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_TEXT_FILE_SIZE_LABEL = `${MAX_TEXT_FILE_BYTES / (1024 * 1024)} MB`;
 export const MAX_WRITE_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_BASE64_PAYLOAD_BYTES = Math.ceil(MAX_WRITE_FILE_BYTES / 3) * 4 + 4;
 

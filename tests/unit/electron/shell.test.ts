@@ -3,16 +3,23 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { APP_SLUG } from "../../../apps/backend/src/core/constants";
-import { MAX_BINARY_FILE_BYTES } from "../../../apps/backend/src/core/path-safety";
+import {
+  MAX_BINARY_FILE_BYTES,
+  MAX_TEXT_FILE_BYTES,
+  MAX_TEXT_FILE_SIZE_LABEL,
+} from "../../../apps/backend/src/core/path-safety";
 import {
   CommandFailedError,
+  assertEditorTextFileSize,
   commandExists,
+  decodeEditorTextFile,
   homePath,
   inferLanguage,
   pathExists,
   readFileBase64,
   readTextFile,
   runCommand,
+  runCommandBuffer,
   spawnCommand,
   writeFileBase64,
 } from "../../../apps/backend/src/core/shell";
@@ -114,6 +121,54 @@ describe("Electron shell file helpers", () => {
       content: "export {};",
       language: "typescript",
     });
+
+    const internalLink = path.join(worktree, "src", "hello-link.ts");
+    await fs.symlink(path.join(worktree, "src", "hello.ts"), internalLink);
+    await expect(readTextFile(worktree, "src/hello-link.ts")).resolves.toMatchObject({
+      content: "export {};",
+    });
+
+    const outsideFile = path.join(root, "outside.txt");
+    await fs.writeFile(outsideFile, "private");
+    await fs.symlink(outsideFile, path.join(worktree, "src", "outside-link.txt"));
+    await expect(readTextFile(worktree, "src/outside-link.txt")).rejects.toThrow(
+      "File is outside the local worktree",
+    );
+
+    await fs.mkdir(path.join(worktree, "src", "directory"));
+    await expect(readTextFile(worktree, "src/directory")).rejects.toThrow(
+      "File is not a regular file",
+    );
+
+    await fs.writeFile(path.join(worktree, "src", "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
+    await expect(readTextFile(worktree, "src/invalid.txt")).rejects.toThrow(
+      "File is not valid UTF-8 text",
+    );
+
+    const growingFile = path.join(worktree, "src", "growing.txt");
+    await fs.writeFile(growingFile, "small");
+    await expect(
+      readTextFile(worktree, "src/growing.txt", {
+        afterInitialValidation: () =>
+          fs.writeFile(growingFile, Buffer.alloc(MAX_TEXT_FILE_BYTES + 1)),
+      }),
+    ).rejects.toThrow(
+      `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
+    );
+  });
+
+  test("validates editor sizes and UTF-8 bytes without lossy decoding", () => {
+    expect(() => assertEditorTextFileSize(Number.NaN)).toThrow(
+      "File size could not be determined safely",
+    );
+    expect(() => assertEditorTextFileSize(-1)).toThrow("File size could not be determined safely");
+    expect(() => assertEditorTextFileSize(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      "File size could not be determined safely",
+    );
+    expect(() => decodeEditorTextFile(Buffer.from([0xff, 0xfe, 0xfd]))).toThrow(
+      "File is not valid UTF-8 text",
+    );
+    expect(decodeEditorTextFile(Buffer.from([0xef, 0xbb, 0xbf, 0x61]))).toBe("\ufeffa");
   });
 });
 
@@ -128,6 +183,15 @@ describe("runCommand", () => {
     const { stdout, stderr } = await runCommand("node", ["-e", "process.stderr.write('warn')"]);
     expect(stdout).toBe("");
     expect(stderr).toBe("warn");
+  });
+
+  test("preserves raw stdout bytes when requested", async () => {
+    const { stdout, stderr } = await runCommandBuffer("node", [
+      "-e",
+      "process.stdout.write(Buffer.from([0, 255, 254, 65]))",
+    ]);
+    expect(stdout).toEqual(Buffer.from([0, 255, 254, 65]));
+    expect(stderr).toEqual(Buffer.alloc(0));
   });
 
   test("returns quickly when a child reads piped stdin instead of hanging until timeout", async () => {

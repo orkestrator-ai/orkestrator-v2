@@ -300,6 +300,8 @@ const path = require("node:path");
 const root = path.resolve(process.argv[1]);
 const target = path.resolve(process.argv[2]);
 const limit = Number(process.argv[3]);
+const editorRead = process.argv[4] === "editor";
+const editorLimitLabel = process.argv[5] || String(limit) + " bytes";
 function fail(message) {
   const error = new Error(message);
   error.safeMessage = true;
@@ -312,25 +314,42 @@ function inside(rootPath, targetPath) {
 function main() {
   if (!inside(root, target)) fail("File is outside the container workspace");
   const canonicalRoot = fs.realpathSync(root);
-  let current = root;
-  for (const segment of path.relative(root, target).split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    if (fs.lstatSync(current).isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+  let openedTarget = target;
+  if (editorRead) {
+    openedTarget = fs.realpathSync(target);
+    if (!inside(canonicalRoot, openedTarget)) fail("File is outside the container workspace");
+  } else {
+    let current = root;
+    for (const segment of path.relative(root, target).split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      if (fs.lstatSync(current).isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
+    }
+    if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
   }
-  if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
-  const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  const fd = fs.openSync(openedTarget, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   try {
     const initial = fs.fstatSync(fd);
     const assertStablePath = (opened) => {
-      const currentStats = fs.lstatSync(target);
-      if (currentStats.isSymbolicLink()) fail("Symbolic-link attachments are not allowed");
-      if (!currentStats.isFile() || !opened.isFile() || currentStats.dev !== opened.dev || currentStats.ino !== opened.ino) {
-        fail("Attachment is not a stable regular file");
+      const currentPath = editorRead ? openedTarget : target;
+      const currentStats = fs.lstatSync(currentPath);
+      if (currentStats.isSymbolicLink()) {
+        fail(editorRead ? "File is not a stable regular file" : "Symbolic-link attachments are not allowed");
       }
-      if (!inside(canonicalRoot, fs.realpathSync(target))) fail("File is outside the container workspace");
+      if (!currentStats.isFile() || !opened.isFile() || currentStats.dev !== opened.dev || currentStats.ino !== opened.ino) {
+        fail(editorRead ? "File is not a stable regular file" : "Attachment is not a stable regular file");
+      }
+      const resolvedTarget = fs.realpathSync(target);
+      if (!inside(canonicalRoot, resolvedTarget)) fail("File is outside the container workspace");
+      if (editorRead && resolvedTarget !== openedTarget) {
+        fail("File changed while it was being read; please try again");
+      }
     };
     assertStablePath(initial);
-    if (initial.size > limit) fail("File exceeds the attachment size limit");
+    if (initial.size > limit) {
+      fail(editorRead
+        ? "File is too large to open in the editor (maximum size is " + editorLimitLabel + ")"
+        : "File exceeds the attachment size limit");
+    }
     ${afterInitialValidationForTest}
     const chunks = [];
     let total = 0;
@@ -341,17 +360,21 @@ function main() {
       chunks.push(chunk.subarray(0, bytesRead));
       total += bytesRead;
     }
-    if (total > limit) fail("File exceeds the attachment size limit");
+    if (total > limit) {
+      fail(editorRead
+        ? "File is too large to open in the editor (maximum size is " + editorLimitLabel + ")"
+        : "File exceeds the attachment size limit");
+    }
     const final = fs.fstatSync(fd);
     assertStablePath(final);
-    if (
+    if (!editorRead && (
       final.dev !== initial.dev
       || final.ino !== initial.ino
       || final.size !== initial.size
       || final.size !== total
       || final.mtimeMs !== initial.mtimeMs
       || final.ctimeMs !== initial.ctimeMs
-    ) fail("File changed while it was being read; please try again");
+    )) fail("File changed while it was being read; please try again");
     process.stdout.write(Buffer.concat(chunks, total).toString("base64"));
   } finally {
     fs.closeSync(fd);

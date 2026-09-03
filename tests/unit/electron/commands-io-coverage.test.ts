@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import { APP_SLUG } from "../../../apps/backend/src/core/constants";
+import {
+  MAX_TEXT_FILE_BYTES,
+  MAX_TEXT_FILE_SIZE_LABEL,
+} from "../../../apps/backend/src/core/path-safety";
 import * as realPty from "../../../apps/backend/src/core/pty";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 
@@ -303,6 +307,35 @@ describe("backend command I/O coverage", () => {
       language: "typescript",
     });
 
+    await fs.writeFile(path.join(root, "src", "binary.dat"), Buffer.from([0, 1, 2, 3]));
+    await expect(
+      commands.get("read_local_file")?.(
+        { worktreePath: root, filePath: "src/binary.dat" },
+        context,
+      ),
+    ).rejects.toThrow("Binary files cannot be opened in the text editor");
+
+    await fs.writeFile(path.join(root, "src", "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
+    await expect(
+      commands.get("read_local_file")?.(
+        { worktreePath: root, filePath: "src/invalid.txt" },
+        context,
+      ),
+    ).rejects.toThrow("File is not valid UTF-8 text");
+
+    await fs.writeFile(
+      path.join(root, "src", "oversized.txt"),
+      Buffer.alloc(MAX_TEXT_FILE_BYTES + 1, 97),
+    );
+    await expect(
+      commands.get("read_local_file")?.(
+        { worktreePath: root, filePath: "src/oversized.txt" },
+        context,
+      ),
+    ).rejects.toThrow(
+      `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
+    );
+
     const data = Buffer.from([0, 1, 2, 255]).toString("base64");
     const writtenPath = await commands.get("write_local_file")?.(
       { worktreePath: root, filePath: "generated/data.bin", base64Data: data },
@@ -548,6 +581,29 @@ describe("backend command I/O coverage", () => {
     await expect(
       runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, oversizedFile, "3"]),
     ).rejects.toThrow("File exceeds the attachment size limit");
+    await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        oversizedFile,
+        String(MAX_TEXT_FILE_BYTES),
+        "editor",
+      ]),
+    ).resolves.toMatchObject({ stdout: "AAECAw==" });
+    await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        oversizedFile,
+        "3",
+        "editor",
+        "3 bytes",
+      ]),
+    ).rejects.toThrow("File is too large to open in the editor (maximum size is 3 bytes)");
 
     const changedFile = path.join(workspace, "changed.bin");
     await fs.writeFile(changedFile, "abc");
@@ -561,6 +617,19 @@ describe("backend command I/O coverage", () => {
         "10",
       ]),
     ).rejects.toThrow("File changed while it was being read");
+    await fs.writeFile(changedFile, "abc");
+    await expect(
+      runCommand("node", [
+        "-e",
+        buildContainerSafeBase64Reader("append"),
+        "--",
+        workspace,
+        changedFile,
+        "10",
+        "editor",
+        "10 bytes",
+      ]),
+    ).resolves.toMatchObject({ stdout: Buffer.from("abcx").toString("base64") });
 
     const replacedFile = path.join(workspace, "replaced.bin");
     await fs.writeFile(replacedFile, "original");
@@ -583,6 +652,18 @@ describe("backend command I/O coverage", () => {
       await expect(
         runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, linkedPath, "3"]),
       ).rejects.toThrow("Symbolic-link attachments are not allowed");
+      await expect(
+        runCommand("node", [
+          "-e",
+          CONTAINER_SAFE_BASE64_READER,
+          "--",
+          workspace,
+          linkedPath,
+          "3",
+          "editor",
+          "3 bytes",
+        ]),
+      ).resolves.toMatchObject({ stdout: "AAEC" });
     }
 
     const outsideFile = path.join(outside, "private.bin");
@@ -600,6 +681,18 @@ describe("backend command I/O coverage", () => {
       ]),
     ).rejects.toThrow("Symbolic-link attachments are not allowed");
     await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        path.join(linkedDirectory, "private.bin"),
+        "10",
+        "editor",
+        "10 bytes",
+      ]),
+    ).rejects.toThrow("File is outside the container workspace");
+    await expect(
       runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, outsideFile, "10"]),
     ).rejects.toThrow("File is outside the container workspace");
 
@@ -615,6 +708,18 @@ describe("backend command I/O coverage", () => {
         "10",
       ]),
     ).rejects.toThrow("Attachment is not a stable regular file");
+    await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        directoryTarget,
+        "10",
+        "editor",
+        "10 bytes",
+      ]),
+    ).rejects.toThrow("File is not a stable regular file");
   });
 
   test("executes container file reads and writes through docker without a live daemon", async () => {
@@ -622,9 +727,20 @@ describe("backend command I/O coverage", () => {
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
   *"-- /workspace 5000"*) printf 'd\\tsrc\\000f\\tsrc/app.ts\\000f\\tREADME.md\\000' ;;
-  *"cat '/workspace/src/app.ts'"*) printf 'export const value = 2;\\n' ;;
-  *"git show 'main':'src/app.ts'"*) printf 'export const value = 1;\\n' ;;
-  *"git show 'missing':'src/app.ts'"*) ;;
+  *"/workspace/src/binary.dat"*) printf 'AAE=\\n' ;;
+  *"/workspace/src/invalid.txt"*) printf '//79\\n' ;;
+  *"/workspace/src/oversized.txt"*) printf 'File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})\\n' >&2; exit 1 ;;
+  *"/workspace/src/app.ts"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMjsK\\n' ;;
+  *"git cat-file -s 'main:src/app.ts'"*) printf '24\\n' ;;
+  *"git cat-file -s 'missing:src/app.ts'"*) ;;
+  *"git cat-file -s 'empty:src/app.ts'"*) printf '0\\n' ;;
+  *"git cat-file -s 'binary:src/app.ts'"*) printf '2\\n' ;;
+  *"git cat-file -s 'invalid:src/app.ts'"*) printf '3\\n' ;;
+  *"git cat-file -s 'oversized:src/app.ts'"*) printf '5242881\\n' ;;
+  *"set -o pipefail; git show 'main:src/app.ts' | base64"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMTsK\\n' ;;
+  *"set -o pipefail; git show 'empty:src/app.ts' | base64"*) ;;
+  *"set -o pipefail; git show 'binary:src/app.ts' | base64"*) printf 'AAE=\\n' ;;
+  *"set -o pipefail; git show 'invalid:src/app.ts' | base64"*) printf '//79\\n' ;;
   *"/workspace/assets/blob.bin"*) printf 'AAEC\\n' ;;
   *"mkdir -p '/workspace/generated'"*) ;;
   *"base64 -d > '/workspace/generated/out.bin'"*) cat > "$FAKE_DOCKER_STDIN" ;;
@@ -679,6 +795,26 @@ esac
         language: "ts",
       });
       await expect(
+        commands.get("read_container_file")?.(
+          { containerId: "container-1", filePath: "src/binary.dat" },
+          context,
+        ),
+      ).rejects.toThrow("Binary files cannot be opened in the text editor");
+      await expect(
+        commands.get("read_container_file")?.(
+          { containerId: "container-1", filePath: "src/invalid.txt" },
+          context,
+        ),
+      ).rejects.toThrow("File is not valid UTF-8 text");
+      await expect(
+        commands.get("read_container_file")?.(
+          { containerId: "container-1", filePath: "src/oversized.txt" },
+          context,
+        ),
+      ).rejects.toThrow(
+        `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
+      );
+      await expect(
         commands.get("read_file_at_branch")?.(
           { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
           context,
@@ -695,6 +831,30 @@ esac
         ),
       ).resolves.toBeNull();
       await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "empty" },
+          context,
+        ),
+      ).resolves.toMatchObject({ content: "" });
+      await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "binary" },
+          context,
+        ),
+      ).rejects.toThrow("Binary files cannot be opened in the text editor");
+      await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "invalid" },
+          context,
+        ),
+      ).rejects.toThrow("File is not valid UTF-8 text");
+      await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "oversized" },
+          context,
+        ),
+      ).rejects.toThrow("File is too large to open in the editor");
+      await expect(
         commands.get("read_container_file_base64")?.(
           { containerId: "container-1", filePath: "assets/blob.bin" },
           context,
@@ -710,6 +870,10 @@ esac
       expect(await fs.readFile(stdinPath, "utf8")).toBe("AAEC");
       const dockerLog = await fs.readFile(logPath, "utf8");
       expect(dockerLog).toContain("-- /workspace 5000");
+      expect(dockerLog).toContain(
+        `/workspace/src/app.ts' ${MAX_TEXT_FILE_BYTES} editor '${MAX_TEXT_FILE_SIZE_LABEL}'`,
+      );
+      expect(dockerLog).toContain("set -o pipefail; git show 'main:src/app.ts' | base64");
       expect(dockerLog).toContain(
         "exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'",
       );

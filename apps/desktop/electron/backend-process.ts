@@ -1,9 +1,8 @@
 import { createInterface } from "node:readline";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 
@@ -20,148 +19,6 @@ export type GatewayStartInfo = {
   browserUrl?: string;
   browserError?: string;
 };
-
-const execFileAsync = promisify(execFile);
-const MAX_SSH_AGENT_SOCKET_PATH_CHARS = 4_096;
-
-type SshAgentSocketSource = "configured" | "environment" | "session";
-
-export type ResolvedSshAgentSocket = {
-  path: string;
-  source: SshAgentSocketSource;
-};
-
-function normalizedSocketPath(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const candidate = value.trim();
-  if (
-    !candidate ||
-    candidate.length > MAX_SSH_AGENT_SOCKET_PATH_CHARS ||
-    candidate.includes("\0") ||
-    !path.isAbsolute(candidate)
-  ) {
-    return undefined;
-  }
-  return candidate;
-}
-
-async function isUsableOwnedSocket(candidate: string): Promise<boolean> {
-  const stats = await lstat(candidate).catch(() => null);
-  if (!stats?.isSocket()) return false;
-  const uid = process.getuid?.();
-  return uid === undefined || stats.uid === uid;
-}
-
-async function commandOutput(command: string, args: string[]): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync(command, args, {
-      encoding: "utf8",
-      timeout: 3_000,
-      maxBuffer: 256 * 1024,
-    });
-    const output = stdout.trim();
-    return output || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function valueFromSystemdEnvironment(
-  output: string | undefined,
-  variable: string,
-): string | undefined {
-  if (!output) return undefined;
-  const prefix = `${variable}=`;
-  const line = output.split("\n").find((entry) => entry.startsWith(prefix));
-  return line?.slice(prefix.length);
-}
-
-async function discoverSessionSshAgentSockets(platform: NodeJS.Platform): Promise<string[]> {
-  const candidates: Array<string | undefined> = [];
-  if (platform === "linux") {
-    const systemdEnvironment = await commandOutput("systemctl", ["--user", "show-environment"]);
-    candidates.push(valueFromSystemdEnvironment(systemdEnvironment, "SSH_AUTH_SOCK"));
-
-    // GNOME Keyring/GCR and systemd ssh-agent services use stable names under
-    // the per-user runtime directory. Constructing these paths from the active
-    // uid avoids both a username-specific setting and unsafe /tmp scanning.
-    const uid = process.getuid?.();
-    const runtimeDirectory =
-      normalizedSocketPath(valueFromSystemdEnvironment(systemdEnvironment, "XDG_RUNTIME_DIR")) ??
-      normalizedSocketPath(process.env.XDG_RUNTIME_DIR) ??
-      (uid === undefined ? undefined : `/run/user/${uid}`);
-    if (runtimeDirectory) {
-      candidates.push(
-        path.join(runtimeDirectory, "gcr", "ssh"),
-        path.join(runtimeDirectory, "keyring", "ssh"),
-        path.join(runtimeDirectory, "ssh-agent.socket"),
-      );
-    }
-  } else if (platform === "darwin") {
-    candidates.push(await commandOutput("launchctl", ["getenv", "SSH_AUTH_SOCK"]));
-  } else {
-    return [];
-  }
-
-  candidates.push(await commandOutput("gpgconf", ["--list-dirs", "agent-ssh-socket"]));
-  return Array.from(new Set(candidates.filter((candidate): candidate is string => !!candidate)));
-}
-
-/**
- * Resolve one trusted SSH-agent socket without guessing usernames or scanning
- * attacker-writable temporary directories. A configured socket is an explicit
- * override; auto mode tries the inherited environment and then the desktop
- * session's own environment manager.
- */
-export async function resolveSshAgentSocket(
-  options: {
-    configuredPath?: unknown;
-    inheritedPath?: unknown;
-    platform?: NodeJS.Platform;
-  },
-  dependencies: {
-    isUsableSocket?: (candidate: string) => Promise<boolean>;
-    discoverSessionSockets?: (
-      platform: NodeJS.Platform,
-    ) => Promise<string | readonly string[] | undefined>;
-  } = {},
-): Promise<ResolvedSshAgentSocket | null> {
-  const isUsableSocket = dependencies.isUsableSocket ?? isUsableOwnedSocket;
-  const configured = normalizedSocketPath(options.configuredPath);
-  if (typeof options.configuredPath === "string" && options.configuredPath.trim() && !configured) {
-    return null;
-  }
-  if (configured) {
-    return (await isUsableSocket(configured)) ? { path: configured, source: "configured" } : null;
-  }
-
-  const inherited = normalizedSocketPath(options.inheritedPath);
-  if (inherited && (await isUsableSocket(inherited))) {
-    return { path: inherited, source: "environment" };
-  }
-
-  const discoverSessionSockets =
-    dependencies.discoverSessionSockets ?? discoverSessionSshAgentSockets;
-  const discovered = await discoverSessionSockets(options.platform ?? process.platform);
-  const sessionCandidates = typeof discovered === "string" ? [discovered] : (discovered ?? []);
-  for (const candidate of sessionCandidates) {
-    const session = normalizedSocketPath(candidate);
-    if (session && (await isUsableSocket(session))) {
-      return { path: session, source: "session" };
-    }
-  }
-  return null;
-}
-
-export async function readConfiguredSshAgentSocket(dataDir: string): Promise<string | undefined> {
-  const config = await readFile(path.join(dataDir, "config.json"), "utf8")
-    .then((contents) => JSON.parse(contents) as unknown)
-    .catch(() => null);
-  if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
-  const global = (config as { global?: unknown }).global;
-  if (!global || typeof global !== "object" || Array.isArray(global)) return undefined;
-  return normalizedSocketPath((global as { sshAgentSocketPath?: unknown }).sshAgentSocketPath);
-}
 
 const AGENT_TEST_SAFE_ENV_NAMES = new Set([
   "BUN_INSTALL",
@@ -661,19 +518,6 @@ export class BackendProcess {
           }
         : undefined,
     );
-    if (options.runtimeFlavor !== "agent-test") {
-      const sshAgentSocket = await resolveSshAgentSocket({
-        configuredPath: await readConfiguredSshAgentSocket(options.dataDir),
-        inheritedPath: process.env.SSH_AUTH_SOCK,
-      });
-      if (sshAgentSocket) {
-        env.SSH_AUTH_SOCK = sshAgentSocket.path;
-        console.info(`[Desktop] SSH agent socket resolved from ${sshAgentSocket.source}`);
-      } else {
-        delete env.SSH_AUTH_SOCK;
-        console.warn("[Desktop] No usable SSH agent socket was found");
-      }
-    }
     if (options.runtimeFlavor === "agent-test") {
       await seedAgentTestDockerConfig({
         isolatedCredentialRoot,

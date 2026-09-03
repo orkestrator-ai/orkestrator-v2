@@ -151,7 +151,11 @@ describe("SSH agent socket configuration", () => {
     });
   });
 
-  test("rejects an invalid override without changing the stored value", async () => {
+  test.each([
+    ["relative", "relative/agent.sock", "SSH agent socket path must be an absolute path."],
+    ["overlong", `/${"a".repeat(5_000)}`, "SSH agent socket path is too long."],
+    ["NUL-containing", "/run/user/501/agent\0.sock", "must not contain NUL characters"],
+  ])("rejects a %s override without changing the stored value", async (_label, value, message) => {
     await withTemporaryStorage(async (storage) => {
       const base = (await storage.loadConfig()).global;
       await storage.updateGlobalConfig({
@@ -162,12 +166,27 @@ describe("SSH agent socket configuration", () => {
       await expect(
         storage.updateGlobalConfig({
           ...base,
-          sshAgentSocketPath: "relative/agent.sock",
+          sshAgentSocketPath: value,
         }),
-      ).rejects.toThrow("SSH agent socket path must be an absolute path");
+      ).rejects.toThrow(message);
       expect((await storage.loadConfig()).global.sshAgentSocketPath).toBe(
         "/run/user/501/agent.sock",
       );
+    });
+  });
+
+  test.each([
+    ["relative/agent.sock"],
+    [`/${"a".repeat(5_000)}`],
+    ["/run/user/501/agent\0.sock"],
+    [42],
+  ])("drops a malformed persisted socket path", async (value) => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const config = defaultConfig();
+      (config.global as unknown as Record<string, unknown>).sshAgentSocketPath = value;
+      await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`, "utf8");
+
+      expect((await storage.loadConfig()).global.sshAgentSocketPath).toBeUndefined();
     });
   });
 });

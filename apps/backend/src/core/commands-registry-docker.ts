@@ -42,7 +42,13 @@ export function dockerUnavailableReason(error: unknown): DockerUnavailableReason
   if (error instanceof CommandFailedError && error.timedOut) return "timed-out";
 
   const message = error instanceof Error ? error.message : String(error);
-  if (/permission denied|access (?:is )?denied/i.test(message)) return "permission-denied";
+  if (
+    /(?:permission denied|access (?:is )?denied).*?(?:docker daemon socket|unix:\/\/|docker\.sock)|(?:docker daemon socket|unix:\/\/|docker\.sock).*?(?:permission denied|access (?:is )?denied)|dial unix .*connect: permission denied/i.test(
+      message,
+    )
+  ) {
+    return "permission-denied";
+  }
   if (
     /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect|failed to connect to the docker api|connect: no such file or directory/i.test(
       message,
@@ -53,22 +59,31 @@ export function dockerUnavailableReason(error: unknown): DockerUnavailableReason
   return "unknown";
 }
 
+export async function checkDockerAvailability(
+  dependencies: {
+    commandExists?: (command: string) => Promise<boolean>;
+    runCommand?: typeof runCommand;
+  } = {},
+): Promise<DockerAvailability> {
+  const hasCommand = dependencies.commandExists ?? commandExists;
+  const run = dependencies.runCommand ?? runCommand;
+  if (!(await hasCommand("docker"))) {
+    return { available: false, reason: "not-installed" };
+  }
+  try {
+    await run("docker", ["info"], { timeoutMs: 10_000 });
+    return { available: true, reason: null };
+  } catch (error) {
+    return { available: false, reason: dockerUnavailableReason(error) };
+  }
+}
+
 export function registerDockerCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { commands } = dependencies;
-  register("check_docker", async (): Promise<DockerAvailability> => {
-    if (!(await commandExists("docker"))) {
-      return { available: false, reason: "not-installed" };
-    }
-    try {
-      await runCommand("docker", ["info"], { timeoutMs: 10_000 });
-      return { available: true, reason: null };
-    } catch (error) {
-      return { available: false, reason: dockerUnavailableReason(error) };
-    }
-  });
+  register("check_docker", () => checkDockerAvailability());
   register("docker_version", async () =>
     (
       await runCommand("docker", ["version", "--format", "{{.Server.Version}}"], {

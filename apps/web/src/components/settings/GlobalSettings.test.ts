@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { GlobalConfig } from "@/types";
-import { getSshAgentSocketPathValidationError, globalFormSignature } from "./GlobalSettings";
+import {
+  getSshAgentSocketPathValidationError,
+  globalFormSignature,
+  sshAgentSocketPathForSave,
+} from "./GlobalSettings";
 
 function globalConfig(): GlobalConfig {
   return {
@@ -31,5 +35,18 @@ describe("global settings synchronization", () => {
     expect(getSshAgentSocketPathValidationError("relative/agent.sock")).toBe(
       "SSH agent socket path must be an absolute path.",
     );
+    expect(getSshAgentSocketPathValidationError(`/${"a".repeat(5_000)}`)).toBe(
+      "SSH agent socket path is too long.",
+    );
+    expect(getSshAgentSocketPathValidationError("/run/user/1000/agent\0.sock")).toBe(
+      "SSH agent socket path must not contain NUL characters.",
+    );
+  });
+
+  test("trims configured sockets and omits the field when returning to auto-detection", () => {
+    expect(sshAgentSocketPathForSave("  /run/user/1000/agent.sock  ")).toBe(
+      "/run/user/1000/agent.sock",
+    );
+    expect(sshAgentSocketPathForSave("   ")).toBeUndefined();
   });
 });

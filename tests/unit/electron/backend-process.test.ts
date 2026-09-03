@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { nativeWebPlatform } from "../../register-dom";
 import { defaultConfig } from "../../../apps/backend/src/core/storage";
+import {
+  configureSshAgentSocketEnvironment,
+  discoverSessionSshAgentSockets,
+  isUsableOwnedSocket,
+  readConfiguredSshAgentSocket,
+  resolveSshAgentSocket,
+} from "../../../apps/backend/src/ssh-agent-socket";
 import {
   BackendHttpClient,
   BackendProcess,
@@ -13,9 +21,7 @@ import {
   createBackendProcessEnvironment,
   getBrowserGatewayStatus,
   hostDockerConfigDir,
-  readConfiguredSshAgentSocket,
   removeAgentTestHostKeychainLink,
-  resolveSshAgentSocket,
   seedAgentTestDockerConfig,
 } from "../../../apps/desktop/electron/backend-process";
 
@@ -108,6 +114,125 @@ afterEach(async () => {
 const SPAWN_TIMEOUT_MS = 30_000;
 
 describe("Electron backend process supervisor", () => {
+  test("accepts a live SSH-agent socket through a stable symlink and rejects an unreachable socket", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-socket-"));
+    directories.push(directory);
+    const socketPath = path.join(directory, "agent.sock");
+    const symlinkPath = path.join(directory, "stable-agent.sock");
+    const server = createNetServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    await symlink(socketPath, symlinkPath);
+
+    try {
+      await expect(isUsableOwnedSocket(symlinkPath)).resolves.toBe(true);
+      await expect(
+        isUsableOwnedSocket(socketPath, { canConnect: async () => false }),
+      ).resolves.toBe(false);
+      await expect(
+        isUsableOwnedSocket(socketPath, {
+          canConnect: async () => true,
+          statPath: async () => ({ isSocket: () => true, uid: 502 }),
+          uid: 501,
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  test("discovers Linux session sockets from systemd, runtime defaults, and gpg-agent", async () => {
+    const calls: string[] = [];
+    const commandOutput = mock(async (command: string, args: string[]) => {
+      calls.push([command, ...args].join(" "));
+      if (command === "systemctl") {
+        return "SSH_AUTH_SOCK=/run/user/501/custom-agent.sock\nXDG_RUNTIME_DIR=/run/user/501\n";
+      }
+      if (command === "gpgconf") return "/run/user/501/gnupg/S.gpg-agent.ssh";
+      return undefined;
+    });
+
+    await expect(
+      discoverSessionSshAgentSockets("linux", { commandOutput, env: {}, uid: 501 }),
+    ).resolves.toEqual([
+      "/run/user/501/custom-agent.sock",
+      "/run/user/501/gcr/ssh",
+      "/run/user/501/keyring/ssh",
+      "/run/user/501/ssh-agent.socket",
+      "/run/user/501/gnupg/S.gpg-agent.ssh",
+    ]);
+    expect(calls).toEqual([
+      "systemctl --user show-environment",
+      "gpgconf --list-dirs agent-ssh-socket",
+    ]);
+  });
+
+  test("discovers macOS launchd and gpg-agent sockets", async () => {
+    const commandOutput = mock(async (command: string) =>
+      command === "launchctl"
+        ? "/private/tmp/launchd/Listeners"
+        : "/Users/tester/.gnupg/S.gpg-agent.ssh",
+    );
+
+    await expect(discoverSessionSshAgentSockets("darwin", { commandOutput })).resolves.toEqual([
+      "/private/tmp/launchd/Listeners",
+      "/Users/tester/.gnupg/S.gpg-agent.ssh",
+    ]);
+  });
+
+  test("applies resolved sockets to standalone backend environments and clears agent-test access", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-ssh-agent-config-"));
+    directories.push(directory);
+    const socketPath = path.join(directory, "agent.sock");
+    const server = createNetServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    await writeFile(
+      path.join(directory, "config.json"),
+      JSON.stringify({ global: { sshAgentSocketPath: socketPath } }),
+    );
+
+    try {
+      const productionEnv: NodeJS.ProcessEnv = {};
+      await expect(
+        configureSshAgentSocketEnvironment({
+          dataDir: directory,
+          runtimeFlavor: "production",
+          env: productionEnv,
+        }),
+      ).resolves.toEqual({ path: socketPath, source: "configured" });
+      expect(productionEnv.SSH_AUTH_SOCK).toBe(socketPath);
+
+      const unavailableEnv: NodeJS.ProcessEnv = { SSH_AUTH_SOCK: socketPath };
+      await expect(
+        configureSshAgentSocketEnvironment(
+          { dataDir: directory, runtimeFlavor: "production", env: unavailableEnv },
+          {
+            readConfiguredSocket: async () => undefined,
+            resolveSocket: async () => null,
+          },
+        ),
+      ).resolves.toBeNull();
+      expect(unavailableEnv.SSH_AUTH_SOCK).toBeUndefined();
+
+      const agentTestEnv: NodeJS.ProcessEnv = { SSH_AUTH_SOCK: socketPath };
+      await expect(
+        configureSshAgentSocketEnvironment({
+          dataDir: directory,
+          runtimeFlavor: "agent-test",
+          env: agentTestEnv,
+        }),
+      ).resolves.toBeNull();
+      expect(agentTestEnv.SSH_AUTH_SOCK).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   test("resolves SSH agent sockets by explicit override, inherited environment, then session", async () => {
     const checked: string[] = [];
     const discoverSessionSockets = mock(async () => [

@@ -3,6 +3,10 @@ import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import {
+  MAX_SSH_AGENT_SOCKET_PATH_CHARS,
+  SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
+} from "@orkestrator/protocol/ssh-agent-socket";
+import {
   createHash,
   defaultConfig,
   defaultRepositoryConfig,
@@ -464,13 +468,16 @@ export abstract class StorageConfig extends StorageProjects {
       throw new Error("SSH agent socket path must be a string");
     }
     const requestedSshAgentSocketPath = rawSshAgentSocketPath?.trim();
-    if (
-      requestedSshAgentSocketPath &&
-      (requestedSshAgentSocketPath.length > 4_096 ||
-        requestedSshAgentSocketPath.includes("\0") ||
-        !path.isAbsolute(requestedSshAgentSocketPath))
-    ) {
-      throw new Error("SSH agent socket path must be an absolute path");
+    if (requestedSshAgentSocketPath) {
+      if (requestedSshAgentSocketPath.length > MAX_SSH_AGENT_SOCKET_PATH_CHARS) {
+        throw new Error(SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.tooLong);
+      }
+      if (requestedSshAgentSocketPath.includes("\0")) {
+        throw new Error(SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.containsNull);
+      }
+      if (!path.isAbsolute(requestedSshAgentSocketPath)) {
+        throw new Error(SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES.notAbsolute);
+      }
     }
     const validated: AppConfig["global"] = {
       ...reviewValidated,

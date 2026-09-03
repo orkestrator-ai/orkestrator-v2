@@ -4078,6 +4078,46 @@ esac
     ASYNC_TEST_BUDGET_MS,
   );
 
+  test("persists and rejects with the sanitized Git SSH authentication failure", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-local-ssh-auth-failure",
+      environmentType: "local",
+      status: "stopped",
+      worktreePath: undefined,
+      branch: `ssh-auth-${randomUUID().slice(0, 8)}`,
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: "ssh-auth-repo",
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+    const rawFailure =
+      "git@example.invalid: Permission denied (publickey). Could not read from remote repository.";
+
+    await withFailingGitSubcommand(
+      "fetch",
+      async () => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication);
+      },
+      rawFailure,
+    );
+
+    expect(environment.status).toBe("error");
+    expect(environment.lifecycleError).toBe(
+      ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.gitSshAuthentication,
+    );
+    expect(environment.lifecycleError).not.toContain("example.invalid");
+  });
+
   test("removes a newly created container when persisting its identity fails", async () => {
     const environment = createEnvironment({
       id: "env-container-persist-compensation",

@@ -183,6 +183,17 @@ export interface NativeMessage {
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;
+  /**
+   * Persisted provider message at the end of a display row that coalesces
+   * multiple source messages. Forks use this instead of the stable display id.
+   */
+  latestSourceMessageId?: string;
+  /**
+   * Earliest source-row clock represented by a coalesced display row.
+   * Settled child cards use it for placement while `createdAt` remains the
+   * latest activity clock shown in the row footer.
+   */
+  settleAnchorCreatedAt?: string;
   /** Provider/backend-observed model that produced this assistant message. */
   modelId?: string;
   turnId?: string;

@@ -1,3 +1,8 @@
+import {
+  parseGitHubRepositoryRemote,
+  type GitHubRepositoryRef,
+} from "@orkestrator/protocol/github-repository";
+
 export const GITHUB_STATUS_LABELS = {
   todo: "ork:todo",
   inprogress: "ork:inprogress",
@@ -6,10 +11,7 @@ export const GITHUB_STATUS_LABELS = {
 
 export type GitHubIssueStatus = "backlog" | keyof typeof GITHUB_STATUS_LABELS;
 
-export type GitHubRepositoryRef = {
-  owner: string;
-  name: string;
-};
+export type { GitHubRepositoryRef } from "@orkestrator/protocol/github-repository";
 
 export type GitHubUser = {
   login: string;
@@ -138,73 +140,35 @@ function repositoryPath(ref: GitHubRepositoryRef): string {
   return `/repos/${encodePathSegment(ref.owner)}/${encodePathSegment(ref.name)}`;
 }
 
-function normalizeRepositoryName(value: string): string {
-  return value.replace(/\.git$/i, "");
-}
-
-function validateRepositoryParts(owner: string, name: string): GitHubRepositoryRef {
-  const normalizedOwner = owner.trim();
-  const normalizedName = normalizeRepositoryName(name.trim());
-  const validPart = /^[A-Za-z0-9_.-]+$/;
-  if (
-    !normalizedOwner ||
-    !normalizedName ||
-    !validPart.test(normalizedOwner) ||
-    !validPart.test(normalizedName)
-  ) {
-    throw new GitHubApiError(
-      "Could not resolve the GitHub repository. Use an HTTPS or SSH GitHub repository URL.",
-      { code: "validation" },
-    );
-  }
-  return { owner: normalizedOwner, name: normalizedName };
-}
-
 /**
  * Resolve owner/name from the GitHub URL stored on a project. Only github.com
  * remotes are accepted so a project cannot accidentally query another host.
  */
 export function resolveGitHubRepository(gitUrl: string): GitHubRepositoryRef {
-  const value = gitUrl.trim();
-  if (!value) {
+  const result = parseGitHubRepositoryRemote(gitUrl);
+  if (result.ok) return result.repository;
+
+  if (result.reason === "missing") {
     throw new GitHubApiError(
       "This project does not have a GitHub repository URL. Update the project repository and try again.",
       { code: "validation" },
     );
   }
-
-  const scpMatch = value.match(/^(?:[^@\s]+@)?github\.com:([^/\s]+)\/([^/\s]+)\/?$/i);
-  if (scpMatch?.[1] && scpMatch[2]) {
-    return validateRepositoryParts(scpMatch[1], scpMatch[2]);
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new GitHubApiError(
-      "Could not resolve the GitHub repository. Use an HTTPS or SSH GitHub repository URL.",
-      { code: "validation" },
-    );
-  }
-
-  if (
-    parsed.hostname.toLowerCase() !== "github.com" ||
-    (parsed.protocol !== "https:" && parsed.protocol !== "ssh:")
-  ) {
+  if (result.reason === "unsupported-host-or-protocol") {
     throw new GitHubApiError("This project repository must use a github.com HTTPS or SSH URL.", {
       code: "validation",
     });
   }
-
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+  if (result.reason === "invalid-path") {
     throw new GitHubApiError(
       "Could not resolve the GitHub repository owner and name from the project URL.",
       { code: "validation" },
     );
   }
-  return validateRepositoryParts(parts[0], parts[1]);
+  throw new GitHubApiError(
+    "Could not resolve the GitHub repository. Use an HTTPS or SSH GitHub repository URL.",
+    { code: "validation" },
+  );
 }
 
 export function sanitizeGitHubError(error: unknown, secret?: string): string {

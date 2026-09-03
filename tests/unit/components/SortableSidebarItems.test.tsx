@@ -3,10 +3,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
+import * as realBackend from "@/lib/backend";
+import * as realSonner from "sonner";
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
 const sortableState = { isDragging: false, dragPointerDown: mock(() => {}) };
+const openInBrowser = mock(async (_url: string) => {});
+const toastError = mock((_message: string) => undefined);
 
 mock.module("@dnd-kit/sortable", () => ({
   ...realSortableSnapshot,
@@ -36,6 +40,16 @@ mock.module("@/components/environments/EnvironmentItem", () => ({
       {environment.name}
     </button>
   ),
+}));
+
+mock.module("@/lib/backend", () => ({
+  ...realBackend,
+  openInBrowser,
+}));
+
+mock.module("sonner", () => ({
+  ...realSonner,
+  toast: { ...realSonner.toast, error: toastError },
 }));
 
 const { SortableEnvironmentItem } =
@@ -75,11 +89,16 @@ describe("sortable sidebar items", () => {
     cleanup();
     sortableState.isDragging = false;
     sortableState.dragPointerDown.mockClear();
+    openInBrowser.mockClear();
+    openInBrowser.mockImplementation(async () => {});
+    toastError.mockClear();
   });
 
   afterAll(() => {
     mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
     mock.module("@/components/environments/EnvironmentItem", () => realEnvironmentItemSnapshot);
+    mock.module("@/lib/backend", () => realBackend);
+    mock.module("sonner", () => realSonner);
   });
 
   test("SortableEnvironmentItem applies selected and dragging treatments", () => {
@@ -270,6 +289,48 @@ describe("sortable sidebar items", () => {
       />,
     );
   }
+
+  async function openProjectContextMenu(): Promise<void> {
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
+    await screen.findByRole("menuitem", { name: "Open Board" });
+  }
+
+  test("SortableProjectGroup opens a GitHub remote as a canonical repository URL", async () => {
+    renderProjectGroup();
+    await openProjectContextMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open Repo on GitHub" }));
+
+    await waitFor(() => {
+      expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/project-one");
+    });
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  test.each(["https://gitlab.com/acme/project-one.git", ""])(
+    "SortableProjectGroup hides the GitHub action for unsupported remote %s",
+    async (gitUrl) => {
+      renderProjectGroup({ project: { ...project, gitUrl } });
+      await openProjectContextMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Open Repo on GitHub" }) === null).toBe(true);
+      expect(openInBrowser).not.toHaveBeenCalled();
+    },
+  );
+
+  test("SortableProjectGroup reports a rejected browser launch", async () => {
+    openInBrowser.mockImplementationOnce(async () => {
+      throw new Error("browser unavailable");
+    });
+    renderProjectGroup();
+    await openProjectContextMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open Repo on GitHub" }));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith("Could not open repository in browser.");
+    });
+  });
 
   test("SortableProjectGroup shows the git url and local path in a hover tooltip", async () => {
     renderProjectGroup();

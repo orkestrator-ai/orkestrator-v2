@@ -1119,7 +1119,7 @@ export function EnvironmentSettingsDialog({
         onOpenChange={onOpenChange}
         title="Environment Settings"
         menuItems={menuItems}
-        footer={
+        headerActions={
           <>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

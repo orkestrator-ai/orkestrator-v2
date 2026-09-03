@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
   ConnectionManager,
@@ -13,6 +13,7 @@ function encrypted(value: string): string {
 }
 
 afterEach(() => {
+  jest.useRealTimers();
   globalThis.fetch = originalFetch;
 });
 
@@ -47,6 +48,7 @@ function localBackendHarness(initial?: StoredDesktopConnections) {
   return {
     backend: {
       invoke,
+      probe: mock(async () => true),
       getWebClientStatus: mock(async () => ({
         enabled: true,
         running: true,
@@ -95,6 +97,159 @@ function installHealthyRemoteFetch(): void {
 }
 
 describe("Electron connection manager", () => {
+  test("probes local and saved remotes without exposing or persisting credentials", async () => {
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "ready",
+          name: "ready.example",
+          address: "https://ready.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+        {
+          id: "offline",
+          name: "offline.example",
+          address: "https://offline.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+        {
+          id: "missing-token",
+          name: "missing.example",
+          address: "https://missing.example",
+          encryptedToken: "",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    const requests: Array<{ hostname: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({
+        hostname: url.hostname,
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      if (url.hostname === "offline.example") {
+        return new Response(JSON.stringify({ ok: false }), { status: 503 });
+      }
+      return new Response(JSON.stringify({ ok: true }));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await expect(manager.probe("local")).resolves.toBe(true);
+    await expect(manager.probe("ready")).resolves.toBe(true);
+    await expect(manager.probe("offline")).resolves.toBe(false);
+    await expect(manager.probe("missing-token")).resolves.toBe(false);
+    await expect(manager.probe("unknown")).resolves.toBe(false);
+    expect(requests).toEqual([
+      { hostname: "ready.example", authorization: `Bearer ${token}` },
+      { hostname: "offline.example", authorization: `Bearer ${token}` },
+    ]);
+    expect(local.getStored().activeConnectionId).toBe("local");
+  });
+
+  test("reports Local unavailable when the local backend health check fails", async () => {
+    const local = localBackendHarness();
+    local.backend.probe = mock(async () => {
+      throw new Error("local backend stopped");
+    });
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+
+    await expect(manager.probe("local")).resolves.toBe(false);
+    expect(local.backend.probe).toHaveBeenCalledWith(3_000);
+  });
+
+  test("uses the active remote's in-memory token for session-only probes", async () => {
+    const local = localBackendHarness();
+    const storage = secureStorage(false);
+    const statusRequests: Array<{ authorization: string | null; aborted: boolean }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).endsWith("/__orkestrator/events")) {
+        return new Promise<Response>((_resolve, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          }),
+        );
+      }
+      statusRequests.push({
+        authorization: new Headers(init?.headers).get("authorization"),
+        aborted: init?.signal?.aborted ?? false,
+      });
+      return new Response(JSON.stringify({ ok: true }));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: storage,
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.connect({ address: "https://session-only.example", token });
+    const remoteId = manager.getList().activeConnectionId;
+
+    await expect(manager.probe(remoteId)).resolves.toBe(true);
+    expect(statusRequests).toEqual([
+      { authorization: `Bearer ${token}`, aborted: false },
+      { authorization: `Bearer ${token}`, aborted: false },
+    ]);
+    expect(storage.decryptStringAsync).not.toHaveBeenCalled();
+    expect(
+      local.getStored().connections.find((connection) => connection.id === remoteId)
+        ?.encryptedToken,
+    ).toBe("");
+  });
+
+  test("aborts remote probes at the three-second probe budget", async () => {
+    jest.useFakeTimers();
+    const local = localBackendHarness({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "slow",
+          name: "slow.example",
+          address: "https://slow.example",
+          encryptedToken: encrypted(token),
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
+    });
+    let signal: AbortSignal | undefined;
+    globalThis.fetch = mock(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+        }),
+    ) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+      connectionTimeoutMs: 10_000,
+    });
+    await manager.initialize();
+
+    const pending = manager.probe("slow");
+    await Promise.resolve();
+    expect(signal?.aborted).toBe(false);
+    jest.advanceTimersByTime(2_999);
+    expect(signal?.aborted).toBe(false);
+    jest.advanceTimersByTime(1);
+    await expect(pending).resolves.toBe(false);
+    expect(signal?.aborted).toBe(true);
+  });
+
   test("encrypts remote credentials, routes commands, and returns to Local", async () => {
     const local = localBackendHarness();
     const remoteRequests: Array<{ url: string; method: string; authorization: string | null }> = [];

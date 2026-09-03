@@ -424,6 +424,10 @@ describe("NativeAgentService", () => {
       title: "Projected session",
       shareUrl: "https://share.example/session",
       controls: { mode: "plan" },
+      readiness: {
+        state: "authentication-required",
+        message: "Cursor is not signed in.",
+      },
       messages: [
         {
           id: "message-1",
@@ -476,6 +480,10 @@ describe("NativeAgentService", () => {
           cursor: "in-process:cursor:1",
           messages: [{ id: "message-1", content: "Ready" }],
           composer: { selectedModelId: "cursor/default", selectedModeId: "plan" },
+          readiness: {
+            state: "authentication-required",
+            message: "Cursor is not signed in.",
+          },
         });
         expect(first?.composerControls.map((control) => control.id)).toEqual([
           "model",

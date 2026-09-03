@@ -1,4 +1,5 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
 import {
   type BridgeConnection,
@@ -88,6 +89,16 @@ export function isConnectPhaseFailure(error: unknown): boolean {
 export interface HttpBridgeProviderDependencies {
   fetch?: typeof fetch;
   stageImages?: (images: NonNullable<ProviderSendOptions["images"]>) => Promise<PromptAttachment[]>;
+}
+
+/** Validate the provider-neutral prompt-admission state at the bridge boundary. */
+export function normalizeProviderReadiness(value: unknown): NativeAgentReadiness | undefined {
+  const readiness = asRecord(value);
+  if (readiness?.state === "ready") return { state: "ready" };
+  if (readiness?.state !== "authentication-required") return undefined;
+  const message = nonEmptyString(readiness.message)?.trim();
+  if (!message) return undefined;
+  return { state: "authentication-required", message: message.slice(0, 500) };
 }
 
 export async function boundedJson(

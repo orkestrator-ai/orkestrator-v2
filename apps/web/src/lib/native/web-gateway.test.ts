@@ -419,6 +419,7 @@ describe("web gateway browser API", () => {
     const connectionList = { activeConnectionId: "remote-1", connections: [] };
     const connections = {
       list: mock(async () => connectionList),
+      probe: mock(async () => true),
       connect: mock(async () => connectionList),
       updateToken: mock(async () => connectionList),
       use: mock(async () => connectionList),
@@ -1916,6 +1917,7 @@ describe("web gateway browser API", () => {
     };
     const connections = {
       list: mock(async () => connectionList),
+      probe: mock(async () => true),
       connect: mock(async () => connectionList),
       updateToken: mock(async () => connectionList),
       use: mock(async () => connectionList),

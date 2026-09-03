@@ -16,7 +16,7 @@ import {
   settingSources,
   workingDirectory,
 } from "./config.js";
-import { resolveCredential } from "./credentials.js";
+import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
@@ -123,9 +123,7 @@ export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
 async function attach(state: SessionState): Promise<SDKAgent> {
   const { apiKey } = await resolveCredential();
   if (!apiKey) {
-    throw new CredentialError(
-      "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
-    );
+    throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
   const options = {
     apiKey,

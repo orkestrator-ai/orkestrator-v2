@@ -654,7 +654,7 @@ export function RepositorySettings({
       onOpenChange={onOpenChange}
       title="Repository Settings"
       menuItems={repoMenuItems}
-      footer={
+      headerActions={
         <>
           <Button variant="outline" onClick={handleCancel}>
             Cancel

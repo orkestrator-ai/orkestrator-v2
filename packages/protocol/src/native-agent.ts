@@ -269,6 +269,17 @@ export function migrateOpenCodeModelProviders(storedModelIds: readonly unknown[]
 export type AgentConversationMode = "build" | "plan";
 
 /**
+ * Whether the provider can accept a prompt from this session right now.
+ *
+ * Optional on projections for compatibility with older bridges. A missing
+ * value therefore means "unknown", never "ready" or "blocked". Credential
+ * material and provider-specific account details must not be attached here.
+ */
+export type NativeAgentReadiness =
+  | { state: "ready" }
+  | { state: "authentication-required"; message: string };
+
+/**
  * Provider-neutral composer snapshot. ACP adapters normalize vendor wire
  * (`configOptions`, `models._meta`, `session/set_model`) into this shape before
  * any renderer or backend catalog consumer sees it.
@@ -881,6 +892,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   composerControls: NativeAgentComposerControl[];
   /** Rich, provider-neutral model metadata used by the common model picker. */
   composer?: NativeAgentComposerState;
+  /** Authoritative provider admission state, when the bridge can report it. */
+  readiness?: NativeAgentReadiness;
   capabilities: NativeAgentCapabilities;
   queue?: NativeAgentQueueSnapshot;
   contextUsage?: NativeAgentContextUsage;

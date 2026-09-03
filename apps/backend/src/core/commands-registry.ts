@@ -39,6 +39,7 @@ import { registerPromptCommands } from "./commands-registry-prompts.js";
 import { registerReviewWorkflowCommands } from "./commands-registry-reviews.js";
 import { registerServerCommands } from "./commands-registry-servers.js";
 import { registerSessionCommands } from "./commands-registry-sessions.js";
+import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
@@ -234,6 +235,7 @@ export function createCommandRegistry(
   registerLinearCommands(register, dependencies);
   registerGitHubCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
+  registerSystemCommands(register);
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);
   registerToolingCommands(register, dependencies);

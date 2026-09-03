@@ -11,7 +11,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { authenticate, MAX_BODY_BYTES, PROVIDER, workingDirectory } from "./config.js";
-import { authStatus, beginLogin, logout } from "./credentials.js";
+import {
+  authStatus,
+  beginLogin,
+  CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+  logout,
+} from "./credentials.js";
 import { listModels, refreshModels } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
@@ -96,7 +101,12 @@ export async function route(
     return await routeSession(request, response, url, clientSignal);
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
-    if (error instanceof CredentialError) return json(response, 401, { error: error.message });
+    if (error instanceof CredentialError) {
+      return json(response, 401, {
+        error: error.message,
+        kind: "authentication-required",
+      });
+    }
     if (error instanceof PromptAttachmentError) {
       return json(response, 400, { error: error.message });
     }
@@ -231,7 +241,15 @@ async function routeSession(
     );
   }
   if (action === "status" && request.method === "GET") {
-    return json(response, 200, publicStatus(state));
+    const readiness = state.agent
+      ? { state: "ready" as const }
+      : (await authStatus()).authenticated
+        ? { state: "ready" as const }
+        : {
+            state: "authentication-required" as const,
+            message: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+          };
+    return json(response, 200, publicStatus(state, readiness));
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, publicActivity(state));

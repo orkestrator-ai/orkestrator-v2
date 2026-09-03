@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -323,6 +323,16 @@ function metricValue(label: string): string | undefined {
   return (
     screen.getByText(label).parentElement?.querySelector("div.font-mono")?.textContent ?? undefined
   );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
 }
 
 let confirmResult = true;
@@ -706,6 +716,209 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
+  test("shows live system percentages in one row and reveals full names on tap", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_system_usage"
+        ? {
+            cpuPercent: 12.4,
+            ramPercent: 47.8,
+            gpuPercent: null,
+            diskPercent: 63.2,
+            sampledAt: new Date(Date.now()).toISOString(),
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={claudeTab()} mobile />);
+    expect(nativeInvokeMock).not.toHaveBeenCalledWith("get_system_usage");
+    open();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 12%" }),
+      ).toBeTruthy(),
+    );
+    const system = screen.getByRole("region", { name: "System usage" });
+    const metrics = Array.from(system.querySelectorAll("button"));
+    expect(metrics.map((metric) => metric.textContent)).toEqual(["12%", "48%", "—", "63%"]);
+
+    fireEvent.mouseEnter(metrics[0]!);
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      "Central processing unit (CPU) usage",
+    );
+    fireEvent.mouseLeave(metrics[0]!);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Graphics processing unit (GPU) usage: —" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tooltip").textContent).toContain(
+        "Graphics processing unit (GPU) usage",
+      ),
+    );
+  });
+
+  test("polls while open, marks an old snapshot unavailable, and recovers", async () => {
+    let clock = Date.parse("2026-09-03T12:00:00.000Z");
+    let cpuPercent = 12;
+    let rejectUsage = false;
+    let usageCalls = 0;
+    const firstUsage = deferred<Record<string, unknown>>();
+    const timers: Array<() => unknown> = [];
+    const originalSetTimeout = window.setTimeout;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => clock);
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_system_usage") return undefined;
+      usageCalls += 1;
+      if (usageCalls === 1) return firstUsage.promise;
+      if (rejectUsage) throw new Error("backend unavailable");
+      return {
+        cpuPercent,
+        ramPercent: 48,
+        gpuPercent: null,
+        diskPercent: 63,
+        sampledAt: new Date(clock).toISOString(),
+      };
+    });
+
+    try {
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      await waitFor(() => expect(usageCalls).toBe(1));
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (timeout === 3_000 && typeof handler === "function") {
+          timers.push(() => handler());
+          return 10_000 + timers.length;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      }) as typeof window.setTimeout;
+      firstUsage.resolve({
+        cpuPercent,
+        ramPercent: 48,
+        gpuPercent: null,
+        diskPercent: 63,
+        sampledAt: new Date(clock).toISOString(),
+      });
+      await act(async () => {
+        await firstUsage.promise;
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 12%" }),
+      ).toBeTruthy();
+      expect(timers).toHaveLength(1);
+
+      cpuPercent = 27;
+      clock += 3_000;
+      await act(async () => {
+        await timers.shift()!();
+      });
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 27%" }),
+      ).toBeTruthy();
+
+      rejectUsage = true;
+      for (let index = 0; index < 4; index += 1) {
+        clock += 3_000;
+        await act(async () => {
+          await timers.shift()!();
+        });
+      }
+      expect(screen.getByRole("status").textContent).toBe("Data unavailable");
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: —" }),
+      ).toBeTruthy();
+
+      rejectUsage = false;
+      cpuPercent = 39;
+      clock += 3_000;
+      await act(async () => {
+        await timers.shift()!();
+      });
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 39%" }),
+      ).toBeTruthy();
+    } finally {
+      window.setTimeout = originalSetTimeout;
+      nowSpy.mockRestore();
+    }
+  });
+
+  test("stops polling when closed and ignores an earlier in-flight response after reopening", async () => {
+    const firstUsage = deferred<Record<string, unknown>>();
+    let usageCalls = 0;
+    const timers: Array<() => unknown> = [];
+    const clearedTimers: number[] = [];
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_system_usage") return undefined;
+      usageCalls += 1;
+      if (usageCalls === 1) return firstUsage.promise;
+      return {
+        cpuPercent: 44,
+        ramPercent: 48,
+        gpuPercent: null,
+        diskPercent: 63,
+        sampledAt: new Date(Date.now()).toISOString(),
+      };
+    });
+
+    try {
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      await waitFor(() => expect(usageCalls).toBe(1));
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (timeout === 3_000 && typeof handler === "function") {
+          timers.push(() => handler());
+          return 20_000 + timers.length;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      }) as typeof window.setTimeout;
+      window.clearTimeout = ((timerId: number | undefined) => {
+        if (typeof timerId === "number" && timerId >= 20_000) {
+          clearedTimers.push(timerId);
+          return;
+        }
+        originalClearTimeout(timerId);
+      }) as typeof window.clearTimeout;
+      fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
+      open();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 44%" }),
+      ).toBeTruthy();
+
+      firstUsage.resolve({
+        cpuPercent: 11,
+        ramPercent: 22,
+        gpuPercent: null,
+        diskPercent: 33,
+        sampledAt: new Date(Date.now()).toISOString(),
+      });
+      await act(async () => {
+        await firstUsage.promise;
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("button", { name: "Central processing unit (CPU) usage: 44%" }),
+      ).toBeTruthy();
+      expect(timers).toHaveLength(1);
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
+      expect(clearedTimers).toEqual([20_001]);
+      const callsBeforeClose = usageCalls;
+      await Promise.resolve();
+      expect(usageCalls).toBe(callsBeforeClose);
+    } finally {
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
   test("renders model buckets and suppresses the aggregate Cursor quota", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command !== "get_cursor_account_usage") return undefined;
@@ -2342,16 +2555,17 @@ describe("AgentInfoButton Claude session options", () => {
     fireEvent.click(suggestions!);
     await waitFor(() => expect(suggestions!.checked).toBe(true));
 
-    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
-      1,
+    const controlCalls = nativeInvokeMock.mock.calls.filter(
+      ([command]) => command === "update_native_agent_controls",
+    );
+    expect(controlCalls[0]).toEqual([
       "update_native_agent_controls",
       expect.objectContaining({ update: { includeLocalSettings: true } }),
-    );
-    expect(nativeInvokeMock).toHaveBeenNthCalledWith(
-      2,
+    ]);
+    expect(controlCalls[1]).toEqual([
       "update_native_agent_controls",
       expect.objectContaining({ update: { promptSuggestions: true } }),
-    );
+    ]);
   });
 
   test("reports a provider-neutral control failure and keeps canonical state", async () => {

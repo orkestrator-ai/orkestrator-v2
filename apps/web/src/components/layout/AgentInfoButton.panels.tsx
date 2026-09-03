@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { useEffect, useId, useState, type ComponentType, type SVGProps } from "react";
+import { ChevronRight, CircuitBoard, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import type { SystemUsageSnapshot } from "@/lib/backend";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,107 @@ function formatUsd(value: number): string {
   if (value === 0) return "$0.00";
   if (value < 0.01) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(2)}`;
+}
+
+function SystemMetric({
+  icon: Icon,
+  label,
+  value,
+  align = "center",
+}: {
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
+  label: string;
+  value: number | null | undefined;
+  align?: "start" | "center" | "end";
+}) {
+  const [labelOpen, setLabelOpen] = useState(false);
+  const formatted = typeof value === "number" ? `${Math.round(value)}%` : "—";
+  const labelId = useId();
+  return (
+    <div
+      className="relative min-w-0"
+      onMouseEnter={() => setLabelOpen(true)}
+      onMouseLeave={() => setLabelOpen(false)}
+    >
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-1.5 py-2 text-muted-foreground transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        aria-label={`${label}: ${formatted}`}
+        aria-describedby={labelOpen ? labelId : undefined}
+        onClick={() => setLabelOpen(true)}
+        onFocus={() => setLabelOpen(true)}
+        onBlur={() => setLabelOpen(false)}
+      >
+        <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate font-mono text-xs tabular-nums text-foreground">{formatted}</span>
+      </button>
+      {labelOpen ? (
+        <div
+          id={labelId}
+          role="tooltip"
+          className={`pointer-events-none absolute top-[calc(100%+0.375rem)] z-50 w-max rounded-md border border-zinc-700/70 bg-zinc-900/95 px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg ${
+            align === "start" ? "left-0" : align === "end" ? "right-0" : "left-1/2 -translate-x-1/2"
+          }`}
+        >
+          {label}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
+
+export function isSystemUsageFresh(
+  usage: SystemUsageSnapshot | null,
+  checkedAt: number,
+): usage is SystemUsageSnapshot {
+  if (!usage) return false;
+  const sampledAt = Date.parse(usage.sampledAt);
+  return Number.isFinite(sampledAt) && checkedAt - sampledAt <= SYSTEM_USAGE_STALE_AFTER_MS;
+}
+
+export function SystemUsagePanel({
+  usage,
+  checkedAt,
+}: {
+  usage: SystemUsageSnapshot | null;
+  checkedAt: number;
+}) {
+  const freshUsage = isSystemUsageFresh(usage, checkedAt) ? usage : null;
+  const stale = usage !== null && freshUsage === null;
+  return (
+    <section className="mb-4 border-b border-border/60 pb-4" aria-label="System usage">
+      <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        <span>System</span>
+        {stale ? <span role="status">Data unavailable</span> : null}
+      </div>
+      <div className="mt-2 grid grid-cols-4 gap-1.5">
+        <SystemMetric
+          icon={Cpu}
+          label="Central processing unit (CPU) usage"
+          value={freshUsage?.cpuPercent}
+          align="start"
+        />
+        <SystemMetric
+          icon={MemoryStick}
+          label="Random-access memory (RAM) usage"
+          value={freshUsage?.ramPercent}
+        />
+        <SystemMetric
+          icon={CircuitBoard}
+          label="Graphics processing unit (GPU) usage"
+          value={freshUsage?.gpuPercent}
+        />
+        <SystemMetric
+          icon={HardDrive}
+          label="Disk storage usage"
+          value={freshUsage?.diskPercent}
+          align="end"
+        />
+      </div>
+    </section>
+  );
 }
 
 /**

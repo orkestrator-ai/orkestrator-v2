@@ -11,6 +11,7 @@ const CONNECTIONS_KEY = "orkestrator.public.connections";
 const LEGACY_SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
 const LEGACY_REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
 export const DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS = 10_000;
+const BACKEND_PROBE_TIMEOUT_MS = 3_000;
 const MAX_RECENT_CONNECTIONS = 20;
 
 export interface SavedConnection {
@@ -214,6 +215,20 @@ export function listBrowserConnections(): ConnectionList {
       requiresToken: !tokens[connection.id],
     })),
   };
+}
+
+export async function probeBrowserConnection(id: string): Promise<boolean> {
+  const connection = loadRecentConnections().find((entry) => entry.id === id);
+  const token = loadSessionTokens()[id];
+  if (!connection || !token) return false;
+  try {
+    await checkBackendConnection(connection.address, token, {
+      timeoutMs: BACKEND_PROBE_TIMEOUT_MS,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function selectBrowserConnection(id: string): ConnectionList {

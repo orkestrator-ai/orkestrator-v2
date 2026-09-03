@@ -47,21 +47,21 @@ mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
   FullscreenSettingsLayout: ({
     open,
     children,
-    footer,
+    headerActions,
   }: {
     open: boolean;
     onOpenChange: (o: boolean) => void;
     title: string;
     menuItems: unknown[];
     children: (section: string) => React.ReactNode;
-    footer?: React.ReactNode;
+    headerActions?: React.ReactNode;
     defaultSection?: string;
   }) => {
     if (!open) return null;
     return (
       <div data-testid="settings-layout">
         <div data-testid="settings-content">{children(mockSection)}</div>
-        {footer && <div data-testid="settings-footer">{footer}</div>}
+        {headerActions && <div data-testid="settings-header-actions">{headerActions}</div>}
       </div>
     );
   },

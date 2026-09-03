@@ -177,7 +177,19 @@ exit 1
   test("keeps credential sync compatible with repeated workspace Git configuration", async () => {
     const home = await createTempDir("ork-github-config-home-");
     const credentialFile = path.join(home, "runtime", "github-token");
-    const env = { ...process.env, HOME: home, GITHUB_TOKEN: "token-value", GH_TOKEN: "" };
+    // Git prefers $XDG_CONFIG_HOME/git/config over $HOME/.gitconfig. In an
+    // XDG-configured developer shell, overriding HOME alone lets this test's
+    // placeholder token rewrite the developer's real global Git config. Pin
+    // the global file explicitly as a second barrier against ambient Git path
+    // configuration being added to the test runner later.
+    const env = {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"),
+      GITHUB_TOKEN: "token-value",
+      GH_TOKEN: "",
+    };
     const sync = spawnSync(
       "bash",
       ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile)],

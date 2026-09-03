@@ -112,7 +112,12 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
     expect(desktopMain).toContain("app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME)");
     expect(desktopMain).toContain("createToolchainProgressController");
+    expect(desktopMain).toContain("onUnexpectedClose: () => app.quit()");
     expect(desktopMain).toContain("await toolchainProgress.close()");
+    expect(desktopMain).toContain('alwaysQuit: runtimeFlavor === "agent-test"');
+    expect(desktopMain.indexOf("mainWindow = createdWindow;")).toBeLessThan(
+      desktopMain.indexOf("windowAllClosedQuit.markMainWindowCreated();"),
+    );
     expect(desktopMain).toContain("initializeBrowserPreviews");
     expect(desktopMain).toContain("browserPreviewManager = browserPreviewRuntime.manager");
     expect(desktopMain).toContain("browserPreviews: browserPreviewManager ?? undefined");

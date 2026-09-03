@@ -10,6 +10,7 @@ import {
 describe("toolchain bootstrap window", () => {
   test("collects a normalized first-run platform selection before downloads", async () => {
     let ipcListener: ((_event: unknown, channel: string, values: unknown) => void) | undefined;
+    let loadedUrl = "";
     let destroyed = false;
     class SelectionWindow {
       readonly webContents = {
@@ -19,7 +20,9 @@ describe("toolchain bootstrap window", () => {
         once: mock(() => undefined),
         setWindowOpenHandler: mock(() => undefined),
       };
-      readonly loadURL = mock(async (_url: string) => undefined);
+      readonly loadURL = mock(async (url: string) => {
+        loadedUrl = url;
+      });
       readonly once = mock(() => undefined);
       readonly isDestroyed = mock(() => destroyed);
       readonly close = mock(() => {
@@ -37,6 +40,38 @@ describe("toolchain bootstrap window", () => {
 
     await expect(selecting).resolves.toEqual(["claude", "grok"]);
     expect(destroyed).toBe(true);
+    const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
+    expect(loadedHtml).toContain(
+      "body { margin: 0; min-height: 100vh; display: flex; padding: 44px 28px;",
+    );
+    expect(loadedHtml).toContain("main { width: min(570px, 100%); margin: auto; }");
+  });
+
+  test("rejects when the platform picker is closed before a selection", async () => {
+    let closedListener: (() => void) | undefined;
+    class CancelledSelectionWindow {
+      readonly webContents = {
+        on: mock(() => undefined),
+        once: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+      };
+      readonly loadURL = mock(async () => undefined);
+      readonly once = mock((_event: "closed", listener: () => void) => {
+        closedListener = listener;
+        return undefined as never;
+      });
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+    }
+
+    const selecting = chooseAgentPlatforms({
+      BrowserWindowCtor: CancelledSelectionWindow as never,
+      dirname: "/app/electron",
+    });
+    await Promise.resolve();
+    closedListener?.();
+
+    await expect(selecting).rejects.toThrow("Agent platform selection was cancelled");
   });
 
   test("loads a locked-down local progress page and forwards status over IPC", async () => {
@@ -83,7 +118,12 @@ describe("toolchain bootstrap window", () => {
     });
     const loadedUrl = window.loadURL.mock.calls[0]?.[0] ?? "";
     expect(loadedUrl).toStartWith("data:text/html;charset=utf-8,");
-    expect(decodeURIComponent(loadedUrl.split(",")[1] ?? "")).toContain("Preparing pinned tools");
+    const loadedHtml = decodeURIComponent(loadedUrl.split(",")[1] ?? "");
+    expect(loadedHtml).toContain("Preparing pinned tools");
+    expect(loadedHtml).toContain(
+      "body { margin: 0; min-height: 100vh; display: flex; padding: 28px;",
+    );
+    expect(loadedHtml).toContain("main { width: min(430px, 100%); margin: auto; }");
 
     const preventDefault = mock(() => undefined);
     navigationListener?.({ preventDefault });

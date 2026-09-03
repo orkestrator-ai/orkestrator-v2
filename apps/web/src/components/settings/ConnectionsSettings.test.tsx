@@ -34,6 +34,7 @@ function installConnections(
   connectionList: ConnectionList = initialList,
   overrides: Partial<{
     list: () => Promise<ConnectionList>;
+    probe: (connectionId: string) => Promise<boolean>;
     connect: (input: { address: string; token: string }) => Promise<ConnectionList>;
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
@@ -41,6 +42,7 @@ function installConnections(
   }> = {},
 ) {
   const list = mock(overrides.list ?? (async () => connectionList));
+  const probe = mock(overrides.probe ?? (async () => true));
   const connect = mock(overrides.connect ?? (async () => connectionList));
   const updateToken = mock(overrides.updateToken ?? (async () => connectionList));
   const use = mock(overrides.use ?? (async () => connectionList));
@@ -63,11 +65,11 @@ function installConnections(
       writeImage: mock(async () => undefined),
     },
     dialog: { open: mock(async () => null) },
-    connections: { list, connect, updateToken, use, forget },
+    connections: { list, probe, connect, updateToken, use, forget },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list, connect, updateToken, use, forget };
+  return { list, probe, connect, updateToken, use, forget };
 }
 
 afterEach(() => {

@@ -16,6 +16,7 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentForkOutcome,
   NativeAgentNotice,
+  NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
@@ -202,6 +203,7 @@ export interface ProviderInteractiveSnapshot {
   title?: string;
   shareUrl?: string | null;
   composer?: NativeAgentComposerState;
+  readiness?: NativeAgentReadiness;
   controls?: NativeAgentControlUpdate;
   providerRevision?: number;
   providerGeneration?: string | number;

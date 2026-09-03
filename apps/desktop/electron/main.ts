@@ -48,6 +48,7 @@ import {
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
+import { registerWindowAllClosedQuit } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
@@ -81,6 +82,13 @@ let backend: BackendHttpClient | null = null;
 let connectionManager: ConnectionManager | null = null;
 let browserPreviewManager: BrowserPreviewManager | null = null;
 const backendProcess = new BackendProcess();
+// Closing a main window may quit; the windowless moments before the first one,
+// between programmatic first-run setup handoffs, must not.
+const windowAllClosedQuit = registerWindowAllClosedQuit({
+  app,
+  platform: process.platform,
+  alwaysQuit: runtimeFlavor === "agent-test",
+});
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -88,6 +96,7 @@ const toolchainProgress = createToolchainProgressController({
       dirname: __dirname,
     }),
   reportProgress: (window, progress) => reportToolchainProgress(window as BrowserWindow, progress),
+  onUnexpectedClose: () => app.quit(),
   logError: (error) => console.error("[Toolchains] Failed to show bootstrap progress:", error),
 });
 
@@ -119,6 +128,7 @@ async function createWindow(): Promise<void> {
     title: productName,
   });
   mainWindow = createdWindow;
+  windowAllClosedQuit.markMainWindowCreated();
   registerBrowserPreviewWindowCleanup({
     window: createdWindow,
     getManager: () => browserPreviewManager,
@@ -142,6 +152,10 @@ function registerIpc(): void {
     listConnections: () => {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.getList();
+    },
+    probeConnection: (connectionId) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.probe(connectionId);
     },
     connectToRemote: (input) => {
       if (!connectionManager) throw new Error("Connections are not initialized");
@@ -322,10 +336,6 @@ if (isPrimaryInstance) {
     `[Desktop] Another ${productName} instance is already using ${app.getPath("userData")}. Quit it and try again.`,
   );
 }
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin" || runtimeFlavor === "agent-test") app.quit();
-});
 
 registerBackendShutdown(app, backendProcess);
 registerApplicationLoggingShutdown(app, applicationLogging);

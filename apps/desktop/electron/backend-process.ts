@@ -275,6 +275,23 @@ export class BackendHttpClient {
     return payload.result as T;
   }
 
+  async probe(timeoutMs: number): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(new URL("/__orkestrator/status", this.baseUrl), {
+        headers: { authorization: `Bearer ${this.token}` },
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean };
+      return response.ok && payload.ok === true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async getTokenSettings(): Promise<GatewayTokenSettings> {
     return this.gatewaySettings("GET");
   }

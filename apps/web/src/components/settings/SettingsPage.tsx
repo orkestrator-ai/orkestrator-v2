@@ -25,8 +25,9 @@ import { McpSettings } from "./McpSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { MessagingSettings } from "./MessagingSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
+import type { GlobalSettingsSection } from "@/lib/settings-navigation";
 
-const MENU_ITEMS: SettingsMenuItem[] = [
+const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
   { id: "connections", label: "Connections", icon: <RadioTower className="h-4 w-4" /> },
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
@@ -76,9 +77,10 @@ const MENU_ITEMS: SettingsMenuItem[] = [
 interface SettingsPageProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  defaultSection?: GlobalSettingsSection;
 }
 
-export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
+export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPageProps) {
   const setConfig = useConfigStore((state) => state.setConfig);
   const isLoading = useConfigStore((state) => state.isLoading);
   const setLoading = useConfigStore((state) => state.setLoading);
@@ -109,6 +111,7 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
       onOpenChange={onOpenChange}
       title="Settings"
       menuItems={MENU_ITEMS}
+      defaultSection={defaultSection}
     >
       {(activeSection) =>
         // Skills is a read-only browser of the host's skill directories, not a

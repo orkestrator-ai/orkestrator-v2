@@ -6,10 +6,19 @@ import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
 const originalReload = window.location.reload;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function installConnections(
   list: ConnectionList,
   overrides: Partial<{
     list: () => Promise<ConnectionList>;
+    probe: (connectionId: string) => Promise<boolean>;
     connect: (input: { address: string; token: string }) => Promise<ConnectionList>;
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
@@ -17,6 +26,7 @@ function installConnections(
   }> = {},
 ) {
   const listConnections = mock(overrides.list ?? (async () => list));
+  const probe = mock(overrides.probe ?? (async () => true));
   const connect = mock(overrides.connect ?? (async () => list));
   const updateToken = mock(overrides.updateToken ?? (async () => list));
   const use = mock(overrides.use ?? (async () => list));
@@ -33,6 +43,7 @@ function installConnections(
     dialog: { open: mock(async () => null) },
     connections: {
       list: listConnections,
+      probe,
       connect,
       updateToken,
       use,
@@ -41,7 +52,7 @@ function installConnections(
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list: listConnections, connect, updateToken, use, forget };
+  return { list: listConnections, probe, connect, updateToken, use, forget };
 }
 
 afterEach(() => {
@@ -83,6 +94,243 @@ describe("server connection switcher", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByLabelText("Tailscale address")).toBeTruthy();
     expect(screen.getByText(/operating system’s secure credential storage/)).toBeTruthy();
+  });
+
+  test("probes the active server automatically and inactive servers only on row intent", async () => {
+    const list: ConnectionList = {
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: true,
+          requiresToken: false,
+        },
+        {
+          id: "ready",
+          name: "Ready desk",
+          address: "https://ready.example",
+          kind: "remote",
+          active: false,
+          requiresToken: false,
+        },
+        {
+          id: "offline",
+          name: "Offline desk",
+          address: "https://offline.example",
+          kind: "remote",
+          active: false,
+          requiresToken: false,
+        },
+      ],
+    };
+    const probe = mock(async (connectionId: string) => connectionId !== "offline");
+    installConnections(list, { probe });
+    render(<ServerConnectionSwitcher />);
+
+    await waitFor(() => expect(probe).toHaveBeenCalledWith("local"));
+    expect(probe.mock.calls.every(([connectionId]) => connectionId === "local")).toBe(true);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+
+    const readyItem = await screen.findByRole("menuitem", {
+      name: /Ready desk.*status: not checked/,
+    });
+    const offlineItem = screen.getByRole("menuitem", {
+      name: /Offline desk.*status: not checked/,
+    });
+    expect(probe.mock.calls.every(([connectionId]) => connectionId === "local")).toBe(true);
+
+    // happy-dom does not reproduce Radix's automatic initial item focus, so
+    // explicitly consume the focus event that menu open produces in a browser.
+    fireEvent.focus(screen.getByRole("menuitem", { name: /Local.*status:/ }));
+    fireEvent.pointerMove(readyItem);
+    expect(await screen.findByRole("menuitem", { name: /Ready desk.*status: ready/ })).toBeTruthy();
+    fireEvent.focus(offlineItem);
+    expect(
+      await screen.findByRole("menuitem", { name: /Offline desk.*status: unavailable/ }),
+    ).toBeTruthy();
+    expect(probe.mock.calls.some(([connectionId]) => connectionId === "ready")).toBe(true);
+    expect(probe.mock.calls.some(([connectionId]) => connectionId === "offline")).toBe(true);
+  });
+
+  test("does not probe an inactive remote merely because menu open focuses its row", async () => {
+    const { probe } = installConnections({
+      activeConnectionId: "active",
+      connections: [
+        {
+          id: "inactive",
+          name: "Inactive",
+          address: "https://inactive.example",
+          kind: "remote",
+          active: false,
+          requiresToken: false,
+        },
+        {
+          id: "active",
+          name: "Active",
+          address: "https://active.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    });
+    render(<ServerConnectionSwitcher />);
+    await waitFor(() => expect(probe).toHaveBeenCalledWith("active"));
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Active" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+
+    const inactive = await screen.findByRole("menuitem", { name: /Inactive.*status:/ });
+    fireEvent.focus(inactive);
+    expect(probe.mock.calls.every(([connectionId]) => connectionId === "active")).toBe(true);
+
+    fireEvent.pointerMove(inactive);
+    await waitFor(() => expect(probe).toHaveBeenCalledWith("inactive"));
+    fireEvent.pointerMove(inactive);
+    expect(probe.mock.calls.filter(([connectionId]) => connectionId === "inactive")).toHaveLength(
+      1,
+    );
+  });
+
+  test("treats a failed readiness probe as unavailable", async () => {
+    const list: ConnectionList = {
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    installConnections(list, {
+      probe: mock(async () => {
+        throw new Error("probe failed");
+      }),
+    });
+    render(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+
+    expect(
+      await screen.findByRole("menuitem", { name: /Local.*status: unavailable/ }),
+    ).toBeTruthy();
+  });
+
+  test("reports a missing credential as token required without probing it", async () => {
+    const list: ConnectionList = {
+      activeConnectionId: "current",
+      connections: [
+        {
+          id: "current",
+          name: "Current",
+          address: "https://current.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+        {
+          id: "saved",
+          name: "Saved",
+          address: "https://saved.example",
+          kind: "remote",
+          active: false,
+          requiresToken: true,
+        },
+      ],
+    };
+    const { probe } = installConnections(list);
+    render(<ServerConnectionSwitcher />);
+    fireEvent.pointerDown(
+      await screen.findByRole("button", { name: "Connected server: Current" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+
+    const saved = await screen.findByRole("menuitem", { name: /Saved.*status: token required/ });
+    fireEvent.pointerMove(saved);
+    fireEvent.focus(saved);
+    expect(probe.mock.calls.some(([connectionId]) => connectionId === "saved")).toBe(false);
+    expect(screen.queryByRole("menuitem", { name: /Saved.*status: unavailable/ })).toBeNull();
+  });
+
+  test("keeps the active badge neutral until checked and ignores superseded results", async () => {
+    const first = deferred<boolean>();
+    const probe = mock()
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    installConnections(
+      {
+        activeConnectionId: "active",
+        connections: [
+          {
+            id: "active",
+            name: "Active",
+            address: "https://active.example",
+            kind: "remote",
+            active: true,
+            requiresToken: false,
+          },
+        ],
+      },
+      { probe },
+    );
+    render(<ServerConnectionSwitcher />);
+    const trigger = await screen.findByRole("button", { name: "Connected server: Active" });
+    await waitFor(() => expect(trigger.querySelector('[data-status="checking"]')).toBeTruthy());
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
+    await act(async () => first.resolve(false));
+    expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy();
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(trigger.querySelector('[data-status="unavailable"]')).toBeTruthy());
+    fireEvent.focus(window);
+    await waitFor(() => expect(trigger.querySelector('[data-status="ready"]')).toBeTruthy());
+  });
+
+  test("discards an active probe result after unmount", async () => {
+    const pending = deferred<boolean>();
+    const { probe } = installConnections(
+      {
+        activeConnectionId: "local",
+        connections: [
+          {
+            id: "local",
+            name: "Local",
+            address: null,
+            kind: "local",
+            active: true,
+            requiresToken: false,
+          },
+        ],
+      },
+      { probe: mock(() => pending.promise) },
+    );
+    const rendered = render(<ServerConnectionSwitcher />);
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    rendered.unmount();
+    await act(async () => pending.resolve(true));
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   test("prefills a remembered browser server when its tab token is missing", async () => {

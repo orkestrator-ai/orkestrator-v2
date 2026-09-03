@@ -10,6 +10,7 @@ import {
   listBrowserConnections,
   loadSavedConnection,
   normalizeBackendAddress,
+  probeBrowserConnection,
   saveConnection,
   selectBrowserConnection,
   updateSavedToken,
@@ -23,6 +24,7 @@ interface ActiveConnection extends SavedConnection {
 
 const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
   list: async () => listBrowserConnections(),
+  probe: probeBrowserConnection,
   async connect(input) {
     const normalizedAddress = await checkBackendConnection(input.address, input.token);
     saveConnection({ address: normalizedAddress, token: input.token.trim() });

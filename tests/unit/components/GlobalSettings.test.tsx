@@ -1729,7 +1729,7 @@ describe("GlobalSettings", () => {
       );
       expect(token.value).toBe("discarded-token");
 
-      fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+      fireEvent.click(screen.getAllByRole("button", { name: "Reset" })[0]!);
       expect(token.value).toBe("");
 
       // Any later external config change re-runs the `[global]` sync effect. A
@@ -1917,9 +1917,10 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="general" />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Log retention in Debug");
-    expect(
-      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    const saveButton = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+    expect(saveButton.getAttribute("aria-describedby")).toBe(alert.id);
+    expect(saveButton.title).toContain("Log retention in Debug");
 
     rerender(<GlobalSettings activeSection="debug" />);
     fireEvent.change(await screen.findByLabelText("Log retention days"), {
@@ -1946,7 +1947,7 @@ describe("GlobalSettings", () => {
       'input[type="text"][value="#000000"]',
     ) as HTMLInputElement;
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
-    fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Reset" })[0]!);
 
     expect(screen.getByText("1,000 lines")).toBeTruthy();
     expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(
@@ -2199,7 +2200,7 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
     await waitFor(() => expect(mockTestDomainResolution).toHaveBeenCalledWith(["example.com"]));
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Reset" })[0]!);
     expect(domains.value).toBe("");
     expect(screen.queryByText(/Invalid domain format/) === null).toBe(true);
   });
@@ -2256,7 +2257,7 @@ describe("GlobalSettings", () => {
     );
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Reset" })[0]!);
     expect(colorTextInput.value).toBe("#000000");
     expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(
       true,

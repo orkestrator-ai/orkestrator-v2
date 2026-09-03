@@ -115,6 +115,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       connect(input: ConnectToRemoteInput): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:connect", input);
       },
+      updateToken(connectionId: string, token: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:update-token", connectionId, token);
+      },
       use(connectionId: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:use", connectionId);
       },

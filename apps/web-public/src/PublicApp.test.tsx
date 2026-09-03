@@ -91,6 +91,64 @@ describe("PublicApp connection form", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  test("updates the live authorization header when replacing the active token", async () => {
+    saveConnection({ address: "https://workstation.example", token });
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      if (String(input).endsWith("/__orkestrator/invoke")) {
+        return new Response(JSON.stringify({ result: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    render(<PublicApp />);
+    await screen.findByText("Main app stub");
+
+    const api = window.orkestrator?.connections;
+    const activeId = (await api?.list())?.activeConnectionId ?? "missing";
+    await api?.updateToken(activeId, "replacement-token-123456");
+    await window.orkestrator?.invoke("get_projects");
+
+    expect(
+      requests.find((request) => request.url.endsWith("/__orkestrator/invoke"))?.authorization,
+    ).toBe("Bearer replacement-token-123456");
+  });
+
+  test("keeps the active transport token when replacement verification fails", async () => {
+    saveConnection({ address: "https://workstation.example", token });
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const request = {
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+      };
+      requests.push(request);
+      if (request.authorization === "Bearer rejected-token-123456") {
+        return new Response("{}", { status: 401 });
+      }
+      if (request.url.endsWith("/__orkestrator/invoke")) {
+        return new Response(JSON.stringify({ result: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    render(<PublicApp />);
+    await screen.findByText("Main app stub");
+
+    const api = window.orkestrator?.connections;
+    const activeId = (await api?.list())?.activeConnectionId ?? "missing";
+    await expect(api?.updateToken(activeId, "rejected-token-123456")).rejects.toThrow(
+      "token was rejected",
+    );
+    await window.orkestrator?.invoke("get_projects");
+
+    expect(
+      requests.findLast((request) => request.url.endsWith("/__orkestrator/invoke"))?.authorization,
+    ).toBe(`Bearer ${token}`);
+  });
+
   test("warns when this HTTPS page targets a plain-HTTP backend", () => {
     render(<PublicApp />);
 

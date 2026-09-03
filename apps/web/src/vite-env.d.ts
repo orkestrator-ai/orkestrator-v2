@@ -52,6 +52,10 @@ interface Window {
       connect(
         input: import("@orkestrator/protocol/connections").ConnectToRemoteInput,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      updateToken(
+        connectionId: string,
+        token: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       use(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;

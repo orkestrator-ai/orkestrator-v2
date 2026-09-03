@@ -43,6 +43,9 @@ describe("direct gateway authentication transport", () => {
     );
     await fetch("https://workstation.example/not-gateway");
     await fetch("https://other.example/__orkestrator/status");
+    await fetch("https://workstation.example/__orkestrator/status", {
+      headers: { authorization: "Bearer candidate-token-123456" },
+    });
     updateDirectGatewayToken("second-token-123456");
     await fetch("https://workstation.example/__orkestrator/status");
 
@@ -64,6 +67,12 @@ describe("direct gateway authentication transport", () => {
         authorization: null,
         custom: null,
         credentials: undefined,
+      },
+      {
+        url: "https://workstation.example/__orkestrator/status",
+        authorization: "Bearer candidate-token-123456",
+        custom: null,
+        credentials: "omit",
       },
       {
         url: "https://workstation.example/__orkestrator/status",

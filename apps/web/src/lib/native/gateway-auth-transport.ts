@@ -26,7 +26,9 @@ function isGatewayRequest(input: RequestInfo | URL): boolean {
 function authenticatedInit(input: RequestInfo | URL, init?: RequestInit): RequestInit {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
-  headers.set("authorization", `Bearer ${directGatewayAuth?.token ?? ""}`);
+  if (!headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${directGatewayAuth?.token ?? ""}`);
+  }
   return { ...init, credentials: "omit", headers };
 }
 

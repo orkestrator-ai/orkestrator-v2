@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { subscribeToConnections } from "@/lib/connections";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
 type Readiness = "checking" | "ready" | "unavailable";
@@ -77,6 +78,8 @@ export function ServerConnectionSwitcher() {
       inFlight.clear();
     };
   }, []);
+
+  useEffect(() => subscribeToConnections(setConnections), []);
 
   const probeConnection = useCallback(
     (connection: ConnectionSummary, options: { supersede?: boolean } = {}) => {
@@ -337,9 +340,9 @@ export function ServerConnectionSwitcher() {
                 <Label htmlFor="connection-address">Tailscale address</Label>
                 <Input
                   id="connection-address"
-                  type="url"
+                  type="text"
                   inputMode="url"
-                  placeholder="https://workstation.tailnet.ts.net"
+                  placeholder="workstation or https://workstation.tailnet.ts.net"
                   value={address}
                   onChange={(event) => setAddress(event.target.value)}
                   autoComplete="url"
@@ -347,7 +350,8 @@ export function ServerConnectionSwitcher() {
                   required
                 />
                 <p className="text-xs leading-relaxed text-zinc-500">
-                  Use the HTTPS origin, without a path.
+                  A machine name reuses the tailnet suffix from a saved connection. Use the full
+                  HTTPS origin the first time.
                 </p>
               </div>
 

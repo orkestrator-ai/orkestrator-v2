@@ -195,6 +195,25 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let agentTestSessionActive = false;
   let credentialLapseHandled = false;
 
+  const applyGatewayToken = (token: string): void => {
+    const normalizedToken = token.trim();
+    bearerToken = normalizedToken || undefined;
+    terminalSocket?.updateToken(normalizedToken);
+    updateDirectGatewayToken(normalizedToken);
+  };
+
+  const sourceConnections = options.connections;
+  const connections = sourceConnections
+    ? {
+        ...sourceConnections,
+        async updateToken(connectionId: string, token: string) {
+          const list = await sourceConnections.updateToken(connectionId, token);
+          if (list.activeConnectionId === connectionId) applyGatewayToken(token);
+          return list;
+        },
+      }
+    : undefined;
+
   /**
    * An agent-test session has a sliding idle deadline and a hard absolute one,
    * and the gateway tears down this tab's event stream and terminal sockets the
@@ -1318,7 +1337,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       },
     },
 
-    ...(options.connections ? { connections: options.connections } : {}),
+    ...(connections ? { connections } : {}),
 
     webClient: {
       getStatus(): Promise<WebClientStatus> {
@@ -1361,9 +1380,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           response,
           "Gateway settings request failed",
         );
-        bearerToken = settings.token;
-        terminalSocket?.updateToken(settings.token);
-        updateDirectGatewayToken(settings.token);
+        applyGatewayToken(settings.token);
         options.onTokenChanged?.(settings.token);
         return settings;
       },

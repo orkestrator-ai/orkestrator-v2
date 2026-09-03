@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  expandTailscaleMachineName,
   LOCAL_CONNECTION_ID,
   parseStoredDesktopConnections,
   type ConnectToRemoteInput,
@@ -40,9 +41,18 @@ export type ConnectionManagerOptions = {
 const CONNECTION_TIMEOUT_MS = 10_000;
 const CONNECTION_PROBE_TIMEOUT_MS = 3_000;
 
-function normalizeRemoteAddress(value: string): string {
-  const candidate = value.trim();
+function normalizeRemoteAddress(value: string, knownAddresses: readonly string[] = []): string {
+  const candidate = expandTailscaleMachineName(value, knownAddresses);
   if (!candidate) throw new Error("Enter the backend address.");
+  if (
+    candidate === value.trim() &&
+    /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(candidate) &&
+    candidate.toLowerCase() !== "localhost"
+  ) {
+    throw new Error(
+      "Enter the full Tailscale HTTPS address once. Saved machines on that tailnet can then use a short name.",
+    );
+  }
 
   let url: URL;
   try {
@@ -87,6 +97,7 @@ export class ConnectionManager {
     token: string;
   } | null = null;
   private secureStorageAvailable = false;
+  private readonly sessionTokens = new Map<string, string>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(options: ConnectionManagerOptions) {
@@ -139,7 +150,10 @@ export class ConnectionManager {
           address: connection.address,
           kind: "remote" as const,
           active: activeConnectionId === connection.id,
-          requiresToken: connection.id !== activeConnectionId && !connection.encryptedToken,
+          requiresToken:
+            connection.id !== activeConnectionId &&
+            !connection.encryptedToken &&
+            !this.sessionTokens.has(connection.id),
           lastConnectedAt: connection.lastConnectedAt,
         })),
       ],
@@ -148,7 +162,15 @@ export class ConnectionManager {
 
   async connect(input: ConnectToRemoteInput): Promise<ConnectionList> {
     return this.enqueueMutation(async () => {
-      const address = normalizeRemoteAddress(input.address);
+      const address = normalizeRemoteAddress(
+        input.address,
+        [
+          this.stored.connections.find(
+            (connection) => connection.id === this.stored.activeConnectionId,
+          ),
+          ...this.stored.connections,
+        ].flatMap((connection) => (connection ? [connection.address] : [])),
+      );
       const token = normalizeGatewayToken(input.token);
       this.secureStorageAvailable = await this.detectSecureStorage();
 
@@ -174,6 +196,7 @@ export class ConnectionManager {
       };
       await this.persist(candidate);
       this.stored = candidate;
+      this.sessionTokens.set(record.id, token);
       this.setActiveRemote(record, client, token);
       return this.getList();
     });
@@ -208,9 +231,48 @@ export class ConnectionManager {
       };
       await this.persist(candidate);
       this.stored = candidate;
+      this.sessionTokens.delete(connectionId);
       if (forgettingActive) {
         this.activeRemote?.client.stopListening();
         this.activeRemote = null;
+      }
+      return this.getList();
+    });
+  }
+
+  async updateToken(connectionId: string, value: string): Promise<ConnectionList> {
+    return this.enqueueMutation(async () => {
+      const storedRecord = this.stored.connections.find(
+        (connection) => connection.id === connectionId,
+      );
+      if (!storedRecord) throw new Error("That saved connection no longer exists.");
+
+      const token = normalizeGatewayToken(value);
+      await this.checkRemote(storedRecord.address, token);
+      this.secureStorageAvailable = await this.detectSecureStorage();
+      let encryptedToken = "";
+      if (this.secureStorageAvailable) {
+        try {
+          encryptedToken = (await this.secureStorage.encryptStringAsync(token)).toString("base64");
+        } catch {
+          // The token was already accepted by the server. Keep it usable for
+          // this process even when the OS credential store fails mid-write.
+          this.secureStorageAvailable = false;
+        }
+      }
+      const record = { ...storedRecord, encryptedToken };
+      const candidate: StoredDesktopConnections = {
+        ...this.stored,
+        connections: this.stored.connections.map((connection) =>
+          connection.id === connectionId ? record : connection,
+        ),
+      };
+      await this.persist(candidate);
+      this.stored = candidate;
+      this.sessionTokens.set(connectionId, token);
+
+      if (this.activeRemote?.record.id === connectionId) {
+        this.setActiveRemote(record, new BackendHttpClient(record.address, token), token);
       }
       return this.getList();
     });
@@ -298,6 +360,7 @@ export class ConnectionManager {
       if (!target) return settings;
 
       target.token = settings.token;
+      this.sessionTokens.set(target.record.id, settings.token);
       this.secureStorageAvailable = await this.detectSecureStorage();
       let encryptedToken = "";
       try {
@@ -332,20 +395,25 @@ export class ConnectionManager {
       (connection) => connection.id === connectionId,
     );
     if (!storedRecord) throw new Error("That saved connection no longer exists.");
-    if (!storedRecord.encryptedToken)
+    const sessionToken = this.sessionTokens.get(connectionId);
+    if (!storedRecord.encryptedToken && !sessionToken) {
       throw new Error("Enter the gateway token to reconnect to this server.");
+    }
     this.secureStorageAvailable = await this.detectSecureStorage();
-    if (!this.secureStorageAvailable) {
+    if (!this.secureStorageAvailable && !sessionToken) {
       throw new Error("Secure credential storage is unavailable. Enter the gateway token again.");
     }
-    const decrypted = await this.secureStorage.decryptStringAsync(
-      Buffer.from(storedRecord.encryptedToken, "base64"),
-    );
-    const token = normalizeGatewayToken(decrypted.result);
+    const decrypted =
+      !sessionToken && storedRecord.encryptedToken
+        ? await this.secureStorage.decryptStringAsync(
+            Buffer.from(storedRecord.encryptedToken, "base64"),
+          )
+        : null;
+    const token = normalizeGatewayToken(sessionToken ?? decrypted?.result ?? "");
     const client = new BackendHttpClient(storedRecord.address, token);
     await this.checkRemote(storedRecord.address, token);
     const record = { ...storedRecord };
-    if (decrypted.shouldReEncrypt) {
+    if (decrypted?.shouldReEncrypt) {
       record.encryptedToken = (await this.secureStorage.encryptStringAsync(token)).toString(
         "base64",
       );
@@ -359,6 +427,7 @@ export class ConnectionManager {
     };
     await this.persist(candidate);
     this.stored = candidate;
+    this.sessionTokens.set(record.id, token);
     this.setActiveRemote(record, client, token);
   }
 

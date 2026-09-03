@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
+import { publishConnections } from "@/lib/connections";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
 const originalReload = window.location.reload;
@@ -19,6 +20,7 @@ function installConnections(
     list: () => Promise<ConnectionList>;
     probe: (connectionId: string) => Promise<boolean>;
     connect: (input: { address: string; token: string }) => Promise<ConnectionList>;
+    updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
     forget: (connectionId: string) => Promise<ConnectionList>;
   }> = {},
@@ -26,6 +28,7 @@ function installConnections(
   const listConnections = mock(overrides.list ?? (async () => list));
   const probe = mock(overrides.probe ?? (async () => true));
   const connect = mock(overrides.connect ?? (async () => list));
+  const updateToken = mock(overrides.updateToken ?? (async () => list));
   const use = mock(overrides.use ?? (async () => list));
   const forget = mock(overrides.forget ?? (async () => list));
   window.orkestrator = {
@@ -42,13 +45,14 @@ function installConnections(
       list: listConnections,
       probe,
       connect,
+      updateToken,
       use,
       forget,
     },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list: listConnections, probe, connect, use, forget };
+  return { list: listConnections, probe, connect, updateToken, use, forget };
 }
 
 afterEach(() => {
@@ -412,6 +416,49 @@ describe("server connection switcher", () => {
   test("falls back to the Projects label without a connections API", () => {
     render(<ServerConnectionSwitcher />);
     expect(screen.getByText("Projects")).toBeTruthy();
+  });
+
+  test("rehydrates from published connection snapshots and unsubscribes on unmount", async () => {
+    const initial: ConnectionList = {
+      activeConnectionId: "local",
+      credentialStorage: "secure",
+      connections: [
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    installConnections(initial);
+    const view = render(<ServerConnectionSwitcher />);
+    await screen.findByRole("button", { name: "Connected server: Local" });
+
+    const remoteList: ConnectionList = {
+      activeConnectionId: "remote-1",
+      credentialStorage: "secure",
+      connections: [
+        { ...initial.connections[0]!, active: false },
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    };
+    act(() => publishConnections(remoteList));
+    expect(
+      await screen.findByRole("button", { name: "Connected server: desk.example" }),
+    ).toBeTruthy();
+
+    view.unmount();
+    act(() => publishConnections(initial));
   });
 
   test("switches to a saved server and reloads after the backend confirms", async () => {

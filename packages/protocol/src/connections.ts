@@ -23,6 +23,38 @@ export interface ConnectToRemoteInput {
   token: string;
 }
 
+/**
+ * Expand a bare Tailscale machine name using the first known `.ts.net`
+ * connection. Tailscale HTTPS certificates cover the full MagicDNS name, not
+ * the bare hostname, so retaining the suffix is required for TLS validation.
+ */
+export function expandTailscaleMachineName(
+  value: string,
+  knownAddresses: readonly string[],
+): string {
+  const candidate = value.trim();
+  if (
+    !/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(candidate) ||
+    candidate.toLowerCase() === "localhost"
+  ) {
+    return candidate;
+  }
+
+  for (const address of knownAddresses) {
+    try {
+      const hostname = new URL(address).hostname;
+      const firstDot = hostname.indexOf(".");
+      if (firstDot < 1) continue;
+      const tailnetSuffix = hostname.slice(firstDot + 1);
+      if (tailnetSuffix.endsWith(".ts.net")) return `${candidate}.${tailnetSuffix}`;
+    } catch {
+      // Ignore malformed historical entries and keep looking for a usable suffix.
+    }
+  }
+
+  return candidate;
+}
+
 export interface StoredDesktopConnection {
   id: string;
   name: string;

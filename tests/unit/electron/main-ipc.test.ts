@@ -91,6 +91,7 @@ function createHarness(
   const listConnections = mock(() => connectionList);
   const probeConnection = mock(async () => true);
   const connectToRemote = mock(async () => connectionList);
+  const updateConnectionToken = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
   const forgetConnection = mock(async () => connectionList);
   const browserPreviewState = {
@@ -132,6 +133,7 @@ function createHarness(
     listConnections,
     probeConnection,
     connectToRemote,
+    updateConnectionToken,
     useConnection,
     forgetConnection,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
@@ -183,6 +185,7 @@ function createHarness(
     listConnections,
     probeConnection,
     connectToRemote,
+    updateConnectionToken,
     useConnection,
     forgetConnection,
     browserPreviews,
@@ -394,7 +397,7 @@ describe("main IPC registration", () => {
     );
   });
 
-  test("lists, creates, selects, and forgets server connections", async () => {
+  test("lists, creates, updates, selects, and forgets server connections", async () => {
     const harness = createHarness();
     await expect(harness.invoke("orkestrator:connections:list")).resolves.toMatchObject({
       activeConnectionId: "local",
@@ -413,6 +416,15 @@ describe("main IPC registration", () => {
       address: "https://desk.example",
       token: "gateway-token-123456",
     });
+    await harness.invoke(
+      "orkestrator:connections:update-token",
+      "remote-1",
+      "replacement-token-123456",
+    );
+    expect(harness.updateConnectionToken).toHaveBeenCalledWith(
+      "remote-1",
+      "replacement-token-123456",
+    );
     await harness.invoke("orkestrator:connections:use", "remote-1");
     expect(harness.useConnection).toHaveBeenCalledWith("remote-1");
     await harness.invoke("orkestrator:connections:forget", "remote-1");
@@ -430,6 +442,9 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:connections:use", 42)).rejects.toThrow(
       "connection ID",
     );
+    await expect(
+      harness.invoke("orkestrator:connections:update-token", "remote-1", null),
+    ).rejects.toThrow("connection ID and gateway token");
     await expect(harness.invoke("orkestrator:connections:probe", null)).rejects.toThrow(
       "connection ID",
     );

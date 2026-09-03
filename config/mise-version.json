@@ -1,0 +1,13 @@
+{
+  "$comment": [
+    "Single source of truth for the mise release installed in the Docker image.",
+    "docker/Dockerfile duplicates these values because Docker ARGs cannot read this file directly.",
+    "tests/unit/version-drift.test.ts enforces that the Dockerfile and default network allowlists agree."
+  ],
+  "version": "2026.9.1",
+  "linux": {
+    "x64Sha256": "063dda9149ab6be53da877c2d176afe0eac68e64cf8ca295bd0528720701c65d",
+    "arm64Sha256": "98d2ea7b82dd966afdb8a9f4e9edbca771acf2a30d2842bfc0efdb7b61c886a3"
+  },
+  "runtimeAllowedHosts": ["nodejs.org", "mise.jdx.dev", "mise-versions.jdx.dev", "aube.jdx.dev"]
+}

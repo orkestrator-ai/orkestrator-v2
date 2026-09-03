@@ -1129,10 +1129,10 @@ done
     // The packaged layout resolveBunBinary looks for: resources/bin/bun.
     const resourceRoot = await createTempDir("ork-commands-io-resources-");
     await fs.mkdir(path.join(resourceRoot, "bin"), { recursive: true });
-    const bunPath = (
-      await runCommand("sh", ["-c", "command -v bun"], { timeoutMs: 30_000 })
-    ).stdout.trim();
-    await fs.symlink(bunPath, path.join(resourceRoot, "bin", "bun"));
+    // process.execPath is the Bun binary running this test. `command -v bun`
+    // may return a version-manager shim whose target depends on the fixture's
+    // deliberately empty PATH, which would invalidate the packaged-binary test.
+    await fs.symlink(process.execPath, path.join(resourceRoot, "bin", "bun"));
 
     const previousPath = process.env.PATH;
     process.env.PATH = bareBin;

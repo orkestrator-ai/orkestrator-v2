@@ -777,6 +777,20 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
   });
 
+  test("mise: Docker version and Linux checksums match the independent pin", () => {
+    const config = JSON.parse(read("config/mise-version.json")) as {
+      version: string;
+      linux: { x64Sha256: string; arm64Sha256: string };
+    };
+    const dockerfile = read("docker/Dockerfile");
+
+    expect(getDockerfileArg("MISE_VERSION")).toBe(config.version);
+    expect(config.linux.x64Sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(config.linux.arm64Sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(dockerfile).toContain(`amd64) MISE_ARCH=x64; MISE_SHA=${config.linux.x64Sha256} ;;`);
+    expect(dockerfile).toContain(`arm64) MISE_ARCH=arm64; MISE_SHA=${config.linux.arm64Sha256} ;;`);
+  });
+
   test("Playwright: the container pin tracks the version the repo actually resolves", () => {
     // Browser revisions are tied to the Playwright package. Keep the complete
     // resolved version aligned so a lockfile update cannot leave the image on a
@@ -892,7 +906,16 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     // Not the full union — the three lists are deliberately different sizes.
     // These are the hosts the image itself depends on being reachable.
-    for (const host of ["github.com", "registry.npmjs.org", "cdn.playwright.dev"]) {
+    const miseConfig = JSON.parse(read("config/mise-version.json")) as {
+      runtimeAllowedHosts: string[];
+    };
+    const requiredHosts = [
+      "github.com",
+      "registry.npmjs.org",
+      "cdn.playwright.dev",
+      ...miseConfig.runtimeAllowedHosts,
+    ];
+    for (const host of requiredHosts) {
       expect({
         host,
         backend: lists.backend.includes(`"${host}"`),

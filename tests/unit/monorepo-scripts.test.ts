@@ -29,6 +29,8 @@ describe("monorepo orchestration scripts", () => {
     );
     expect(runtimeWorkflow).toContain("bun run build:all");
     expect(runtimeWorkflow).toContain("bunx electron-builder --dir");
+    expect(runtimeWorkflow).toContain("bun scripts/install-packaged-app-linux.ts");
+    expect(runtimeWorkflow).toContain("desktop-file-validate");
     expect(runtimeWorkflow).toContain("bun run verify:packaged-backend");
     expect(runtimeWorkflow).toContain("tests/standalone.test.ts");
   });

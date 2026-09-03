@@ -6,7 +6,7 @@ const releaseDir = path.resolve("release");
 const applicationsDir = "/Applications";
 const destination = path.join(applicationsDir, appName);
 
-async function findAppBundle(dir: string): Promise<string | null> {
+export async function findAppBundle(dir: string): Promise<string | null> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -30,6 +30,10 @@ async function findAppBundle(dir: string): Promise<string | null> {
   return null;
 }
 
+export function assertMacInstallerPlatform(platform = process.platform): void {
+  if (platform !== "darwin") throw new Error("The macOS package installer must be run on macOS.");
+}
+
 export async function copyAppBundle(source: string, target: string): Promise<void> {
   await rm(target, { recursive: true, force: true });
   await cp(source, target, {
@@ -42,6 +46,13 @@ export async function copyAppBundle(source: string, target: string): Promise<voi
 }
 
 async function main(): Promise<void> {
+  try {
+    assertMacInstallerPlatform();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
   const source = await findAppBundle(releaseDir);
 
   if (!source) {

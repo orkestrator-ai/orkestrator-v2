@@ -54,13 +54,15 @@ docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 bun run dev
 ```
 
-### Packaging the macOS app
+### Packaging the desktop app
+
+#### macOS
 
 For a fast local build, package and install the unpacked app with local ad-hoc
 signing, without Apple Developer ID signing, notarization, or DMG creation:
 
 ```bash
-bun run package
+bun run package:mac
 ```
 
 For a distributable DMG, opt into both Developer ID signing and Apple
@@ -73,6 +75,23 @@ bun run package:release
 The release command relies on electron-builder's standard signing identity and
 Apple notarization environment variables. It is expected to fail when the
 required certificate or notarization credentials are unavailable.
+
+#### Linux
+
+Package and install the app for the current user:
+
+```bash
+bun run package:linux
+```
+
+The Linux installer uses the freedesktop/XDG layout. It installs the unpacked
+app and desktop-menu entry under `XDG_DATA_HOME` (normally `~/.local/share`) and
+adds a launcher at `~/.local/bin/orkestrator-v2`. The install itself does not
+require root or a distro package manager. The host must provide Docker, the
+standard Electron runtime libraries, and a Chromium sandbox configuration that
+permits an unpacked per-user Electron app to run. Distribution security policy
+varies; in particular, Ubuntu/AppArmor installations may require enabling
+unprivileged user namespaces or adding an appropriate local AppArmor profile.
 
 ### Published container image
 

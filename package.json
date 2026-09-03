@@ -71,8 +71,9 @@
     "verify:codex:protocol": "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY=0 bun scripts/generate-codex-app-server-protocol.ts --check",
     "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
     "docker:build:dev": "bun apps/desktop/scripts/dev-build-image.ts",
-    "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --dir && bun scripts/install-packaged-app.ts",
-    "package:release": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --config electron-builder.release.config.ts && bun scripts/install-packaged-app.ts"
+    "package:mac": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --mac --dir && bun scripts/install-packaged-app-mac.ts",
+    "package:linux": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --linux --dir && bun scripts/install-packaged-app-linux.ts",
+    "package:release": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --mac --config electron-builder.release.config.ts && bun scripts/install-packaged-app-mac.ts"
   },
   "devDependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -203,6 +204,8 @@
       ]
     },
     "linux": {
+      "category": "Development",
+      "executableName": "orkestrator-v2",
       "icon": "icons"
     }
   }

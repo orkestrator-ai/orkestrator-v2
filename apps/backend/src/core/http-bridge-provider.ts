@@ -56,6 +56,7 @@ import {
   assertOkWithErrorDetail,
   boundedJson,
   bridgeFetch,
+  normalizeProviderReadiness,
   resolvePromptAttachments,
   type HttpBridgeProviderDependencies,
 } from "./http-bridge-transport.js";
@@ -446,9 +447,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // Bridges answer terminal rejections with an actionable message (e.g. an
       // ACP prompt whose outcome is unknown after a restart). Surface it so the
       // pipeline failure tells the user what to do instead of a bare status.
-      const detail = (await response.json().catch(() => null)) as { error?: unknown } | null;
-      const detailMessage =
-        detail !== null && typeof detail.error === "string" ? `: ${detail.error}` : "";
+      const detail = asRecord(await response.json().catch(() => null));
+      const detailText = nonEmptyString(detail?.error)?.trim() ?? "";
+      // Cursor uses 401 for a missing SDK credential as well as for bridge
+      // transport authentication. The former is an expected, user-actionable
+      // admission failure, so preserve the bridge's friendly instruction and
+      // do not expose the lowercase provider key or HTTP plumbing in the chat.
+      if (
+        this.agent === "cursor" &&
+        response.status === 401 &&
+        detailText &&
+        detail?.kind === "authentication-required"
+      ) {
+        throw new PromptRejectedError(detailText);
+      }
+      const detailMessage = detailText ? `: ${detailText}` : "";
       throw new PromptRejectedError(
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
@@ -816,6 +829,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
       const contextUsage = normalizeProviderContextUsage(payload?.contextUsage);
       const runtime = normalizeProviderRuntimeSummary(payload?.runtime);
+      const readiness = normalizeProviderReadiness(payload?.readiness);
       return {
         status,
         messages,
@@ -823,6 +837,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ? { title: payload.title.trim() }
           : {}),
         composer: composer as unknown as NativeAgentComposerState,
+        ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
         ...(runtime ? { runtime } : {}),

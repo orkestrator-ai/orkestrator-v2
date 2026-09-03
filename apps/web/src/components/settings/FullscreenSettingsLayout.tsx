@@ -13,19 +13,20 @@ import {
 import { Z_FULLSCREEN_POPOVER, Z_FULLSCREEN_SURFACE } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 
-export interface SettingsMenuItem {
-  id: string;
+export interface SettingsMenuItem<TSection extends string = string> {
+  id: TSection;
   label: string;
   icon: React.ReactNode;
 }
 
-interface FullscreenSettingsLayoutProps {
+interface FullscreenSettingsLayoutProps<TSection extends string = string> {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  menuItems: SettingsMenuItem[];
-  defaultSection?: string;
-  children: (activeSection: string) => React.ReactNode;
+  menuItems: ReadonlyArray<SettingsMenuItem<TSection>>;
+  defaultSection?: TSection;
+  children: (activeSection: TSection | "") => React.ReactNode;
+  footer?: React.ReactNode;
   headerActions?: React.ReactNode;
 }
 
@@ -38,16 +39,19 @@ export function SettingsHeaderActions({ children }: { children: React.ReactNode 
   return target ? createPortal(children, target) : null;
 }
 
-export function FullscreenSettingsLayout({
+export function FullscreenSettingsLayout<TSection extends string = string>({
   open,
   onOpenChange,
   title,
   menuItems,
   defaultSection,
   children,
+  footer,
   headerActions,
-}: FullscreenSettingsLayoutProps) {
-  const defaultId = defaultSection ?? menuItems[0]?.id ?? "";
+}: FullscreenSettingsLayoutProps<TSection>) {
+  const defaultId: TSection | "" = menuItems.some((item) => item.id === defaultSection)
+    ? (defaultSection ?? "")
+    : (menuItems[0]?.id ?? "");
   const [activeSection, setActiveSection] = useState(defaultId);
   const [headerActionsTarget, setHeaderActionsTarget] = useState<HTMLDivElement | null>(null);
 
@@ -119,7 +123,10 @@ export function FullscreenSettingsLayout({
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* Content header */}
             <div className="flex h-12 items-center justify-between bg-zinc-900/80 px-4 md:px-8">
-              <Select value={activeSection} onValueChange={setActiveSection}>
+              <Select
+                value={activeSection}
+                onValueChange={(value) => setActiveSection(value as TSection)}
+              >
                 <SelectTrigger
                   aria-label="Settings section"
                   className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:ring-0 md:hidden"
@@ -177,6 +184,11 @@ export function FullscreenSettingsLayout({
             {/* Content body */}
             <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6">
               <div className="flex-1">{children(activeSection)}</div>
+              {footer && (
+                <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+                  {footer}
+                </div>
+              )}
             </div>
           </div>
         </div>

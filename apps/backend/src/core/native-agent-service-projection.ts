@@ -42,6 +42,7 @@ type NativeAgentControlUpdate = shared.NativeAgentControlUpdate;
 type NativeAgentDispatchOutcome = shared.NativeAgentDispatchOutcome;
 type NativeAgentForkOutcome = shared.NativeAgentForkOutcome;
 type NativeAgentMessageWindow = shared.NativeAgentMessageWindow;
+type NativeAgentReadiness = shared.NativeAgentReadiness;
 type NativeAgentResumeEntry = shared.NativeAgentResumeEntry;
 type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
@@ -89,6 +90,7 @@ export type NativeAgentServiceLayerTypes = [
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
   NativeAgentMessageWindow,
+  NativeAgentReadiness,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
@@ -944,6 +946,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           capabilities,
         ),
         composer,
+        ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
         ...(queue

@@ -48,6 +48,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
+import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 
 export function isEditableShortcutTarget(target: EventTarget | null): boolean {
@@ -90,6 +91,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // orphaned copy whose saves would silently no-op.
   const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
+  const [globalSettingsDefaultSection, setGlobalSettingsDefaultSection] =
+    useState<GlobalSettingsSection>();
   const [envSettingsEnvironmentId, setEnvSettingsEnvironmentId] = useState<string | null>(null);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
@@ -108,6 +111,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      onGlobalSettingsRequest((section) => {
+        setGlobalSettingsDefaultSection(section);
+        setGlobalSettingsOpen(true);
+      }),
+    [],
+  );
+
+  const updateGlobalSettingsOpen = useCallback((open: boolean) => {
+    setGlobalSettingsOpen(open);
+    if (!open) setGlobalSettingsDefaultSection(undefined);
+  }, []);
   const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
@@ -1826,7 +1843,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     repoSettingsProjectId,
     setRepoSettingsProjectId,
     globalSettingsOpen,
-    setGlobalSettingsOpen,
+    globalSettingsDefaultSection,
+    setGlobalSettingsOpen: updateGlobalSettingsOpen,
     envSettingsEnvironmentId,
     setEnvSettingsEnvironmentId,
     dockerStatsOpen,

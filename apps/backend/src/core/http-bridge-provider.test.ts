@@ -14,6 +14,7 @@ import {
   httpProvider,
   piConnection,
 } from "./agent-provider-test-support.js";
+import { normalizeProviderReadiness } from "./http-bridge-transport.js";
 
 describe("HTTP bridge provider", () => {
   const operations = {
@@ -238,6 +239,69 @@ describe("HTTP bridge provider", () => {
     await expect(ambiguous.provider.send("s", "prompt", { requestId: "r" })).rejects.toBeInstanceOf(
       AmbiguousPromptDispatchError,
     );
+  });
+
+  test("surfaces Cursor credential rejection without an HTTP transport envelope", async () => {
+    const message =
+      "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.";
+    const { provider } = httpProvider(
+      () => Response.json({ error: message, kind: "authentication-required" }, { status: 401 }),
+      cursorConnection,
+    );
+
+    await expect(
+      provider.send("cursor-session", "Build it", { requestId: "request-1" }),
+    ).rejects.toThrow(message);
+  });
+
+  test.each([
+    [
+      "a transport rejection",
+      cursorConnection,
+      { error: "Unauthorized" },
+      "cursor rejected the prompt (HTTP 401): Unauthorized",
+    ],
+    [
+      "an unclassified Cursor rejection",
+      cursorConnection,
+      { error: "Sign in again" },
+      "cursor rejected the prompt (HTTP 401): Sign in again",
+    ],
+    [
+      "a non-Cursor rejection",
+      grokConnection,
+      { error: "Sign in again", kind: "authentication-required" },
+      "grok rejected the prompt (HTTP 401): Sign in again",
+    ],
+    ["an empty error", cursorConnection, { error: "  " }, "cursor rejected the prompt (HTTP 401)"],
+  ])("keeps the HTTP envelope for %s", async (_name, connection, body, expected) => {
+    const { provider } = httpProvider(() => Response.json(body, { status: 401 }), connection);
+
+    await expect(
+      provider.send("session-1", "Build it", { requestId: "request-1" }),
+    ).rejects.toThrow(expected);
+  });
+
+  test.each([
+    [null],
+    ["ready"],
+    [{ state: "future-state" }],
+    [{ state: "authentication-required" }],
+    [{ state: "authentication-required", message: "   " }],
+  ])("rejects malformed provider readiness %#", (value) => {
+    expect(normalizeProviderReadiness(value)).toBeUndefined();
+  });
+
+  test("normalizes and bounds provider readiness", () => {
+    expect(normalizeProviderReadiness({ state: "ready", message: "ignored" })).toEqual({
+      state: "ready",
+    });
+    expect(
+      normalizeProviderReadiness({
+        state: "authentication-required",
+        message: ` ${"x".repeat(600)} `,
+      }),
+    ).toEqual({ state: "authentication-required", message: "x".repeat(500) });
   });
 
   test("keeps a bridge that was never reached out of the ambiguous bucket", async () => {
@@ -698,6 +762,10 @@ describe("HTTP bridge provider", () => {
         status: "idle",
         revision: 7,
         composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+        readiness: {
+          state: "authentication-required",
+          message: "Cursor is not signed in.",
+        },
         // A status body that still carried messages must not be the source: it
         // is the transcript route that applies the byte ceiling.
         messages: [{ id: "stale", role: "assistant", content: "from status", parts: [] }],
@@ -714,6 +782,10 @@ describe("HTTP bridge provider", () => {
       { id: "m-1", role: "assistant", content: "from transcript", parts: [] },
     ]);
     expect(snapshot.providerRevision).toBe(7);
+    expect(snapshot.readiness).toEqual({
+      state: "authentication-required",
+      message: "Cursor is not signed in.",
+    });
     expect(snapshot.notices).toBeUndefined();
   });
 

@@ -29,6 +29,7 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -814,6 +815,136 @@ describe("AgentNativeTab", () => {
     expect(createTab).toHaveBeenCalledTimes(1);
     expect(mockToastError).toHaveBeenCalledTimes(1);
     expect(mockToastError).toHaveBeenCalledWith("Maximum tab limit reached");
+  });
+
+  test("keeps an unauthenticated Cursor composer stable and routes recovery to settings", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message:
+          "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
+      },
+    }));
+    let requestedSection: unknown;
+    const onSettings = (event: Event) => {
+      requestedSection = (event as CustomEvent<unknown>).detail;
+    };
+    window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
+    try {
+      render(
+        <AgentNativeTab tabId="tab-cursor-auth-required" data={identity("cursor")} isActive />,
+      );
+
+      expect(await screen.findByText(/Cursor is not signed in/)).toBeTruthy();
+      const dock = screen.getByTestId("compose-dock");
+      expect(dock.className).toContain("top-1/2");
+      expect(
+        (screen.getByTitle("Sign in to Cursor Agent before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Test" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      expect(dock.className).toContain("top-1/2");
+
+      fireEvent.click(screen.getByRole("button", { name: "Open Cursor Agent settings" }));
+      expect(requestedSection).toBe("cursor");
+    } finally {
+      window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
+    }
+  });
+
+  test("routes provider-neutral authentication recovery to the active platform", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Grok authentication is required.",
+      },
+    }));
+    let requestedSection: unknown;
+    const onSettings = (event: Event) => {
+      requestedSection = (event as CustomEvent<unknown>).detail;
+    };
+    window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
+    try {
+      render(<AgentNativeTab tabId="tab-grok-auth-required" data={identity("grok")} isActive />);
+
+      expect(await screen.findByText("Grok authentication is required.")).toBeTruthy();
+      expect(
+        (screen.getByTitle("Sign in to Grok Build before sending") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Open Grok Build settings" }));
+      expect(requestedSection).toBe("grok");
+    } finally {
+      window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
+    }
+  });
+
+  test("unlocks a preserved draft when authoritative readiness recovers", async () => {
+    let authenticationRequired = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: authenticationRequired
+        ? {
+            state: "authentication-required" as const,
+            message: "Cursor authentication is required.",
+          }
+        : { state: "ready" as const },
+    }));
+    render(<AgentNativeTab tabId="tab-cursor-auth-recovery" data={identity("cursor")} isActive />);
+
+    expect(await screen.findByText("Cursor authentication is required.")).toBeTruthy();
+    const input = screen.getByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Preserved draft" } });
+
+    authenticationRequired = false;
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 2,
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 80));
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText("Cursor authentication is required.") === null).toBe(true),
+    );
+    expect(input.textContent).toBe("Preserved draft");
+    expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "cursor", prompt: "Preserved draft" }),
+    );
+  });
+
+  test("does not move an empty composer while its first prompt is rejected", async () => {
+    let rejectPrompt!: (outcome: NativeAgentDispatchOutcome) => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      () =>
+        new Promise<NativeAgentDispatchOutcome>((resolve) => {
+          rejectPrompt = resolve;
+        }),
+    );
+    render(<AgentNativeTab tabId="tab-stable-rejection" data={identity("codex")} isActive />);
+
+    const input = await screen.findByRole("textbox");
+    const dock = screen.getByTestId("compose-dock");
+    fireEvent.input(input, { target: { textContent: "Test" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dock.className).toContain("top-1/2");
+
+    await act(async () => {
+      rejectPrompt({ outcome: "rejected", error: "Prompt was rejected" });
+    });
+    expect(await screen.findByText("Prompt was rejected")).toBeTruthy();
+    expect(dock.className).toContain("top-1/2");
   });
 
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {

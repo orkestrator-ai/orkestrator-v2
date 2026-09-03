@@ -1,6 +1,6 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, LogIn, X } from "lucide-react";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
@@ -113,6 +113,7 @@ import {
 } from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
@@ -513,6 +514,9 @@ export function SharedNativeAgentController({
   );
 
   const composer = projection?.composer;
+  const authenticationReadiness =
+    projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
+  const authenticationRequired = authenticationReadiness !== null;
   const selectedModel =
     composer?.models.find((model) => model.id === composer.selectedModelId) ?? composer?.models[0];
   const selectedReasoningId = composer?.selectedReasoningId ?? selectedModel?.defaultReasoningId;
@@ -612,6 +616,7 @@ export function SharedNativeAgentController({
   const recoverableDispatch = projection?.recoverableDispatch;
   const sendLocked =
     !projection ||
+    authenticationRequired ||
     !handoff.ready ||
     (isRunning && !canQueue) ||
     phase === "cancelling" ||
@@ -664,6 +669,10 @@ export function SharedNativeAgentController({
     },
     [clearDraft, discardProvisionalDraft, sessionKey],
   );
+
+  useEffect(() => {
+    if (authenticationRequired) setSendError(null);
+  }, [authenticationRequired]);
 
   useEffect(() => {
     if (!transcriptEchoedOptimistic) return;
@@ -1317,8 +1326,16 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // An optimistic first prompt is not yet a conversation. Keeping the empty
+  // layout centered until the provider accepts it prevents a fast terminal
+  // rejection (authentication in particular) from sending the dock to the
+  // bottom and immediately animating it back again.
+  const onlyOptimisticFirstPrompt =
+    messages.length === 1 && messages[0]?.id === `optimistic-native:${sessionKey}`;
   const composerCentered =
-    messages.length === 0 && !isTurnActive && transcriptInteractions.length === 0;
+    (messages.length === 0 || onlyOptimisticFirstPrompt) &&
+    !isTurnActive &&
+    transcriptInteractions.length === 0;
 
   /**
    * The rendered list is also what decides whether anything is pinned at all, so
@@ -1351,6 +1368,24 @@ export function SharedNativeAgentController({
         {notice.message}
       </div>
     )),
+    authenticationRequired ? (
+      <div
+        key="authentication-required"
+        role="status"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+      >
+        <span>{authenticationReadiness.message}</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => requestGlobalSettings(platform)}
+        >
+          <LogIn className="mr-1.5 h-3.5 w-3.5" />
+          Open {label} settings
+        </Button>
+      </div>
+    ) : null,
     recoverableDispatch ? (
       <div
         key="recoverable-dispatch"
@@ -1407,7 +1442,7 @@ export function SharedNativeAgentController({
         </div>
       </div>
     ) : null,
-    sendError ? (
+    sendError && !authenticationRequired ? (
       <div
         key="send-error"
         className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
@@ -1801,18 +1836,22 @@ export function SharedNativeAgentController({
                 }
               : undefined
           }
-          showSendButton={!sendLocked || canQueue || Boolean(draftSessionAction)}
+          showSendButton={
+            authenticationRequired || !sendLocked || canQueue || Boolean(draftSessionAction)
+          }
           sendDisabled={
             (sendLocked && !draftSessionAction) ||
             isDispatching ||
             (!draft.text.trim() && draft.attachments.length === 0 && draft.annotations.length === 0)
           }
           sendTitle={
-            draftSessionAction
-              ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
-              : canQueue
-                ? "Add to queue"
-                : "Send"
+            authenticationRequired
+              ? `Sign in to ${label} before sending`
+              : draftSessionAction
+                ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
+                : canQueue
+                  ? "Add to queue"
+                  : "Send"
           }
           onSend={() => {
             void submit(draft.text);

@@ -79,12 +79,14 @@ final class ConnectionModelTests: XCTestCase {
         let store = MemoryCredentialStore(vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved]))
         let model = ConnectionModel(credentialStore: store, validator: MockValidator())
         XCTAssertEqual(model.activeConnection, saved)
+        XCTAssertTrue(model.requiresLaunchSelection)
 
         let brokenStore = MemoryCredentialStore()
         brokenStore.loadError = TestFailure.expected
         let broken = ConnectionModel(credentialStore: brokenStore, validator: MockValidator())
         XCTAssertEqual(broken.vault, .empty)
         XCTAssertNotNil(broken.connectionError)
+        XCTAssertFalse(broken.requiresLaunchSelection)
     }
 
     func testEditorStatePrefillsAndClearsCredentials() {
@@ -148,6 +150,105 @@ final class ConnectionModelTests: XCTestCase {
         XCTAssertEqual(model.draftToken, "")
         XCTAssertFalse(model.isShowingConnectionEditor)
         XCTAssertFalse(model.isConnecting)
+        XCTAssertFalse(model.requiresLaunchSelection)
+    }
+
+    func testLaunchSelectionValidatesAndOnlyDismissesAfterSuccess() async throws {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let store = MemoryCredentialStore(
+            vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+        )
+        let validator = MockValidator()
+        let model = ConnectionModel(credentialStore: store, validator: validator)
+
+        validator.checkError = TestFailure.expected
+        await model.selectConnectionForLaunch(second)
+        XCTAssertTrue(model.requiresLaunchSelection)
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+        XCTAssertNotNil(model.connectionError)
+
+        validator.checkError = nil
+        await model.selectConnectionForLaunch(second)
+        XCTAssertFalse(model.requiresLaunchSelection)
+        XCTAssertEqual(model.activeConnection?.id, second.id)
+        XCTAssertNil(model.connectionError)
+    }
+
+    func testLaunchSelectionIgnoresConcurrentAndSettledRequests() async {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let validator = MockValidator()
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+            ),
+            validator: validator
+        )
+
+        model.isConnecting = true
+        await model.selectConnectionForLaunch(second)
+        XCTAssertTrue(validator.checks.isEmpty)
+        XCTAssertTrue(model.requiresLaunchSelection)
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+
+        model.isConnecting = false
+        await model.selectConnectionForLaunch(second)
+        XCTAssertEqual(validator.checks.count, 1)
+        XCTAssertFalse(model.requiresLaunchSelection)
+        XCTAssertEqual(model.activeConnection?.id, second.id)
+
+        await model.selectConnectionForLaunch(first)
+        XCTAssertEqual(validator.checks.count, 1)
+        XCTAssertEqual(model.activeConnection?.id, second.id)
+    }
+
+    func testAddingServerFromLaunchSelectionDismissesPickerOnlyAfterSuccess() async {
+        let saved = connection(address: "https://saved.example")
+        let validator = MockValidator()
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved])
+            ),
+            validator: validator
+        )
+        model.showConnectionEditor()
+        model.draftAddress = "https://new.example"
+        model.draftToken = "gateway-token-new-123"
+
+        validator.checkError = TestFailure.expected
+        await model.connectDraft()
+        XCTAssertTrue(model.requiresLaunchSelection)
+        XCTAssertTrue(model.isShowingConnectionEditor)
+
+        validator.checkError = nil
+        await model.connectDraft()
+        XCTAssertFalse(model.requiresLaunchSelection)
+        XCTAssertFalse(model.isShowingConnectionEditor)
+        XCTAssertEqual(model.activeConnection?.address.absoluteString, "https://new.example")
+    }
+
+    func testRootDestinationAndEditorCancellationPreserveLaunchSelection() {
+        let saved = connection()
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: saved.id, connections: [saved])
+            ),
+            validator: MockValidator()
+        )
+
+        XCTAssertEqual(
+            rootDestination(
+                requiresLaunchSelection: model.requiresLaunchSelection,
+                activeConnection: model.activeConnection
+            ),
+            .launchSelection
+        )
+        model.showConnectionEditor()
+        model.dismissConnectionEditor()
+        XCTAssertTrue(model.requiresLaunchSelection)
+        XCTAssertEqual(rootDestination(requiresLaunchSelection: false, activeConnection: saved), .remote(saved))
+        XCTAssertEqual(rootDestination(requiresLaunchSelection: false, activeConnection: nil), .connectionEditor)
     }
 
     func testUseValidatesBeforeChangingActiveConnection() async throws {
@@ -169,6 +270,28 @@ final class ConnectionModelTests: XCTestCase {
         XCTAssertEqual(payload.activeConnectionId, second.id.uuidString)
         await XCTAssertThrowsErrorAsync(try await model.use(connectionID: "missing"))
         await XCTAssertThrowsErrorAsync(try await model.use(connectionID: UUID().uuidString))
+    }
+
+    func testProbeValidatesWithoutChangingTheActiveConnection() async throws {
+        let first = connection(address: "https://one.example")
+        let second = connection(address: "https://two.example")
+        let validator = MockValidator()
+        let model = ConnectionModel(
+            credentialStore: MemoryCredentialStore(
+                vault: ConnectionVault(activeConnectionID: first.id, connections: [first, second])
+            ),
+            validator: validator
+        )
+
+        let available = try await model.probe(connectionID: second.id.uuidString)
+        XCTAssertTrue(available)
+        XCTAssertEqual(model.activeConnection?.id, first.id)
+        XCTAssertEqual(validator.checks.last?.0, second.address)
+
+        validator.checkError = TestFailure.expected
+        await XCTAssertThrowsErrorAsync(try await model.probe(connectionID: second.id.uuidString))
+        await XCTAssertThrowsErrorAsync(try await model.probe(connectionID: "missing"))
+        XCTAssertEqual(model.activeConnection?.id, first.id)
     }
 
     func testUseRejectsCredentialChangedDuringValidation() async throws {
@@ -442,9 +565,15 @@ final class RemoteWebViewPolicyTests: XCTestCase {
 
     private final class StateBox {
         var value: WebViewState
+        private(set) var bindingWriteCount = 0
 
         init(_ value: WebViewState) {
             self.value = value
+        }
+
+        func publish(_ value: WebViewState) {
+            self.value = value
+            bindingWriteCount += 1
         }
     }
 
@@ -462,7 +591,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         let state = StateBox(initialState)
         let binding = Binding(
             get: { state.value },
-            set: { state.value = $0 }
+            set: { state.publish($0) }
         )
         let coordinator = RemoteWebView.Coordinator(
             model: model ?? ConnectionModel(
@@ -645,8 +774,9 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         ), .allow)
     }
 
-    func testNavigationStateTransitionsForFinishResponseAndFailures() {
+    func testNavigationStateTransitionsForFinishResponseAndFailures() async {
         let (coordinator, state) = makeCoordinator()
+        coordinator.javaScriptEvaluator = { _ in true }
         coordinator.beginAuthenticationState(for: saved)
 
         coordinator.navigationDidFinish(at: URL(string: "https://other.example"))
@@ -654,6 +784,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertNil(coordinator.authenticatedConnection)
 
         coordinator.navigationDidFinish(at: URL(string: "https://desk.example/projects"))
+        await coordinator.readinessTask?.value
         XCTAssertEqual(state.value, .ready)
         XCTAssertEqual(coordinator.authenticatedConnection, saved)
 
@@ -692,6 +823,164 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         )
     }
 
+    func testReadinessRequiresConsecutiveChecksAndAcceptsNSNumberBooleans() async {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.readinessCheckDelay = .zero
+        var results: [Any] = [true, false, NSNumber(value: true), true]
+        coordinator.javaScriptEvaluator = { _ in results.removeFirst() }
+
+        coordinator.navigationDidFinish(at: URL(string: "https://desk.example/projects"))
+        await coordinator.readinessTask?.value
+
+        XCTAssertEqual(results.count, 0)
+        XCTAssertEqual(state.value, .ready)
+    }
+
+    func testReadinessRetriesEvaluationErrorsAndTimesOut() async {
+        let (recovering, recoveringState) = makeCoordinator()
+        recovering.beginAuthenticationState(for: saved)
+        recovering.readinessCheckDelay = .zero
+        var checks = 0
+        recovering.javaScriptEvaluator = { _ in
+            checks += 1
+            if checks == 1 { throw TestFailure.expected }
+            return NSNumber(value: true)
+        }
+
+        recovering.navigationDidFinish(at: saved.address)
+        await recovering.readinessTask?.value
+        XCTAssertEqual(checks, 3)
+        XCTAssertEqual(recoveringState.value, .ready)
+
+        let (timingOut, timingOutState) = makeCoordinator()
+        timingOut.beginAuthenticationState(for: saved)
+        timingOut.readinessCheckLimit = 3
+        timingOut.readinessCheckDelay = .zero
+        var timeoutChecks = 0
+        timingOut.javaScriptEvaluator = { _ in
+            timeoutChecks += 1
+            return false
+        }
+
+        timingOut.navigationDidFinish(at: saved.address)
+        await timingOut.readinessTask?.value
+        XCTAssertEqual(timeoutChecks, 3)
+        XCTAssertEqual(
+            timingOutState.value,
+            .failed("The remote app opened but did not finish starting. Try again.")
+        )
+    }
+
+    func testCancelledReadinessErrorCannotOverwriteContentProcessFailure() async {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+        var continuation: CheckedContinuation<Any?, Error>?
+        coordinator.javaScriptEvaluator = { _ in
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+
+        coordinator.navigationDidFinish(at: saved.address)
+        while continuation == nil { await Task.yield() }
+        let cancelledTask = coordinator.readinessTask
+        coordinator.webViewWebContentProcessDidTerminate(WKWebView())
+        continuation?.resume(throwing: TestFailure.expected)
+        await cancelledTask?.value
+
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app stopped unexpectedly. Try again.")
+        )
+    }
+
+    func testNavigationFailureInvalidatesSuspendedReadinessResult() async {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.readinessCheckDelay = .zero
+        var continuation: CheckedContinuation<Any?, Error>?
+        coordinator.javaScriptEvaluator = { _ in
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+
+        coordinator.navigationDidFinish(at: saved.address)
+        while continuation == nil { await Task.yield() }
+        let cancelledTask = coordinator.readinessTask
+        coordinator.javaScriptEvaluator = { _ in true }
+        coordinator.handleNavigationError(URLError(.cannotConnectToHost))
+        continuation?.resume(returning: true)
+        await cancelledTask?.value
+
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app could not be loaded. Check Tailscale and try again.")
+        )
+    }
+
+    func testAuthenticationInvalidatesSuspendedReadinessResult() async {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.readinessCheckDelay = .zero
+        var continuation: CheckedContinuation<Any?, Error>?
+        coordinator.javaScriptEvaluator = { _ in
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+
+        coordinator.navigationDidFinish(at: saved.address)
+        while continuation == nil { await Task.yield() }
+        let cancelledTask = coordinator.readinessTask
+        let retryID = UUID()
+        state.value = .retrying(retryID)
+        coordinator.javaScriptEvaluator = { _ in true }
+        coordinator.authenticate(saved)
+        continuation?.resume(returning: true)
+        await cancelledTask?.value
+        await coordinator.authenticationTask?.value
+
+        XCTAssertEqual(state.value, .retrying(retryID))
+        XCTAssertEqual(coordinator.handledRetryID, retryID)
+    }
+
+    func testLaterNavigationSupersedesSuspendedReadinessPollForSameConnection() async {
+        let (coordinator, state) = makeCoordinator()
+        coordinator.beginAuthenticationState(for: saved)
+        coordinator.readinessCheckLimit = 2
+        coordinator.readinessCheckDelay = .zero
+        var continuation: CheckedContinuation<Any?, Error>?
+        var checks = 0
+        coordinator.javaScriptEvaluator = { _ in
+            checks += 1
+            return try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+
+        coordinator.navigationDidFinish(at: saved.address)
+        while continuation == nil { await Task.yield() }
+        let supersededTask = coordinator.readinessTask
+        coordinator.javaScriptEvaluator = { _ in
+            checks += 1
+            return false
+        }
+        coordinator.navigationDidFinish(at: saved.address)
+        let currentTask = coordinator.readinessTask
+        continuation?.resume(returning: true)
+        await supersededTask?.value
+        await currentTask?.value
+
+        XCTAssertEqual(checks, 3)
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app opened but did not finish starting. Try again.")
+        )
+    }
+
+    func testWebContentTerminationBecomesVisibleFailure() {
+        let (coordinator, state) = makeCoordinator(initialState: .ready)
+        coordinator.webViewWebContentProcessDidTerminate(WKWebView())
+        XCTAssertEqual(
+            state.value,
+            .failed("The remote app stopped unexpectedly. Try again.")
+        )
+    }
+
     func testBridgeListConnectUseAndForgetActionsReturnEncodedReplies() async throws {
         let first = connection(address: "https://one.example", token: "gateway-token-one-0001")
         let second = connection(address: "https://two.example", token: "gateway-token-two-0002")
@@ -720,6 +1009,13 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""list-id", true"#))
         XCTAssertTrue(try XCTUnwrap(scripts.last).contains(#""credentialStorage":"secure""#))
         assertRedactsTokens(try XCTUnwrap(scripts.last), [first.token, second.token])
+
+        await coordinator.handleBridgeRequest(
+            id: "probe-id",
+            action: "probe",
+            body: ["connectionId": first.id.uuidString]
+        )
+        XCTAssertEqual(try XCTUnwrap(scripts.last), replyScript(id: "probe-id", ok: true, literal: "true"))
 
         await coordinator.handleBridgeRequest(
             id: "use-id",
@@ -779,6 +1075,7 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         // the assertion observes the failure path clearing it.
         for request in [
             ("bad-connect", "connect", ["address": "https://desk.example"]),
+            ("bad-probe", "probe", [:]),
             ("bad-use", "use", [:]),
             ("bad-forget", "forget", [:]),
             ("bad-action", "destroy", [:]),
@@ -792,13 +1089,14 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             XCTAssertNil(coordinator.requestedConnection)
         }
 
-        XCTAssertEqual(scripts.count, 4)
+        XCTAssertEqual(scripts.count, 5)
         XCTAssertTrue(scripts[0].contains(#""bad-connect", false"#))
         XCTAssertTrue(scripts[0].contains("connection details were incomplete"))
-        XCTAssertTrue(scripts[1].contains(#""bad-use", false"#))
-        XCTAssertTrue(scripts[2].contains(#""bad-forget", false"#))
-        XCTAssertTrue(scripts[3].contains(#""bad-action", false"#))
-        XCTAssertTrue(scripts[3].contains("action is not supported"))
+        XCTAssertTrue(scripts[1].contains(#""bad-probe", false"#))
+        XCTAssertTrue(scripts[2].contains(#""bad-use", false"#))
+        XCTAssertTrue(scripts[3].contains(#""bad-forget", false"#))
+        XCTAssertTrue(scripts[4].contains(#""bad-action", false"#))
+        XCTAssertTrue(scripts[4].contains("action is not supported"))
     }
 
     func testBridgeRecoversSwitchWhenJavaScriptEvaluationFails() async throws {
@@ -982,8 +1280,12 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         let binding = Binding(get: { state }, set: { state = $0 })
         let model = ConnectionModel(credentialStore: MemoryCredentialStore(), validator: MockValidator())
         let coordinator = RemoteWebView.Coordinator(model: model, state: binding)
+        coordinator.state.wrappedValue = .retrying(UUID())
+        coordinator.authenticate(saved)
         let task = Task<Void, Never> { try? await Task.sleep(for: .seconds(10)) }
+        let readinessTask = Task<Void, Never> { try? await Task.sleep(for: .seconds(10)) }
         coordinator.authenticationTask = task
+        coordinator.readinessTask = readinessTask
         coordinator.authenticatedConnection = saved
         coordinator.isSwitchingThroughBridge = true
         coordinator.javaScriptEvaluator = { _ in nil }
@@ -992,7 +1294,10 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         coordinator.teardown()
 
         XCTAssertTrue(task.isCancelled)
+        XCTAssertTrue(readinessTask.isCancelled)
         XCTAssertNil(coordinator.authenticationTask)
+        XCTAssertNil(coordinator.readinessTask)
+        XCTAssertNil(coordinator.handledRetryID)
         XCTAssertNil(coordinator.requestedConnection)
         XCTAssertNil(coordinator.authenticatedConnection)
         XCTAssertFalse(coordinator.isSwitchingThroughBridge)
@@ -1105,12 +1410,50 @@ final class RemoteWebViewPolicyTests: XCTestCase {
         // Retrying reloads even when that connection is already authenticated.
         let (retrying, retryingState) = makeCoordinator(initialState: .ready)
         retrying.authenticatedConnection = saved
-        retryingState.value = .retrying(UUID())
+        let retryID = UUID()
+        retryingState.value = .retrying(retryID)
         retrying.synchronizeAuthentication(with: saved)
         XCTAssertEqual(retrying.requestedConnection, saved)
         XCTAssertNil(retrying.authenticatedConnection)
-        XCTAssertEqual(retryingState.value, .loading)
+        XCTAssertEqual(retryingState.value, .retrying(retryID))
+        XCTAssertEqual(retrying.handledRetryID, retryID)
+        let firstAttempt = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        retrying.authenticationTask = firstAttempt
+        retrying.synchronizeAuthentication(with: saved)
+        XCTAssertFalse(firstAttempt.isCancelled)
+
+        // The token is scoped to the connection it started. A connection
+        // change with the same token must still begin a new attempt.
+        retrying.synchronizeAuthentication(with: other)
+        XCTAssertTrue(firstAttempt.isCancelled)
+        XCTAssertEqual(retrying.requestedConnection, other)
+
+        let secondAttempt = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+        retrying.authenticationTask = secondAttempt
+        let nextRetryID = UUID()
+        retryingState.value = .retrying(nextRetryID)
+        retrying.synchronizeAuthentication(with: other)
+        XCTAssertTrue(secondAttempt.isCancelled)
+        XCTAssertEqual(retrying.handledRetryID, nextRetryID)
         await retrying.authenticationTask?.value
+    }
+
+    func testBeginAuthenticationStateAvoidsRedundantLoadingAndRetryWrites() {
+        let (loading, loadingState) = makeCoordinator()
+        loading.beginAuthenticationState(for: saved)
+        XCTAssertEqual(loadingState.value, .loading)
+        XCTAssertEqual(loadingState.bindingWriteCount, 0)
+
+        let retryID = UUID()
+        let (retrying, retryingState) = makeCoordinator(initialState: .retrying(retryID))
+        retrying.beginAuthenticationState(for: saved)
+        XCTAssertEqual(retryingState.value, .retrying(retryID))
+        XCTAssertEqual(retryingState.bindingWriteCount, 0)
+
+        let (settled, settledState) = makeCoordinator(initialState: .ready)
+        settled.beginAuthenticationState(for: saved)
+        XCTAssertEqual(settledState.value, .loading)
+        XCTAssertEqual(settledState.bindingWriteCount, 1)
     }
 
     func testLoginExchangePostsTheTokenInTheBodyAndReturnsTheSessionCookie() async throws {
@@ -1206,13 +1549,14 @@ final class RemoteWebViewPolicyTests: XCTestCase {
     func testBridgeScriptExposesOnlyConnectionSummaries() {
         let script = RemoteWebView.Coordinator.connectionBridgeScript
         XCTAssertTrue(script.contains("list: () => call(\"list\")"))
+        XCTAssertTrue(script.contains("probe: (connectionId) => call(\"probe\""))
         XCTAssertTrue(script.contains("forget: (connectionId)"))
 
         let actions = script
             .components(separatedBy: "call(\"")
             .dropFirst()
             .map { String($0.prefix(while: { $0 != "\"" })) }
-        XCTAssertEqual(actions, ["list", "connect", "use", "forget"])
+        XCTAssertEqual(actions, ["list", "probe", "connect", "use", "forget"])
     }
 }
 

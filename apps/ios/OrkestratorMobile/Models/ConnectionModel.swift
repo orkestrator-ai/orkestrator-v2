@@ -8,6 +8,7 @@ final class ConnectionModel: ObservableObject {
     @Published var draftToken = ""
     @Published var isConnecting = false
     @Published var connectionError: String?
+    @Published private(set) var requiresLaunchSelection = false
 
     private let credentialStore: any ConnectionCredentialStoring
     private let validator: any GatewayConnectionValidating
@@ -20,6 +21,7 @@ final class ConnectionModel: ObservableObject {
         self.validator = validator
         do {
             vault = try credentialStore.load()
+            requiresLaunchSelection = !vault.connections.isEmpty
         } catch {
             vault = .empty
             connectionError = error.localizedDescription
@@ -54,6 +56,20 @@ final class ConnectionModel: ObservableObject {
             _ = try await connect(address: draftAddress, token: draftToken)
             draftToken = ""
             isShowingConnectionEditor = false
+            requiresLaunchSelection = false
+        } catch {
+            connectionError = error.localizedDescription
+        }
+    }
+
+    func selectConnectionForLaunch(_ connection: RemoteConnection) async {
+        guard requiresLaunchSelection, !isConnecting else { return }
+        isConnecting = true
+        connectionError = nil
+        defer { isConnecting = false }
+        do {
+            _ = try await use(connectionID: connection.id.uuidString)
+            requiresLaunchSelection = false
         } catch {
             connectionError = error.localizedDescription
         }
@@ -88,10 +104,8 @@ final class ConnectionModel: ObservableObject {
 
     @discardableResult
     func use(connectionID: String) async throws -> ConnectionListPayload {
-        guard let id = UUID(uuidString: connectionID),
-              let connection = vault.connections.first(where: { $0.id == id }) else {
-            throw ConnectionModelError.missingConnection
-        }
+        let connection = try savedConnection(connectionID: connectionID)
+        let id = connection.id
 
         // Do not strand the user on a saved server that can no longer be
         // reached or authenticated. The active connection remains unchanged
@@ -112,6 +126,12 @@ final class ConnectionModel: ObservableObject {
         try credentialStore.save(nextVault)
         vault = nextVault
         return connectionListPayload()
+    }
+
+    func probe(connectionID: String) async throws -> Bool {
+        let connection = try savedConnection(connectionID: connectionID)
+        try await validator.check(address: connection.address, token: connection.token)
+        return true
     }
 
     @discardableResult
@@ -146,6 +166,14 @@ final class ConnectionModel: ObservableObject {
                 )
             }
         )
+    }
+
+    private func savedConnection(connectionID: String) throws -> RemoteConnection {
+        guard let id = UUID(uuidString: connectionID),
+              let connection = vault.connections.first(where: { $0.id == id }) else {
+            throw ConnectionModelError.missingConnection
+        }
+        return connection
     }
 }
 

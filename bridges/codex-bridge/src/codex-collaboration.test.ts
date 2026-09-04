@@ -438,6 +438,33 @@ describe("Codex collaboration state", () => {
     expect(part).toMatchObject({ subagentId: "agent-1", toolState: "failure" });
   });
 
+  test("resolves completion without repainting authoritative terminal state", () => {
+    const completion = {
+      id: "complete-1",
+      type: "subagent_activity",
+      activity: "completed",
+      agent_thread_id: "agent-1",
+      agent_path: "/root/fixture_review",
+    } as const;
+
+    const [completed] = applyCodexCollabStateToSubagentParts([makeAgent("agent-1")], [completion]);
+    expect(completed).toMatchObject({ subagentId: "agent-1", toolState: "success" });
+
+    const [orphan] = applyCodexCollabStateToSubagentParts([], [completion]);
+    expect(orphan).toMatchObject({
+      content: "fixture_review",
+      subagentId: "agent-1",
+      subagentRole: "fixture_review",
+      toolState: "success",
+    });
+
+    const [stillFailed] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "failure" })],
+      [completion],
+    );
+    expect(stillFailed?.toolState).toBe("failure");
+  });
+
   test("reports an interrupted child with no spawn row in this turn", () => {
     const [part] = applyCodexCollabStateToSubagentParts(
       [],

@@ -2,7 +2,7 @@
 
 **Do not edit by hand.** Everything here is produced by
 `bun scripts/generate-codex-app-server-protocol.ts` from the Codex binary
-pinned in `config/codex-version.json` (currently 0.149.1).
+pinned in `config/codex-version.json` (currently 0.153.3).
 
 These bindings are only valid for the version that generated them, so they
 are treated as a lockfile. The full test pipeline runs the generator with

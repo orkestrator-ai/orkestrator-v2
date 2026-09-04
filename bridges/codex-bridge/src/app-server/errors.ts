@@ -153,21 +153,57 @@ export function isSafeToRetryImmediately(error: unknown): boolean {
   return error instanceof AppServerRpcError && error.isOverload();
 }
 
+/** True for the paginated-history response that needs a metadata cross-check. */
+export function isPaginatedHistoryUnsupportedError(error: unknown): error is AppServerRpcError {
+  return (
+    error instanceof AppServerRpcError &&
+    error.method === "thread/read" &&
+    error.code === JSON_RPC_METHOD_NOT_FOUND &&
+    /list_turns is not supported yet/i.test(error.message)
+  );
+}
+
 /**
  * `thread/read(includeTurns=true)` on a thread whose first turn never
- * materialized fails instead of returning an empty turn list:
+ * materialized fails instead of returning an empty turn list. App-server has
+ * used two errors for that state:
  *
  *   -32600 "thread <id> is not materialized yet; includeTurns is unavailable
  *            before first user message"
  *
- * Recovery depends on distinguishing this from a genuine read failure. It proves
- * no `userMessage` was ever persisted, so an ambiguous first dispatch definitely
- * did not execute and can be re-sent exactly once. Verified against the pinned
- * binary in `live-contract.test.ts`.
+ *   -32601 "list_turns is not supported yet"
+ *
+ * The newer wording is also returned for a genuinely paginated thread whose
+ * history cannot be read. Codex 0.153.3 defaults durable threads to paginated
+ * history and creates the rollout header eagerly, but does not index the thread
+ * for paginated reads until its first user message. The -32601 response carries
+ * the materialization signal; the metadata-only read is a defence-in-depth
+ * cross-check that this is still the untouched, idle start shape rather than a
+ * different paginated-history failure. Verified against Codex 0.153.3 in
+ * `live-contract.test.ts`.
  */
-export function isUnmaterializedThreadError(error: unknown): boolean {
+export function isUnmaterializedThreadError(
+  error: unknown,
+  thread?: Record<string, unknown>,
+): boolean {
   if (!(error instanceof AppServerRpcError)) return false;
-  return /not materialized/i.test(error.message);
+  if (error.method !== "thread/read") return false;
+  if (error.code === JSON_RPC_INVALID_REQUEST && /not materialized/i.test(error.message)) {
+    return true;
+  }
+  const status = thread?.status;
+  const statusType =
+    status && typeof status === "object" && !Array.isArray(status)
+      ? (status as Record<string, unknown>).type
+      : undefined;
+  return (
+    isPaginatedHistoryUnsupportedError(error) &&
+    thread?.historyMode === "paginated" &&
+    thread.preview === "" &&
+    typeof thread.createdAt === "number" &&
+    thread.updatedAt === thread.createdAt &&
+    statusType === "idle"
+  );
 }
 
 /**

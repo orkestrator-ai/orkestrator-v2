@@ -5,12 +5,12 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.245`, Anthropic SDK `0.120.0`, CLI `2.1.245` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.149.1` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.23` |
-| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.28` |
-| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.10` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.84.3` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.261`, Anthropic SDK `0.123.0`, CLI `2.1.261` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.153.3` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.28` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.31` |
+| Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.13` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.0` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
 
@@ -443,6 +443,12 @@ hermetic `codex exec` exception.
    The live contract tests do not call a model or spend credits. They verify
    initialization order, method errors, model pagination/order, thread listing
    and reads, thread naming, project-trust behavior, and clean process shutdown.
+   Codex 0.153.3 defaults new durable threads to paginated history and eagerly
+   writes their rollout header, but `thread/read(includeTurns=true)` returns
+   `list_turns is not supported yet` until the first user message indexes the
+   thread. The bridge accepts that as an empty thread only after a metadata read
+   confirms the untouched, idle start snapshot; keep that live assertion when
+   reviewing later versions because it protects at-most-once dispatch recovery.
 7. Replay committed notification recordings:
 
    ```bash
@@ -552,9 +558,11 @@ Pi is pinned in three places that must move together, because the SDK the
 bridge drives and the `pi` binary a terminal tab runs are the same program
 published two ways:
 
-- `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent` and the
-  two packages it exposes types from, `@earendil-works/pi-ai` and
-  `@earendil-works/pi-agent-core`, all pinned exactly.
+- `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent`, the two
+  packages it exposes types from (`@earendil-works/pi-ai` and
+  `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
+  `0.85.0` public entry point imports without declaring. All four are pinned
+  exactly and vendored as runtime roots.
 - `apps/desktop/electron/toolchain-manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
@@ -564,7 +572,7 @@ Dockerfile pins the same archive digests the manifest does.
 
 ### Procedure
 
-1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then
+1. Bump the four SDK dependencies in `bridges/pi-bridge/package.json`, then
    `bun install`.
 2. Bump `PINNED_TOOLCHAIN_VERSIONS.pi` and `ARG PI_CLI_VERSION` to the same
    version.

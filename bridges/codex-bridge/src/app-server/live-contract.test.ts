@@ -246,10 +246,11 @@ describeLive("live thread history", () => {
    * The recovery flow reads `thread/read(includeTurns=true)` and looks for a
    * `userMessage` whose `clientId` matches the request id. On a thread whose
    * first turn never materialized, that call does **not** return an empty turn
-   * list — it fails with -32600. Recovery has to read that specific error as
-   * "no user message was ever recorded", i.e. the turn definitely did not start
-   * and may be dispatched exactly once. Treating it as a generic failure would
-   * strand the prompt; treating it as ambiguous would deadlock the session.
+   * list — Codex 0.153.3 fails with -32601 "list_turns is not supported yet".
+   * Recovery combines that not-yet-indexed response with a metadata-only read
+   * of the untouched idle snapshot before deciding the turn may be dispatched
+   * exactly once. Treating it as a generic failure would strand the prompt;
+   * trusting the shared error wording alone could duplicate a real turn.
    */
   test("thread/read(includeTurns) rejects an unmaterialized thread instead of returning empty", async () => {
     const session = await boot();
@@ -265,9 +266,18 @@ describeLive("live thread history", () => {
         .request("thread/read", { threadId: started.thread.id, includeTurns: true })
         .catch((caught: unknown) => caught);
 
+      const metadata = await session.client.request<{ thread: Record<string, unknown> }>(
+        "thread/read",
+        { threadId: started.thread.id },
+      );
       expect(error).toBeInstanceOf(AppServerRpcError);
-      expect((error as AppServerRpcError).message).toContain("not materialized");
-      expect(isUnmaterializedThreadError(error)).toBe(true);
+      expect((error as AppServerRpcError).message).toContain("list_turns is not supported yet");
+      expect(metadata.thread.historyMode).toBe("paginated");
+      expect(typeof metadata.thread.path).toBe("string");
+      expect(metadata.thread.preview).toBe("");
+      expect(metadata.thread.updatedAt).toBe(metadata.thread.createdAt);
+      expect(metadata.thread.status).toEqual({ type: "idle" });
+      expect(isUnmaterializedThreadError(error, metadata.thread)).toBe(true);
     } finally {
       await session.stop();
     }

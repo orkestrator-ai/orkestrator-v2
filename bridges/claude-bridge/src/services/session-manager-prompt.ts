@@ -804,7 +804,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         hooks: {
           PreToolUse: [{ matcher: "Write|Edit", hooks: [observePlanWrite] }],
         },
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.245: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.261: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK

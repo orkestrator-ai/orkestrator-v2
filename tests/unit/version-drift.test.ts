@@ -272,6 +272,11 @@ const AGENT_PINS: Record<string, AgentPins> = {
         dep: "@earendil-works/pi-agent-core",
         tracksCli: true,
       },
+      {
+        file: "bridges/pi-bridge/package.json",
+        dep: "@earendil-works/pi-server",
+        tracksCli: true,
+      },
     ],
   },
 };
@@ -752,7 +757,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       }
     }
 
-    // OpenCode ships unsigned macOS binaries, and Pi 0.84.3 ships binaries with
+    // OpenCode ships unsigned macOS binaries, and Pi 0.85.0 ships binaries with
     // invalid linker signatures. Both architectures must opt into repair or
     // installation fails before the executable can be probed.
     for (const name of ["opencode", "pi"] as const) {

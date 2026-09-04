@@ -126,14 +126,14 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 # tests/unit/version-drift.test.ts is what stops the two drifting.
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json
-#   PI_CLI_VERSION        ↔ the three @earendil-works/pi-* pins in bridges/pi-bridge/package.json
+#   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.245
-ARG CODEX_CLI_VERSION=0.149.1
-ARG OPENCODE_CLI_VERSION=1.18.23
-ARG GROK_BUILD_VERSION=1.0.10
-ARG PI_CLI_VERSION=0.84.3
+ARG CLAUDE_CLI_VERSION=2.1.261
+ARG CODEX_CLI_VERSION=0.153.3
+ARG OPENCODE_CLI_VERSION=1.18.28
+ARG GROK_BUILD_VERSION=1.0.13
+ARG PI_CLI_VERSION=0.85.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -154,8 +154,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) GROK_ARCH=x86_64; GROK_SHA=d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752 ;; \
-    arm64) GROK_ARCH=aarch64; GROK_SHA=050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=edf79521581bb5e6b95abef848491a6a742e860da3e237ebe86a280d30dce4c1 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=b926fc5308374396e260e7efbd6107231a8dae13c084ddaf0fe89b7ebb3edd25 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
@@ -169,8 +169,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # apps/desktop/electron/toolchain-manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=6f8bb67c21bc6b8a8a106d354f56d7fd4a190a3cd8ad3a32db45f6d281a5d008 ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=e7cd48cd6f64b708e8459a890882b1007332f6e6b876fe1fd5c5203abd0addb7 ;; \
+    amd64) PI_ARCH=x64; PI_SHA=a7e7c65f1dc528d2e17e7d946ad2b61df0e2b0f9952faee77807c2484b464d6e ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=821750e0ac6bf6e10c35b93ddab88a44f2d0ef8411af9ea4e8ffe620f62130df ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

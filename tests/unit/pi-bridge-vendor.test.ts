@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { stageRuntimeClosure } from "../../bridges/pi-bridge/scripts/vendor";
+
+const execFileAsync = promisify(execFile);
 
 type FixturePackage = {
   key: string;
@@ -13,6 +18,35 @@ type FixturePackage = {
 };
 
 describe("Pi bridge runtime vendoring", () => {
+  test("loads Pi's undeclared server import from the staged runtime closure", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-live-test-"));
+    const packageRoot = path.resolve(import.meta.dir, "../../bridges/pi-bridge");
+    const stagedModules = path.join(root, "node_modules");
+    const entryPackages = [
+      "@earendil-works/pi-coding-agent",
+      "@earendil-works/pi-ai",
+      "@earendil-works/pi-agent-core",
+      "@earendil-works/pi-server",
+    ] as const;
+
+    try {
+      await stageRuntimeClosure({ packageRoot, destination: stagedModules, entryPackages });
+
+      const workerModule = path.join(
+        stagedModules,
+        "@earendil-works/pi-coding-agent/dist/experimental/session-worker-manager.js",
+      );
+      const moduleUrl = pathToFileURL(workerModule).href;
+      await execFileAsync("node", [
+        "--input-type=module",
+        "--eval",
+        `const loaded = await import(${JSON.stringify(moduleUrl)}); if (typeof loaded.SessionWorkerManager !== "function") process.exit(2);`,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("preserves nested versions and remains resolvable without the source install", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-test-"));
     const sourceModules = path.join(root, "source", "node_modules");

@@ -42,6 +42,7 @@ import { redactSecrets } from "../app-server/redaction.js";
 import {
   AppServerRpcError,
   classifyDispatchFailure,
+  isPaginatedHistoryUnsupportedError,
   isSafeToRetryImmediately,
   isUnmaterializedThreadError,
   toEngineError,
@@ -891,11 +892,27 @@ export class AppServerEngine implements CodexEngine {
     } catch (error) {
       /**
        * A thread whose first turn never materialized rejects `includeTurns`
-       * instead of returning an empty list. Reporting it as "no turns" is exactly
-       * right for recovery: it proves no user message was ever persisted.
+       * instead of returning an empty list. The not-yet-indexed response is the
+       * recovery signal; because Codex 0.153.3 shares its wording with unsupported
+       * paginated history, confirm the metadata is still the untouched start
+       * snapshot before reporting "no turns".
        */
-      if (isUnmaterializedThreadError(error)) {
-        return { id: threadId, handle: threadId, turns: [] };
+      let metadata: Record<string, unknown> | undefined;
+      if (isPaginatedHistoryUnsupportedError(error)) {
+        try {
+          const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
+            "thread/read",
+            { threadId },
+          );
+          metadata = response.thread;
+        } catch {
+          // The original full-history error remains authoritative.
+        }
+      }
+      if (isUnmaterializedThreadError(error, metadata)) {
+        return metadata
+          ? { ...this.toEngineThread(metadata), turns: [] }
+          : { id: threadId, handle: threadId, turns: [] };
       }
       throw error;
     }

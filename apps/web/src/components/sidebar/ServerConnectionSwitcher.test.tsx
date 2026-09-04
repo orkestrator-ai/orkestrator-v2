@@ -267,7 +267,9 @@ describe("server connection switcher", () => {
     fireEvent.pointerMove(saved);
     fireEvent.focus(saved);
     expect(probe.mock.calls.some(([connectionId]) => connectionId === "saved")).toBe(false);
-    expect(screen.queryByRole("menuitem", { name: /Saved.*status: unavailable/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Saved.*status: unavailable/ }) === null).toBe(
+      true,
+    );
   });
 
   test("keeps the active badge neutral until checked and ignores superseded results", async () => {

@@ -835,7 +835,7 @@ describe("AgentInfoButton usage panel", () => {
       await act(async () => {
         await timers.shift()!();
       });
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status") === null).toBe(true);
       expect(
         screen.getByRole("button", { name: "Central processing unit (CPU) usage: 39%" }),
       ).toBeTruthy();

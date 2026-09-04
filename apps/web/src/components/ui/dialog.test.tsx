@@ -108,4 +108,24 @@ describe("Dialog primitives", () => {
       expect(contents).not.toMatch(/<DialogFooter[^>]*bg-background\/30/);
     }
   });
+
+  test("keeps every dialog opened from a fullscreen surface on the raised layer", () => {
+    // Ordinary dialogs need the same explicit content and overlay layers as
+    // alert dialogs when they are portalled out of a fullscreen surface.
+    const sources = ["apps/web/src/components/settings/ConnectionsSettings.tsx"];
+
+    for (const source of sources) {
+      const text = readFileSync(path.join(repositoryRoot, source), "utf8");
+      const contents = text.match(/<DialogContent[\s\S]*?>/g) ?? [];
+      expect(contents.length).toBeGreaterThan(0);
+      for (const opening of contents) {
+        expect({ source, opening }).toMatchObject({
+          opening: expect.stringMatching(/className=\{cn\([\s\S]*Z_FULLSCREEN_DIALOG[\s\S]*\)\}/),
+        });
+        expect({ source, opening }).toMatchObject({
+          opening: expect.stringMatching(/overlayClassName=\{Z_FULLSCREEN_DIALOG\}/),
+        });
+      }
+    }
+  });
 });

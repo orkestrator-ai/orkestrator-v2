@@ -1774,7 +1774,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               Clean up logs
             </Button>
           </AlertDialogTrigger>
-          <AlertDialogContent className={Z_FULLSCREEN_DIALOG}>
+          <AlertDialogContent
+            className={Z_FULLSCREEN_DIALOG}
+            overlayClassName={Z_FULLSCREEN_DIALOG}
+          >
             <AlertDialogHeader>
               <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
               <AlertDialogDescription>

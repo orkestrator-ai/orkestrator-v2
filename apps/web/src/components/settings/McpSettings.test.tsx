@@ -79,7 +79,12 @@ describe("McpSettings", () => {
     await screen.findByText("Control Orkestrator from another agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Rotate" }));
-    expect(screen.getByText("Rotate the MCP token?")).toBeTruthy();
+    const dialog = screen.getByRole("alertdialog", { name: "Rotate the MCP token?" });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
     fireEvent.click(screen.getByRole("button", { name: "Rotate token" }));
 
     await waitFor(() =>

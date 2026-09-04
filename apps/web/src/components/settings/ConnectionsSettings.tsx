@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { publishConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 
@@ -350,7 +351,10 @@ export function ConnectionsSettings() {
       )}
 
       <Dialog open={addOpen} onOpenChange={(open) => busyId !== "add" && setAddOpen(open)}>
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className={cn("max-w-md", Z_FULLSCREEN_DIALOG)}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <form onSubmit={handleAdd}>
             <DialogHeader>
               <DialogTitle>Add connection</DialogTitle>
@@ -390,7 +394,10 @@ export function ConnectionsSettings() {
         open={tokenTarget !== null}
         onOpenChange={(open) => busyId === null && !open && setTokenTarget(null)}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className={cn("max-w-md", Z_FULLSCREEN_DIALOG)}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <form onSubmit={handleUpdateToken}>
             <DialogHeader>
               <DialogTitle>
@@ -444,7 +451,7 @@ export function ConnectionsSettings() {
         open={removeTarget !== null}
         onOpenChange={(open) => !open && setRemoveTarget(null)}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removeTarget?.name}?</AlertDialogTitle>
             <AlertDialogDescription>

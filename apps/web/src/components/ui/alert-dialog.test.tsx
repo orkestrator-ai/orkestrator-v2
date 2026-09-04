@@ -224,6 +224,8 @@ describe("AlertDialog primitives", () => {
     // renders above the shadcn default.
     const sources = [
       "apps/web/src/components/settings/GlobalSettings.sections.tsx",
+      "apps/web/src/components/settings/ConnectionsSettings.tsx",
+      "apps/web/src/components/settings/McpSettings.tsx",
       "apps/web/src/components/docker/DockerStatsDialog.tsx",
       "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
     ];
@@ -233,7 +235,10 @@ describe("AlertDialog primitives", () => {
       expect(contents.length).toBeGreaterThan(0);
       for (const opening of contents) {
         expect({ source, opening }).toMatchObject({
-          opening: expect.stringContaining("Z_FULLSCREEN_DIALOG"),
+          opening: expect.stringMatching(/className=\{Z_FULLSCREEN_DIALOG\}/),
+        });
+        expect({ source, opening }).toMatchObject({
+          opening: expect.stringMatching(/overlayClassName=\{Z_FULLSCREEN_DIALOG\}/),
         });
       }
     }

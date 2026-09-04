@@ -96,6 +96,12 @@ describe("ConnectionsSettings", () => {
     await screen.findByText("desk.tailnet.ts.net");
 
     fireEvent.click(screen.getByRole("button", { name: "Add connection" }));
+    const dialog = screen.getByRole("dialog", { name: "Add connection" });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
     fireEvent.change(screen.getByLabelText("Machine name or HTTPS address"), {
       target: { value: "workstation" },
     });
@@ -118,6 +124,12 @@ describe("ConnectionsSettings", () => {
     await screen.findByText("desk.tailnet.ts.net");
 
     fireEvent.click(screen.getByRole("button", { name: "Replace token" }));
+    const dialog = screen.getByRole("dialog", { name: "Replace gateway token" });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
     fireEvent.change(screen.getByLabelText("New gateway token"), {
       target: { value: "replacement-token-123456" },
     });
@@ -145,7 +157,12 @@ describe("ConnectionsSettings", () => {
     expect(await screen.findByText("Token required")).toBeTruthy();
     expect(screen.getByText("Tokens are kept only for this app session.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Enter token" }));
-    expect(screen.getByRole("heading", { name: "Enter gateway token" })).toBeTruthy();
+    const dialog = screen.getByRole("dialog", { name: "Enter gateway token" });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
     fireEvent.change(screen.getByLabelText("New gateway token"), {
       target: { value: "replacement-token-123456" },
     });
@@ -204,6 +221,12 @@ describe("ConnectionsSettings", () => {
     await screen.findByText("desk.tailnet.ts.net");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove desk.tailnet.ts.net" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Remove desk.tailnet.ts.net?" });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]')!;
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay.className).toContain("z-[80]");
+    expect(overlay.className).not.toContain("z-50");
     fireEvent.click(screen.getByRole("button", { name: "Remove connection" }));
 
     await waitFor(() => expect(api.forget).toHaveBeenCalledWith("remote-1"));

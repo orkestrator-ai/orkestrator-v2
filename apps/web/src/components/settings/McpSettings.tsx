@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { useTimedCopyFeedback } from "@/hooks";
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
@@ -224,7 +225,10 @@ export function McpSettings() {
                       Rotate
                     </Button>
                   </AlertDialogTrigger>
-                  <AlertDialogContent>
+                  <AlertDialogContent
+                    className={Z_FULLSCREEN_DIALOG}
+                    overlayClassName={Z_FULLSCREEN_DIALOG}
+                  >
                     <AlertDialogHeader>
                       <AlertDialogTitle>Rotate the MCP token?</AlertDialogTitle>
                       <AlertDialogDescription>

@@ -530,6 +530,12 @@ export function abortSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
   if (session && session.abortController) {
     session.abortController.abort();
+    // Bank completed model calls synchronously. A replacement prompt may claim
+    // the session before the aborted iterator reaches its finally block; if we
+    // waited for that block, the new turn would clear this lower bound first.
+    if (session.inProgressUsage) session.usage = session.inProgressUsage;
+    session.inProgressUsage = undefined;
+    session.inProgressUsageGeneration = undefined;
     session.status = "idle";
     session.turnStartedAt = undefined;
     session.abortController = undefined;

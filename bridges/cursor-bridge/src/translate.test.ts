@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { newSessionState } from "./agent-session.js";
+import { publicContextUsage } from "./public.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
-import { applyInteractionUpdate, settleBackgroundChildren } from "./translate.js";
+import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
 
 function running(): SessionState {
   const state = newSessionState();
@@ -412,6 +413,138 @@ describe("session-wide state", () => {
       cacheReadTokens: 5,
       cacheWriteTokens: 0,
       reasoningTokens: 7,
+    });
+    expect(state.currentRunUsage).toEqual(state.currentTurnUsage);
+  });
+
+  test("accumulates completed model-call usage while retaining the latest context", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "turn-ended",
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 0 },
+    });
+    applyInteractionUpdate(state, {
+      type: "turn-ended",
+      usage: { inputTokens: 140, outputTokens: 30, cacheReadTokens: 10, cacheWriteTokens: 1 },
+    });
+
+    expect(state.currentTurnUsage).toEqual({
+      inputTokens: 140,
+      outputTokens: 30,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 1,
+    });
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 240,
+      outputTokens: 50,
+      cacheReadTokens: 15,
+      cacheWriteTokens: 1,
+    });
+    expect(state.currentRunUsageUpdatedAt).toBeDefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 181,
+      lastTurnTokens: 306,
+      sessionTokens: 306,
+    });
+  });
+
+  test("retains omitted latest-call categories and ignores empty usage updates", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "turn-ended",
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 5 },
+    });
+    const revision = state.revision;
+
+    applyInteractionUpdate(state, { type: "turn-ended", usage: {} });
+    expect(state.revision).toBe(revision);
+    applyInteractionUpdate(state, { type: "turn-ended", usage: { outputTokens: 7 } });
+
+    expect(state.currentTurnUsage).toEqual({
+      inputTokens: 100,
+      outputTokens: 7,
+      cacheReadTokens: 5,
+    });
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 100,
+      outputTokens: 27,
+      cacheReadTokens: 5,
+    });
+  });
+
+  test("takes the larger independent usage source without double-counting it", () => {
+    const state = running();
+    const first = { inputTokens: 100, outputTokens: 20 };
+    applyInteractionUpdate(state, { type: "turn-ended", usage: first });
+    applyStreamUsage(state, { ...first, totalTokens: 120 }, first);
+
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    });
+
+    const second = { inputTokens: 40, outputTokens: 10 };
+    applyInteractionUpdate(state, { type: "turn-ended", usage: second });
+    applyStreamUsage(state, { inputTokens: 140, outputTokens: 30, totalTokens: 170 }, second);
+    expect(state.currentRunUsage).toEqual({
+      inputTokens: 140,
+      outputTokens: 30,
+      totalTokens: 170,
+    });
+  });
+
+  test("does not charge a nested sub-agent turn to the parent run", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-delta",
+      callId: "child-launch",
+      taskUpdate: {
+        type: "turn-ended",
+        usage: { inputTokens: 500, outputTokens: 50 },
+      },
+    });
+
+    expect(state.currentTurnUsage).toBeUndefined();
+    expect(state.currentRunUsage).toBeUndefined();
+  });
+
+  test("uses the active run model instead of durable usage from a previous model", () => {
+    const state = running();
+    state.composer.models = [
+      {
+        platform: "cursor",
+        id: "old-model",
+        label: "Old",
+        providerLabel: "Cursor",
+        contextWindow: 1_000,
+      },
+      {
+        platform: "cursor",
+        id: "new-model",
+        label: "New",
+        providerLabel: "Cursor",
+        contextWindow: 2_000,
+      },
+    ];
+    state.composer.selectedModelId = "new-model";
+    state.usage = {
+      turn: { inputTokens: 100, outputTokens: 10 },
+      modelId: "old-model",
+      sessionTokenFloor: 110,
+      updatedAt: new Date(0).toISOString(),
+    };
+    state.currentRunModelId = "new-model";
+    state.currentRunUsage = { inputTokens: 20, outputTokens: 5 };
+    state.currentTurnUsage = { inputTokens: 20, outputTokens: 5 };
+    state.currentRunUsageUpdatedAt = new Date(1).toISOString();
+
+    expect(publicContextUsage(state)).toMatchObject({
+      modelId: "new-model",
+      maximumTokens: 2_000,
+      usedTokens: 25,
+      lastTurnTokens: 25,
+      sessionTokens: 135,
     });
   });
 

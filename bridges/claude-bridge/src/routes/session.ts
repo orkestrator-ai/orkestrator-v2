@@ -263,7 +263,7 @@ session.get("/:id", async (c) => {
     error: sessionData.error,
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
-    contextUsage: sessionData.usage,
+    contextUsage: sessionData.inProgressUsage ?? sessionData.usage,
     // Authoritative even before the first turn completes: rate-limit events
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,

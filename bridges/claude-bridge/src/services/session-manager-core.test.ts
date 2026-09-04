@@ -370,6 +370,93 @@ describe("rate_limit_event", () => {
     }
   });
 
+  test("merges a structured allocation into usage already streaming", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveUsage = resolve;
+        }),
+    );
+
+    const created = createSession("streaming structured allocation");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    try {
+      call.push({
+        type: "stream_event",
+        event: {
+          type: "message_start",
+          message: { usage: { input_tokens: 10, cache_read_input_tokens: 90 } },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        event: { type: "message_delta", usage: { output_tokens: 5 } },
+      });
+      call.push({ type: "stream_event", event: { type: "message_stop" } });
+      await waitFor(() => created.inProgressUsage?.sessionTokens === 105);
+
+      resolveUsage({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 31 } },
+      });
+      await waitFor(() => created.inProgressUsage?.rateLimits?.[0]?.usedPercent === 31);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.updated" &&
+            event.sessionId === created.id &&
+            (event.data as { contextUsage?: { sessionTokens?: number; rateLimits?: unknown[] } })
+              .contextUsage?.sessionTokens === 105 &&
+            (event.data as { contextUsage?: { rateLimits?: unknown[] } }).contextUsage?.rateLimits
+              ?.length === 1,
+        ),
+      ).toBe(true);
+    } finally {
+      stop();
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("merges a sparse rate-limit notification into usage already streaming", async () => {
+    const created = createSession("streaming sparse allocation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    try {
+      call.push({
+        type: "stream_event",
+        event: {
+          type: "message_start",
+          message: { usage: { input_tokens: 10, cache_read_input_tokens: 90 } },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        event: { type: "message_delta", usage: { output_tokens: 5 } },
+      });
+      call.push({ type: "stream_event", event: { type: "message_stop" } });
+      await waitFor(() => created.inProgressUsage?.sessionTokens === 105);
+
+      call.push({
+        type: "rate_limit_event",
+        rate_limit_info: { rateLimitType: "five_hour", utilization: 47 },
+      });
+      await waitFor(() => created.inProgressUsage?.rateLimits?.[0]?.usedPercent === 47);
+      expect(created.inProgressUsage).toMatchObject({
+        sessionTokens: 105,
+        rateLimits: [{ label: "Five Hour", usedPercent: 47 }],
+      });
+    } finally {
+      call.finish();
+      await promptPromise;
+    }
+  });
+
   test("replaces a sparse mid-turn notification with structured allocation", async () => {
     let requestCount = 0;
     const getStructuredUsage = mock(async () => {

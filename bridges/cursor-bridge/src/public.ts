@@ -104,29 +104,41 @@ export function publicDispatch(state: SessionState, requestId: string): JsonObje
 
 export function publicContextUsage(state: SessionState): NativeAgentContextUsage | undefined {
   const usage = state.usage;
-  if (!usage) return undefined;
-  const turn = usage.turn;
+  const live = state.currentRunUsage;
+  if (!usage && !live) return undefined;
+  const turn = live ?? usage!.turn;
   const spent = turnTokenTotal(turn);
   const hasSessionTokens =
-    usage.sessionTokens !== undefined || usage.sessionTokenFloor !== undefined;
+    live !== undefined ||
+    usage?.sessionTokens !== undefined ||
+    usage?.sessionTokenFloor !== undefined;
   // The run result is already an exact provider reading. Publish the durable
   // locally accumulated floor immediately so a completed workflow does not
   // lose its token count while Cursor's eventually consistent account endpoint
   // catches up. A later account total can only raise this value.
   const sessionTokens = hasSessionTokens
-    ? Math.max(usage.sessionTokens ?? 0, usage.sessionTokenFloor ?? 0)
+    ? Math.max(usage?.sessionTokens ?? 0, usage?.sessionTokenFloor ?? 0) +
+      (live ? turnTokenTotal(live) : 0)
     : undefined;
   // `usedTokens` is measured against the model's context window, so it has to
   // be an occupancy figure. `turn` is cumulative across every model call the
   // run made and can exceed the window several times over, which would peg the
   // gauge at 100%; `context` is the final call's own snapshot, which is what
   // the window actually held. They are the same number on a single-call run.
-  const used = usage.context ? turnTokenTotal(usage.context) : spent;
-  const model = state.composer.models.find((entry) => entry.id === usage.modelId);
+  const liveContext = live ? state.currentTurnUsage : undefined;
+  const used = liveContext
+    ? turnTokenTotal(liveContext)
+    : usage?.context
+      ? turnTokenTotal(usage.context)
+      : spent;
+  const modelId = live
+    ? (state.currentRunModelId ?? state.composer.selectedModelId)
+    : usage?.modelId;
+  const model = state.composer.models.find((entry) => entry.id === modelId);
   return {
     usedTokens: used,
     ...(model?.contextWindow ? { maximumTokens: model.contextWindow } : {}),
-    ...(usage.modelId ? { modelId: usage.modelId } : {}),
+    ...(modelId ? { modelId } : {}),
     ...(turn.inputTokens !== undefined ? { inputTokens: turn.inputTokens } : {}),
     ...(turn.outputTokens !== undefined ? { outputTokens: turn.outputTokens } : {}),
     ...(turn.cacheReadTokens !== undefined ? { cacheReadTokens: turn.cacheReadTokens } : {}),
@@ -136,10 +148,10 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     // breakdown above is cumulative for the same reason.
     lastTurnTokens: spent,
     ...(sessionTokens !== undefined ? { sessionTokens } : {}),
-    ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-    ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
+    ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+    ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     source: "provider",
-    updatedAt: usage.updatedAt,
+    updatedAt: state.currentRunUsageUpdatedAt ?? usage!.updatedAt,
   };
 }
 

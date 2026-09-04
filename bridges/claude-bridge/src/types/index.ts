@@ -266,6 +266,10 @@ export interface SessionState {
   lastStreamedRevisionAt?: number;
   /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
   usage?: SessionUsageSnapshot;
+  /** Monotonic lower bound from completed model calls in the query still running. */
+  inProgressUsage?: SessionUsageSnapshot;
+  /** Prevents an older released query from overwriting a newer turn's live meter. */
+  inProgressUsageGeneration?: number;
   /** Predicted next prompt emitted by the SDK after a completed turn. */
   promptSuggestion?: string;
   /**

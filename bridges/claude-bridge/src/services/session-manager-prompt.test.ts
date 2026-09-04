@@ -317,6 +317,194 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("publishes cumulative token usage after each completed model call", async () => {
+    const session = createSession("streaming usage");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "Review this");
+    const call = await nextQueryCall();
+    call.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: {
+          model: "claude-opus-test",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 0,
+            cache_read_input_tokens: 90,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+    });
+    call.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 5 } },
+    });
+    call.push({ type: "stream_event", event: { type: "message_stop" } });
+
+    await waitFor(() => getSession(session.id)?.inProgressUsage?.sessionTokens === 105);
+    expect(getSession(session.id)?.inProgressUsage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 90,
+      lastTurnTokens: 105,
+      sessionTokens: 105,
+      estimated: true,
+    });
+
+    call.push({
+      type: "result",
+      subtype: "success",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 6,
+        cache_read_input_tokens: 90,
+        cache_creation_input_tokens: 0,
+      },
+    });
+    call.finish();
+    await promptPromise;
+
+    expect(getSession(session.id)?.inProgressUsage).toBeUndefined();
+    expect(getSession(session.id)?.usage).toMatchObject({
+      lastTurnTokens: 106,
+      sessionTokens: 106,
+    });
+  });
+
+  test("keeps the cumulative snapshot when a later result reports no usage", async () => {
+    const session = createSession("missing later usage");
+    track(session.id);
+
+    const first = sendPrompt(session.id, "one");
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "result",
+      subtype: "success",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 6,
+        cache_read_input_tokens: 90,
+      },
+    });
+    firstCall.finish();
+    await first;
+    expect(session.usage?.sessionTokens).toBe(106);
+
+    const second = sendPrompt(session.id, "two");
+    const secondCall = await nextQueryCall();
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await second;
+
+    expect(session.usage?.sessionTokens).toBe(106);
+  });
+
+  test("retains streamed totals when the terminal result has context only", async () => {
+    const session = createSession("context-only terminal usage");
+    track(session.id);
+    session.usage = {
+      usedTokens: 80,
+      totalTokens: 200_000,
+      percentUsed: 0.04,
+      modelId: "claude-opus-test",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 65,
+      cacheWriteTokens: 0,
+      lastTurnTokens: 80,
+      sessionTokens: 80,
+      source: "claude",
+      updatedAt: new Date(0).toISOString(),
+    };
+    queryControlOverrides.getContextUsage = mock(async () => ({
+      totalTokens: 120,
+      maxTokens: 200_000,
+      percentage: 0.06,
+      model: "claude-opus-test",
+    }));
+
+    const promptPromise = sendPrompt(session.id, "continue");
+    const call = await nextQueryCall();
+    call.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: {
+          model: "claude-opus-test",
+          usage: { input_tokens: 20, cache_read_input_tokens: 100 },
+        },
+      },
+    });
+    call.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 10 } },
+    });
+    call.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 210);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 120,
+      totalTokens: 200_000,
+      inputTokens: 30,
+      outputTokens: 15,
+      cacheReadTokens: 165,
+      lastTurnTokens: 130,
+      sessionTokens: 210,
+      estimated: true,
+    });
+  });
+
+  test("banks streamed usage before an aborted turn is immediately replaced", async () => {
+    const session = createSession("usage abort restart");
+    track(session.id);
+    const first = sendPrompt(session.id, "first");
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 90 } },
+      },
+    });
+    firstCall.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 5 } },
+    });
+    firstCall.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 105);
+
+    expect(abortSession(session.id)).toBe(true);
+    expect(session.usage?.sessionTokens).toBe(105);
+    const second = sendPrompt(session.id, "second");
+    const secondCall = await nextQueryCall();
+    secondCall.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 2 } },
+      },
+    });
+    secondCall.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 3 } },
+    });
+    secondCall.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 110);
+    await first;
+    expect(session.inProgressUsage?.sessionTokens).toBe(110);
+
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await second;
+    expect(session.usage?.sessionTokens).toBe(110);
+  });
+
   test("publishes model attribution when only the final assistant record supplies it", async () => {
     const session = createSession("late model metadata");
     track(session.id);
@@ -1087,6 +1275,32 @@ describe("sendPrompt", () => {
     } finally {
       stop();
     }
+  });
+
+  test("banks completed streamed usage when the query fails", async () => {
+    const session = createSession("failed usage");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "work then fail");
+    const call = await nextQueryCall();
+    call.push({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { usage: { input_tokens: 10, cache_read_input_tokens: 90 } },
+      },
+    });
+    call.push({
+      type: "stream_event",
+      event: { type: "message_delta", usage: { output_tokens: 5 } },
+    });
+    call.push({ type: "stream_event", event: { type: "message_stop" } });
+    await waitFor(() => session.inProgressUsage?.sessionTokens === 105);
+    call.fail(new Error("provider disconnected"));
+
+    await expect(promptPromise).rejects.toThrow("provider disconnected");
+    expect(session.usage).toMatchObject({ lastTurnTokens: 105, sessionTokens: 105 });
+    expect(session.inProgressUsage).toBeUndefined();
+    expect(session.inProgressUsageGeneration).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------

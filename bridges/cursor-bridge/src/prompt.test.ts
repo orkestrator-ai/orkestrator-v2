@@ -210,6 +210,47 @@ describe("a turn that outlives its budget", () => {
 });
 
 describe("terminal run usage", () => {
+  test("publishes stream-only usage before the run finishes", async () => {
+    const state = runningSession();
+    state.composer.selectedModelId = "stream-model";
+    state.currentRunModelId = "stream-model";
+    let finish!: (result: { status: string }) => void;
+    let closeStream!: () => void;
+    const terminal = new Promise<{ status: string }>((resolve) => {
+      finish = resolve;
+    });
+    const streamClosed = new Promise<void>((resolve) => {
+      closeStream = resolve;
+    });
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        };
+        await streamClosed;
+      },
+      cancel: async () => undefined,
+      wait: () => terminal,
+    };
+
+    const completion = followRun(state, run, state.promptSequence, {
+      prompt: "x",
+      images: [],
+    });
+    await waitFor(() => state.currentRunUsage !== undefined);
+    expect(publicContextUsage(state)).toMatchObject({
+      modelId: "stream-model",
+      usedTokens: 50,
+      lastTurnTokens: 50,
+      sessionTokens: 50,
+    });
+
+    finish({ status: "finished" });
+    closeStream();
+    await completion;
+  });
+
   test("prefers RunResult usage over streamed and turn-ended usage", async () => {
     const state = runningSession();
     state.composer.selectedModelId = "requested-model";
@@ -272,6 +313,9 @@ describe("terminal run usage", () => {
       durationMs: 123,
       source: "provider",
     });
+    expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect(state.currentRunModelId).toBeUndefined();
   });
 
   test("publishes Cursor Grok tokens before account usage catches up", async () => {
@@ -399,6 +443,9 @@ describe("terminal run usage", () => {
       durationMs: 234,
       turn: { inputTokens: 30, outputTokens: 5, totalTokens: 37 },
     });
+    expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect(state.currentRunModelId).toBeUndefined();
   });
 
   test("records terminal usage when a run is cancelled", async () => {
@@ -426,6 +473,9 @@ describe("terminal run usage", () => {
       usedTokens: 15,
       lastTurnTokens: 15,
     });
+    expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect(state.currentRunModelId).toBeUndefined();
   });
 
   test("falls back to the turn-ended delta when neither terminal nor streamed usage exists", async () => {
@@ -1282,6 +1332,9 @@ describe("context occupancy versus turn spend", () => {
       usedTokens: 30,
       lastTurnTokens: 30,
     });
+    expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect(state.currentRunModelId).toBeUndefined();
   });
 
   test("records streamed usage when a terminal result arrives after the budget", async () => {

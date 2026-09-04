@@ -82,7 +82,11 @@ export function applyInteractionUpdate(
       applySummary(state, readText(update.summary), context);
       break;
     case "turn-ended":
-      applyTurnUsage(state, update.usage);
+      // Nested task usage belongs to the child model context. Folding it into
+      // the parent would make the parent's live context gauge jump to an
+      // unrelated window and can double-count work the SDK later reports on
+      // the parent run.
+      if (!context.parentTaskUseId) applyTurnUsage(state, update.usage);
       break;
     default:
       break;
@@ -339,7 +343,67 @@ function applyTurnUsage(state: SessionState, usage: unknown): void {
     const value = usage[key];
     if (typeof value === "number" && Number.isFinite(value)) turn[key] = value;
   }
-  state.currentTurnUsage = { ...state.currentTurnUsage, ...turn };
+  if (Object.keys(turn).length === 0) return;
+  state.currentTurnUsage = mergeLatestUsage(state.currentTurnUsage, turn);
+  state.currentRunDeltaUsage = sumUsage(state.currentRunDeltaUsage, turn);
+  publishRunUsage(state);
+}
+
+/** Publish usage from runtimes that report it only on the run message stream. */
+export function applyStreamUsage(state: SessionState, total: TurnUsage, latest: TurnUsage): void {
+  state.currentRunStreamUsage = total;
+  state.currentTurnUsage = latest;
+  publishRunUsage(state);
+}
+
+const usageKeys = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "totalTokens",
+] as const;
+
+function mergeLatestUsage(current: TurnUsage | undefined, next: TurnUsage): TurnUsage {
+  const merged = { ...current, ...next };
+  if (next.totalTokens === undefined) delete merged.totalTokens;
+  return merged;
+}
+
+function sumUsage(current: TurnUsage | undefined, next: TurnUsage): TurnUsage {
+  const summed: TurnUsage = {};
+  for (const key of usageKeys) {
+    if (key === "totalTokens") continue;
+    if (current?.[key] !== undefined || next[key] !== undefined) {
+      summed[key] = (current?.[key] ?? 0) + (next[key] ?? 0);
+    }
+  }
+  if (Object.keys(summed).length === 0) {
+    summed.totalTokens = (current?.totalTokens ?? 0) + (next.totalTokens ?? 0);
+  }
+  return summed;
+}
+
+function usageLowerBound(...sources: Array<TurnUsage | undefined>): TurnUsage | undefined {
+  const present = sources.filter((source): source is TurnUsage => source !== undefined);
+  if (present.length === 0) return undefined;
+  const lowerBound: TurnUsage = {};
+  for (const key of usageKeys) {
+    const values = present.flatMap((source) => (source[key] === undefined ? [] : [source[key]]));
+    if (values.length > 0) lowerBound[key] = Math.max(...values);
+  }
+  return lowerBound;
+}
+
+function publishRunUsage(state: SessionState): void {
+  const projected = usageLowerBound(state.currentRunDeltaUsage, state.currentRunStreamUsage);
+  if (!projected) return;
+  state.currentRunUsage = projected;
+  state.currentRunUsageUpdatedAt = new Date().toISOString();
+  // Token-only updates otherwise leave the revision unchanged, so a consumer
+  // watching snapshots by revision would not know that the live meter moved.
+  state.revision += 1;
 }
 
 /**

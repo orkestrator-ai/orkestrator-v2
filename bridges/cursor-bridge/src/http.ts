@@ -451,6 +451,11 @@ async function handlePrompt(
   state.error = undefined;
   state.promptSequence += 1;
   state.turnStartedAt = Date.now();
+  state.currentRunUsage = undefined;
+  state.currentRunDeltaUsage = undefined;
+  state.currentRunStreamUsage = undefined;
+  state.currentRunUsageUpdatedAt = undefined;
+  state.currentRunModelId = state.composer.selectedModelId;
   state.currentTurnUsage = {};
   state.currentTurnOutput = schema ? "" : null;
   state.currentAssistantMessageId = undefined;
@@ -472,6 +477,12 @@ async function handlePrompt(
     state.status = "error";
     state.error = errorText(error);
     state.dispatching = false;
+    state.currentRunUsage = undefined;
+    state.currentRunDeltaUsage = undefined;
+    state.currentRunStreamUsage = undefined;
+    state.currentRunUsageUpdatedAt = undefined;
+    state.currentRunModelId = undefined;
+    state.currentTurnUsage = undefined;
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();

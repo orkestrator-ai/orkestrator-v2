@@ -349,6 +349,36 @@ describe("session routes", () => {
       expect(Object.hasOwn(data, "planMode")).toBe(false);
     });
 
+    test("prefers the in-progress token lower bound while a turn is running", async () => {
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "running" as const,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+              usage: {
+                usedTokens: 80,
+                sessionTokens: 80,
+                source: "claude" as const,
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              },
+              inProgressUsage: {
+                usedTokens: 130,
+                sessionTokens: 210,
+                source: "claude" as const,
+                updatedAt: "2026-01-01T00:00:01.000Z",
+              },
+            }
+          : undefined,
+      );
+
+      const res = await app.request("/session/s-1");
+      expect(res.status).toBe(200);
+      expect((await jsonBody(res)).contextUsage).toMatchObject({ sessionTokens: 210 });
+    });
+
     test("returns 404 for unknown session", async () => {
       const res = await app.request("/session/s-unknown");
       expect(res.status).toBe(404);

@@ -19,7 +19,7 @@ import {
 } from "./config.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
-import { applyInteractionUpdate, settleBackgroundChildren } from "./translate.js";
+import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
 import { boundTranscript } from "./transcript.js";
 import {
   type JsonObject,
@@ -160,6 +160,9 @@ export async function followRun(
         // is what the turn spent, the last message is what the context window
         // held when it ended.
         streamed.last = message;
+        if (turnStillOwned(state, promptSequence) && streamed.total) {
+          applyStreamUsage(state, streamed.total, message);
+        }
       }
     } catch {
       // A stream failure is reported authoritatively by `wait()` below.
@@ -304,7 +307,11 @@ function recordUsage(
   // publishing it here, which used to leave the bridge with no snapshot at
   // all. Prefer the terminal value when it exists and retain the delta
   // accumulator as a compatibility fallback for older SDK/runtime pairs.
-  const turn = terminalTurnUsage(result?.usage) ?? streamed.total ?? state.currentTurnUsage;
+  const turn =
+    terminalTurnUsage(result?.usage) ??
+    streamed.total ??
+    state.currentRunUsage ??
+    state.currentTurnUsage;
   // The occupancy figure, which is a different question from the spend above:
   // `RunResult.usage` sums every model call the run made, so on a run with
   // several calls it is a multiple of anything the window ever held. Only a
@@ -342,6 +349,11 @@ function recordUsage(
     };
   }
   state.currentTurnUsage = undefined;
+  state.currentRunUsage = undefined;
+  state.currentRunDeltaUsage = undefined;
+  state.currentRunStreamUsage = undefined;
+  state.currentRunUsageUpdatedAt = undefined;
+  state.currentRunModelId = undefined;
   state.turnStartedAt = undefined;
   // The smallest cumulative total that can already account for this turn.
   // Computed here, once, while both halves are still in hand: the refresh

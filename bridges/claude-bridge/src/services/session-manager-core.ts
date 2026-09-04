@@ -600,12 +600,20 @@ export async function refreshStructuredRateLimits(
         updatedAt: new Date().toISOString(),
       };
     }
+    if (session.inProgressUsage) {
+      session.inProgressUsage = {
+        ...session.inProgressUsage,
+        rateLimits,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    const contextUsage = session.inProgressUsage ?? session.usage;
     eventEmitter.emit({
       type: "session.updated",
       sessionId: session.id,
       data: {
         rateLimits,
-        ...(session.usage ? { contextUsage: session.usage } : {}),
+        ...(contextUsage ? { contextUsage } : {}),
       },
     });
     return "updated";

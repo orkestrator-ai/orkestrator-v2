@@ -223,6 +223,17 @@ export interface SessionState {
   /** Accumulates the assistant text of a structured-output turn. */
   currentTurnOutput: string | null;
   usage?: PersistedUsage;
+  /** Cumulative usage reported by completed model calls in the run still in flight. */
+  currentRunUsage?: TurnUsage;
+  /** Independent accumulator for usage delivered through turn-ended deltas. */
+  currentRunDeltaUsage?: TurnUsage;
+  /** Independent accumulator for usage delivered through the run message stream. */
+  currentRunStreamUsage?: TurnUsage;
+  /** Timestamp of the latest in-flight usage update exposed to polling clients. */
+  currentRunUsageUpdatedAt?: string;
+  /** Model selected when the current run was dispatched. */
+  currentRunModelId?: string;
+  /** The most recent model call, used as the live context-occupancy snapshot. */
   currentTurnUsage?: TurnUsage;
   turnStartedAt?: number;
   /** Wall clock the session was last touched by a tab-facing route. */

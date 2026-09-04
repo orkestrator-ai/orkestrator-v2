@@ -73,6 +73,11 @@ import * as lifecycle from "./session-manager-lifecycle.js";
 import * as messageParts from "./session-manager-messages.js";
 import * as persistence from "./session-manager-persistence.js";
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
+import {
+  ClaudeStreamUsageAccumulator,
+  inProgressClaudeUsage,
+  reconcileClaudeUsage,
+} from "./session-manager-usage.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
 import {
   ClaudeStructuredOutputError,
@@ -274,6 +279,8 @@ export async function sendPrompt(
   const structuredOutputBeforeStartup = session.structuredOutput;
   const structuredOutputRequestIdBeforeStartup = session.structuredOutputRequestId;
   const latestTurnGenerationBeforeStartup = session.latestTurnGeneration;
+  const inProgressUsageBeforeStartup = session.inProgressUsage;
+  const inProgressUsageGenerationBeforeStartup = session.inProgressUsageGeneration;
   if (ownsClaimedDispatch) {
     claimedPromptDispatches.delete(sessionId);
   }
@@ -304,6 +311,8 @@ export async function sendPrompt(
   const turnGeneration = nextTurnGeneration();
   session.latestTurnGeneration = turnGeneration;
   session.status = "running";
+  session.inProgressUsage = undefined;
+  session.inProgressUsageGeneration = turnGeneration;
   session.completionBlockedByBackgroundTasks = false;
   // Preserve the original user-turn clock across bridge-internal re-prompts.
   session.turnStartedAt ??= new Date().toISOString();
@@ -344,6 +353,8 @@ export async function sendPrompt(
         session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
         session.structuredOutput = structuredOutputBeforeStartup;
         session.structuredOutputRequestId = structuredOutputRequestIdBeforeStartup;
+        session.inProgressUsage = inProgressUsageBeforeStartup;
+        session.inProgressUsageGeneration = inProgressUsageGenerationBeforeStartup;
       }
       if (dispatchRequestId) {
         forgetPromptDispatch(sessionId, dispatchRequestId);
@@ -465,6 +476,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     flushIntervalMs: STREAM_EVENT_COALESCE_MS,
     maxBlockIndex: MAX_STREAM_CONTENT_BLOCK_INDEX,
   });
+  const streamUsage = new ClaudeStreamUsageAccumulator();
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
     if (
@@ -542,6 +554,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       !abortController.signal.aborted &&
       sessions.get(sessionId) === session &&
       session.abortController === abortController;
+    const publishStreamUsage = (message: unknown) => {
+      const usage = streamUsage.apply(message);
+      if (!usage || !ownsActiveTurn()) return;
+      session.inProgressUsage = inProgressClaudeUsage(session, usage);
+      session.inProgressUsageGeneration = turnGeneration;
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId,
+        data: { contextUsage: session.inProgressUsage },
+      });
+    };
     const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
       if (!ownsActiveTurn()) return;
       if (session.completionBlockedByBackgroundTasks === blocked) return;
@@ -1288,12 +1311,24 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               updatedAt: new Date().toISOString(),
             };
           }
+          // Read through the declared session shape: this turn initializes the
+          // field to undefined and later mutates it from a stream callback,
+          // which TypeScript's local control-flow analysis cannot observe.
+          const inProgressUsage = (session as SessionState).inProgressUsage;
+          if (inProgressUsage) {
+            session.inProgressUsage = {
+              ...inProgressUsage,
+              rateLimits: session.rateLimits,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          const contextUsage = session.inProgressUsage ?? session.usage;
           eventEmitter.emit({
             type: "session.updated",
             sessionId,
             data: {
               rateLimits: session.rateLimits,
-              ...(session.usage ? { contextUsage: session.usage } : {}),
+              ...(contextUsage ? { contextUsage } : {}),
             },
           });
           // The notification is often only a threshold edge with no
@@ -1799,15 +1834,26 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           heldSdkPrompt.close();
           return;
         }
-        if (exactUsage) {
-          session.usage = exactUsage;
+        const streamedUsage =
+          session.inProgressUsageGeneration === turnGeneration
+            ? session.inProgressUsage
+            : undefined;
+        const settledUsage = reconcileClaudeUsage(exactUsage, streamedUsage);
+        // A provider/runtime pair may omit terminal totals even though its
+        // message stream reported completed calls. Conversely, a completely
+        // silent turn must retain the prior durable snapshot.
+        if (settledUsage) session.usage = settledUsage;
+        if (session.inProgressUsageGeneration === turnGeneration) {
+          session.inProgressUsage = undefined;
+          session.inProgressUsageGeneration = undefined;
         }
-        if (exactUsage || session.rateLimits !== undefined) {
+        streamUsage.reset();
+        if (session.usage || session.rateLimits !== undefined) {
           eventEmitter.emit({
             type: "session.updated",
             sessionId,
             data: {
-              ...(exactUsage ? { contextUsage: exactUsage } : {}),
+              ...(session.usage ? { contextUsage: session.usage } : {}),
               ...(session.rateLimits !== undefined ? { rateLimits: session.rateLimits } : {}),
             },
           });
@@ -1857,6 +1903,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           throw new Error(resultError);
         }
       } else if (message.type === "stream_event") {
+        publishStreamUsage(message);
         stream.applyPartialAssistantMessage(message);
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
@@ -2028,6 +2075,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // it stamped only matter for as long as a disconnected client could still
     // be resuming from them; see `evictIdleHydratedTranscripts`.
     session.lastStreamedRevisionAt = Date.now();
+    if (session.inProgressUsageGeneration === turnGeneration) {
+      // Preserve tokens already observed on interrupted/error paths; the
+      // provider may never send the terminal result that would reconcile them.
+      if (session.inProgressUsage) session.usage = session.inProgressUsage;
+      session.inProgressUsage = undefined;
+      session.inProgressUsageGeneration = undefined;
+    }
     closeSdkInput?.();
     if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
       session.finishTurnInputIfSettled = undefined;

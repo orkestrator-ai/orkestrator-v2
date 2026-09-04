@@ -82,6 +82,7 @@ struct RemoteWebView: UIViewRepresentable {
                 ),
             ]
         }
+
         static let connectionBridgeScript = #"""
         (() => {
           const pending = new Map();
@@ -92,6 +93,7 @@ struct RemoteWebView: UIViewRepresentable {
           });
           const connections = {
             list: () => call("list"),
+            probe: (connectionId) => call("probe", { connectionId }),
             connect: (input) => call("connect", input || {}),
             use: (connectionId) => call("use", { connectionId }),
             forget: (connectionId) => call("forget", { connectionId }),
@@ -121,6 +123,11 @@ struct RemoteWebView: UIViewRepresentable {
         var isSwitchingThroughBridge = false
         private(set) var requestedConnection: RemoteConnection?
         var authenticationTask: Task<Void, Never>?
+        var readinessTask: Task<Void, Never>?
+        private(set) var handledRetryID: UUID?
+        private var readinessGeneration = UUID()
+        var readinessCheckLimit = 100
+        var readinessCheckDelay: Duration = .milliseconds(100)
         var javaScriptEvaluator: ((String) async throws -> Any?)?
         var authenticationStarter: ((RemoteConnection) -> Void)?
         /// Injected only by tests so the login exchange can be stubbed without
@@ -146,8 +153,15 @@ struct RemoteWebView: UIViewRepresentable {
         }
 
         func authenticate(_ connection: RemoteConnection) {
+            if case .retrying(let retryID) = state.wrappedValue {
+                guard handledRetryID != retryID || requestedConnection != connection else { return }
+                handledRetryID = retryID
+            } else {
+                handledRetryID = nil
+            }
             guard requestedConnection != connection || state.wrappedValue != .loading else { return }
             authenticationTask?.cancel()
+            invalidateReadiness()
             beginAuthenticationState(for: connection)
             authenticationTask = Task { [weak self, weak webView] in
                 guard let self, let webView else { return }
@@ -178,12 +192,24 @@ struct RemoteWebView: UIViewRepresentable {
         func beginAuthenticationState(for connection: RemoteConnection) {
             requestedConnection = connection
             authenticatedConnection = nil
-            state.wrappedValue = .loading
+            // `makeUIView` and `updateUIView` both reach this method. Publishing
+            // a redundant binding write while SwiftUI is evaluating either
+            // callback triggers its undefined-behaviour runtime warning.
+            // RootView already moves ordinary connection changes to `.loading`;
+            // a retry keeps its unique token until this attempt settles.
+            switch state.wrappedValue {
+            case .loading, .retrying:
+                break
+            case .ready, .failed:
+                state.wrappedValue = .loading
+            }
         }
 
         func teardown() {
             authenticationTask?.cancel()
+            invalidateReadiness()
             authenticationTask = nil
+            handledRetryID = nil
             requestedConnection = nil
             authenticatedConnection = nil
             isSwitchingThroughBridge = false
@@ -277,7 +303,79 @@ struct RemoteWebView: UIViewRepresentable {
             guard let requestedConnection, let url,
                   Self.sameOrigin(url, requestedConnection.address) else { return }
             authenticatedConnection = requestedConnection
-            state.wrappedValue = .ready
+            invalidateReadiness()
+            let generation = UUID()
+            readinessGeneration = generation
+            readinessTask = Task { [weak self] in
+                guard let self else { return }
+                var consecutiveReadyChecks = 0
+                for _ in 0..<self.readinessCheckLimit {
+                    guard self.isCurrentReadinessAttempt(
+                        generation,
+                        connection: requestedConnection
+                    ) else { return }
+                    do {
+                        let result = try await self.evaluateJavaScript(
+                            "document.getElementById('root')?.childElementCount > 0"
+                        )
+                        guard self.isCurrentReadinessAttempt(
+                            generation,
+                            connection: requestedConnection
+                        ) else { return }
+                        if Self.javaScriptBoolean(result) {
+                            consecutiveReadyChecks += 1
+                            if consecutiveReadyChecks == 2 {
+                                self.state.wrappedValue = .ready
+                                return
+                            }
+                        } else {
+                            consecutiveReadyChecks = 0
+                        }
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        guard self.isCurrentReadinessAttempt(
+                            generation,
+                            connection: requestedConnection
+                        ) else { return }
+                        consecutiveReadyChecks = 0
+                    }
+                    try? await Task.sleep(for: self.readinessCheckDelay)
+                }
+                guard self.isCurrentReadinessAttempt(
+                    generation,
+                    connection: requestedConnection
+                ) else { return }
+                self.state.wrappedValue = .failed(
+                    "The remote app opened but did not finish starting. Try again."
+                )
+            }
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            invalidateReadiness()
+            state.wrappedValue = .failed("The remote app stopped unexpectedly. Try again.")
+        }
+
+        private func invalidateReadiness() {
+            readinessTask?.cancel()
+            readinessTask = nil
+            readinessGeneration = UUID()
+        }
+
+        private func isCurrentReadinessAttempt(
+            _ generation: UUID,
+            connection: RemoteConnection
+        ) -> Bool {
+            !Task.isCancelled
+                && readinessGeneration == generation
+                && requestedConnection == connection
+        }
+
+        static func javaScriptBoolean(_ value: Any?) -> Bool {
+            if let value = value as? Bool { return value }
+            if let value = value as? NSNumber { return value.boolValue }
+            return false
         }
 
         enum NavigationResponseDisposition: Equatable {
@@ -312,6 +410,7 @@ struct RemoteWebView: UIViewRepresentable {
                 statusCode: statusCode,
                 isMainFrame: isMainFrame
             ) == .rejectToken {
+                invalidateReadiness()
                 state.wrappedValue = .failed("The saved gateway token was rejected.")
                 return .cancel
             }
@@ -353,6 +452,7 @@ struct RemoteWebView: UIViewRepresentable {
 
         func handleNavigationError(_ error: Error) {
             guard let message = Self.navigationFailureMessage(for: error) else { return }
+            invalidateReadiness()
             state.wrappedValue = .failed(message)
         }
 
@@ -454,6 +554,12 @@ struct RemoteWebView: UIViewRepresentable {
                 switch action {
                 case "list":
                     try await reply(id: requestID, result: model.connectionListPayload())
+                case "probe":
+                    guard let connectionID = body["connectionId"] as? String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    let available = try await model.probe(connectionID: connectionID)
+                    try await reply(id: requestID, result: available)
                 case "connect":
                     guard let address = body["address"] as? String,
                           let token = body["token"] as? String else {

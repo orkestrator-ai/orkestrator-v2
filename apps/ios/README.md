@@ -33,7 +33,7 @@ Alternatively:
 
 The first successful connection is saved with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so it is unavailable while the device is locked and is not migrated through backups. The token is never written to `UserDefaults`, local storage, or JavaScript. Each app process creates an ephemeral WebKit session and exchanges the Keychain token for the backend's HttpOnly session cookie.
 
-Saved servers appear in the existing server switcher inside Orkestrator's mobile sidebar. Adding or switching there is routed back through the native Keychain store.
+On every cold launch, the native app asks which saved server to open. Returning to an app that is already running keeps the current server. Saved servers also appear in the existing server switcher inside Orkestrator's mobile sidebar; adding or switching there is routed back through the native Keychain store.
 
 If the active server is offline or its credential has expired, use **Switch saved server** on the native failure screen to reach another Keychain-backed connection without re-entering its token.
 

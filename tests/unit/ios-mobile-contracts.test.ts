@@ -197,6 +197,25 @@ describe("iOS project and deployment contracts", () => {
 });
 
 describe("iOS UI and WebKit security contracts", () => {
+  test("cold launch requires an explicit saved-server choice", () => {
+    const model = read("apps/ios/OrkestratorMobile/Models/ConnectionModel.swift");
+    const root = read("apps/ios/OrkestratorMobile/Views/RootView.swift");
+    expect(model).toContain("requiresLaunchSelection = !vault.connections.isEmpty");
+    expect(model).toContain("func selectConnectionForLaunch");
+    expect(root).toContain("requiresLaunchSelection: model.requiresLaunchSelection");
+    expect(root).toContain("case .launchSelection:");
+    expect(root).toContain('Text("Where do you want to work?")');
+    expect(root).toContain('Label("Add another server", systemImage: "plus")');
+  });
+
+  test("retry renders the secure loading affordance", () => {
+    const root = read("apps/ios/OrkestratorMobile/Views/RootView.swift");
+    expect(root).toContain("case .loading, .retrying:");
+    expect(root).toContain("SecureLoadingView(host: connection.name)");
+    expect(root).toContain("case .ready:");
+    expect(root).not.toContain("case .ready, .retrying:");
+  });
+
   test("failure UI exposes native saved-server recovery", () => {
     const source = read("apps/ios/OrkestratorMobile/Views/RootView.swift");
     expect(source).toContain('Label("Switch saved server", systemImage: "server.rack")');
@@ -221,6 +240,9 @@ describe("iOS UI and WebKit security contracts", () => {
     expect(source).toContain("message.frameInfo.securityOrigin");
     expect(source).toContain("coordinator.teardown()");
     expect(source).toContain("authenticationTask?.cancel()");
+    expect(source).toContain('probe: (connectionId) => call("probe"');
+    expect(source).toContain("document.getElementById('root')?.childElementCount > 0");
+    expect(source).toContain("webViewWebContentProcessDidTerminate");
     expect(source).toContain("Self.sameOrigin(url, requestedConnection.address)");
   });
 

@@ -99,7 +99,7 @@ export type EngineItem =
 export interface EngineSubagentActivityItem {
   id: string;
   type: "subagent_activity";
-  activity: "started" | "interacted" | "interrupted";
+  activity: "started" | "interacted" | "interrupted" | "completed";
   agent_thread_id: string;
   agent_path?: string;
 }

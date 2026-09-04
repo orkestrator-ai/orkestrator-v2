@@ -205,7 +205,7 @@ describe("item adapter edge cases", () => {
   });
 
   test("maps every known subagent activity kind exactly", () => {
-    for (const kind of ["started", "interacted", "interrupted"] as const) {
+    for (const kind of ["started", "interacted", "interrupted", "completed"] as const) {
       expect(
         adaptAppServerItem({
           id: `sub-${kind}`,
@@ -231,6 +231,7 @@ describe("item adapter edge cases", () => {
       "enteredReviewMode",
       "exitedReviewMode",
       "contextCompaction",
+      "functionCallOutput",
     ]) {
       expect(adaptAppServerItem({ id: "id", type })).toEqual({
         item: null,

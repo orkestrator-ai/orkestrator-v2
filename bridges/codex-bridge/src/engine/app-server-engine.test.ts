@@ -301,6 +301,82 @@ describe("thread lifecycle", () => {
     expect(read).toEqual({ id: "t1", handle: "t1", turns: [] });
   });
 
+  test("the new unmaterialized error is accepted only for an untouched start snapshot", async () => {
+    let reads = 0;
+    const h = harness({
+      "thread/read": () => {
+        reads += 1;
+        if (reads === 1) {
+          const error = new Error("list_turns is not supported yet");
+          (error as { rpcCode?: number }).rpcCode = -32601;
+          throw error;
+        }
+        return {
+          thread: thread("t1", {
+            historyMode: "paginated",
+            path: "/tmp/rollout.jsonl",
+            preview: "",
+            createdAt: 1,
+            updatedAt: 1,
+            status: { type: "idle" },
+          }),
+        };
+      },
+    });
+    await h.engine.start();
+
+    const read = await h.engine.readThread("t1", { includeTurns: true });
+    expect(read).toMatchObject({ id: "t1", handle: "t1", turns: [] });
+    expect(reads).toBe(2);
+  });
+
+  test("unsupported paginated history never masquerades as an unmaterialized thread", async () => {
+    let reads = 0;
+    const h = harness({
+      "thread/read": () => {
+        reads += 1;
+        if (reads === 1) {
+          const error = new Error("list_turns is not supported yet");
+          (error as { rpcCode?: number }).rpcCode = -32601;
+          throw error;
+        }
+        return {
+          thread: thread("t1", {
+            historyMode: "paginated",
+            path: "/tmp/rollout.jsonl",
+            preview: "persisted prompt",
+          }),
+        };
+      },
+    });
+    await h.engine.start();
+
+    await expect(h.engine.readThread("t1", { includeTurns: true })).rejects.toThrow(
+      "list_turns is not supported yet",
+    );
+    expect(reads).toBe(2);
+  });
+
+  test("a failed metadata cross-check preserves the original history error", async () => {
+    let reads = 0;
+    const h = harness({
+      "thread/read": () => {
+        reads += 1;
+        const error = new Error(
+          reads === 1 ? "list_turns is not supported yet" : "metadata read failed",
+        );
+        (error as { rpcCode?: number }).rpcCode = reads === 1 ? -32601 : -32603;
+        throw error;
+      },
+    });
+    await h.engine.start();
+
+    await expect(h.engine.readThread("t1", { includeTurns: true })).rejects.toThrow(
+      "list_turns is not supported yet",
+    );
+    expect(reads).toBe(2);
+  });
+
   test("a genuine read failure still propagates", async () => {
     const h = harness({
       "thread/read": () => {
@@ -599,6 +675,33 @@ describe("turn dispatch", () => {
 });
 
 describe("reconciliation", () => {
+  test("reports absent through the 0.153.3 unmaterialized-thread path", async () => {
+    let reads = 0;
+    const h = harness({
+      "thread/read": () => {
+        reads += 1;
+        if (reads === 1) {
+          const error = new Error("list_turns is not supported yet");
+          (error as { rpcCode?: number }).rpcCode = -32601;
+          throw error;
+        }
+        return {
+          thread: thread("t1", {
+            historyMode: "paginated",
+            preview: "",
+            createdAt: 1,
+            updatedAt: 1,
+            status: { type: "idle" },
+          }),
+        };
+      },
+    });
+    await h.engine.start();
+
+    expect(await h.engine.reconcileRequest("t1", "req-1")).toEqual({ result: "absent" });
+    expect(reads).toBe(2);
+  });
+
   test("finds an already-dispatched request by client id", async () => {
     const h = harness({
       "thread/read": () => ({

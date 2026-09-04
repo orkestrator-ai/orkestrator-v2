@@ -307,6 +307,10 @@ describe("agent extension discovery commands", () => {
         containerId: null,
       });
       const { context } = createContext(environment);
+      const emptyToolchain = await createTempDir("ork-electron-empty-toolchain-");
+      context.appRoot = emptyToolchain;
+      context.resourceRoot = emptyToolchain;
+      context.toolchainBinDir = emptyToolchain;
       const { run, calls } = recordingRun("docs: cmd - Connected");
 
       const runner = commandTesting.createExtensionCommandRunner(environment, context, run);

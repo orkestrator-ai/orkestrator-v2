@@ -14,6 +14,7 @@ import {
   classifyDispatchFailure,
   codexErrorInfoToCode,
   isMissingRolloutError,
+  isPaginatedHistoryUnsupportedError,
   isSafeToRetryImmediately,
   isUnmaterializedThreadError,
   toEngineError,
@@ -164,6 +165,56 @@ describe("app-server error taxonomy", () => {
         }),
       ),
     ).toBe(true);
+    const unsupportedLegacy = new AppServerRpcError("thread/read", {
+      code: -32601,
+      message: "list_turns is not supported yet",
+    });
+    expect(isPaginatedHistoryUnsupportedError(unsupportedLegacy)).toBe(true);
+    expect(
+      isPaginatedHistoryUnsupportedError(
+        new AppServerRpcError("thread/list", {
+          code: -32601,
+          message: "list_turns is not supported yet",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isPaginatedHistoryUnsupportedError(
+        new AppServerRpcError("thread/read", { code: -32600, message: "not materialized" }),
+      ),
+    ).toBe(false);
+    expect(isUnmaterializedThreadError(unsupportedLegacy)).toBe(false);
+    expect(
+      isUnmaterializedThreadError(unsupportedLegacy, {
+        historyMode: "paginated",
+        path: "/tmp/rollout.jsonl",
+        preview: "persisted prompt",
+        createdAt: 1,
+        updatedAt: 2,
+        status: { type: "idle" },
+      }),
+    ).toBe(false);
+    const untouched = {
+      historyMode: "paginated",
+      path: "/tmp/rollout.jsonl",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+    };
+    expect(isUnmaterializedThreadError(unsupportedLegacy, untouched)).toBe(true);
+    for (const changed of [
+      { ...untouched, historyMode: "legacy" },
+      { ...untouched, historyMode: undefined },
+      { ...untouched, preview: "persisted prompt" },
+      { ...untouched, updatedAt: 2 },
+      { ...untouched, createdAt: undefined, updatedAt: undefined },
+      { ...untouched, createdAt: "1", updatedAt: "1" },
+      { ...untouched, status: { type: "running" } },
+      { ...untouched, status: undefined },
+    ]) {
+      expect(isUnmaterializedThreadError(unsupportedLegacy, changed)).toBe(false);
+    }
     expect(isMissingRolloutError("thread/resume: no rollout found for thread id t1")).toBe(true);
     expect(isMissingRolloutError("thread/read: no rollout found for thread id t1")).toBe(false);
     // The message usually arrives wrapped in an Error, not as a bare string.

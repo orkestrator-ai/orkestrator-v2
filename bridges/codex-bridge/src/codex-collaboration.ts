@@ -30,18 +30,18 @@ interface LatestCollabAgentState {
   spawnPrompt?: string;
   taskName?: string;
   /**
-   * The child's last lifecycle beat was `interrupted` and nothing later reported
-   * a status for it. Applied only to rows that are otherwise unresolved, so it
-   * can end a spinner without repainting a child that reached its own terminal
-   * state.
+   * The child's last lifecycle beat was terminal and nothing later reported a
+   * status for it. Applied only to rows that are otherwise unresolved, so it can
+   * end a spinner without repainting a child that reached an authoritative
+   * terminal state.
    */
-  interruptedWithoutSnapshot?: boolean;
+  weakTerminalActivity?: "completed" | "interrupted";
 }
 
 interface CodexSubagentActivityItem {
   id: string;
   type: "subagent_activity";
-  activity: "started" | "interacted" | "interrupted";
+  activity: "started" | "interacted" | "interrupted" | "completed";
   agent_thread_id: string;
   agent_path?: string;
 }
@@ -103,7 +103,10 @@ function normalizeSubagentActivityItem(value: unknown): CodexSubagentActivityIte
   if (
     !id ||
     !agentThreadId ||
-    (activity !== "started" && activity !== "interacted" && activity !== "interrupted")
+    (activity !== "started" &&
+      activity !== "interacted" &&
+      activity !== "interrupted" &&
+      activity !== "completed")
   ) {
     return null;
   }
@@ -269,7 +272,11 @@ function makeSubagentPart(
     subagentActionCount: 0,
     toolState:
       toToolState(latest?.state?.status) ??
-      (latest?.interruptedWithoutSnapshot ? "failure" : "pending"),
+      (latest?.weakTerminalActivity === "completed"
+        ? "success"
+        : latest?.weakTerminalActivity === "interrupted"
+          ? "failure"
+          : "pending"),
   };
 }
 
@@ -313,18 +320,17 @@ export function applyCodexCollabStateToSubagentParts(
       // newer terminal transcript. Interactions without prior state are also
       // ignored because send_message may not wake a completed child.
       //
-      // `interrupted` is the exception, because it is the only signal that
-      // always names an interrupted child. app-server drops interrupted agents
-      // from later `list_agents` snapshots unpredictably — two children
-      // interrupted seconds apart can disagree on whether any snapshot reports
-      // them at all — and `interrupt_agent` answers only with `previous_status`.
-      // It is still recorded as a weak outcome so a no-op interrupt of an
-      // already-finished child cannot repaint its terminal state.
+      // Terminal activities are exceptions. app-server can omit a finished
+      // child from later `list_agents` snapshots, so these beats are retained as
+      // weak outcomes. They settle only pending rows and cannot repaint a child
+      // whose transcript or an authoritative snapshot already finished it.
       const interrupted = item.activity === "interrupted";
-      if (item.activity !== "started" && !interrupted && !previous) continue;
+      const completed = item.activity === "completed";
+      const terminalActivity = interrupted || completed;
+      if (item.activity !== "started" && !terminalActivity && !previous) continue;
       const previousToolState = toToolState(previous?.state?.status);
       const preserveTerminalState =
-        interrupted && (previousToolState === "success" || previousToolState === "failure");
+        terminalActivity && (previousToolState === "success" || previousToolState === "failure");
       const nextState = preserveTerminalState
         ? previous?.state
         : previous?.state?.message !== undefined
@@ -333,15 +339,15 @@ export function applyCodexCollabStateToSubagentParts(
       latestByAgentId.set(item.agent_thread_id, {
         spawnPrompt: previous?.spawnPrompt,
         taskName: previous?.taskName ?? taskNameFromAgentPath(item.agent_path),
-        // An interrupt issued after a terminal snapshot is a no-op, so retain
-        // that authoritative outcome even when the child transcript is not
-        // available. Other activity beats reopen the child while preserving
-        // any final message from its earlier task.
+        // Retain an authoritative terminal snapshot even when the child
+        // transcript is not available. Other activity beats reopen the child
+        // while preserving any final message from its earlier task.
         ...(nextState ? { state: nextState } : {}),
-        // Only an interrupt carries this forward: a started or interacted beat
-        // means the child is working again, so an earlier interrupt no longer
-        // describes it.
-        ...(interrupted && !preserveTerminalState ? { interruptedWithoutSnapshot: true } : {}),
+        // A started or interacted beat means the child is working again, so an
+        // earlier weak terminal outcome no longer describes it.
+        ...(terminalActivity && !preserveTerminalState
+          ? { weakTerminalActivity: completed ? "completed" : "interrupted" }
+          : {}),
       });
       continue;
     }
@@ -353,7 +359,7 @@ export function applyCodexCollabStateToSubagentParts(
       // Naming a child is not the same as reporting on it: `receiver_thread_ids`
       // is populated for every collaboration call, while `agents_states` carries
       // an entry only when the call actually observed the child, and that entry
-      // may still be message-only. An unconfirmed interrupt therefore survives
+      // may still be message-only. A weak terminal activity therefore survives
       // until something supplies a real status — otherwise a later send/list
       // that says nothing about the child would drop the only terminal evidence
       // it has and return the row to a permanent spinner.
@@ -362,8 +368,8 @@ export function applyCodexCollabStateToSubagentParts(
         state: reportedState ?? previous?.state,
         spawnPrompt: previous?.spawnPrompt ?? spawnPrompt,
         taskName: previous?.taskName,
-        ...(previous?.interruptedWithoutSnapshot && !reportsStatus
-          ? { interruptedWithoutSnapshot: true }
+        ...(previous?.weakTerminalActivity && !reportsStatus
+          ? { weakTerminalActivity: previous.weakTerminalActivity }
           : {}),
       });
     }
@@ -439,11 +445,11 @@ export function applyCodexCollabStateToSubagentParts(
     part.subagentRole ??= latest.taskName;
     part.subagentPrompt ??= latest.spawnPrompt;
     part.toolState = toToolState(latest.state?.status) ?? part.toolState;
-    // Resolve an interrupt that no snapshot ever confirmed, but only for a row
-    // still waiting on an outcome: an interrupt issued against a child that had
-    // already finished is a no-op, and its transcript owns the real result.
-    if (latest.interruptedWithoutSnapshot && part.toolState === "pending") {
-      part.toolState = "failure";
+    // Resolve a terminal activity that no snapshot ever confirmed, but only for
+    // a row still waiting on an outcome. An authoritative snapshot or terminal
+    // transcript owns the real result when one exists.
+    if (latest.weakTerminalActivity && part.toolState === "pending") {
+      part.toolState = latest.weakTerminalActivity === "completed" ? "success" : "failure";
     }
     if (failedSpawnAgentIds.has(agentId)) part.toolState = "failure";
     part.subagentActions = appendFinalCollabMessage(part.subagentActions, latest.state?.message);

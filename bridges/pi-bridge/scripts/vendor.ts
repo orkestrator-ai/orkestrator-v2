@@ -8,7 +8,7 @@
  * retain Bun's `.bun/<instance>/node_modules` stores and their relative links,
  * then expose only the bridge's direct external packages at the top level.
  */
-import { cp, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
@@ -17,6 +17,7 @@ const ENTRY_PACKAGES = [
   "@earendil-works/pi-coding-agent",
   "@earendil-works/pi-ai",
   "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-server",
 ] as const;
 
 /** Resolve a package by walking up `node_modules` from a starting directory. */
@@ -122,10 +123,12 @@ export async function stageRuntimeClosure(options: {
     });
   }
 
+  const entries = new Map<string, BunStorePackage>();
   for (const name of options.entryPackages) {
     const resolved = await resolvePackage(name, options.packageRoot);
     if (!resolved) throw new Error(`${name} is not installed; run \`bun install\` first`);
     const instance = packages.get(resolved)!;
+    entries.set(name, instance);
     const relativeWithinStore = path.relative(
       path.join(instance.storeRoot, "node_modules"),
       resolved,
@@ -143,6 +146,45 @@ export async function stageRuntimeClosure(options: {
       ),
     );
     await symlink(target, linkPath, "dir");
+  }
+
+  // An upstream package can import another bridge-owned runtime root without
+  // declaring it, as pi-coding-agent 0.85.0 does with pi-server. A top-level
+  // link is not visible from inside Bun's nested isolated store, so expose the
+  // explicit roots beside one another there too. Preserve any link Bun already
+  // created for a declared dependency; it may intentionally select another
+  // version.
+  for (const requester of entries.values()) {
+    const requesterModules = path.join(
+      options.destination,
+      ".bun",
+      requester.storeKey,
+      "node_modules",
+    );
+    for (const [name, dependency] of entries) {
+      const linkPath = path.join(requesterModules, name);
+      const exists = await lstat(linkPath).then(
+        () => true,
+        () => false,
+      );
+      if (exists) continue;
+      const relativeWithinStore = path.relative(
+        path.join(dependency.storeRoot, "node_modules"),
+        dependency.packageRoot,
+      );
+      const target = path.relative(
+        path.dirname(linkPath),
+        path.join(
+          options.destination,
+          ".bun",
+          dependency.storeKey,
+          "node_modules",
+          relativeWithinStore,
+        ),
+      );
+      await mkdir(path.dirname(linkPath), { recursive: true });
+      await symlink(target, linkPath, "dir");
+    }
   }
 
   return { packageCount: packages.size, unavailable: Array.from(missing) };

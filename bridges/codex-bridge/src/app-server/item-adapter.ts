@@ -256,7 +256,12 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       const agentThreadId = str(raw.agentThreadId);
       if (!agentThreadId) return { item: null, unsupportedType: type };
       const kind = raw.kind;
-      if (kind !== "started" && kind !== "interacted" && kind !== "interrupted") {
+      if (
+        kind !== "started" &&
+        kind !== "interacted" &&
+        kind !== "interrupted" &&
+        kind !== "completed"
+      ) {
         return { item: null, unsupportedType: type };
       }
       return {
@@ -286,6 +291,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
     case "enteredReviewMode":
     case "exitedReviewMode":
     case "contextCompaction":
+    case "functionCallOutput":
       return { item: null, unsupportedType: type };
 
     default:

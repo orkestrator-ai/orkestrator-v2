@@ -47,6 +47,7 @@ const {
   disableMonacoFileDiagnostics,
   forwardMonacoFileChange,
   registerMonacoFileSaveCommand,
+  revealMonacoFileLocation,
 } = await import("./MonacoFileEditor");
 
 beforeEach(() => {
@@ -130,6 +131,27 @@ describe("MonacoFileEditor integration helpers", () => {
     expect(onChange).toHaveBeenNthCalledWith(1, "");
     expect(onChange).toHaveBeenNthCalledWith(2, "updated");
   });
+
+  test("validates, reveals, and focuses a transcript source location", () => {
+    const validatedPosition = { lineNumber: 8, column: 3 };
+    const validatePosition = mock(() => validatedPosition);
+    const setPosition = mock(() => {});
+    const revealPositionInCenter = mock(() => {});
+    const focus = mock(() => {});
+    const editor = {
+      getModel: () => ({ validatePosition }),
+      setPosition,
+      revealPositionInCenter,
+      focus,
+    };
+
+    revealMonacoFileLocation(editor as never, 80, 30);
+
+    expect(validatePosition).toHaveBeenCalledWith({ lineNumber: 80, column: 30 });
+    expect(setPosition).toHaveBeenCalledWith(validatedPosition, "transcript-link");
+    expect(revealPositionInCenter).toHaveBeenCalledWith(validatedPosition);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("MonacoFileEditor component", () => {
@@ -163,6 +185,7 @@ describe("MonacoFileEditor component", () => {
       <MonacoFileEditor
         language="markdown"
         value="initial"
+        isActive
         onChange={onChange}
         onSave={firstSave}
       />,
@@ -194,6 +217,7 @@ describe("MonacoFileEditor component", () => {
       <MonacoFileEditor
         language="markdown"
         value="updated"
+        isActive
         onChange={onChange}
         onSave={latestSave}
       />,
@@ -201,6 +225,100 @@ describe("MonacoFileEditor component", () => {
     command?.();
     expect(firstSave).toHaveBeenCalledTimes(1);
     expect(latestSave).toHaveBeenCalledTimes(1);
+  });
+
+  test("repeats navigation when an already-open file receives a new request", () => {
+    const setPosition = mock(() => {});
+    const revealPositionInCenter = mock(() => {});
+    const focus = mock(() => {});
+    const editor = {
+      addCommand: mock(() => null),
+      getModel: () => ({ validatePosition: (position: unknown) => position }),
+      setPosition,
+      revealPositionInCenter,
+      focus,
+    };
+    const monaco = {
+      KeyMod: { CtrlCmd: 4 },
+      KeyCode: { KeyS: 8 },
+    };
+    const view = render(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        lineNumber={10}
+        navigationRequestId={1}
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+    renderedEditorProps?.onMount?.(editor, monaco);
+    expect(setPosition).toHaveBeenLastCalledWith({ lineNumber: 10, column: 1 }, "transcript-link");
+
+    view.rerender(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        lineNumber={20}
+        columnNumber={4}
+        navigationRequestId={2}
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    expect(setPosition).toHaveBeenLastCalledWith({ lineNumber: 20, column: 4 }, "transcript-link");
+    expect(revealPositionInCenter).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not focus an inactive editor and focuses its pending location on activation", () => {
+    const setPosition = mock(() => {});
+    const revealPositionInCenter = mock(() => {});
+    const focus = mock(() => {});
+    const editor = {
+      addCommand: mock(() => null),
+      getModel: () => ({ validatePosition: (position: unknown) => position }),
+      setPosition,
+      revealPositionInCenter,
+      focus,
+    };
+    const monaco = {
+      KeyMod: { CtrlCmd: 4 },
+      KeyCode: { KeyS: 8 },
+    };
+    const view = render(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        lineNumber={10}
+        navigationRequestId={1}
+        isActive={false}
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    renderedEditorProps?.onMount?.(editor, monaco);
+    expect(setPosition).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
+
+    view.rerender(
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        lineNumber={10}
+        navigationRequestId={1}
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
+    );
+
+    expect(setPosition).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledTimes(1);
   });
 
   test("waits for browser Monaco configuration before mounting the editor", async () => {
@@ -217,6 +335,7 @@ describe("MonacoFileEditor component", () => {
       <MonacoFileEditor
         language="typescript"
         value="const value = 1"
+        isActive
         onChange={() => {}}
         onSave={() => {}}
       />,
@@ -234,7 +353,13 @@ describe("MonacoFileEditor component", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
     );
 
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
@@ -253,7 +378,13 @@ describe("MonacoFileEditor component", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
     );
 
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
@@ -279,7 +410,13 @@ describe("MonacoFileEditor component", () => {
         }),
     );
     const view = render(
-      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
+      <MonacoFileEditor
+        language="typescript"
+        value=""
+        isActive
+        onChange={() => {}}
+        onSave={() => {}}
+      />,
     );
 
     view.unmount();

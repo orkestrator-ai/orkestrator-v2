@@ -56,6 +56,72 @@ afterAll(() => {
 });
 
 describe("MarkdownEditorTab", () => {
+  test("opens line references in raw mode where the source line can be revealed", async () => {
+    render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="README.md"
+        initialContent={ORIGINAL_MARKDOWN}
+        language="markdown"
+        lineNumber={2}
+        navigationRequestId={1}
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByRole("textbox", { name: "Raw Markdown source" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state")).toBe("active");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Rendered" }), { button: 0 });
+    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
+  });
+
+  test("flushes rendered edits once when a later source navigation switches to raw", async () => {
+    const view = render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="README.md"
+        initialContent={ORIGINAL_MARKDOWN}
+        language="markdown"
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
+    act(() => {
+      editor.editor.commands.setContent("<p>Changed before navigation</p>");
+    });
+
+    view.rerender(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="README.md"
+        initialContent={ORIGINAL_MARKDOWN}
+        language="markdown"
+        lineNumber={2}
+        navigationRequestId={1}
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    expect(
+      (
+        (await screen.findByRole("textbox", {
+          name: "Raw Markdown source",
+        })) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Changed before navigation");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Rendered" }), { button: 0 });
+    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
+  });
+
   test("starts rendered and preserves untouched source when entering raw mode", async () => {
     render(
       <MarkdownEditorTab

@@ -219,6 +219,13 @@ interface PaneLayoutState {
     sessionId: string | undefined,
     environmentId?: string,
   ) => void;
+  navigateFileTab: (
+    tabId: string,
+    lineNumber: number,
+    columnNumber?: number,
+    environmentId?: string,
+  ) => void;
+  clearFileTabNavigation: (tabId: string, environmentId?: string) => void;
   lockTabNativePlatform: (
     tabId: string,
     platform: AgentPlatform,
@@ -1073,6 +1080,78 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     const environments = new Map(state.environments);
     environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
+  },
+
+  navigateFileTab: (tabId, lineNumber, columnNumber, environmentId) => {
+    if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return;
+    if (columnNumber !== undefined && (!Number.isSafeInteger(columnNumber) || columnNumber < 1)) {
+      return;
+    }
+
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const pane = findPaneWithTab(envState.root, tabId);
+    const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
+    if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
+
+    const previousRequestId = existingTab.fileData.navigationRequestId ?? 0;
+    const navigationRequestId =
+      previousRequestId >= Number.MAX_SAFE_INTEGER ? 1 : previousRequestId + 1;
+    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId && tab.type === "file" && tab.fileData
+          ? {
+              ...tab,
+              fileData: {
+                ...tab.fileData,
+                lineNumber,
+                columnNumber,
+                navigationRequestId,
+              },
+            }
+          : tab,
+      ),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root });
+    set({ environments });
+  },
+
+  clearFileTabNavigation: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const pane = findPaneWithTab(envState.root, tabId);
+    const existingTab = pane?.tabs.find((tab) => tab.id === tabId);
+    if (!pane || existingTab?.type !== "file" || !existingTab.fileData) return;
+    if (
+      existingTab.fileData.lineNumber === undefined &&
+      existingTab.fileData.columnNumber === undefined &&
+      existingTab.fileData.navigationRequestId === undefined
+    ) {
+      return;
+    }
+
+    const root = updateLeaf(envState.root, pane.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) => {
+        if (tab.id !== tabId || tab.type !== "file" || !tab.fileData) return tab;
+        const fileData = { ...tab.fileData };
+        delete fileData.lineNumber;
+        delete fileData.columnNumber;
+        delete fileData.navigationRequestId;
+        return { ...tab, fileData };
+      }),
+    }));
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root });
     set({ environments });
   },
 

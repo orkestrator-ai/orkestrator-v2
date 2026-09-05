@@ -45,6 +45,11 @@ export function isGitFileStatus(value: unknown): value is GitFileStatus {
 // File data for file viewer tabs
 export interface FileTabData {
   filePath: string;
+  /** Latest one-based source location requested by a transcript link. */
+  lineNumber?: number;
+  columnNumber?: number;
+  /** Changes on every navigation so repeated clicks reveal the location again. */
+  navigationRequestId?: number;
   /** Container ID (for containerized environments) */
   containerId?: string;
   /** Worktree path (for local environments) */

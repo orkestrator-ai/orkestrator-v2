@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import type { PluggableList, Processor } from "unified";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
-import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
+import { parseLocalFileLinkTarget } from "@/lib/chat/file-url";
 import { cn } from "@/lib/utils";
 
 /*
@@ -103,11 +103,7 @@ function remarkInlineOnly(this: Processor): undefined {
 const INLINE_PLUGINS: PluggableList = [remarkGfm, remarkInlineOnly];
 const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code", "a"];
 const markdownUrlTransform: UrlTransform = (url, key, node) => {
-  if (
-    key === "href" &&
-    node.tagName === "a" &&
-    (/^file:/i.test(url) || /^[A-Za-z]:[\\/]/.test(url))
-  ) {
+  if (key === "href" && node.tagName === "a" && parseLocalFileLinkTarget(url)) {
     return url;
   }
 
@@ -203,25 +199,6 @@ function MarkdownListItem({ className, children, ...props }: HTMLAttributes<HTML
   );
 }
 
-function filePathFromMarkdownHref(href: string): string | null {
-  const destination = href.trim();
-  if (!destination || destination.startsWith("#") || destination.startsWith("//")) return null;
-
-  if (/^file:/i.test(destination)) {
-    return parseLocalFilePathFromUrl(destination);
-  }
-
-  // A Windows drive prefix is a path, not a URI scheme.
-  if (/^[A-Za-z]:[\\/]/.test(destination)) return destination;
-  if (/^[A-Za-z][A-Za-z\d+.-]*:/.test(destination)) return null;
-
-  try {
-    return decodeURIComponent(destination);
-  } catch {
-    return destination;
-  }
-}
-
 export function MarkdownLink({
   href,
   children,
@@ -238,10 +215,19 @@ export function MarkdownLink({
       event.preventDefault();
       if (!href) return;
 
-      const filePath = filePathFromMarkdownHref(href);
-      if (filePath) {
+      const fileTarget = parseLocalFileLinkTarget(href);
+      if (fileTarget) {
         if (createFileTab) {
-          createFileTab(filePath);
+          if (fileTarget.lineNumber) {
+            createFileTab(fileTarget.filePath, {
+              lineNumber: fileTarget.lineNumber,
+              ...(fileTarget.columnNumber !== undefined
+                ? { columnNumber: fileTarget.columnNumber }
+                : {}),
+            });
+          } else {
+            createFileTab(fileTarget.filePath);
+          }
         } else {
           toast.info("Start or open the environment to view this file", {
             description:

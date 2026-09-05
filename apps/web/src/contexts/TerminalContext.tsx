@@ -78,6 +78,9 @@ export interface CreateFileTabOptions {
   isDiff?: boolean;
   /** Git status of the file (M=modified, A=added, D=deleted, ?=untracked) */
   gitStatus?: string;
+  /** One-based source location to reveal after opening the file. */
+  lineNumber?: number;
+  columnNumber?: number;
 }
 
 interface TerminalContextValue {

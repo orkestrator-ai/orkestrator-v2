@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
-import { TerminalProvider, useTerminalContext } from "@/contexts";
+import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
@@ -198,7 +198,11 @@ describe("MessageMarkdown links", () => {
     cleanup();
   });
 
-  function RegisterFileTab({ openFile }: { openFile: (path: string) => void }) {
+  function RegisterFileTab({
+    openFile,
+  }: {
+    openFile: (path: string, options?: CreateFileTabOptions) => void;
+  }) {
     const { setCreateFileTab } = useTerminalContext();
 
     useEffect(() => {
@@ -227,6 +231,12 @@ describe("MessageMarkdown links", () => {
     expect(container.querySelector("a")?.getAttribute("href")).toBe("");
   });
 
+  test("does not mistake a numeric JavaScript URL payload for a source line", () => {
+    const { container } = render(<MessageMarkdown content="Do not open [this](javascript:10)." />);
+
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("");
+  });
+
   test.each([
     ["a relative path", "src/App.tsx", "src/App.tsx"],
     ["an absolute path", "/workspace/src/App.tsx", "/workspace/src/App.tsx"],
@@ -246,6 +256,25 @@ describe("MessageMarkdown links", () => {
 
     expect(openFile).toHaveBeenCalledTimes(1);
     expect(openFile).toHaveBeenCalledWith(expectedPath);
+  });
+
+  test.each([
+    ["README.md:10", "README.md", { lineNumber: 10 }],
+    ["/workspace/src/App.tsx:10", "/workspace/src/App.tsx", { lineNumber: 10 }],
+    ["src/App.tsx:12:7", "src/App.tsx", { lineNumber: 12, columnNumber: 7 }],
+    ["src/App.tsx#L21C6", "src/App.tsx", { lineNumber: 21, columnNumber: 6 }],
+  ])("opens the source location in %s", (href, expectedPath, expectedOptions) => {
+    const openFile = mock((_path: string, _options?: CreateFileTabOptions) => undefined);
+    render(
+      <TerminalProvider>
+        <RegisterFileTab openFile={openFile} />
+        <MessageMarkdown content={`[Open source](${href})`} />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open source" }));
+
+    expect(openFile).toHaveBeenCalledWith(expectedPath, expectedOptions);
   });
 
   test("shows feedback instead of sending a file path to the browser without a tab action", () => {

@@ -73,6 +73,44 @@ describe("reconcilePersistedLayout", () => {
     });
   });
 
+  test("restores valid file locations and drops malformed navigation fields", () => {
+    const restoreFileData = (fileData: Record<string, unknown>) => {
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "file", type: "file", fileData }],
+          activeTabId: "file",
+        }),
+        context,
+      );
+      expect(restored).not.toBeNull();
+      return (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>).tabs[0]
+        ?.fileData;
+    };
+
+    expect(
+      restoreFileData({
+        filePath: "src/App.tsx",
+        lineNumber: 20,
+        columnNumber: 4,
+        navigationRequestId: 7,
+      }),
+    ).toMatchObject({ lineNumber: 20, columnNumber: 4, navigationRequestId: 7 });
+
+    for (const malformed of [0, -1, 1.5, "2", Number.POSITIVE_INFINITY]) {
+      const fileData = restoreFileData({
+        filePath: "src/App.tsx",
+        lineNumber: malformed,
+        columnNumber: malformed,
+        navigationRequestId: malformed,
+      });
+      expect(fileData?.lineNumber, String(malformed)).toBeUndefined();
+      expect(fileData?.columnNumber, String(malformed)).toBeUndefined();
+      expect(fileData?.navigationRequestId, String(malformed)).toBeUndefined();
+    }
+  });
+
   test("accepts legacy v1 layouts for one-time selection migration", () => {
     const root = {
       kind: "leaf",

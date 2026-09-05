@@ -66,6 +66,45 @@ function createSaved(environmentId: string, input: LayoutInput) {
 describe("pane layout persistence", () => {
   beforeEach(resetStore);
 
+  test("round-trips file navigation state through persistence and restoration", () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "file",
+            type: "file",
+            fileData: {
+              filePath: "src/App.tsx",
+              lineNumber: 20,
+              columnNumber: 4,
+              navigationRequestId: 7,
+            },
+          },
+        ],
+        activeTabId: "file",
+      },
+    });
+
+    const restored = reconcilePersistedLayout(createSaved("env-1", input), {
+      environmentId: "env-1",
+      containerId: "container-1",
+      isLocal: false,
+    });
+    expect(restored).not.toBeNull();
+    const [fileTab] = (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
+      .tabs;
+    expect(fileTab?.fileData).toMatchObject({
+      filePath: "src/App.tsx",
+      lineNumber: 20,
+      columnNumber: 4,
+      navigationRequestId: 7,
+    });
+  });
+
   test("does not write before hydration and primes a restored snapshot without echoing it", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input),

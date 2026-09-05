@@ -2670,6 +2670,109 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(store.findPaneWithTab("missing-tab", "env-duplicate")).toBeNull();
   });
 
+  test("navigates file tabs, validates locations, and wraps the request id", () => {
+    seedSingleTabEnvironment("env-file-navigation", null, {
+      id: "file-tab",
+      type: "file",
+      fileData: {
+        filePath: "src/App.tsx",
+        lineNumber: 1,
+        columnNumber: 2,
+        navigationRequestId: Number.MAX_SAFE_INTEGER,
+      },
+    });
+
+    const store = usePaneLayoutStore.getState();
+    store.navigateFileTab("file-tab", 20, undefined, "env-file-navigation");
+    expect(store.getAllTabs("env-file-navigation")[0]?.fileData).toMatchObject({
+      filePath: "src/App.tsx",
+      lineNumber: 20,
+      navigationRequestId: 1,
+    });
+    expect(store.getAllTabs("env-file-navigation")[0]?.fileData?.columnNumber).toBeUndefined();
+
+    const root = store.getRoot("env-file-navigation");
+    for (const [lineNumber, columnNumber] of [
+      [0, undefined],
+      [-1, undefined],
+      [1.5, undefined],
+      [Number.POSITIVE_INFINITY, undefined],
+      [Number.MAX_SAFE_INTEGER + 1, undefined],
+      [10, 0],
+      [10, 1.5],
+    ] as const) {
+      store.navigateFileTab("file-tab", lineNumber, columnNumber, "env-file-navigation");
+      expect(usePaneLayoutStore.getState().getRoot("env-file-navigation")).toBe(root);
+    }
+  });
+
+  test("ignores file navigation when its environment, tab, or file data is missing", () => {
+    const store = usePaneLayoutStore.getState();
+    const emptyEnvironments = store.environments;
+    store.navigateFileTab("missing", 10);
+    store.navigateFileTab("missing", 10, undefined, "missing-environment");
+    expect(usePaneLayoutStore.getState().environments).toBe(emptyEnvironments);
+
+    seedSingleTabEnvironment("env-file-navigation-guards", null, {
+      id: "plain-tab",
+      type: "plain",
+    });
+    const root = usePaneLayoutStore.getState().getRoot("env-file-navigation-guards");
+    usePaneLayoutStore
+      .getState()
+      .navigateFileTab("plain-tab", 10, undefined, "env-file-navigation-guards");
+    usePaneLayoutStore
+      .getState()
+      .navigateFileTab("missing-tab", 10, undefined, "env-file-navigation-guards");
+    expect(usePaneLayoutStore.getState().getRoot("env-file-navigation-guards")).toBe(root);
+
+    seedSingleTabEnvironment("env-file-without-data", null, {
+      id: "file-without-data",
+      type: "file",
+    });
+    const fileRoot = usePaneLayoutStore.getState().getRoot("env-file-without-data");
+    usePaneLayoutStore
+      .getState()
+      .navigateFileTab("file-without-data", 10, undefined, "env-file-without-data");
+    expect(usePaneLayoutStore.getState().getRoot("env-file-without-data")).toBe(fileRoot);
+  });
+
+  test("clears location state from a file tab and ignores non-file tabs", () => {
+    seedSingleTabEnvironment("env-clear-file-navigation", null, {
+      id: "file-tab",
+      type: "file",
+      fileData: {
+        filePath: "src/App.tsx",
+        lineNumber: 20,
+        columnNumber: 4,
+        navigationRequestId: 2,
+      },
+    });
+
+    usePaneLayoutStore.getState().clearFileTabNavigation("file-tab", "env-clear-file-navigation");
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-clear-file-navigation")[0]?.fileData,
+    ).toEqual({ filePath: "src/App.tsx" });
+
+    const root = usePaneLayoutStore.getState().getRoot("env-clear-file-navigation");
+    usePaneLayoutStore.getState().clearFileTabNavigation("file-tab", "env-clear-file-navigation");
+    usePaneLayoutStore.getState().clearFileTabNavigation("missing", "env-clear-file-navigation");
+    expect(usePaneLayoutStore.getState().getRoot("env-clear-file-navigation")).toBe(root);
+
+    seedSingleTabEnvironment("env-clear-file-navigation-guards", null, {
+      id: "plain-tab",
+      type: "plain",
+    });
+    const plainRoot = usePaneLayoutStore.getState().getRoot("env-clear-file-navigation-guards");
+    usePaneLayoutStore
+      .getState()
+      .clearFileTabNavigation("plain-tab", "env-clear-file-navigation-guards");
+    usePaneLayoutStore.getState().clearFileTabNavigation("plain-tab", "missing-environment");
+    expect(usePaneLayoutStore.getState().getRoot("env-clear-file-navigation-guards")).toBe(
+      plainRoot,
+    );
+  });
+
   test("reorders tabs and ignores invalid indexes", () => {
     seedPaneTree(
       {

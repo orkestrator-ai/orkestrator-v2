@@ -11,6 +11,10 @@ interface MonacoFileEditorProps {
   value: string;
   onChange: (value: string) => void;
   onSave: () => void | Promise<unknown>;
+  lineNumber?: number;
+  columnNumber?: number;
+  navigationRequestId?: number;
+  isActive: boolean;
 }
 
 type MonacoBeforeMountApi = Parameters<BeforeMount>[0];
@@ -41,6 +45,20 @@ export function registerMonacoFileSaveCommand(
   });
 }
 
+export function revealMonacoFileLocation(
+  editor: MonacoMountedEditor | null,
+  lineNumber: number | undefined,
+  columnNumber: number | undefined,
+  shouldFocus = true,
+): void {
+  if (!editor || !lineNumber) return;
+  const requestedPosition = { lineNumber, column: columnNumber ?? 1 };
+  const position = editor.getModel()?.validatePosition(requestedPosition) ?? requestedPosition;
+  editor.setPosition(position, "transcript-link");
+  editor.revealPositionInCenter(position);
+  if (shouldFocus) editor.focus();
+}
+
 export function forwardMonacoFileChange(
   nextValue: string | undefined,
   onChange: MonacoFileEditorProps["onChange"],
@@ -48,11 +66,21 @@ export function forwardMonacoFileChange(
   if (nextValue !== undefined) onChange(nextValue);
 }
 
-export function MonacoFileEditor({ language, value, onChange, onSave }: MonacoFileEditorProps) {
+export function MonacoFileEditor({
+  language,
+  value,
+  onChange,
+  onSave,
+  lineNumber,
+  columnNumber,
+  navigationRequestId,
+  isActive,
+}: MonacoFileEditorProps) {
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
   const onSaveRef = useRef(onSave);
+  const editorRef = useRef<MonacoMountedEditor | null>(null);
   const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
   const [monacoFailed, setMonacoFailed] = useState(false);
   const [monacoAttempt, setMonacoAttempt] = useState(0);
@@ -80,9 +108,19 @@ export function MonacoFileEditor({ language, value, onChange, onSave }: MonacoFi
 
   const handleEditorWillMount: BeforeMount = useCallback(disableMonacoFileDiagnostics, []);
 
-  const handleEditorMount: OnMount = useCallback((editor, monaco) => {
-    registerMonacoFileSaveCommand(editor, monaco, () => onSaveRef.current);
-  }, []);
+  const handleEditorMount: OnMount = useCallback(
+    (editor, monaco) => {
+      editorRef.current = editor;
+      registerMonacoFileSaveCommand(editor, monaco, () => onSaveRef.current);
+      revealMonacoFileLocation(editor, lineNumber, columnNumber, isActive);
+    },
+    [columnNumber, isActive, lineNumber],
+  );
+
+  useEffect(() => {
+    if (navigationRequestId === undefined || !isActive) return;
+    revealMonacoFileLocation(editorRef.current, lineNumber, columnNumber, true);
+  }, [columnNumber, isActive, lineNumber, navigationRequestId]);
 
   const handleEditorChange: OnChange = useCallback(
     (nextValue) => {

@@ -101,6 +101,9 @@ interface FileViewerTabProps {
   /** Owning environment; required by production callers for draft recovery. */
   environmentId?: string;
   filePath: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  navigationRequestId?: number;
   /** Container ID (for containerized environments) */
   containerId?: string;
   /** Worktree path (for local environments) */
@@ -119,6 +122,9 @@ export function FileViewerTab({
   tabId,
   environmentId,
   filePath,
+  lineNumber,
+  columnNumber,
+  navigationRequestId,
   containerId,
   worktreePath,
   isLocalEnvironment = false,
@@ -523,6 +529,9 @@ export function FileViewerTab({
           filePath={filePath}
           initialContent={content}
           language={detectedLanguage}
+          lineNumber={lineNumber}
+          columnNumber={columnNumber}
+          navigationRequestId={navigationRequestId}
           isActive={isActive}
           isSaving={isSaving}
           onSave={saveFile}
@@ -572,6 +581,10 @@ export function FileViewerTab({
             <LazyMonacoFileEditor
               language={detectedLanguage}
               value={dirtyContent ?? content ?? ""}
+              lineNumber={lineNumber}
+              columnNumber={columnNumber}
+              navigationRequestId={navigationRequestId}
+              isActive={isActive}
               onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
               onSave={saveFile}
             />

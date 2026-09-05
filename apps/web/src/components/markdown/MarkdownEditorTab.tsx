@@ -1,4 +1,4 @@
-import { lazy, useCallback, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
@@ -20,6 +20,9 @@ interface MarkdownEditorTabProps {
   filePath: string;
   initialContent: string;
   language: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  navigationRequestId?: number;
   isActive: boolean;
   isSaving: boolean;
   onSave: SaveFile;
@@ -30,6 +33,9 @@ export function MarkdownEditorTab({
   filePath,
   initialContent,
   language,
+  lineNumber,
+  columnNumber,
+  navigationRequestId,
   isActive,
   isSaving,
   onSave,
@@ -42,9 +48,24 @@ export function MarkdownEditorTab({
   );
   const setContent = useFileDirtyStore((state) => state.setContent);
   const [initialAssessment] = useState(() => assessMarkdownForRichEditing(markdown));
-  const [mode, setMode] = useState<MarkdownEditorMode>(initialAssessment.safe ? "rendered" : "raw");
+  const [mode, setMode] = useState<MarkdownEditorMode>(
+    lineNumber ? "raw" : initialAssessment.safe ? "rendered" : "raw",
+  );
   const [parseError, setParseError] = useState<string | null>(initialAssessment.reason);
   const editorRef = useRef<TiptapMarkdownEditorHandle>(null);
+  const handledNavigationRequestIdRef = useRef(navigationRequestId);
+
+  useEffect(() => {
+    if (navigationRequestId === undefined) {
+      handledNavigationRequestIdRef.current = undefined;
+      return;
+    }
+    if (navigationRequestId === handledNavigationRequestIdRef.current) return;
+    handledNavigationRequestIdRef.current = navigationRequestId;
+    if (!lineNumber || mode === "raw") return;
+    editorRef.current?.flushPendingChanges();
+    setMode("raw");
+  }, [lineNumber, mode, navigationRequestId]);
 
   const handleModeChange = useCallback(
     (nextMode: string) => {
@@ -138,6 +159,10 @@ export function MarkdownEditorTab({
           <LazyMonacoFileEditor
             language={language}
             value={markdown}
+            lineNumber={lineNumber}
+            columnNumber={columnNumber}
+            navigationRequestId={navigationRequestId}
+            isActive={isActive && mode === "raw"}
             onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
             onSave={onSave}
           />

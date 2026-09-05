@@ -179,6 +179,8 @@ export function TerminalContainer({
     getAllTabs,
     getOpenFilePaths,
     getPane,
+    navigateFileTab,
+    clearFileTabNavigation,
   } = usePaneLayoutStore(
     useShallow((state) => ({
       setActiveEnvironment: state.setActiveEnvironment,
@@ -195,6 +197,8 @@ export function TerminalContainer({
       getAllTabs: state.getAllTabs,
       getOpenFilePaths: state.getOpenFilePaths,
       getPane: state.getPane,
+      navigateFileTab: state.navigateFileTab,
+      clearFileTabNavigation: state.clearFileTabNavigation,
     })),
   );
 
@@ -1478,9 +1482,14 @@ export function TerminalContainer({
         (t) =>
           t.type === "file" &&
           t.fileData?.filePath === relativeFilePath &&
-          t.fileData?.isDiff === (options?.isDiff ?? false),
+          (t.fileData?.isDiff ?? false) === (options?.isDiff ?? false),
       );
       if (existingTab) {
+        if (options?.lineNumber) {
+          navigateFileTab(existingTab.id, options.lineNumber, options.columnNumber, environmentId);
+        } else {
+          clearFileTabNavigation(existingTab.id, environmentId);
+        }
         // Activate the existing tab instead of creating a duplicate
         const pane = usePaneLayoutStore.getState().findPaneWithTab(existingTab.id, environmentId);
         if (pane) {
@@ -1517,6 +1526,13 @@ export function TerminalContainer({
           isDiff: options?.isDiff,
           gitStatus: validatedGitStatus,
           baseBranch: undefined,
+          ...(options?.lineNumber
+            ? {
+                lineNumber: options.lineNumber,
+                columnNumber: options.columnNumber,
+                navigationRequestId: 1,
+              }
+            : {}),
         },
       };
 
@@ -1541,6 +1557,8 @@ export function TerminalContainer({
       worktreePath,
       activePaneId,
       addTab,
+      navigateFileTab,
+      clearFileTabNavigation,
       getAllTabs,
       environmentId,
     ],

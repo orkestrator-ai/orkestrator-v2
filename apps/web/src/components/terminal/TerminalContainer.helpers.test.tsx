@@ -584,6 +584,68 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("stores source locations and updates an already-open tab on every navigation", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "src/main.tsx", options: { lineNumber: 10 } },
+              { filePath: "src/main.tsx", options: { lineNumber: 20, columnNumber: 4 } },
+            ]}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
+        expect(fileTabs).toHaveLength(1);
+        expect(fileTabs[0]?.fileData).toMatchObject({
+          filePath: "src/main.tsx",
+          lineNumber: 20,
+          columnNumber: 4,
+          navigationRequestId: 2,
+        });
+      });
+    });
+
+    test("clears a stored source location when reopening the file without one", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "src/main.tsx", options: { lineNumber: 20, columnNumber: 4 } },
+              { filePath: "src/main.tsx" },
+            ]}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
+        expect(fileTabs).toHaveLength(1);
+        expect(fileTabs[0]?.fileData).toMatchObject({ filePath: "src/main.tsx" });
+        expect(fileTabs[0]?.fileData?.lineNumber).toBeUndefined();
+        expect(fileTabs[0]?.fileData?.columnNumber).toBeUndefined();
+        expect(fileTabs[0]?.fileData?.navigationRequestId).toBeUndefined();
+      });
+    });
+
     test("activates an existing matching file tab at the limit without reporting an error", async () => {
       usePaneLayoutStore.setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {

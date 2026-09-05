@@ -42,6 +42,10 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function optionalPositiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : undefined;
+}
+
 function restoreNativeAgentData(
   value: JsonObject,
   context: PaneLayoutRestoreContext,
@@ -171,6 +175,9 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       type,
       fileData: {
         filePath,
+        lineNumber: optionalPositiveInteger(value.fileData.lineNumber),
+        columnNumber: optionalPositiveInteger(value.fileData.columnNumber),
+        navigationRequestId: optionalPositiveInteger(value.fileData.navigationRequestId),
         containerId: context.containerId ?? undefined,
         worktreePath: context.isLocal ? context.worktreePath : undefined,
         isLocalEnvironment: context.isLocal,

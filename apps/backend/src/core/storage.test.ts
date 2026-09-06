@@ -695,6 +695,17 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
+  test("persists the branch revision used to avoid historical head reuse", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      await storage.updateEnvironment(environment.id, { branchRevision: 2 });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment(environment.id))?.branchRevision).toBe(2);
+    });
+  });
+
   test("creates and refreshes the build tab in the authoritative pane layout", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");

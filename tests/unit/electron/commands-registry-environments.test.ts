@@ -24,6 +24,7 @@ const {
   configuredGitPushBehaviour,
   configuredGitUpstream,
   createCommandRegistry,
+  environmentBranchBase,
   createContext,
   createDeferred,
   createEnvironment,
@@ -1443,7 +1444,7 @@ exit 42
         );
 
         expect(result.name).toBe("20260415-123456");
-        expect(result.branch).toBe("20260415-123456");
+        expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
         expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
         expect(result.createdAt).toBe("2026-04-15T12:34:56.789Z");
         expect(result.lastActivityAt).toBe(result.createdAt);
@@ -1477,7 +1478,7 @@ exit 42
         );
 
         expect(result.name).toBe("20260415-123456");
-        expect(result.branch).toBe("20260415-123456");
+        expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
         expect(result.initialPrompt).toBeUndefined();
         expect(result.pendingRenamePrompt).toBeUndefined();
         expect((await context.storage.getEnvironment(result.id))?.pendingRenamePrompt).toBe(
@@ -1542,7 +1543,7 @@ exit 42
     );
 
     expect(environment.name).toBe("manual-choice");
-    expect(environment.branch).toBe("manual-choice");
+    expect(environment.branch).toBe("manual-choice-envlocal-r1");
     expect(environment.pendingRenamePrompt).toBeUndefined();
   });
 
@@ -1565,9 +1566,9 @@ exit 42
         { environmentId: environment.id, name: "Manual Choice" },
         context,
       ),
-    ).resolves.toMatchObject({ name: "manual-choice", branch: "manual-choice" });
+    ).resolves.toMatchObject({ name: "manual-choice", branch: "manual-choice-envlocal-r1" });
 
-    expect(await currentGitBranch(worktreePath)).toBe("manual-choice");
+    expect(await currentGitBranch(worktreePath)).toBe("manual-choice-envlocal-r1");
     expect(environment.prUrl).toBeNull();
     expect(environment.prState).toBeNull();
     expect(environment.hasMergeConflicts).toBeNull();
@@ -1576,7 +1577,7 @@ exit 42
       payload: {
         environment_id: environment.id,
         new_name: "manual-choice",
-        new_branch: "manual-choice",
+        new_branch: "manual-choice-envlocal-r1",
       },
     });
   });
@@ -1620,9 +1621,9 @@ exit 42
         );
 
         expect(environment.name).toBe("review-oauth-flow");
-        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow-envpendingre-r1");
         expect(environment.pendingRenamePrompt).toBeUndefined();
-        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow-envpendingre-r1");
       });
     },
     ASYNC_TEST_BUDGET_MS,
@@ -1659,7 +1660,7 @@ exit 42
 
       expect(environment.name).toBe("reconcile-session-state");
       expect(environment.pendingRenamePrompt).toBeUndefined();
-      expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state");
+      expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state-envpendingre-r1");
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -1857,6 +1858,53 @@ printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
     }
   });
 
+  test("does not repeat name generation when an unreachable origin is ignored", async () => {
+    const worktreePath = await createGitRepoOnBranch("timestamp-name");
+    await runGit(worktreePath, ["remote", "add", "origin", "/definitely/missing/origin.git"]);
+    const environment = createEnvironment({
+      id: "env-offline-pending-rename",
+      name: "20260415-123456",
+      branch: "timestamp-name",
+      status: "running",
+      environmentType: "local",
+      worktreePath,
+      pendingRenamePrompt: "Name this while offline",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://example.invalid/acme/repo.git",
+        localPath: worktreePath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(
+      `#!/bin/sh
+printf 'invoke\n' >> "$FAKE_CODEX_LOG"
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+printf '%s\n' '{"slug":"Offline Rename"}' > "$out"
+`,
+      async (logPath) => {
+        await commands.get("reconcile_pending_environment_renames")?.({}, context);
+        await commands.get("reconcile_pending_environment_renames")?.({}, context);
+
+        expect(environment.name).toBe("offline-rename");
+        expect(environment.pendingRenamePrompt).toBeUndefined();
+        expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
+      },
+    );
+  });
+
   test("lets an explicit first prompt bypass rename retry backoff", async () => {
     const environment = createEnvironment({
       id: "env-explicit-rename-retry",
@@ -1984,7 +2032,7 @@ exit 1
         );
 
         expect(result.name).toBe("20260415-123456");
-        expect(result.branch).toBe("20260415-123456");
+        expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
         expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
         await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
       },
@@ -2009,7 +2057,7 @@ exit 1
     );
 
     expect(result.name).toBe("20260415-123456");
-    expect(result.branch).toBe(result.name);
+    expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
     expect(result.initialPrompt).toBe("🔥🔥🔥");
   });
 
@@ -2035,7 +2083,7 @@ exit 1
     );
 
     expect(result.name).toBe("20260415-123456-1");
-    expect(result.branch).toBe("20260415-123456-1");
+    expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
   });
 
   test("suffixes explicit environment names when the current project already uses the slug", async () => {
@@ -2057,7 +2105,83 @@ exit 1
     )) as Environment;
 
     expect(result.name).toBe("custom-name-1");
-    expect(result.branch).toBe("custom-name-1");
+    expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
+  });
+
+  test("keeps an explicit display name friendly when only a Git branch uses its slug", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["branch", "custom-name"]);
+    const { context } = createContext([], {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+
+    const result = (await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        name: "Custom Name",
+        environmentType: "local",
+      },
+      context,
+    )) as Environment;
+
+    expect(result.name).toBe("custom-name");
+    expect(result.branch).toBe(environmentBranchBase(result.name, result.id));
+  });
+
+  test("suffixes a container branch when the live remote reserves its generated base", async () => {
+    const { context } = createContext([], {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://example.invalid/acme/repo.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+    let result: Environment | undefined;
+
+    await withGitArgumentStub(
+      `  *"ls-remote --heads "*)
+    pattern=""
+    for argument in "$@"; do pattern="$argument"; done
+    ref="\${pattern%\\*}"
+    printf '%040d\\t%s\\n' 0 "$ref"
+    exit 0 ;;`,
+      async () => {
+        result = (await commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            name: "Container Remote Collision",
+            environmentType: "containerized",
+          },
+          context,
+        )) as Environment;
+      },
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.branch).toBe(`${environmentBranchBase(result!.name, result!.id)}-1`);
+  });
+
+  test("builds distinct namespaces beyond a shared eight-character id prefix", () => {
+    expect(environmentBranchBase("feature", "env-abcde-1111")).not.toBe(
+      environmentBranchBase("feature", "env-abcde-2222"),
+    );
+    expect(environmentBranchBase("Feature", "A-B")).toBe("feature-ab");
+    expect(() => environmentBranchBase("feature", "---")).toThrow("cannot form a branch namespace");
+    expect(() => environmentBranchBase("feature", "valid", -1)).toThrow(
+      "must be a non-negative integer",
+    );
   });
 
   test("renames environments from prompts using codex exec output", async () => {
@@ -2098,7 +2222,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         ).resolves.toBeUndefined();
 
         expect(environment.name).toBe("review-oauth-flow");
-        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow-envlocal-r1");
         expect(environment.prUrl).toBeNull();
         expect(environment.prState).toBeNull();
         expect(environment.hasMergeConflicts).toBeNull();
@@ -2107,7 +2231,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
           payload: {
             environment_id: environment.id,
             new_name: "review-oauth-flow",
-            new_branch: "review-oauth-flow",
+            new_branch: "review-oauth-flow-envlocal-r1",
           },
         });
 
@@ -2156,7 +2280,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       ).resolves.toBeUndefined();
 
       expect(environment.name).toBe("review-oauth-flow-1");
-      expect(environment.branch).toBe("review-oauth-flow-1");
+      expect(environment.branch).toBe("review-oauth-flow-1-envnew-r1");
       expect(existing.name).toBe("review-oauth-flow");
       expect(existing.branch).toBe("review-oauth-flow");
       expect(emitted).toContainEqual({
@@ -2164,7 +2288,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         payload: {
           environment_id: environment.id,
           new_name: "review-oauth-flow-1",
-          new_branch: "review-oauth-flow-1",
+          new_branch: "review-oauth-flow-1-envnew-r1",
         },
       });
     });
@@ -2172,7 +2296,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
 
   test("suffixes prompt-renamed local environments when the project already has the generated branch", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
-    await runGit(worktree, ["branch", "review-oauth-flow"]);
+    await runGit(worktree, ["branch", "review-oauth-flow-envnew-r1"]);
     const environment = createEnvironment({
       id: "env-new",
       name: "20260415-123456",
@@ -2203,9 +2327,349 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         ),
       ).resolves.toBeUndefined();
 
-      expect(environment.name).toBe("review-oauth-flow-1");
-      expect(environment.branch).toBe("review-oauth-flow-1");
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("review-oauth-flow-envnew-r1-1");
     });
+  });
+
+  test("suffixes a generated rename when only the live remote has the namespaced branch", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-remote-only",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      environmentType: "local",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const proposedBranch = environmentBranchBase("review-oauth-flow", environment.id, 1);
+    await runGit(worktree, ["push", "origin", `main:refs/heads/${proposedBranch}`]);
+    // Prove the collision is not visible through local or remote-tracking refs.
+    await runGit(worktree, ["update-ref", "-d", `refs/remotes/origin/${proposedBranch}`]);
+    expect(await gitOutput(worktree, ["branch", "-a", "--list", `*${proposedBranch}*`])).toBe("");
+
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      );
+    });
+
+    expect(environment.name).toBe("review-oauth-flow");
+    expect(environment.branch).toBe(`${proposedBranch}-1`);
+  });
+
+  test("treats a stale remote-tracking ref as reserved during generated rename", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-stale-ref",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      environmentType: "local",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const proposedBranch = environmentBranchBase("review-oauth-flow", environment.id, 1);
+    await runGit(worktree, ["update-ref", `refs/remotes/origin/${proposedBranch}`, "HEAD"]);
+
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      );
+    });
+
+    expect(environment.name).toBe("review-oauth-flow");
+    expect(environment.branch).toBe(`${proposedBranch}-1`);
+  });
+
+  test("does not reuse a deleted historical PR head slug for a generated rename", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-after-merged-pr",
+      name: "20260906-120040",
+      branch: "20260906-120040",
+      environmentType: "local",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    // `fix-flaky-tests` is intentionally absent from every ref, matching a merged
+    // PR whose remote head was deleted but whose name remains in GitHub history.
+    await withFakeCodex(codexSlugScript("Fix Flaky Tests"), async () => {
+      await commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Fix the flaky tests" },
+        context,
+      );
+    });
+
+    expect(environment.name).toBe("fix-flaky-tests");
+    expect(environment.branch).toBe("fix-flaky-tests-envaftermerg-r1");
+    expect(environment.branch).not.toBe(environment.name);
+  });
+
+  test("does not reuse a namespaced historical PR head after an A to B to A rename", async () => {
+    const environment = createEnvironment({
+      id: "env-repeat-name",
+      name: "alpha",
+      branch: environmentBranchBase("alpha", "env-repeat-name"),
+      environmentType: "containerized",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const firstAlphaBranch = environment.branch;
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await commands.get("rename_environment")?.(
+      { environmentId: environment.id, name: "Beta" },
+      context,
+    );
+    expect(environment.branch).toBe(environmentBranchBase("beta", environment.id, 1));
+    expect(environment.branchRevision).toBe(1);
+
+    await commands.get("rename_environment")?.(
+      { environmentId: environment.id, name: "Alpha" },
+      context,
+    );
+    expect(environment.branch).toBe(environmentBranchBase("alpha", environment.id, 2));
+    expect(environment.branch).not.toBe(firstAlphaBranch);
+    expect(environment.branchRevision).toBe(2);
+  });
+
+  test("checks a container-only project's live remote during manual rename", async () => {
+    const { remote, worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-container-remote",
+      name: "old-name",
+      branch: "old-branch",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const proposedBranch = environmentBranchBase("manual-choice", environment.id, 1);
+    await runGit(worktree, ["push", "origin", `main:refs/heads/${proposedBranch}`]);
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: remote,
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await commands.get("rename_environment")?.(
+      { environmentId: environment.id, name: "Manual Choice" },
+      context,
+    );
+
+    expect(environment.branch).toBe(`${proposedBranch}-1`);
+    expect(environment.branchRevision).toBe(1);
+  });
+
+  test("checks a container-only project's live remote during generated rename", async () => {
+    const { remote, worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-container-generated-remote",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const proposedBranch = environmentBranchBase("review-oauth-flow", environment.id, 1);
+    await runGit(worktree, ["push", "origin", `main:refs/heads/${proposedBranch}`]);
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: remote,
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Review the OAuth callback" },
+        context,
+      );
+    });
+
+    expect(environment.branch).toBe(`${proposedBranch}-1`);
+    expect(environment.branchRevision).toBe(1);
+  });
+
+  test("uses one remote lookup while suffixing several occupied candidates", async () => {
+    const environment = createEnvironment({
+      id: "env-single-remote-probe",
+      name: "old-name",
+      branch: "old-branch",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      status: "stopped",
+    });
+    const proposedBranch = environmentBranchBase("manual-choice", environment.id, 1);
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://example.invalid/acme/repo.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+    const logPath = path.join(await createTempDir("ork-branch-lookup-"), "lookups.log");
+    const previousLogPath = process.env.FAKE_BRANCH_LOOKUP_LOG;
+    process.env.FAKE_BRANCH_LOOKUP_LOG = logPath;
+
+    try {
+      await withGitArgumentStub(
+        `  *"ls-remote --heads "*)
+    printf 'lookup\\n' >> "$FAKE_BRANCH_LOOKUP_LOG"
+    pattern=""
+    for argument in "$@"; do pattern="$argument"; done
+    ref="\${pattern%\\*}"
+    printf '%040d\\t%s\\n' 0 "$ref"
+    printf '%040d\\t%s-1\\n' 0 "$ref"
+    exit 0 ;;`,
+        async () => {
+          await commands.get("rename_environment")?.(
+            { environmentId: environment.id, name: "Manual Choice" },
+            context,
+          );
+        },
+      );
+    } finally {
+      if (previousLogPath === undefined) delete process.env.FAKE_BRANCH_LOOKUP_LOG;
+      else process.env.FAKE_BRANCH_LOOKUP_LOG = previousLogPath;
+    }
+
+    expect(environment.branch).toBe(`${proposedBranch}-2`);
+    expect((await fs.readFile(logPath, "utf8")).trim().split("\n")).toHaveLength(1);
+  });
+
+  test("manual rename uses the same live-remote collision allocator", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-manual-remote",
+      name: "main",
+      branch: "main",
+      environmentType: "local",
+      worktreePath: worktree,
+      status: "running",
+    });
+    const proposedBranch = environmentBranchBase("manual-choice", environment.id, 1);
+    await runGit(worktree, ["push", "origin", `main:refs/heads/${proposedBranch}`]);
+    await runGit(worktree, ["update-ref", "-d", `refs/remotes/origin/${proposedBranch}`]);
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await commands.get("rename_environment")?.(
+      { environmentId: environment.id, name: "Manual Choice" },
+      context,
+    );
+
+    expect(environment.name).toBe("manual-choice");
+    expect(environment.branch).toBe(`${proposedBranch}-1`);
+    expect(await currentGitBranch(worktree)).toBe(`${proposedBranch}-1`);
+  });
+
+  test("renames promptly when the configured origin is unreachable", async () => {
+    const worktreePath = await createGitRepoOnBranch("old-branch");
+    await runGit(worktreePath, ["remote", "add", "origin", "/definitely/missing/origin.git"]);
+    const environment = createEnvironment({
+      id: "env-remote-failure",
+      name: "old-name",
+      branch: "old-branch",
+      environmentType: "local",
+      worktreePath,
+      status: "running",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktreePath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("rename_environment")?.(
+        { environmentId: environment.id, name: "Manual Choice" },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      name: "manual-choice",
+      branch: environmentBranchBase("manual-choice", environment.id, 1),
+    });
+
+    expect(environment.prUrl).toBeNull();
+    expect(await currentGitBranch(worktreePath)).toBe(
+      environmentBranchBase("manual-choice", environment.id, 1),
+    );
+    expect(updates).toHaveLength(1);
   });
 
   test(
@@ -2235,11 +2699,11 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         ).resolves.toBeUndefined();
 
         expect(environment.name).toBe("review-oauth-flow");
-        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow-envlocal-r1");
         expect(environment.prUrl).toBeNull();
         expect(environment.prState).toBeNull();
         expect(environment.hasMergeConflicts).toBeNull();
-        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow-envlocal-r1");
         await expect(configuredGitPushBehaviour(worktreePath)).resolves.toEqual({
           pushDefault: "current",
           autoSetupRemote: "true",
@@ -2247,16 +2711,15 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         // The upstream `git branch -m` carried over from the old name would make the
         // renamed branch compare and pull against origin/old-branch, so it is dropped
         // and the next push records the right one.
-        await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
-          remote: "",
-          merge: "",
-        });
+        await expect(
+          configuredGitUpstream(worktreePath, "review-oauth-flow-envlocal-r1"),
+        ).resolves.toEqual({ remote: "", merge: "" });
         expect(emitted).toContainEqual({
           event: "environment-renamed",
           payload: {
             environment_id: environment.id,
             new_name: "review-oauth-flow",
-            new_branch: "review-oauth-flow",
+            new_branch: "review-oauth-flow-envlocal-r1",
           },
         });
       });
@@ -2304,10 +2767,9 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         remote: "origin",
         merge: "refs/heads/old-branch",
       });
-      await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
-        remote: "",
-        merge: "",
-      });
+      await expect(
+        configuredGitUpstream(worktreePath, "review-oauth-flow-envlocal-r1"),
+      ).resolves.toEqual({ remote: "", merge: "" });
     },
     ASYNC_TEST_BUDGET_MS,
   );
@@ -2331,7 +2793,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
         await withGitArgumentStub(
           `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
-  *" branch -m -- review-oauth-flow old-branch"*) echo "forced rollback failure" >&2; exit 42 ;;`,
+  *" branch -m -- review-oauth-flow-envlocal-r1 old-branch"*) echo "forced rollback failure" >&2; exit 42 ;;`,
           async () => {
             await expect(
               commands.get("rename_environment_from_prompt")?.(
@@ -2345,8 +2807,8 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
 
       // The rollback never ran, so git really is on the new branch and storage has to
       // follow it.
-      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
-      expect(environment.branch).toBe("review-oauth-flow");
+      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow-envlocal-r1");
+      expect(environment.branch).toBe("review-oauth-flow-envlocal-r1");
       expect(environment.prUrl).toBeNull();
       expect(environment.prState).toBeNull();
       expect(environment.hasMergeConflicts).toBeNull();
@@ -2376,7 +2838,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
       await withGitArgumentStub(
         `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
-  *" branch -m -- review-oauth-flow old-branch"*) real_git "$@"; echo "forced timeout" >&2; exit 42 ;;`,
+  *" branch -m -- review-oauth-flow-envlocal-r1 old-branch"*) real_git "$@"; echo "forced timeout" >&2; exit 42 ;;`,
         async () => {
           await expect(
             commands.get("rename_environment_from_prompt")?.(
@@ -2397,7 +2859,9 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         "--format=%(refname:short)",
       ]),
     ).toBe("old-branch");
-    expect(await gitOutput(worktreePath, ["branch", "--list", "review-oauth-flow"])).toBe("");
+    expect(
+      await gitOutput(worktreePath, ["branch", "--list", "review-oauth-flow-envlocal-r1"]),
+    ).toBe("");
     expect(environment.branch).toBe("old-branch");
     expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
     expect(environment.prState).toBe("open");
@@ -2441,26 +2905,26 @@ exit 0
           ).resolves.toBeUndefined();
 
           expect(environment.name).toBe("review-oauth-flow");
-          expect(environment.branch).toBe("review-oauth-flow");
+          expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
           expect(environment.prUrl).toBeNull();
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain(
-            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'",
+            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow-envcontainer-r1'",
           );
           expect(execLog).toContain("git -C /workspace config --local push.default current");
           expect(execLog).toContain("git -C /workspace config --local push.autoSetupRemote true");
           // The upstream the rename carried over from the old name has to go, or the
           // renamed branch keeps comparing itself against origin/old-branch.
           expect(execLog).toContain(
-            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow.merge'",
+            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.merge'",
           );
           expect(execLog).toContain(
-            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow.remote'",
+            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow-envcontainer-r1.remote'",
           );
           // Nothing may pre-create an upstream for a branch that has never been pushed.
           expect(execLog).not.toContain(
-            "config --local 'branch.review-oauth-flow.merge' 'refs/heads/review-oauth-flow'",
+            "config --local 'branch.review-oauth-flow-envcontainer-r1.merge' 'refs/heads/review-oauth-flow-envcontainer-r1'",
           );
         },
       );
@@ -2511,11 +2975,11 @@ exit 0
           const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
           expect(execCalls).toHaveLength(3);
           expect(execCalls[0]).toContain(
-            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'",
+            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow-envcontainer-r1'",
           );
           expect(execCalls[1]).toContain("git -C /workspace config --local push.default current");
           expect(execCalls[2]).toContain(
-            "git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'",
+            "git -C /workspace branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'",
           );
         },
       );
@@ -2546,11 +3010,11 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
   case "$*" in
-    *"rev-parse --verify --quiet 'refs/heads/review-oauth-flow'"*)
+    *"rev-parse --verify --quiet 'refs/heads/review-oauth-flow-envcontainer-r1'"*)
       printf '%s' '${commandTesting.BRANCH_REF_EXISTS_SENTINEL}'; exit 0 ;;
     *"rev-parse --verify --quiet 'refs/heads/old-branch'"*) exit 0 ;;
     *" config --local "*) exit 42 ;;
-    *"branch -m -- 'review-oauth-flow' 'old-branch'"*) exit 43 ;;
+    *"branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'"*) exit 43 ;;
   esac
 fi
 exit 0
@@ -2563,7 +3027,7 @@ exit 0
             ),
           ).resolves.toBeUndefined();
 
-          expect(environment.branch).toBe("review-oauth-flow");
+          expect(environment.branch).toBe("review-oauth-flow-envcontainer-r1");
           expect(environment.prUrl).toBeNull();
           expect(environment.prState).toBeNull();
           expect(environment.hasMergeConflicts).toBeNull();
@@ -2571,10 +3035,10 @@ exit 0
           const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
           expect(execCalls).toHaveLength(5);
           expect(execCalls[2]).toContain(
-            "git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'",
+            "git -C /workspace branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'",
           );
           expect(execCalls[3]).toContain(
-            "rev-parse --verify --quiet 'refs/heads/review-oauth-flow'",
+            "rev-parse --verify --quiet 'refs/heads/review-oauth-flow-envcontainer-r1'",
           );
           expect(execCalls[4]).toContain("rev-parse --verify --quiet 'refs/heads/old-branch'");
         },
@@ -2610,7 +3074,7 @@ if [ "$1" = "exec" ]; then
     *"rev-parse --verify --quiet "*)
       printf '%s' '${commandTesting.BRANCH_REF_EXISTS_SENTINEL}'; exit 0 ;;
     *" config --local "*) exit 42 ;;
-    *"branch -m -- 'review-oauth-flow' 'old-branch'"*) exit 43 ;;
+    *"branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'"*) exit 43 ;;
   esac
 fi
 exit 0
@@ -2658,7 +3122,7 @@ if [ "$1" = "exec" ]; then
   case "$*" in
     *"rev-parse --verify --quiet "*) echo "container is gone" >&2; exit 44 ;;
     *" config --local "*) exit 42 ;;
-    *"branch -m -- 'review-oauth-flow' 'old-branch'"*) exit 43 ;;
+    *"branch -m -- 'review-oauth-flow-envcontainer-r1' 'old-branch'"*) exit 43 ;;
   esac
 fi
 exit 0
@@ -2871,6 +3335,7 @@ printf '%s\\n' '{}' > "$out"
           base64Data: "cHJpdmF0ZQ==",
         },
       ],
+      branchRevision: 7,
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
@@ -2905,6 +3370,7 @@ printf '%s\\n' '{}' > "$out"
       "initialAgentModel",
       "initialReasoningEffort",
       "initialPromptAttachments",
+      "branchRevision",
     ]) {
       expect(snapshots[0]).not.toHaveProperty(field);
     }

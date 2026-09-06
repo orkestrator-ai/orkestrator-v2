@@ -48,6 +48,9 @@ rotation.
 
 The endpoint listens only on `127.0.0.1`. Treat the token like a password: it
 can create environments, launch jobs, read transcripts, and update tickets.
+Managed development profiles request an ephemeral loopback port so they can run
+alongside an installed Orkestrator instance; the selected URL is published in
+the profile's readiness and descriptor data.
 
 ## What an agent can do
 
@@ -63,6 +66,38 @@ Control-MCP messages are always classified as external and are never injected
 into an agent turn. The destination's user can inspect and acknowledge them in
 the global inbox. `send_message` requires a stable `requestId`; retrying the
 same request with different content is rejected.
+
+## Project coordinator credentials
+
+The project Coordinator uses the same HTTP endpoint with a separate,
+backend-issued credential. That credential is ephemeral and bound to one
+project, coordinator workspace, conversation, and mailbox incarnation. It is
+written only into the trusted bridge runtime configuration; it is not returned
+to the renderer or stored in a transcript. Closing the conversation revokes the
+credential and stops that conversation's bridge. A backend restart reaps the
+old bridge and issues a new credential on reattachment.
+
+Coordinator calls are checked again at the command boundary. Discovery is
+limited to the bound project, environment and workflow mutations must target a
+disposable worker in that project, and the credential cannot dispatch arbitrary
+backend commands, change application settings, merge/delete the root checkout,
+or mint credentials. Repository branch switching and synchronization are UI-only
+backend actions and are not MCP tools.
+
+In addition to the ordinary discovery tools, a coordinator can start/stop
+workers, launch a job, start and control a structured build pipeline, start/get/
+cancel/address a multi-review, and use durable mailbox read/send/ack operations.
+Environment launch requires an explicit base branch and immutable 40-character
+commit. The association between request, coordinator, worker/workflow, and base
+revision is persisted independently of the open chat tab.
+
+Authenticated same-project coordinator messages and worker replies are eligible
+for idle delivery even when the ordinary external/peer default is inbox-only.
+This exception is role-checked server-side, remains subject to pause/mute,
+activity, approval, draft, incarnation, queue, and hop limits, and never treats
+an injection receipt as proof that a task completed. Backend workflow completion
+notifications use a distinct authenticated system origin and a stable outbox
+message ID so restart reconciliation cannot lose or duplicate them.
 
 Agent launches, prompt dispatches, agent messages, ticket creation, and comment
 appends use a caller-provided `requestId`. Reuse the same ID only when retrying

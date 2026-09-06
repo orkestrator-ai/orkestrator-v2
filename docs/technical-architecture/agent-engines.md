@@ -126,6 +126,39 @@ still spawns a hermetic `codex exec` with a custom model catalog, a read-only
 sandbox, and user config ignored, so title generation cannot inherit the user's
 tools or instructions.
 
+### Project Coordinator
+
+A Coordinator conversation is project-owned, not an environment disguised as a
+local worktree. Its durable owner is `{ kind: "coordinator", projectId,
+coordinatorId }`; provider processes, projections, queues, transcripts, and mail
+use a distinct `coordinator:` runtime namespace. Each conversation gets its own
+bridge so its scoped MCP/mail credential cannot be shared with a sibling tab.
+Unmounting the project page does not stop that backend-owned runtime.
+
+Coordinator currently qualifies Codex only. The bridge receives a trusted
+`coordinator-read-only` execution policy and selects a per-conversation Codex
+permission profile on restored sessions and every turn regardless of Plan/Build
+mode. That profile denies filesystem access by default, grants read access only
+to the project and the managed Codex runtime, and disables shell network access.
+The isolated Codex home contains only the provider credential, the checkout is
+pinned untrusted, and project hooks plus plugin/browser execution paths are
+disabled; the only injected MCP server is the scoped Orkestrator endpoint. The
+renderer stores pasted attachments outside the checkout and hides mode/permission
+controls, resume/fork, and file-rewinding actions; the backend independently
+rejects write-capable history actions. Other providers remain unavailable until
+their pinned runtimes can enforce the same boundary; there is no permissive
+fallback or provider substitution.
+
+The working directory is the canonical `Project.localPath`. Bridge state and a
+fresh coordinator `CODEX_HOME` live under application data, and initialization
+does not run project setup scripts, dependency installation, environment-file
+copying, or repository hooks. Git fetch/sync/switch is implemented by a separate
+backend service, serialized by canonical repository root, and blocked while a
+coordinator turn or another repository mutation is active. Sync is fast-forward
+only with rebase/autostash disabled; switching never forces an occupied or dirty
+worktree. Every successful or externally detected branch/HEAD change increments
+the repository-context revision included before the next coordinator turn.
+
 ## OpenCode
 
 **Bridge:** none · **Transport:** HTTP + SSE via `@opencode-ai/sdk/v2/client`

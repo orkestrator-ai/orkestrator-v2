@@ -30,13 +30,13 @@ async function requireMessagingEnabled(storage: StorageService) {
 export function registerAgentMailCommands(register: CommandRegistrar): void {
   register(
     "list_agent_mailboxes",
-    async ({ projectId, q, offset, limit, includeTombstoned }, { storage }) => {
+    async ({ projectId, q, offset, limit, includeTombstoned, strictProjectScope }, { storage }) => {
       const settings = await requireMessagingEnabled(storage);
       return storage.listAgentMailboxes({
         ...(typeof projectId === "string" && projectId.trim()
           ? { projectId: projectId.trim() }
           : {}),
-        allowCrossProject: settings.allowCrossProject,
+        allowCrossProject: strictProjectScope === true ? false : settings.allowCrossProject,
         ...(typeof q === "string" ? { q } : {}),
         ...(typeof offset === "number" ? { offset } : {}),
         ...(typeof limit === "number" ? { limit } : {}),
@@ -107,6 +107,10 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       required(tabId, "tabId"),
       required(messageId, "messageId"),
     );
+  });
+  register("get_agent_mail_status", async ({ messageId }, { storage }) => {
+    await requireMessagingEnabled(storage);
+    return storage.getAgentMailStatus(required(messageId, "messageId"));
   });
   register(
     "send_agent_mail",

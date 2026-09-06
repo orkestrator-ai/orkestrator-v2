@@ -43,7 +43,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import { adoptNativeAgentSession } from "@/lib/backend";
+import { adoptNativeAgentSession, writeCoordinatorAttachment } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -134,7 +134,10 @@ export function SharedNativeAgentController({
   agentHandoffId,
   consumedAgentHandoffId,
   refreshRequestId = 0,
+  executionPolicy,
+  coordinatorWorkspacePath,
 }: AgentNativeTabProps) {
+  const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   const platform = data.platform!;
   const adapter = getNativeAgentAdapter(platform);
   const label = adapter.label;
@@ -161,7 +164,12 @@ export function SharedNativeAgentController({
     initialAgentModel ?? configuredModel,
   );
   const configuredFastMode = speedCompatible ? configured.fastMode : undefined;
-  const setupPending = isSetupBlocked({ setupPhase: environment?.setupPhase });
+  // Coordinator runtimes deliberately have no Environment record: they run
+  // against the project's checkout under their own read-only lifecycle. The
+  // ordinary worker setup gate would otherwise classify that absence as
+  // permanently pending and its override action cannot target a synthetic ID.
+  const setupPending =
+    !isReadOnlyCoordinator && isSetupBlocked({ setupPhase: environment?.setupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
@@ -285,7 +293,7 @@ export function SharedNativeAgentController({
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
   const fileSearch = useFileSearch(
     data.containerId,
-    environment?.worktreePath,
+    environment?.worktreePath ?? coordinatorWorkspacePath,
     adapter.capabilities.attachments.files || adapter.capabilities.attachments.images,
   );
   const {
@@ -1071,7 +1079,7 @@ export function SharedNativeAgentController({
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       const resolved = resolveWorkspaceAttachment(file, {
         containerId: data.containerId,
-        worktreePath: environment?.worktreePath,
+        worktreePath: environment?.worktreePath ?? coordinatorWorkspacePath,
         allowFiles: adapter.capabilities.attachments.files,
         allowImages: adapter.capabilities.attachments.images,
         modelSupportsImages: selectedModel?.supportsImageInput,
@@ -1091,6 +1099,7 @@ export function SharedNativeAgentController({
       adapter.capabilities.attachments.images,
       data.containerId,
       environment?.worktreePath,
+      coordinatorWorkspacePath,
       selectedModel?.label,
       selectedModel?.supportsImageInput,
       sessionKey,
@@ -1106,10 +1115,16 @@ export function SharedNativeAgentController({
     },
     [sessionKey, updateDraft],
   );
+  const writeCoordinatorImage = useCallback(
+    (filename: string, base64Data: string) =>
+      writeCoordinatorAttachment(data.environmentId, filename, base64Data),
+    [data.environmentId],
+  );
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: data.containerId ?? null,
-    worktreePath: environment?.worktreePath,
+    worktreePath: isReadOnlyCoordinator ? undefined : environment?.worktreePath,
+    writeImage: isReadOnlyCoordinator ? writeCoordinatorImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
       adapter.capabilities.attachments.images && selectedModel?.supportsImageInput !== false,
@@ -1583,16 +1598,20 @@ export function SharedNativeAgentController({
       onAddAnnotation={addTranscriptAnnotation}
       onUpdateAnnotationComment={updateTranscriptAnnotationComment}
       messageActions={
-        adapter.capabilities.fork
+        adapter.capabilities.fork && !isReadOnlyCoordinator
           ? (message) => {
               const planned = forkPlan.get(message.id);
               return planned ? renderForkAction(message.id, planned.kind) : null;
             }
           : undefined
       }
-      onResumeClick={adapter.capabilities.resume ? () => setResumeDialogOpen(true) : undefined}
+      onResumeClick={
+        adapter.capabilities.resume && !isReadOnlyCoordinator
+          ? () => setResumeDialogOpen(true)
+          : undefined
+      }
       resumeDialog={
-        adapter.capabilities.resume ? (
+        adapter.capabilities.resume && !isReadOnlyCoordinator ? (
           <NativeResumeSessionDialog
             open={resumeDialogOpen}
             onOpenChange={setResumeDialogOpen}
@@ -1752,7 +1771,7 @@ export function SharedNativeAgentController({
                   }
                   disabled={settingsLocked}
                 />
-                {composer.modes.length > 0 ? (
+                {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -1780,7 +1799,7 @@ export function SharedNativeAgentController({
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
-                ) : composeExecutionProfiles.length > 0 ? (
+                ) : !isReadOnlyCoordinator && composeExecutionProfiles.length > 0 ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button

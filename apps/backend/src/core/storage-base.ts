@@ -167,6 +167,7 @@ export abstract class StorageBase {
   protected kanbanMutation: Promise<unknown> = Promise.resolve();
   protected agentHandoffMutation: Promise<unknown> = Promise.resolve();
   protected agentMailMutation: Promise<unknown> = Promise.resolve();
+  protected coordinatorMutation: Promise<unknown> = Promise.resolve();
   protected changeListener: ResourceChangeListener | null = null;
   protected changeRevision = 0;
   protected readonly scopedChanges: Array<{
@@ -355,6 +356,10 @@ export abstract class StorageBase {
 
   protected agentMailFile(): string {
     return this.file("agent-mail.json");
+  }
+
+  protected coordinatorsFile(): string {
+    return this.file("coordinators.json");
   }
 
   protected kanbanFile(): string {
@@ -718,6 +723,26 @@ export abstract class StorageBase {
     };
     const next = this.projectMutationQueue.then(run, run);
     this.projectMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  protected enqueueCoordinatorMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.coordinatorsFile(),
+        "coordinator storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.coordinatorMutation.then(run, run);
+    this.coordinatorMutation = next.then(
       () => undefined,
       () => undefined,
     );

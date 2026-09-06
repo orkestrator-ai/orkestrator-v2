@@ -1,4 +1,5 @@
 import nodePath from "node:path";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   isResourceChange,
   type ResourceChange,
@@ -29,6 +30,7 @@ import type {
   AgentReasoningOption,
 } from "./commands-dependencies.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
+import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import {
   syncDiffStatsTracking,
   asString,
@@ -293,11 +295,35 @@ export function registerProjectCommands(
       runProjectCreationCommand,
     );
   });
-  register("remove_project", async ({ projectId }, { storage }) => {
+  register("remove_project", async ({ projectId }, context) => {
+    const { storage } = context;
     const id = asString(projectId, "projectId");
+    const coordinator =
+      typeof storage.getCoordinatorWorkspace === "function"
+        ? await storage.getCoordinatorWorkspace(id)
+        : undefined;
+    if (coordinator) {
+      context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);
+      for (const conversation of coordinator.conversations) {
+        const runtimeId = coordinatorRuntimeId(coordinator.id, conversation.id);
+        await Promise.resolve(
+          commands.get("stop_local_codex_server_cmd")?.({ environmentId: runtimeId }, context),
+        ).catch(() => undefined);
+        const key = nativeAgentSessionStorageKey(
+          runtimeId,
+          conversation.agent,
+          conversation.logicalSessionKey,
+        );
+        const session = await storage.getNativeAgentSession(key);
+        if (session) {
+          await storage.invalidateNativeAgentSession(key, session.providerSessionId);
+        }
+      }
+    }
     if (typeof storage.deleteAgentMailByProject === "function") {
       await storage.deleteAgentMailByProject(id);
     }
+    await context.coordinators?.removeProject(id);
     return storage.removeProject(id);
   });
   register("get_project", ({ projectId }, { storage }) =>

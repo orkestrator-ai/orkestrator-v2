@@ -18,6 +18,8 @@ import type { AgentMailMessage, MailboxDescriptor } from "@orkestrator/protocol/
 function senderLabel(message: Pick<AgentMailMessage, "from">): string {
   if (message.from.kind === "user") return "You";
   if (message.from.kind === "external") return "External client";
+  if (message.from.kind === "system") return "Orkestrator workflow";
+  if (message.from.kind === "coordinator") return message.from.title || "Project coordinator";
   return message.from.title || `${message.from.environmentId} / ${message.from.tabId}`;
 }
 
@@ -397,7 +399,9 @@ export function AgentMailButton({
                             <option value="idle">Deliver when idle</option>
                           )}
                         </select>
-                        {message.placement === "inject_failed" && (
+                        {(message.placement === "inject_failed" ||
+                          (message.placement === "inject-held" &&
+                            message.placementReason === "loop-budget-exhausted")) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -412,11 +416,15 @@ export function AgentMailButton({
                             }
                           >
                             <RotateCcw className="mr-1 h-3 w-3" />
-                            Retry delivery
+                            {message.placementReason === "loop-budget-exhausted"
+                              ? "Resume delivery"
+                              : "Retry delivery"}
                           </Button>
                         )}
                         {(message.placement === "inject_failed" ||
-                          message.placement === "pending-inject") && (
+                          message.placement === "pending-inject" ||
+                          (message.placement === "inject-held" &&
+                            message.placementReason === "loop-budget-exhausted")) && (
                           <Button
                             size="sm"
                             variant="ghost"

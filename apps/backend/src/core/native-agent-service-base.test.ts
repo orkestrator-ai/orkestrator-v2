@@ -45,6 +45,12 @@ import {
 } from "./native-agent-service.js";
 
 import { StorageService } from "./storage.js";
+import { createProject } from "./storage.js";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -3450,6 +3456,205 @@ describe("NativeAgentService", () => {
       expect(nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey)).not.toBe(
         nativeAgentSessionStorageKey("env-2", "codex", logicalSessionKey),
       );
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("replaces caller authority and enriches a legacy environment-owned session", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-authority-"));
+    const storage = await createStorage(dataDir);
+    await addEnvironment(storage);
+    const logicalSessionKey = "legacy-session";
+    const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+    await storage.adoptNativeAgentSession({
+      key,
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey,
+      providerSessionId: "thread-1",
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    });
+    const provider = createProviderStub("codex");
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider.provider,
+    });
+    try {
+      const session = await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        owner: {
+          kind: "coordinator",
+          projectId: "forged-project",
+          coordinatorId: "forged-coordinator",
+        },
+        executionPolicy: "coordinator-read-only",
+      });
+      expect(session.owner).toEqual({
+        kind: "environment",
+        projectId: "project-1",
+        environmentId: "env-1",
+      });
+      expect(session.executionPolicy).toBeUndefined();
+      expect(provider.createSession).not.toHaveBeenCalled();
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("derives coordinator authority, prepends context once, and uses turn admission", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-"));
+    const storage = await createStorage(dataDir);
+    const checkout = path.join(dataDir, "checkout");
+    await fs.mkdir(checkout);
+    const project = await storage.addProject(createProject("remote", checkout));
+    const now = new Date(0).toISOString();
+    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: project.id,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "conversation-1",
+          tabId: "coordinator-tab",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+          agent: "codex",
+          title: "Coordinator",
+          createdAt: now,
+          mailboxIncarnationId: "incarnation-1",
+        },
+      ],
+      selectedConversationId: "conversation-1",
+      repositoryContextRevision: 3,
+      createdAt: now,
+      updatedAt: now,
+      repositoryStatus: {
+        projectId: project.id,
+        repositoryRoot: checkout,
+        revision: 1,
+        branch: "main",
+        detached: false,
+        unborn: false,
+        headCommit: "a".repeat(40),
+        upstream: null,
+        remote: null,
+        ahead: null,
+        behind: null,
+        remoteState: "unknown",
+        fetchedAt: null,
+        trackedChanges: 0,
+        untrackedChanges: 0,
+        conflicts: 0,
+        mergeInProgress: false,
+        rebaseInProgress: false,
+        operationState: "idle",
+        repositoryOperationBlockedReason: null,
+        branches: [],
+        lastError: null,
+      },
+    }));
+    const provider = createProviderStub("codex");
+    const release = mock(() => undefined);
+    const admit = mock(() => release);
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider.provider,
+      beginCoordinatorTurn: admit,
+    });
+    try {
+      const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      const session = await service.dispatchPrompt({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-1",
+        prompt: "Inspect this",
+        owner: { kind: "environment", projectId: "forged", environmentId: runtimeId },
+      });
+      expect(session).toMatchObject({
+        origin: "coordinator",
+        executionPolicy: "coordinator-read-only",
+        owner: { kind: "coordinator", projectId: project.id, coordinatorId: "coordinator-1" },
+      });
+      expect(admit).toHaveBeenCalledWith(project.id);
+      expect(release).toHaveBeenCalledTimes(1);
+      const sent = provider.send.mock.calls[0]![1];
+      expect(sent.match(/<orkestrator-coordinator-context>/g)).toHaveLength(1);
+      expect(sent).toContain("Inspect this");
+      expect(
+        (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
+          ?.repositoryContextRevisionAcknowledged,
+      ).toBe(3);
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        repositoryContextRevision: 4,
+      }));
+      await service.dispatchPrompt({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-1",
+        prompt: "Inspect this",
+      });
+      expect(provider.send).toHaveBeenCalledTimes(1);
+      expect(
+        (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
+          ?.repositoryContextRevisionAcknowledged,
+      ).toBe(3);
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        lifecycleState: "paused",
+      }));
+      await expect(
+        service.dispatchPrompt({
+          environmentId: runtimeId,
+          agent: "codex",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+          requestId: "request-paused",
+          prompt: "Do not send",
+        }),
+      ).rejects.toThrow("not ready");
+      expect(admit).toHaveBeenCalledTimes(2);
+
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        lifecycleState: "ready",
+        repositoryStatus: {
+          ...workspace!.repositoryStatus!,
+          operationState: "switching",
+        },
+      }));
+      await expect(
+        service.ensureSession({
+          environmentId: runtimeId,
+          agent: "codex",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        }),
+      ).rejects.toThrow("checkout is changing");
+
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        repositoryStatus: {
+          ...workspace!.repositoryStatus!,
+          operationState: "idle",
+        },
+        conversations: workspace!.conversations.map((conversation) => ({
+          ...conversation,
+          agent: "claude",
+        })),
+      }));
+      await expect(
+        service.ensureSession({
+          environmentId: runtimeId,
+          agent: "claude",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        }),
+      ).rejects.toThrow("Only Codex");
     } finally {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });

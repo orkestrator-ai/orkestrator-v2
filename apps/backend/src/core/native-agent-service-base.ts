@@ -1,5 +1,10 @@
 import * as shared from "./native-agent-service-shared.js";
 import {
+  COORDINATOR_EXECUTION_POLICY,
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
   BUILD_PIPELINE_AGENTS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   NativeAgentProviderSessionMissingError,
@@ -347,6 +352,77 @@ export abstract class NativeAgentServiceBase {
     return this.options.now?.() ?? Date.now();
   }
 
+  /** Resolve coordinator authority from persisted ownership, never caller metadata. */
+  protected async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(
+    input: T,
+  ): Promise<T> {
+    const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
+    if (!coordinatorId) {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      return {
+        ...input,
+        ...(environment
+          ? {
+              owner: {
+                kind: "environment" as const,
+                projectId: environment.projectId,
+                environmentId: environment.id,
+              },
+            }
+          : {}),
+        executionPolicy: undefined,
+      };
+    }
+    const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
+    if (!workspace) throw new Error("Coordinator workspace is unavailable");
+    const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
+    const conversation = workspace.conversations.find(
+      (item) => item.id === conversationId && !item.closedAt,
+    );
+    if (!conversation || conversation.agent !== input.agent) {
+      throw new Error("Coordinator conversation is unavailable");
+    }
+    if (workspace.lifecycleState !== "ready") {
+      throw new Error("Coordinator workspace is not ready");
+    }
+    if (
+      workspace.repositoryStatus?.operationState !== undefined &&
+      workspace.repositoryStatus.operationState !== "idle"
+    ) {
+      throw new Error("The project checkout is changing; wait for the Git operation to finish");
+    }
+    if (input.agent !== "codex") {
+      throw new Error("Only Codex is qualified for read-only coordination");
+    }
+    const trusted = {
+      ...input,
+      origin: "coordinator",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+    };
+    if (
+      "prompt" in input &&
+      typeof input.prompt === "string" &&
+      !input.prompt.startsWith("<orkestrator-coordinator-context>")
+    ) {
+      const status = workspace.repositoryStatus;
+      return {
+        ...trusted,
+        prompt:
+          `<orkestrator-coordinator-context>\n` +
+          `Project: ${workspace.projectId}\n` +
+          `Coordinator: ${coordinatorId}\n` +
+          `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          `Repository context revision: ${workspace.repositoryContextRevision}\n` +
+          `Branch: ${status?.branch ?? "unknown"}\n` +
+          `Commit: ${status?.headCommit ?? "unknown"}\n` +
+          `</orkestrator-coordinator-context>\n\n${input.prompt}`,
+      } as T;
+    }
+    return trusted;
+  }
+
   init(): Promise<void> {
     if (this.stopped) return Promise.reject(new Error("Native agent service is shut down"));
     if (this.initialization) return this.initialization;
@@ -418,6 +494,7 @@ export abstract class NativeAgentServiceBase {
   }
 
   async ensureSession(input: EnsureNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+    input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (
       !nonBlank(input.environmentId) ||
@@ -454,6 +531,21 @@ export abstract class NativeAgentServiceBase {
       const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
+        if ((!existing.owner || !existing.executionPolicy) && input.owner) {
+          const enriched = await this.storage.adoptNativeAgentSession({
+            key,
+            environmentId: input.environmentId,
+            agent: input.agent,
+            logicalSessionKey: input.logicalSessionKey,
+            providerSessionId: existing.providerSessionId,
+            origin: existing.origin,
+            interactionPolicy: existing.interactionPolicy,
+            owner: input.owner,
+            executionPolicy: input.executionPolicy,
+          });
+          void this.reconcileAgentInteractions().catch(() => undefined);
+          return enriched;
+        }
         void this.reconcileAgentInteractions().catch(() => undefined);
         return existing;
       }
@@ -483,6 +575,8 @@ export abstract class NativeAgentServiceBase {
         origin: input.origin,
         interactionPolicy: input.interactionPolicy,
         controls: controlsFromSessionInput(input),
+        owner: input.owner,
+        executionPolicy: input.executionPolicy,
       },
       () => this.createProviderSession(provider, input),
     );
@@ -491,6 +585,7 @@ export abstract class NativeAgentServiceBase {
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+    input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (
       !nonBlank(input.environmentId) ||
@@ -534,6 +629,8 @@ export abstract class NativeAgentServiceBase {
       origin: input.origin,
       interactionPolicy: input.interactionPolicy,
       controls: input.controls ?? controlsFromSessionInput(input),
+      owner: input.owner,
+      executionPolicy: input.executionPolicy,
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
     void this.reconcileAgentInteractions().catch(() => undefined);

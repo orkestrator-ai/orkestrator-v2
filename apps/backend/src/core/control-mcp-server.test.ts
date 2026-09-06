@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,6 +45,18 @@ async function rpc(
         ?.slice("data: ".length)
     : text;
   return { response, body: payload ? (JSON.parse(payload) as RpcBody) : {} };
+}
+
+async function rpcPayload(url: string, token: string, body: unknown): Promise<Response> {
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
 }
 
 describe("Orkestrator control MCP server", () => {
@@ -173,6 +185,266 @@ describe("Orkestrator control MCP server", () => {
     expect(oldCredential.response.status).toBe(401);
     const newCredential = await rpc(rotated.url, rotated.token, "tools/list");
     expect(newCredential.response.status).toBe(200);
+  });
+
+  test("binds coordinator credentials to one project and revokes them", async () => {
+    overrides.set("get_projects", () => [
+      { id: "project-1", name: "Allowed", localPath: "/allowed" },
+      { id: "project-2", name: "Hidden", localPath: "/hidden" },
+    ]);
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            mailboxIncarnationId: "incarnation-1",
+          },
+        ],
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: [
+        "discovery",
+        "tickets",
+        "environments",
+        "jobs",
+        "build-pipelines",
+        "multi-review",
+        "mail",
+      ],
+    });
+    const listed = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_projects",
+      arguments: {},
+    });
+    expect(listed.body.result?.structuredContent).toMatchObject({
+      total: 1,
+      projects: [{ id: "project-1" }],
+    });
+
+    overrides.set("get_environment_snapshots", ({ projectId }) => [
+      {
+        id: `env-${projectId}`,
+        projectId,
+        name: "Scoped environment",
+        status: "running",
+      },
+    ]);
+    const environments = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_environments",
+      arguments: {},
+    });
+    expect(environments.body.result?.structuredContent).toMatchObject({
+      total: 1,
+      environments: [{ id: "env-project-1", projectId: "project-1" }],
+    });
+
+    const denied = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_tickets",
+      arguments: { projectId: "project-2" },
+    });
+    expect(denied.body.result?.isError).toBe(true);
+
+    const replacement = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery"],
+    });
+    expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+    const batch = await rpcPayload(replacement.url, replacement.token, [
+      {
+        jsonrpc: "2.0",
+        id: "allowed",
+        method: "tools/call",
+        params: { name: "list_projects", arguments: {} },
+      },
+      {
+        jsonrpc: "2.0",
+        id: "denied",
+        method: "tools/call",
+        params: { name: "send_message", arguments: {} },
+      },
+    ]);
+    expect(batch.status).toBe(403);
+
+    server.revokeCoordinatorCredentials("coordinator-1", "conversation-1");
+    expect((await rpc(replacement.url, replacement.token, "tools/list")).response.status).toBe(401);
+  });
+
+  test("normalizes persisted workflow envelopes for coordinator list, read, and control tools", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            mailboxIncarnationId: "incarnation-1",
+          },
+        ],
+      },
+      workflows: [
+        {
+          id: "association-build",
+          kind: "build-pipeline",
+          resourceId: "pipeline-1",
+          requestId: "request-build",
+          createdAt: new Date(0).toISOString(),
+        },
+        {
+          id: "association-review",
+          kind: "multi-review",
+          resourceId: "review-1",
+          requestId: "request-review",
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    }));
+    const buildEnvelope = {
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      snapshot: {
+        id: "pipeline-1",
+        projectId: "project-1",
+        environmentId: "env-1",
+        phase: "reviewing",
+        createdAt: new Date(1).toISOString(),
+      },
+      updatedAt: new Date(2).toISOString(),
+      revision: 7,
+    };
+    const reviewEnvelope = {
+      id: "review-1",
+      environmentId: "env-1",
+      snapshot: {
+        id: "review-1",
+        projectId: "project-1",
+        environmentId: "env-1",
+        phase: "review",
+        createdAt: new Date(3).toISOString(),
+      },
+      updatedAt: new Date(4).toISOString(),
+      revision: 9,
+    };
+    overrides.set("get_build_pipeline", () => buildEnvelope);
+    overrides.set("get_multi_review_workflow", () => reviewEnvelope);
+    overrides.set("pause_build_pipeline", () => buildEnvelope);
+    overrides.set("cancel_multi_review", () => reviewEnvelope);
+    overrides.set("address_multi_review", () => reviewEnvelope);
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "build-pipelines", "multi-review"],
+    });
+    const call = (name: string, arguments_: Record<string, unknown> = {}) =>
+      rpc(credential.url, credential.token, "tools/call", { name, arguments: arguments_ });
+
+    const listed = await call("list_workflows");
+    expect(listed.body.result?.structuredContent).toMatchObject({
+      workflows: [
+        { resource: { id: "pipeline-1", phase: "reviewing", revision: 7 } },
+        { resource: { id: "review-1", phase: "review", revision: 9 } },
+      ],
+    });
+    expect(
+      (await call("get_build_pipeline", { pipelineId: "pipeline-1" })).body.result,
+    ).toMatchObject({ structuredContent: { workflow: { phase: "reviewing", revision: 7 } } });
+    expect((await call("get_multi_review", { workflowId: "review-1" })).body.result).toMatchObject({
+      structuredContent: { workflow: { phase: "review", revision: 9 } },
+    });
+    expect(
+      (await call("pause_build_pipeline", { pipelineId: "pipeline-1" })).body.result?.isError,
+    ).not.toBe(true);
+    expect(
+      (await call("cancel_multi_review", { workflowId: "review-1" })).body.result?.isError,
+    ).not.toBe(true);
+    expect(
+      (await call("address_multi_review", { workflowId: "review-1" })).body.result?.isError,
+    ).not.toBe(true);
+  });
+
+  test("rejects cross-project environments and invalidates paused, superseded, and expired credentials", async () => {
+    let lifecycleState = "ready";
+    let incarnation = "incarnation-1";
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState,
+        conversations: [
+          {
+            id: "conversation-1",
+            mailboxIncarnationId: incarnation,
+          },
+        ],
+      },
+    }));
+    overrides.set("get_environment", () => ({ id: "env-2", projectId: "project-2" }));
+    const issue = () =>
+      server.issueCoordinatorCredential({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        mailboxIncarnationId: "incarnation-1",
+        capabilities: ["environments", "discovery"],
+      });
+
+    let credential = issue();
+    const crossProject = await rpc(credential.url, credential.token, "tools/call", {
+      name: "start_environment",
+      arguments: { environmentId: "env-2" },
+    });
+    expect(crossProject.body.result?.isError).toBe(true);
+    const crossProjectTranscript = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_tab_transcript",
+      arguments: { environmentId: "env-2", tabId: "tab-1" },
+    });
+    expect(crossProjectTranscript.body.result?.isError).toBe(true);
+    const deniedMutation = await rpc(credential.url, credential.token, "tools/call", {
+      name: "update_config",
+      arguments: { config: {} },
+    });
+    expect(deniedMutation.response.status).toBe(403);
+    const missingDelegationBase = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "missing-base",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Delegate this work",
+      },
+    });
+    expect(missingDelegationBase.body.result?.isError).toBe(true);
+
+    lifecycleState = "paused";
+    expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(409);
+    lifecycleState = "ready";
+    incarnation = "incarnation-2";
+    expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+
+    incarnation = "incarnation-1";
+    credential = issue();
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(now + 12 * 60 * 60 * 1_000 + 1);
+    try {
+      expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("exposes the bounded core tools without leaking project paths", async () => {

@@ -700,6 +700,10 @@ test("does not publish the persistent control MCP until backend recovery complet
     rotateToken: mock(async () => {
       throw new Error("not used");
     }),
+    issueCoordinatorCredential: mock(() => {
+      throw new Error("not used");
+    }),
+    revokeCoordinatorCredentials: mock(() => undefined),
     start: mock(async () => undefined),
     stop: mock(async () => undefined),
   };

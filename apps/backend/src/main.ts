@@ -122,22 +122,6 @@ if (managedWebClient) {
   }
 }
 
-// Machine-readable startup contract used by the Electron supervisor and service managers.
-// Authentication material stays in the mode-0600 auth file and must never enter logs.
-process.stdout.write(
-  `${JSON.stringify({
-    type: "orkestrator-backend-ready",
-    bindAddress: info.bindAddress,
-    port: info.port,
-    url: info.url,
-    authFile: info.authFile,
-    browserUrl: info.browserUrl,
-    browserError: info.browserError,
-    controlMcpUrl: backend.getControlMcpInfo()?.url,
-    controlMcpFile: backend.getControlMcpInfo()?.descriptorFile,
-  })}\n`,
-);
-
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
   stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
@@ -161,3 +145,22 @@ startReparentWatchdog({
     void stop("SIGTERM");
   },
 });
+
+// Install every shutdown path before publishing readiness. Supervisors are
+// allowed to stop the process as soon as this frame is visible; emitting it
+// earlier leaves a small race where SIGTERM takes Bun's default exit path.
+// Authentication material stays in the mode-0600 auth file and must never
+// enter logs.
+process.stdout.write(
+  `${JSON.stringify({
+    type: "orkestrator-backend-ready",
+    bindAddress: info.bindAddress,
+    port: info.port,
+    url: info.url,
+    authFile: info.authFile,
+    browserUrl: info.browserUrl,
+    browserError: info.browserError,
+    controlMcpUrl: backend.getControlMcpInfo()?.url,
+    controlMcpFile: backend.getControlMcpInfo()?.descriptorFile,
+  })}\n`,
+);

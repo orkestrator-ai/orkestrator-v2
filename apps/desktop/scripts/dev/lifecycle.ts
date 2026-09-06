@@ -521,6 +521,10 @@ export async function startDevelopment(
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
+        // Development profiles routinely coexist with the installed app and
+        // with one another. Let the OS reserve an isolated control-MCP port;
+        // the backend publishes that URL in its descriptor and readiness frame.
+        ORKESTRATOR_CONTROL_MCP_PORT: electronEnv.ORKESTRATOR_CONTROL_MCP_PORT ?? "0",
       },
     });
     if (!electron.pid) throw new Error("Electron failed to start");

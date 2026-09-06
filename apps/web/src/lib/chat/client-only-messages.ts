@@ -220,7 +220,11 @@ export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): Na
       ? "You"
       : message.from.kind === "external"
         ? "External client"
-        : message.from.title || `${message.from.environmentId} / ${message.from.tabId}`;
+        : message.from.kind === "system"
+          ? "Orkestrator workflow"
+          : message.from.kind === "coordinator"
+            ? message.from.title || "Project coordinator"
+            : message.from.title || `${message.from.environmentId} / ${message.from.tabId}`;
   const heading = message.subject
     ? `Message from ${sender}: ${message.subject}`
     : `Message from ${sender}`;
@@ -272,9 +276,16 @@ export function createPeerMailNativeMessageFromCarrier(
       return null;
     }
     const from = value.from as Record<string, unknown>;
-    if (from.kind !== "user" && from.kind !== "external" && from.kind !== "tab") return null;
     if (
-      from.kind === "tab" &&
+      from.kind !== "user" &&
+      from.kind !== "external" &&
+      from.kind !== "tab" &&
+      from.kind !== "coordinator" &&
+      from.kind !== "system"
+    )
+      return null;
+    if (
+      (from.kind === "tab" || from.kind === "coordinator") &&
       (typeof from.projectId !== "string" ||
         typeof from.environmentId !== "string" ||
         typeof from.tabId !== "string" ||
@@ -282,6 +293,18 @@ export function createPeerMailNativeMessageFromCarrier(
     ) {
       return null;
     }
+    if (
+      from.kind === "coordinator" &&
+      (typeof from.coordinatorId !== "string" || typeof from.conversationId !== "string")
+    )
+      return null;
+    if (
+      from.kind === "system" &&
+      (typeof from.projectId !== "string" ||
+        from.source !== "workflow" ||
+        typeof from.resourceId !== "string")
+    )
+      return null;
     return createPeerMailNativeMessage({
       id: value.messageId,
       from: from as MailActor,

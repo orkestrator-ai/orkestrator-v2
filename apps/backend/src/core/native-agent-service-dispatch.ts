@@ -115,6 +115,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     input: DispatchNativeAgentPromptInput,
     preserveExistingPending: boolean,
   ): Promise<NativeAgentDispatchOutcome> {
+    input = await this.trustedSessionInput(input);
     let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
     try {
       const isManualOpenCode =
@@ -596,6 +597,12 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   ): Promise<NativeAgentSessionActionOutcome> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) throw new Error("Native agent session was not found");
+    if (
+      resolved.session.executionPolicy === "coordinator-read-only" &&
+      ["rewind-files", "undo", "redo"].includes(input.action.kind)
+    ) {
+      throw new Error("Read-only coordinator sessions cannot change project files");
+    }
     const capability = {
       compact: "compact",
       "rewind-files": "rewindFiles",

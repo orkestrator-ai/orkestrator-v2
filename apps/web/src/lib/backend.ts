@@ -7,3 +7,4 @@ export * from "./backend/files-sessions";
 export * from "./backend/workflows";
 export * from "./backend/kanban";
 export * from "./backend/agent-mail";
+export * from "./backend/coordinator";

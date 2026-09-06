@@ -30,6 +30,14 @@ import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentMailService } from "./agent-mail-service.js";
+import { CoordinatorService } from "./coordinator-service.js";
+import { ProjectGitService } from "./project-git-service.js";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import type { Environment } from "./models.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -44,6 +52,8 @@ export class OrkestratorBackend {
   private readonly loopedReviews: LoopedReviewService;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
+  private readonly coordinators: CoordinatorService;
+  private readonly projectGit: ProjectGitService;
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
@@ -63,7 +73,13 @@ export class OrkestratorBackend {
   >;
   private readonly controlMcp: Pick<
     ControlMcpServer,
-    "getInfo" | "getSettings" | "rotateToken" | "start" | "stop"
+    | "getInfo"
+    | "getSettings"
+    | "rotateToken"
+    | "issueCoordinatorCredential"
+    | "revokeCoordinatorCredentials"
+    | "start"
+    | "stop"
   >;
 
   constructor(options: {
@@ -84,7 +100,13 @@ export class OrkestratorBackend {
     agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop">;
     controlMcp?: Pick<
       ControlMcpServer,
-      "getInfo" | "getSettings" | "rotateToken" | "start" | "stop"
+      | "getInfo"
+      | "getSettings"
+      | "rotateToken"
+      | "issueCoordinatorCredential"
+      | "revokeCoordinatorCredentials"
+      | "start"
+      | "stop"
     >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     environmentLifecycleDrainTimeoutMs?: number;
@@ -134,6 +156,8 @@ export class OrkestratorBackend {
       await handler({ environmentId }, context);
     };
     this.context = context;
+    this.coordinators = new CoordinatorService(storage, () => this.controlMcp.getSettings());
+    context.coordinators = this.coordinators;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
         ? ("observe-only" as const)
@@ -168,9 +192,44 @@ export class OrkestratorBackend {
             this.probeForAgentCreatedPullRequest(event.environmentId, context);
           }
         },
+        beginCoordinatorTurn: (projectId) => {
+          const projectGit = context.projectGit;
+          if (!projectGit) throw new Error("Project Git service is unavailable");
+          return projectGit.beginCoordinatorTurn(projectId);
+        },
       },
     );
     context.nativeAgents = this.nativeAgents;
+    this.projectGit = new ProjectGitService(storage, async (projectId) => {
+      const workspace = await storage.getCoordinatorWorkspace(projectId);
+      if (!workspace) return false;
+      for (const conversation of workspace.conversations) {
+        if (conversation.closedAt) continue;
+        const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
+        const observed = this.nativeAgents.sessionActivitySnapshot(
+          runtimeId,
+          conversation.agent,
+          conversation.logicalSessionKey,
+        );
+        if (observed === "working" || observed === "waiting") return true;
+        const projection = await this.nativeAgents
+          .getProjection({
+            environmentId: runtimeId,
+            agent: conversation.agent,
+            logicalSessionKey: conversation.logicalSessionKey,
+            messageLimit: 1,
+          })
+          .catch(() => null);
+        if (
+          projection &&
+          ["running", "blocked", "cancelling", "recovering"].includes(projection.turn.phase)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+    context.projectGit = this.projectGit;
     this.buildPipelines = new BuildPipelineService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -296,7 +355,71 @@ export class OrkestratorBackend {
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
-    await this.reapPidServers({ storage: this.context.storage }).catch((error) => {
+    const reaperStorage = {
+      loadEnvironments: async (): Promise<Environment[]> => {
+        const [environments, workspaces] = await Promise.all([
+          this.context.storage.loadEnvironments(),
+          this.context.storage.listCoordinatorWorkspaces(),
+        ]);
+        const coordinatorRuntimes = workspaces.flatMap((workspace) =>
+          workspace.conversations.flatMap((conversation): Environment[] =>
+            conversation.codexBridgePid === undefined
+              ? []
+              : [
+                  {
+                    id: coordinatorRuntimeId(workspace.id, conversation.id),
+                    projectId: workspace.projectId,
+                    name: "Coordinator",
+                    branch: workspace.repositoryStatus?.branch ?? "",
+                    containerId: null,
+                    status: "stopped",
+                    prUrl: null,
+                    prState: null,
+                    hasMergeConflicts: null,
+                    createdAt: conversation.createdAt,
+                    networkAccessMode: "restricted",
+                    order: 0,
+                    environmentType: "local",
+                    codexBridgePid: conversation.codexBridgePid,
+                    localCodexPort: conversation.codexBridgePort,
+                    setupPhase: "ready",
+                    setupScriptsComplete: true,
+                  },
+                ],
+          ),
+        );
+        return [...environments, ...coordinatorRuntimes];
+      },
+      updateEnvironment: async (environmentId: string, fields: Partial<Environment>) => {
+        const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+        const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+        if (!coordinatorId || !conversationId) {
+          return this.context.storage.updateEnvironment(environmentId, fields);
+        }
+        const workspace = await this.context.storage.getCoordinatorWorkspaceById(coordinatorId);
+        if (!workspace) return null;
+        return this.context.storage.mutateCoordinatorWorkspace(workspace.projectId, (current) =>
+          current && current.id === coordinatorId
+            ? {
+                ...current,
+                conversations: current.conversations.map((conversation) =>
+                  conversation.id === conversationId
+                    ? {
+                        ...conversation,
+                        codexBridgePid:
+                          fields.codexBridgePid === null ? undefined : fields.codexBridgePid,
+                        codexBridgePort:
+                          fields.localCodexPort === null ? undefined : fields.localCodexPort,
+                      }
+                    : conversation,
+                ),
+                updatedAt: new Date().toISOString(),
+              }
+            : current,
+        );
+      },
+    };
+    await this.reapPidServers({ storage: reaperStorage }).catch((error) => {
       console.warn("[backend] Failed to reap orphaned local servers:", error);
     });
     // claude-tmux leaves no PID behind — its sessions belong to a tmux server
@@ -465,6 +588,22 @@ export class OrkestratorBackend {
         });
     };
     let mailRetentionTick = 0;
+    let coordinatorWorkflowTick = 0;
+    let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
+    const reconcileCoordinatorWorkflows = () => {
+      if (coordinatorWorkflowReconcileInFlight) return;
+      coordinatorWorkflowReconcileInFlight = this.coordinators
+        .reconcileWorkflowNotifications()
+        .catch((error) => {
+          console.warn(
+            "[backend] Failed to reconcile coordinator workflow notifications:",
+            error instanceof Error ? error.message : error,
+          );
+        })
+        .finally(() => {
+          coordinatorWorkflowReconcileInFlight = null;
+        });
+    };
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
@@ -480,6 +619,8 @@ export class OrkestratorBackend {
       void this.agentMail.drainInjects().catch((error) => {
         console.warn("[backend] Failed to drain agent mail:", error);
       });
+      coordinatorWorkflowTick += 1;
+      if (coordinatorWorkflowTick % 30 === 0) reconcileCoordinatorWorkflows();
       mailRetentionTick += 1;
       if (mailRetentionTick % 30 === 0) {
         void this.context.storage
@@ -518,6 +659,7 @@ export class OrkestratorBackend {
       // opening so the user can diagnose it.
       console.warn("[backend] Failed to start control MCP:", error);
     });
+    reconcileCoordinatorWorkflows();
   }
 
   /**

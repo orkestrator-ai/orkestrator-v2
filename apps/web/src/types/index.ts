@@ -112,6 +112,8 @@ export interface Environment {
   agentActivityUpdatedAt?: string;
   /** Git commit that this environment was originally created from. */
   createdFromCommit?: string;
+  delegationBaseBranch?: string;
+  delegationBaseCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */
   networkAccessMode: NetworkAccessMode;
   /** Custom allowed domains for this environment (overrides global if set) */
@@ -276,6 +278,8 @@ export interface PersistedNativeAgentSession {
   providerSessionId: string;
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
+  owner?: import("@orkestrator/protocol/coordinator").AgentSessionOwner;
+  executionPolicy?: "coordinator-read-only";
   controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
   dispatchedRequestIds?: string[];
   openCodeIncompleteTurnNotice?: {

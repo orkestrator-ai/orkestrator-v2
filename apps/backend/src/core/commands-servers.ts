@@ -57,6 +57,7 @@ import {
   configuredOpenCodeAgentTools,
   BRIDGE_TOKEN_PATTERN,
   localServerEnvironmentOperations,
+  localServerWorkingDirectories,
   containerBridgeOperations,
   deletingLocalServerEnvironments,
   mergingEnvironments,
@@ -103,6 +104,93 @@ import {
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import { realpath } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
+import { homedir } from "node:os";
+import { sanitizeCoordinatorError } from "./coordinator-service.js";
+
+export async function prepareCoordinatorCodexHome(
+  destination: string,
+  source = process.env.CODEX_HOME?.trim() || path.join(homedir(), ".codex"),
+): Promise<void> {
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  await chmod(destination, 0o700);
+  const sourceAuth = path.join(source, "auth.json");
+  const sourceStat = await lstat(sourceAuth).catch(() => null);
+  if (!sourceStat) return;
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+    throw new Error("Codex authentication file must be a regular file, not a symbolic link");
+  }
+  const destinationAuth = path.join(destination, "auth.json");
+  const temporary = `${destinationAuth}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await copyFile(sourceAuth, temporary);
+    await chmod(temporary, 0o600);
+    await rename(temporary, destinationAuth);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+async function coordinatorCodexRuntimeRoot(executable: string): Promise<string> {
+  const candidates =
+    path.isAbsolute(executable) || executable.includes(path.sep)
+      ? [path.resolve(executable)]
+      : (process.env.PATH ?? "")
+          .split(path.delimiter)
+          .filter(Boolean)
+          .map((directory) => path.join(directory, executable));
+  for (const candidate of candidates) {
+    const canonical = await realpath(candidate).catch(() => null);
+    if (canonical) return path.dirname(canonical);
+  }
+  throw retryableBridgeStartupError("Codex executable is unavailable");
+}
+
+async function localRuntimeEnvironment(
+  environmentId: string,
+  context: CommandContext,
+): Promise<Environment | null> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (environment) return environment;
+  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+  if (!coordinatorId) return null;
+  const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
+  if (!workspace) return null;
+  const project = await context.storage.getProject(workspace.projectId);
+  if (!project?.localPath) return null;
+  const projectPath = await realpath(project.localPath).catch(() => null);
+  if (!projectPath) return null;
+  const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+  const conversation = workspace.conversations.find(
+    (item) => item.id === conversationId && !item.closedAt,
+  );
+  if (!conversation || workspace.lifecycleState !== "ready") return null;
+  return {
+    id: environmentId,
+    projectId: workspace.projectId,
+    name: "Coordinator",
+    branch: workspace.repositoryStatus?.branch ?? "",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: workspace.createdAt,
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: projectPath,
+    localCodexPort: conversation?.codexBridgePort,
+    codexBridgePid: conversation?.codexBridgePid,
+    setupPhase: "ready",
+    setupScriptsComplete: true,
+  } as Environment;
+}
 
 export async function waitForLocalServerStartup(
   child: ChildProcessWithoutNullStreams,
@@ -247,7 +335,7 @@ export async function peekLocalAgentBridge(
   if (!child || child.killed || !child.pid) return null;
   const authToken = localBridgeTokens(kind).get(environmentId);
   if (!authToken) return null;
-  const environment = await context.storage.getEnvironment(environmentId);
+  const environment = await localRuntimeEnvironment(environmentId, context);
   const port = localServerPort(environment, kind);
   if (!port) return null;
   const healthy = await checkHttpHealth(
@@ -747,7 +835,7 @@ export async function startLocalServerUnlocked(
   const cursorCredentialFingerprint = cursorCredentials?.fingerprint;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
-    const env = await context.storage.getEnvironment(environmentId);
+    const env = await localRuntimeEnvironment(environmentId, context);
     const port = localServerPort(env, kind);
     const tokens = localBridgeTokens(kind);
     const authToken = tokens?.get(environmentId);
@@ -761,8 +849,11 @@ export async function startLocalServerUnlocked(
     const credentialMatches =
       kind !== "cursor" ||
       localCursorCredentialFingerprints.get(environmentId) === cursorCredentialFingerprint;
+    const workingDirectoryMatches =
+      Boolean(env?.worktreePath) && localServerWorkingDirectories.get(key) === env?.worktreePath;
     if (
       credentialMatches &&
+      workingDirectoryMatches &&
       port &&
       authToken &&
       (await checkHttpHealth(port, "/global/health", healthHeaders))
@@ -786,15 +877,29 @@ export async function startLocalServerUnlocked(
     await terminateLocalServerChild(key, existing);
   }
 
-  const environment = await context.storage.getEnvironment(environmentId);
+  const environment = await localRuntimeEnvironment(environmentId, context);
+  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+  const coordinatorConversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+  if (coordinatorId && kind !== "codex") {
+    throw new Error("Only Codex is qualified for read-only coordination");
+  }
   if (!environment?.worktreePath) {
     throw retryableBridgeStartupError("Local environment worktree is not available");
   }
-  const agentToolConnection = context.agentTools?.connection(
-    environment.id,
-    environment.projectId,
-    "host",
+  const coordinatorWorkspace = coordinatorId
+    ? await context.storage.getCoordinatorWorkspaceById(coordinatorId)
+    : null;
+  const selectedConversation = coordinatorWorkspace?.conversations.find(
+    (item) => item.id === coordinatorConversationId && !item.closedAt,
   );
+  let agentToolConnection: AgentToolConnection | undefined;
+  if (!coordinatorId) {
+    agentToolConnection = context.agentTools?.connection(
+      environment.id,
+      environment.projectId,
+      "host",
+    );
+  }
 
   const port = await allocateLocalPort();
   let command = "";
@@ -815,6 +920,13 @@ export async function startLocalServerUnlocked(
         }
       : {}),
   };
+  if (coordinatorId) {
+    // Coordinator authority is always freshly issued for this exact
+    // conversation. Never inherit a token from the backend's own environment
+    // when Control MCP is disabled or unavailable.
+    delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
+    delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+  }
 
   if (kind === "opencode") {
     command = resolveOpenCodeBinary(context);
@@ -829,12 +941,28 @@ export async function startLocalServerUnlocked(
     const config = await context.storage.loadConfig();
     // Point app-server supervision at our shipped Codex binary so it does not
     // depend on a system install / PATH lookup in the packaged app.
-    env.CODEX_PATH = resolveCodexBinary(context);
+    const codexPath = resolveCodexBinary(context);
+    env.CODEX_PATH = codexPath;
     env[CODEX_MAX_CONCURRENT_THREADS_ENV] = String(
       resolveCodexMaxConcurrentThreads(config.global.codexMaxConcurrentThreads),
     );
     // Forwarded to app-server as clientInfo.version.
     env.ORKESTRATOR_VERSION = APP_VERSION;
+    if (coordinatorId) {
+      env.CODEX_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+      env.CODEX_BRIDGE_PERMISSION_PROFILE = `coordinator-${coordinatorConversationId!}`;
+      env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT = await coordinatorCodexRuntimeRoot(codexPath);
+      const coordinatorCodexHome = path.join(
+        context.storage.getDataDir(),
+        "coordinator-runtime",
+        coordinatorId,
+        "conversations",
+        coordinatorConversationId!,
+        "codex-home",
+      );
+      await prepareCoordinatorCodexHome(coordinatorCodexHome);
+      env.CODEX_HOME = coordinatorCodexHome;
+    }
   } else if (kind === "pi") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "pi-bridge");
@@ -921,11 +1049,33 @@ export async function startLocalServerUnlocked(
   }
 
   // Shutdown may have started while this already-admitted operation awaited
-  // storage, port allocation, or packaged-path discovery. Recheck at the last
-  // synchronous boundary before credentials are allocated and the child is
-  // registered, so a bounded shutdown drain cannot snapshot an empty map and
-  // then have this operation spawn behind it.
+  // storage, port allocation, or packaged-path discovery. Recheck before any
+  // scoped credential or bridge token is allocated so a rejected start cannot
+  // leave valid, unused authority behind.
   assertLocalServerStartAllowed(environmentId);
+
+  if (coordinatorId && selectedConversation && context.controlMcp?.getSettings().running) {
+    context.controlMcp.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
+    agentToolConnection = context.controlMcp.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: environment.projectId,
+      coordinatorId,
+      conversationId: selectedConversation.id,
+      mailboxIncarnationId: selectedConversation.mailboxIncarnationId,
+      capabilities: [
+        "discovery",
+        "tickets",
+        "environments",
+        "jobs",
+        "build-pipelines",
+        "multi-review",
+        "mail",
+      ],
+    });
+    env[ORKESTRATOR_AGENT_MCP_URL_ENV] = agentToolConnection.url;
+    env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = agentToolConnection.token;
+  }
+
   const tokens = localBridgeTokens(kind);
   if (tokens) {
     const authToken = randomBytes(32).toString("base64url");
@@ -961,6 +1111,9 @@ export async function startLocalServerUnlocked(
     });
   } catch (error) {
     tokens?.delete(environmentId);
+    if (coordinatorId && selectedConversation) {
+      context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
+    }
     if (kind === "cursor") {
       localCursorCredentialFingerprints.delete(environmentId);
     }
@@ -970,12 +1123,31 @@ export async function startLocalServerUnlocked(
     localCursorCredentialFingerprints.set(environmentId, cursorCredentialFingerprint);
   }
   localServerProcesses.set(key, child);
+  localServerWorkingDirectories.set(key, environment.worktreePath);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
   child.once("exit", () => {
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
-    releaseLocalServerOwnership(key, child);
+    if (!releaseLocalServerOwnership(key, child)) return;
+    if (coordinatorId && selectedConversation) {
+      context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
+      void context.storage
+        .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
+          workspace && workspace.id === coordinatorId
+            ? {
+                ...workspace,
+                conversations: workspace.conversations.map((conversation) =>
+                  conversation.id === coordinatorConversationId
+                    ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                    : conversation,
+                ),
+                updatedAt: new Date().toISOString(),
+              }
+            : workspace,
+        )
+        .catch(() => undefined);
+    }
   });
 
   const { port: field, pid: pidField } = localServerFields(kind);
@@ -1002,10 +1174,28 @@ export async function startLocalServerUnlocked(
         environment.worktreePath,
       );
     }
-    await context.storage.updateEnvironment(environmentId, {
-      [field]: port,
-      [pidField]: child.pid,
-    });
+    if (coordinatorId) {
+      await context.storage.mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
+        workspace && workspace.id === coordinatorId
+          ? {
+              ...workspace,
+              conversations: workspace.conversations.map((conversation) =>
+                conversation.id === coordinatorConversationId
+                  ? { ...conversation, codexBridgePort: port, codexBridgePid: child.pid }
+                  : conversation,
+              ),
+              lifecycleState: "ready",
+              lastStartupError: undefined,
+              updatedAt: new Date().toISOString(),
+            }
+          : workspace,
+      );
+    } else {
+      await context.storage.updateEnvironment(environmentId, {
+        [field]: port,
+        [pidField]: child.pid,
+      });
+    }
   } catch (error) {
     let terminationError: unknown;
     try {
@@ -1013,9 +1203,32 @@ export async function startLocalServerUnlocked(
     } catch (caught) {
       terminationError = caught;
     }
-    await context.storage
-      .updateEnvironment(environmentId, { [field]: null, [pidField]: null })
-      .catch(() => undefined);
+    if (coordinatorId) {
+      if (selectedConversation) {
+        context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, selectedConversation.id);
+      }
+      await context.storage
+        .mutateCoordinatorWorkspace(environment.projectId, (workspace) =>
+          workspace && workspace.id === coordinatorId
+            ? {
+                ...workspace,
+                conversations: workspace.conversations.map((conversation) =>
+                  conversation.id === coordinatorConversationId
+                    ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                    : conversation,
+                ),
+                lifecycleState: "error",
+                lastStartupError: sanitizeCoordinatorError(error),
+                updatedAt: new Date().toISOString(),
+              }
+            : workspace,
+        )
+        .catch(() => undefined);
+    } else {
+      await context.storage
+        .updateEnvironment(environmentId, { [field]: null, [pidField]: null })
+        .catch(() => undefined);
+    }
     if (terminationError) {
       throw new AggregateError(
         [error, terminationError],
@@ -1341,7 +1554,7 @@ export async function readLocalServerStatus(
   agentTools?: OpenCodeAgentToolsState;
 }> {
   const key = `${kind}:${environmentId}`;
-  const env = await context.storage.getEnvironment(environmentId);
+  const env = await localRuntimeEnvironment(environmentId, context);
   // The owned child can exit while storage is being read. Re-read ownership
   // after the await so an exit handler that released the process cannot leave
   // this snapshot claiming that a dead child is still running.

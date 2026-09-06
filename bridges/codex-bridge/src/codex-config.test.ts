@@ -79,6 +79,54 @@ describe("Codex app-server configuration", () => {
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
   });
 
+  test("keeps coordinator credentials out of model-created shell environments", () => {
+    const overrides = codexAppServerConfigOverrides({
+      CODEX_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: "/opt/orkestrator/codex",
+      CWD: "/projects/example",
+      [ORKESTRATOR_AGENT_MCP_URL_ENV]: "http://127.0.0.1:4567/mcp",
+      [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
+    });
+
+    expect(overrides).toMatchObject({
+      default_permissions: '"coordinator-conversation-1"',
+      "permissions.coordinator-conversation-1.network.enabled": "false",
+      'projects."/projects/example".trust_level': '"untrusted"',
+      "features.apps": "false",
+      "features.hooks": "false",
+      "features.plugins": "false",
+      "features.workspace_dependencies": "false",
+      "shell_environment_policy.inherit": '"core"',
+      "shell_environment_policy.ignore_default_excludes": "false",
+    });
+    expect(JSON.parse(overrides["shell_environment_policy.exclude"]!)).toEqual(
+      expect.arrayContaining([
+        "*_TOKEN",
+        "CODEX_HOME",
+        "CODEX_BRIDGE_TOKEN",
+        "CODEX_BRIDGE_PERMISSION_PROFILE",
+        "CODEX_BRIDGE_READABLE_RUNTIME_ROOT",
+        ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+      ]),
+    );
+    expect(overrides["permissions.coordinator-conversation-1.filesystem"]).toContain(
+      '":root" = "deny"',
+    );
+    expect(overrides["permissions.coordinator-conversation-1.filesystem"]).toContain(
+      '"/opt/orkestrator/codex" = "read"',
+    );
+    expect(JSON.stringify(overrides)).not.toContain("project-secret");
+  });
+
+  test("rejects incomplete coordinator permission-profile authority", () => {
+    expect(() =>
+      codexAppServerConfigOverrides({
+        CODEX_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      }),
+    ).toThrow("permission profile configuration is invalid");
+  });
+
   test("accepts both loopback host spellings for local agent tools", () => {
     for (const hostname of ["127.0.0.1", "localhost"]) {
       const overrides = codexAppServerConfigOverrides({

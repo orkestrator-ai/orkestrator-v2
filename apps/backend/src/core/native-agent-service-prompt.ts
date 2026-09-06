@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { coordinatorConversationIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import {
   INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
@@ -222,108 +223,161 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     ) => Promise<PromptDispatchPreparation>,
     persistAmbiguousDispatch = false,
   ): Promise<PersistedNativeAgentSession> {
-    this.assertAcceptingWork();
-    const hasAttachments = (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
-    if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
-      throw new Error("Native agent prompt or attachment and request ID must not be blank");
-    }
-    const session = await this.ensureSession(input);
-    const provider = await this.provider(input);
-    provider.registerSession?.(session.providerSessionId, {
-      origin: session.origin,
-      interactionPolicy: session.interactionPolicy,
-      phase: input.phase,
-    });
-    /*
-     * Attach the provider before the at-most-once window opens.
-     *
-     * A cold agent process is the single most expensive thing the dispatch
-     * request can be waiting on, and it used to run entirely inside the window
-     * where a lost acknowledgement becomes an ambiguous dispatch the user has
-     * to resolve by hand. Out here it is just a slow request that either works
-     * or fails cleanly, and it is also outside the native-agent session
-     * mutation queue, so one cold start no longer serializes every other
-     * session's dispatch behind it.
-     *
-     * Best-effort by contract: the prompt request performs the same work, so a
-     * failure here is left for it to report authoritatively rather than
-     * pre-empting it with a second, less specific error.
-     */
-    await provider.prepareDispatch?.(session.providerSessionId).catch((error: unknown) => {
-      console.warn(
-        `[native-agent] Attaching ${input.agent} before dispatch failed:`,
-        error instanceof Error ? error.message : error,
-      );
-    });
-    await this.prepareEnvironmentFirstPrompt(input, session, provider);
-    /*
-     * Validate liveness before opening the durable dispatch window, but do not
-     * keep the global environments.json mutation lock across provider I/O.
-     * The native-agent session lock below is the at-most-once fence; holding an
-     * unrelated global lock here only stalls activity and deletion bookkeeping
-     * for every environment while a provider is slow.
-     *
-     * Deletion may begin after this check, and physical teardown — the
-     * container, the worktree — is no longer ordered behind this send at all.
-     * That is the accepted trade: a send racing a teardown fails, and the user
-     * asked for the environment to go away. What *is* still ordered is the part
-     * that matters for at-most-once: an accepted request is confirmed
-     * atomically under the native-agent lock, and deletion's session cleanup
-     * queues behind that same lock, so it cannot remove the record mid-dispatch
-     * and leave a confirmed turn unattributed.
-     */
-    await this.assertEnvironmentLive(input.environmentId);
-    this.providerDispatchCounts.set(provider, (this.providerDispatchCounts.get(provider) ?? 0) + 1);
+    input = await this.trustedSessionInput(input);
+    const coordinatorContextRevision =
+      input.owner?.kind === "coordinator"
+        ? Number(input.prompt.match(/Repository context revision: (\d+)/)?.[1] ?? Number.NaN)
+        : Number.NaN;
+    const releaseCoordinatorTurn =
+      input.owner?.kind === "coordinator"
+        ? this.options.beginCoordinatorTurn?.(input.owner.projectId)
+        : undefined;
     try {
-      const result = await this.storage.dispatchNativeAgentPromptOnce(
-        session.key,
-        input.requestId,
-        async (durable) => {
-          const preparation = prepare
-            ? await prepare(durable, provider)
-            : { dispatch: true as const };
-          if (!preparation.dispatch) {
-            return {
-              dispatched: false as const,
-              ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
-            };
-          }
-          await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
-            requestId: input.requestId,
-            // Only a person typing into the composer can mean "run this
-            // command"; workflow-authored prompts are literal text.
-            allowProviderCommands:
-              input.allowProviderCommands ?? durable.origin === "interactive-native",
-            images: input.images,
-            attachments: input.attachments,
-            schema: input.schema,
-            mode: input.mode,
-            fastMode: input.fastMode,
-            subAgent: input.subAgent,
-            executionAgent: preparation.executionAgent ?? input.executionAgent,
-            includeLocalSettings: input.includeLocalSettings,
-            promptSuggestions: input.promptSuggestions,
-            model: preparation.model ?? input.model,
-            effort: preparation.effort ?? input.reasoningEffort,
-          });
-          // Provider acceptance is the authoritative working edge. Record it
-          // before the durable dispatch bookkeeping completes so a newer
-          // idle activity snapshot cannot be overwritten by a late return
-          // from storage.
-          this.observedSessionActivity.set(durable.key, {
-            providerSessionId: durable.providerSessionId,
-            state: "working",
-          });
-        },
-        persistAmbiguousDispatch && session.origin === "interactive-native"
-          ? this.persistedPendingDispatch(input)
-          : undefined,
+      this.assertAcceptingWork();
+      const hasAttachments =
+        (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
+      if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
+        throw new Error("Native agent prompt or attachment and request ID must not be blank");
+      }
+      const session = await this.ensureSession(input);
+      const provider = await this.provider(input);
+      provider.registerSession?.(session.providerSessionId, {
+        origin: session.origin,
+        interactionPolicy: session.interactionPolicy,
+        phase: input.phase,
+      });
+      /*
+       * Attach the provider before the at-most-once window opens.
+       *
+       * A cold agent process is the single most expensive thing the dispatch
+       * request can be waiting on, and it used to run entirely inside the window
+       * where a lost acknowledgement becomes an ambiguous dispatch the user has
+       * to resolve by hand. Out here it is just a slow request that either works
+       * or fails cleanly, and it is also outside the native-agent session
+       * mutation queue, so one cold start no longer serializes every other
+       * session's dispatch behind it.
+       *
+       * Best-effort by contract: the prompt request performs the same work, so a
+       * failure here is left for it to report authoritatively rather than
+       * pre-empting it with a second, less specific error.
+       */
+      await provider.prepareDispatch?.(session.providerSessionId).catch((error: unknown) => {
+        console.warn(
+          `[native-agent] Attaching ${input.agent} before dispatch failed:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+      await this.prepareEnvironmentFirstPrompt(input, session, provider);
+      /*
+       * Validate liveness before opening the durable dispatch window, but do not
+       * keep the global environments.json mutation lock across provider I/O.
+       * The native-agent session lock below is the at-most-once fence; holding an
+       * unrelated global lock here only stalls activity and deletion bookkeeping
+       * for every environment while a provider is slow.
+       *
+       * Deletion may begin after this check, and physical teardown — the
+       * container, the worktree — is no longer ordered behind this send at all.
+       * That is the accepted trade: a send racing a teardown fails, and the user
+       * asked for the environment to go away. What *is* still ordered is the part
+       * that matters for at-most-once: an accepted request is confirmed
+       * atomically under the native-agent lock, and deletion's session cleanup
+       * queues behind that same lock, so it cannot remove the record mid-dispatch
+       * and leave a confirmed turn unattributed.
+       */
+      await this.assertEnvironmentLive(input.environmentId);
+      this.providerDispatchCounts.set(
+        provider,
+        (this.providerDispatchCounts.get(provider) ?? 0) + 1,
       );
-      return result.session;
+      try {
+        const result = await this.storage.dispatchNativeAgentPromptOnce(
+          session.key,
+          input.requestId,
+          async (durable) => {
+            const preparation = prepare
+              ? await prepare(durable, provider)
+              : { dispatch: true as const };
+            if (!preparation.dispatch) {
+              return {
+                dispatched: false as const,
+                ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
+              };
+            }
+            await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
+              requestId: input.requestId,
+              // Only a person typing into the composer can mean "run this
+              // command"; workflow-authored prompts are literal text.
+              allowProviderCommands:
+                input.allowProviderCommands ?? durable.origin === "interactive-native",
+              images: input.images,
+              attachments: input.attachments,
+              schema: input.schema,
+              mode: input.mode,
+              fastMode: input.fastMode,
+              subAgent: input.subAgent,
+              executionAgent: preparation.executionAgent ?? input.executionAgent,
+              includeLocalSettings: input.includeLocalSettings,
+              promptSuggestions: input.promptSuggestions,
+              model: preparation.model ?? input.model,
+              effort: preparation.effort ?? input.reasoningEffort,
+            });
+            // Provider acceptance is the authoritative working edge. Record it
+            // before the durable dispatch bookkeeping completes so a newer
+            // idle activity snapshot cannot be overwritten by a late return
+            // from storage.
+            this.observedSessionActivity.set(durable.key, {
+              providerSessionId: durable.providerSessionId,
+              state: "working",
+            });
+          },
+          persistAmbiguousDispatch && session.origin === "interactive-native"
+            ? this.persistedPendingDispatch(input)
+            : undefined,
+        );
+        if (
+          result.dispatched &&
+          input.owner?.kind === "coordinator" &&
+          Number.isSafeInteger(coordinatorContextRevision)
+        ) {
+          const coordinatorId = input.owner.coordinatorId;
+          const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
+          if (conversationId) {
+            await this.storage
+              .mutateCoordinatorWorkspace(input.owner.projectId, (workspace) =>
+                workspace && workspace.id === coordinatorId
+                  ? {
+                      ...workspace,
+                      conversations: workspace.conversations.map((conversation) =>
+                        conversation.id === conversationId
+                          ? {
+                              ...conversation,
+                              repositoryContextRevisionAcknowledged: Math.max(
+                                conversation.repositoryContextRevisionAcknowledged ?? 0,
+                                coordinatorContextRevision,
+                              ),
+                            }
+                          : conversation,
+                      ),
+                      updatedAt: new Date(this.now()).toISOString(),
+                    }
+                  : workspace,
+              )
+              .catch((error) =>
+                console.warn(
+                  "[native-agent] Failed to acknowledge coordinator repository context:",
+                  error instanceof Error ? error.message : error,
+                ),
+              );
+          }
+        }
+        return result.session;
+      } finally {
+        const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
+        if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
+        else this.providerDispatchCounts.delete(provider);
+      }
     } finally {
-      const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
-      if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
-      else this.providerDispatchCounts.delete(provider);
+      releaseCoordinatorTurn?.();
     }
   }
 

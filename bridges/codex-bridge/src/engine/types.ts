@@ -252,6 +252,12 @@ export interface EngineTurnConfig {
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   approvalPolicy?: "never" | "on-request" | "untrusted";
   networkAccessEnabled?: boolean;
+  /**
+   * Trusted process-level permission profile. When set, legacy sandbox
+   * overrides must be omitted or Codex will discard the profile's restricted
+   * read rules.
+   */
+  permissionProfile?: string;
 }
 
 export interface StartThreadOptions {

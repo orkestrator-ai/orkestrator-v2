@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
@@ -46,6 +46,7 @@ import {
   Globe2,
   ListChecks,
   Loader2,
+  MessagesSquare,
   Play,
   Plus,
   Repeat2,
@@ -1255,123 +1256,72 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 isGrid ? "col-span-2 grid grid-cols-2 gap-2" : "flex shrink-0 items-center gap-2",
               )}
             >
-              {isGrid ? (
+              {isGrid || isProjectBoardView ? (
                 <>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setProjectBoardNotesOpen(true)}
-                    aria-label="Project notes"
-                    disabled={!isProjectBoardView || projectBoardTab !== "kanban"}
-                  >
-                    <StickyNote className="h-4 w-4" />
-                    <span className="truncate text-xs">Project notes</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      projectBoardTab === "kanban" &&
-                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-                    )}
-                    onClick={() => setProjectBoardTab("kanban")}
-                    aria-label="Kanban board"
-                    aria-pressed={projectBoardTab === "kanban"}
-                    disabled={!isProjectBoardView}
-                  >
-                    <Columns3 className="h-4 w-4" />
-                    <span className="truncate text-xs">Kanban board</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      projectBoardTab === "github" &&
-                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-                    )}
-                    onClick={() => setProjectBoardTab("github")}
-                    aria-label="GitHub issues"
-                    aria-pressed={projectBoardTab === "github"}
-                    disabled={!isProjectBoardView}
-                  >
-                    <Github className="h-4 w-4" />
-                    <span className="truncate text-xs">GitHub issues</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      projectBoardTab === "linear" &&
-                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-                    )}
-                    onClick={() => setProjectBoardTab("linear")}
-                    aria-label="Linear pipeline"
-                    aria-pressed={projectBoardTab === "linear"}
-                    disabled={!isProjectBoardView}
-                  >
-                    <Workflow className="h-4 w-4" />
-                    <span className="truncate text-xs">Linear pipeline</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      projectBoardTab === "features" &&
-                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
-                    )}
-                    onClick={() => setProjectBoardTab("features")}
-                    aria-label="Features"
-                    aria-pressed={projectBoardTab === "features"}
-                    disabled={!isProjectBoardView}
-                  >
-                    <ListChecks className="h-4 w-4" />
-                    <span className="truncate text-xs">Features</span>
-                  </Button>
-                </>
-              ) : isProjectBoardView ? (
-                <>
-                  {projectBoardTab === "kanban" && (
+                  {(isGrid || projectBoardTab === "kanban") && (
                     <Button
-                      variant="outline"
-                      size="sm"
+                      variant={isGrid ? "ghost" : "outline"}
+                      size={isGrid ? "icon" : "sm"}
                       className="gap-1.5"
                       onClick={() => setProjectBoardNotesOpen(true)}
+                      aria-label="Project notes"
+                      disabled={!isProjectBoardView || projectBoardTab !== "kanban"}
                     >
                       <StickyNote className="h-3.5 w-3.5" />
-                      Project Notes
+                      {!isGrid && "Project Notes"}
                     </Button>
                   )}
-                  <Tabs
+                  <SegmentedSelector
                     value={projectBoardTab}
-                    onValueChange={(value) => setProjectBoardTab(value as ProjectBoardTab)}
-                  >
-                    <TabsList className="h-8 bg-zinc-900/80">
-                      <TabsTrigger
-                        value="kanban"
-                        className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50"
-                      >
-                        Kanban
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="github"
-                        className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50"
-                      >
-                        GitHub
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="linear"
-                        className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50"
-                      >
-                        Linear
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="features"
-                        className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50"
-                      >
-                        Features
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
+                    onValueChange={setProjectBoardTab}
+                    disabled={!isProjectBoardView}
+                    semantics="tabs"
+                    ariaLabel="Project navigation"
+                    className={cn(
+                      "max-w-[min(100%,36rem)] overflow-x-auto bg-zinc-900/80",
+                      isGrid && "col-span-2 w-full justify-start",
+                    )}
+                    buttonClassName="shrink-0 px-2 text-xs"
+                    options={
+                      [
+                        {
+                          value: "coordinator",
+                          label: "Coordinator",
+                          icon: <MessagesSquare className="size-3.5" />,
+                          panelId: "project-panel-coordinator",
+                        },
+                        {
+                          value: "kanban",
+                          label: "Kanban",
+                          icon: <Columns3 className="size-3.5" />,
+                          panelId: "project-panel-kanban",
+                        },
+                        {
+                          value: "github",
+                          label: "GitHub",
+                          icon: <Github className="size-3.5" />,
+                          panelId: "project-panel-github",
+                        },
+                        {
+                          value: "linear",
+                          label: "Linear",
+                          icon: <Workflow className="size-3.5" />,
+                          panelId: "project-panel-linear",
+                        },
+                        {
+                          value: "features",
+                          label: "Features",
+                          icon: <ListChecks className="size-3.5" />,
+                          panelId: "project-panel-features",
+                        },
+                      ] satisfies Array<{
+                        value: ProjectBoardTab;
+                        label: string;
+                        icon: ReactNode;
+                        panelId: string;
+                      }>
+                    }
+                  />
                 </>
               ) : !isGrid && !selectedEnvironment ? (
                 <span className="whitespace-nowrap text-sm text-muted-foreground">

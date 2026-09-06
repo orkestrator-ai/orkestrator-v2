@@ -62,6 +62,7 @@ import type {
   PersistedNativeAgentPendingDispatch,
   PersistedNativeAgentPendingSteer,
 } from "./models.js";
+import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type { StorageService } from "./storage.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
@@ -125,6 +126,9 @@ export interface EnsureNativeAgentSessionInput {
   fastMode?: boolean;
   /** Primary execution profile to persist before the first interactive prompt. */
   executionProfileId?: string;
+  /** Trusted backend ownership. Renderer-supplied values are replaced. */
+  owner?: AgentSessionOwner;
+  executionPolicy?: "coordinator-read-only";
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
@@ -316,6 +320,8 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** Atomically admits a coordinator prompt against checkout mutations. */
+  beginCoordinatorTurn?: (projectId: string) => () => void;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

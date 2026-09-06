@@ -116,6 +116,7 @@ export type AgentInteractionKind = (typeof AGENT_INTERACTION_KINDS)[number];
 export const AGENT_INTERACTION_ORIGINS = [
   "interactive-native",
   "interactive-tmux",
+  "coordinator",
   "build-pipeline",
   "looped-review",
 ] as const;

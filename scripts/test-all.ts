@@ -338,7 +338,7 @@ export interface WorkerPlan {
  * measured amount of parallelism without allowing core count alone to multiply
  * the suite's peak heap indefinitely.
  */
-export const MAX_AGGREGATE_TEST_WORKERS = 12;
+export const MAX_AGGREGATE_TEST_WORKERS = 8;
 
 /**
  * The bridge suites are ~50 files. A single worker made that group the long pole
@@ -378,9 +378,10 @@ export function planWorkers(cores: number): WorkerPlan {
   // Two package tasks at a time keep the React-heavy workspace tests from
   // multiplying peak heap while leaving enough capacity for the root long pole.
   const workspaceConcurrency = budget >= 8 ? 2 : 1;
-  const workspace = budget >= 10 ? 2 : 1;
-  // Root absorbs the remaining capacity. Its six-worker run is ~41% faster
-  // than four workers on an 18-core host (81.7s versus 137.9s).
+  const workspace = 1;
+  // Root absorbs the remaining capacity. Capping the aggregate at eight leaves
+  // four root workers on large hosts: higher caps repeatedly starved
+  // subprocess fixtures and produced SIGTERM/SIGSEGV UI-worker crashes.
   const root = Math.max(1, budget - bridges - workspace * workspaceConcurrency);
   return { workspace, workspaceConcurrency, root, bridges };
 }

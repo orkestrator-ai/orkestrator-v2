@@ -62,6 +62,13 @@ export function applyInteractionUpdate(
       // The reasoning block is finished; later reasoning is a new one.
       state.openTextParts.delete(openTextKey("thinking", context.parentTaskUseId));
       break;
+    case "token-delta":
+      // Cursor's exact usage arrives only when a model call ends. Its
+      // token-delta is the only running signal during a long first call, which
+      // is the common shape of a Multi Review. Nested deltas belong to the
+      // child model context and are reconciled by the parent run later.
+      if (!context.parentTaskUseId) applyTokenDelta(state, update.tokens);
+      break;
     case "partial-tool-call":
     case "tool-call-started":
       applyToolCall(state, update, "pending", context);
@@ -344,6 +351,9 @@ function applyTurnUsage(state: SessionState, usage: unknown): void {
     if (typeof value === "number" && Number.isFinite(value)) turn[key] = value;
   }
   if (Object.keys(turn).length === 0) return;
+  // The provider-reported turn total supersedes the heuristic deltas collected
+  // for this call. A later token-delta therefore starts the next call at zero.
+  state.currentTurnOutputTokenEstimate = undefined;
   state.currentTurnUsage = mergeLatestUsage(state.currentTurnUsage, turn);
   state.currentRunDeltaUsage = sumUsage(state.currentRunDeltaUsage, turn);
   publishRunUsage(state);
@@ -351,9 +361,24 @@ function applyTurnUsage(state: SessionState, usage: unknown): void {
 
 /** Publish usage from runtimes that report it only on the run message stream. */
 export function applyStreamUsage(state: SessionState, total: TurnUsage, latest: TurnUsage): void {
+  state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunStreamUsage = total;
   state.currentTurnUsage = latest;
   publishRunUsage(state);
+}
+
+function applyTokenDelta(state: SessionState, value: unknown): void {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return;
+  const tokens = Math.floor(value);
+  if (tokens === 0) return;
+  state.currentTurnOutputTokenEstimate = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    (state.currentTurnOutputTokenEstimate ?? 0) + tokens,
+  );
+  state.currentRunUsageUpdatedAt = new Date().toISOString();
+  // Like exact usage-only updates, a token estimate must advance the snapshot
+  // revision so pollers can observe it even when no transcript text changed.
+  state.revision += 1;
 }
 
 const usageKeys = [

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, jest, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,10 @@ import { CommandFailedError, runCommand as shellRunCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 type Run = typeof shellRunCommand;
+
+// These cases create real Git repositories and can cross Bun's generic
+// five-second deadline when the aggregate suite is spawning other processes.
+jest.setTimeout(30_000);
 
 async function withProjectCreation<T>(
   runCommand: Run,

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  BRIDGE_STARTUP_TIMEOUT_MS,
   here,
   nativeFetch,
   NativeAbortController,
@@ -159,14 +160,18 @@ describe("ACP bridge", () => {
     const lifecycle = await fs.readFile(lifecycleFile, "utf8");
     const agentPid = Number(/^start:(\d+)$/m.exec(lifecycle)?.[1]);
     expect(Number.isSafeInteger(agentPid)).toBe(true);
-    await waitFor(async () => {
-      try {
-        process.kill(agentPid, 0);
-        return false;
-      } catch {
-        return true;
-      }
-    }, Boolean);
+    await waitFor(
+      async () => {
+        try {
+          process.kill(agentPid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      },
+      Boolean,
+      BRIDGE_STARTUP_TIMEOUT_MS,
+    );
     expect(lifecycle.match(/^start:/gm)).toHaveLength(1);
     expect((await nativeFetch(`${bridge.base}/global/health`)).ok).toBe(true);
   });

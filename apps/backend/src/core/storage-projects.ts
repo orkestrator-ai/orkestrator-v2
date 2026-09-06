@@ -432,6 +432,14 @@ export abstract class StorageProjects extends StorageBase {
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
       if (
+        "branchRevision" in updates &&
+        typeof updates.branchRevision === "number" &&
+        Number.isSafeInteger(updates.branchRevision) &&
+        updates.branchRevision >= 0
+      ) {
+        environment.branchRevision = updates.branchRevision;
+      }
+      if (
         "status" in updates &&
         isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])
       ) {

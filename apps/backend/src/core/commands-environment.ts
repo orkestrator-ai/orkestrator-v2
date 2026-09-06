@@ -67,6 +67,8 @@ import {
   validateGitRefName,
   envWithManagedBinaries,
   configureSameNamedOriginPush,
+  allocateGitBranchName,
+  createGitBranchCollisionChecker,
 } from "./commands-agent-support.js";
 import {
   createLocalGhRunner,
@@ -1288,15 +1290,18 @@ export async function createLocalWorktree(
     projectPath,
     baseBranch?.trim() || "main",
   );
-  let finalBranch = baseSlug;
-  let worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
-
-  let suffix = 1;
-  while ((await pathExists(worktreePath)) || (await gitBranchExists(projectPath, finalBranch))) {
-    finalBranch = `${baseSlug}-${suffix}`;
-    worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
-    suffix += 1;
-  }
+  const gitBranchExists = await createGitBranchCollisionChecker({
+    baseBranch: baseSlug,
+    projectPath,
+  });
+  const finalBranch = await allocateGitBranchName(baseSlug, async (candidate) => {
+    const candidatePath = path.join(
+      baseDir,
+      `${sanitizeEnvironmentName(projectName)}-${candidate}`,
+    );
+    return (await pathExists(candidatePath)) || (await gitBranchExists(candidate));
+  });
+  const worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
 
   // A branch created directly from origin/<base> otherwise inherits that base as
   // its upstream (usually origin/main), which is what makes a plain `git push`
@@ -1337,29 +1342,6 @@ export async function createLocalWorktree(
     await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
     throw error;
   }
-}
-
-export async function gitBranchExists(projectPath: string, branch: string): Promise<boolean> {
-  const refName = validateGitRefName(branch, "environment branch");
-  const refs = [`refs/heads/${refName}`, `refs/remotes/origin/${refName}`];
-  for (const ref of refs) {
-    const exists = await runCommand(
-      "git",
-      ["-C", projectPath, "show-ref", "--verify", "--quiet", ref],
-      { timeoutMs: 10_000 },
-    ).then(
-      () => true,
-      () => false,
-    );
-    if (exists) return true;
-  }
-
-  const { stdout } = await runCommand(
-    "git",
-    ["-C", projectPath, "ls-remote", "--heads", "origin", `refs/heads/${refName}`],
-    { timeoutMs: 30_000 },
-  );
-  return stdout.trim().length > 0;
 }
 
 export async function removeLocalWorktree(worktreePath: string): Promise<void> {

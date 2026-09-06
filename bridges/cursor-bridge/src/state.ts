@@ -225,6 +225,14 @@ export interface SessionState {
   usage?: PersistedUsage;
   /** Cumulative usage reported by completed model calls in the run still in flight. */
   currentRunUsage?: TurnUsage;
+  /**
+   * Heuristic output-token progress for the model call still in flight.
+   *
+   * Cursor publishes `token-delta` before its first exact `turn-ended.usage`
+   * frame. Keeping the estimate separate prevents it from contaminating the
+   * exact provider categories that replace it at the turn boundary.
+   */
+  currentTurnOutputTokenEstimate?: number;
   /** Independent accumulator for usage delivered through turn-ended deltas. */
   currentRunDeltaUsage?: TurnUsage;
   /** Independent accumulator for usage delivered through the run message stream. */

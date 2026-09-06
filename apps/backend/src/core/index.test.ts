@@ -1497,7 +1497,7 @@ printf '%s\n' '{"slug":"Backend Managed Name"}' > "$out"
     const renamed = await internalStorage.getEnvironment("pending-backend-rename");
     expect(renamed).toMatchObject({
       name: "backend-managed-name",
-      branch: "backend-managed-name",
+      branch: "backend-managed-name-pendingbacke-r1",
     });
     expect(renamed).not.toHaveProperty("pendingRenamePrompt");
     expect(events).toContain("environment-renamed");

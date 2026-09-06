@@ -71,6 +71,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     controlRequestId: _controlRequestId,
+    branchRevision: _branchRevision,
     ...client
   } = environment;
   if (!client.pendingAgentLaunch && client.startupAgentSession?.status !== "starting") {

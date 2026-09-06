@@ -157,14 +157,11 @@ export function sanitizeGeneratedEnvironmentName(rawName: string): string {
 export function makeUniqueEnvironmentSlug(
   baseSlug: string,
   existingEnvironments: Environment[],
-  extraBranches: string[] = [],
 ): string {
   const used = new Set<string>();
   for (const environment of existingEnvironments) {
     used.add(environment.name);
-    used.add(environment.branch);
   }
-  for (const branch of extraBranches) used.add(branch);
 
   let candidate = baseSlug;
   let suffix = 1;
@@ -173,6 +170,152 @@ export function makeUniqueEnvironmentSlug(
     suffix += 1;
   }
   return candidate;
+}
+
+const ENVIRONMENT_BRANCH_NAMESPACE_LENGTH = 12;
+const GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS = 3_000;
+
+/**
+ * Give every environment its own branch namespace.
+ *
+ * GitHub keeps pull-request head names after their refs are deleted. Reusing the
+ * friendly display slug verbatim can therefore attach a brand-new environment to
+ * an old merged PR even when both local refs and `ls-remote` say the name is free.
+ * Environment ids are minted before a branch is allocated, so their compact prefix
+ * separates environments without leaking into the display name. Rename revisions
+ * prevent one environment from returning to a historical PR head after A -> B -> A.
+ */
+export function environmentBranchBase(
+  name: string,
+  environmentId: string,
+  branchRevision = 0,
+): string {
+  const namespace = environmentId
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, ENVIRONMENT_BRANCH_NAMESPACE_LENGTH);
+  if (!namespace)
+    throw new Error(`Environment id cannot form a branch namespace: ${environmentId}`);
+  if (!Number.isSafeInteger(branchRevision) || branchRevision < 0) {
+    throw new Error(
+      `Environment branch revision must be a non-negative integer: ${branchRevision}`,
+    );
+  }
+  const base = `${sanitizeBranchName(name)}-${namespace}`;
+  return branchRevision === 0 ? base : `${base}-r${branchRevision}`;
+}
+
+/** Allocate the first available branch from one shared suffixing policy. */
+export async function allocateGitBranchName(
+  baseBranch: string,
+  isUnavailable: (candidate: string) => Promise<boolean>,
+): Promise<string> {
+  const base = sanitizeBranchName(baseBranch);
+  let candidate = base;
+  let suffix = 1;
+  while (await isUnavailable(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+async function localGitBranchExists(projectPath: string, branch: string): Promise<boolean> {
+  const refName = validateGitRefName(branch, "environment branch");
+  const refs = [`refs/heads/${refName}`, `refs/remotes/origin/${refName}`];
+  for (const ref of refs) {
+    const exists = await runCommand(
+      "git",
+      ["-C", projectPath, "show-ref", "--verify", "--quiet", ref],
+      { timeoutMs: 10_000 },
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (exists) return true;
+  }
+  return false;
+}
+
+/**
+ * Read matching live remote refs once for an allocation.
+ *
+ * Branch identities carry both an environment namespace and a durable rename
+ * revision, so an unavailable remote is uncertainty rather than permission to
+ * reuse a friendly slug. Keep offline operation available and bound the
+ * interactive wait; reachable remotes still protect against exact collisions.
+ */
+async function remoteGitBranchesWithPrefix(options: {
+  baseBranch: string;
+  projectPath?: string | null;
+  remoteUrl?: string | null;
+}): Promise<Set<string>> {
+  const base = validateGitRefName(options.baseBranch, "environment branch");
+  const remote = options.projectPath ? "origin" : options.remoteUrl?.trim();
+  if (!remote) return new Set();
+
+  const result = await runCommand(
+    "git",
+    [
+      ...(options.projectPath ? ["-C", options.projectPath] : []),
+      "ls-remote",
+      "--heads",
+      remote,
+      `refs/heads/${base}*`,
+    ],
+    {
+      timeoutMs: GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    },
+  ).catch(() => null);
+  if (!result) return new Set();
+
+  const branches = new Set<string>();
+  for (const line of result.stdout.split("\n")) {
+    const ref = line.trim().split(/\s+/).at(-1);
+    if (ref?.startsWith("refs/heads/")) branches.add(ref.slice("refs/heads/".length));
+  }
+  return branches;
+}
+
+export async function createGitBranchCollisionChecker(options: {
+  baseBranch: string;
+  projectPath?: string | null;
+  remoteUrl?: string | null;
+}): Promise<(candidate: string) => Promise<boolean>> {
+  const remoteBranches = await remoteGitBranchesWithPrefix(options);
+  return async (candidate) => {
+    if (remoteBranches.has(candidate)) return true;
+    return options.projectPath ? localGitBranchExists(options.projectPath, candidate) : false;
+  };
+}
+
+export async function allocateEnvironmentBranchName(options: {
+  name: string;
+  environmentId: string;
+  branchRevision?: number;
+  siblingEnvironments: Environment[];
+  projectPath?: string | null;
+  remoteUrl?: string | null;
+  currentBranch?: string;
+}): Promise<string> {
+  const baseBranch = environmentBranchBase(
+    options.name,
+    options.environmentId,
+    options.branchRevision,
+  );
+  const reserved = new Set(options.siblingEnvironments.map((environment) => environment.branch));
+  const gitBranchExists = await createGitBranchCollisionChecker({
+    baseBranch,
+    projectPath: options.projectPath,
+    remoteUrl: options.remoteUrl,
+  });
+  return allocateGitBranchName(baseBranch, async (candidate) => {
+    if (reserved.has(candidate)) return true;
+    // The current environment owns this ref, so a repeat allocation is a no-op.
+    if (candidate === options.currentBranch) return false;
+    return gitBranchExists(candidate);
+  });
 }
 
 export function managedBinaryCandidates(context: CommandContext, name: string): string[] {
@@ -527,35 +670,6 @@ export async function generateEnvironmentNameWithCodexExec(
   }
 }
 
-export async function listGitBranchesAtPath(
-  repoPath: string,
-  fetchFirst: boolean,
-): Promise<string[]> {
-  if (fetchFirst) {
-    await runCommand("git", ["-C", repoPath, "fetch", "origin", "--prune"], {
-      timeoutMs: 60_000,
-    }).catch(() => undefined);
-  }
-
-  try {
-    const { stdout } = await runCommand(
-      "git",
-      ["-C", repoPath, "branch", "-a", "--format=%(refname:short)"],
-      { timeoutMs: 30_000 },
-    );
-    const branches = stdout
-      .split("\n")
-      .map((branch) => branch.trim())
-      .filter(Boolean)
-      .map((branch) => branch.replace(/^remotes\/origin\//, "").replace(/^origin\//, ""))
-      .filter((branch) => branch !== "HEAD");
-    return Array.from(new Set(branches)).sort();
-  } catch (error) {
-    console.warn("[ElectronBackend] Failed to list git branches for environment naming:", error);
-    return [];
-  }
-}
-
 /**
  * Renames the git branch backing an environment, returning whether the stored branch
  * may now be advanced to `newBranch`.
@@ -790,23 +904,12 @@ export async function renameEnvironmentFromPrompt(
   ) {
     return;
   }
-  const oldBranch = environment.branch;
   const project = await context.storage.getProject(environment.projectId);
   const siblingEnvironments = (
     await context.storage.getEnvironmentsByProject(environment.projectId)
   ).filter((candidate) => candidate.id !== environmentId);
-  const existingGitBranches = project?.localPath
-    ? (await listGitBranchesAtPath(project.localPath, false)).filter(
-        (branch) => branch !== oldBranch,
-      )
-    : [];
-  const newName = makeUniqueEnvironmentSlug(
-    generatedName,
-    siblingEnvironments,
-    existingGitBranches,
-  );
-  const newBranch = sanitizeBranchName(newName);
-  await renameEnvironmentToName(environment, newName, newBranch, context);
+  const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments);
+  await renameEnvironmentToName(environment, newName, context, project?.localPath, project?.gitUrl);
 }
 
 /**
@@ -821,10 +924,47 @@ export async function renameEnvironmentFromPrompt(
 export async function renameEnvironmentToName(
   environment: Environment,
   newName: string,
-  newBranch: string,
   context: CommandContext,
+  knownProjectPath?: string | null,
+  knownRemoteUrl?: string | null,
 ): Promise<Environment> {
   const oldBranch = environment.branch;
+  const project =
+    knownProjectPath === undefined || knownRemoteUrl === undefined
+      ? await context.storage.getProject(environment.projectId)
+      : undefined;
+  const siblingEnvironments = (
+    await context.storage.getEnvironmentsByProject(environment.projectId)
+  ).filter((candidate) => candidate.id !== environment.id);
+  if (newName === environment.name) {
+    const updated =
+      environment.pendingRenamePrompt === undefined
+        ? environment
+        : await context.storage.updateEnvironment(environment.id, {
+            pendingRenamePrompt: undefined,
+          });
+    context.emit("environment-renamed", {
+      environment_id: updated.id,
+      new_name: updated.name,
+      new_branch: updated.branch,
+    });
+    return updated;
+  }
+  const currentBranchRevision =
+    Number.isSafeInteger(environment.branchRevision) && (environment.branchRevision ?? -1) >= 0
+      ? environment.branchRevision!
+      : 0;
+  const branchRevision = currentBranchRevision + 1;
+  const projectPath = knownProjectPath === undefined ? project?.localPath : knownProjectPath;
+  const newBranch = await allocateEnvironmentBranchName({
+    name: newName,
+    environmentId: environment.id,
+    branchRevision,
+    siblingEnvironments,
+    projectPath: environment.environmentType === "local" ? projectPath : null,
+    remoteUrl: knownRemoteUrl === undefined ? project?.gitUrl : knownRemoteUrl,
+    currentBranch: oldBranch,
+  });
   const branchChanged = oldBranch !== newBranch;
 
   // Rename any live git branch before persisting, and only advance the stored branch
@@ -836,7 +976,13 @@ export async function renameEnvironmentToName(
   const updated = await context.storage.updateEnvironment(environment.id, {
     name: newName,
     ...(persistBranch
-      ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null }
+      ? {
+          branch: newBranch,
+          branchRevision,
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+        }
       : {}),
     ...(environment.pendingRenamePrompt !== undefined ? { pendingRenamePrompt: undefined } : {}),
   });

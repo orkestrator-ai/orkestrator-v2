@@ -255,6 +255,7 @@ describe("terminal run usage", () => {
     const state = runningSession();
     state.composer.selectedModelId = "requested-model";
     state.currentTurnUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+    state.currentTurnOutputTokenEstimate = 7;
     const run: FollowableRun = {
       async *stream() {
         yield {
@@ -314,8 +315,10 @@ describe("terminal run usage", () => {
       source: "provider",
     });
     expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
     expect(state.currentRunUsageUpdatedAt).toBeUndefined();
     expect(state.currentRunModelId).toBeUndefined();
+    expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
   test("publishes Cursor Grok tokens before account usage catches up", async () => {
@@ -416,6 +419,7 @@ describe("terminal run usage", () => {
 
   test("records terminal usage when a run ends in error", async () => {
     const state = runningSession();
+    state.currentTurnOutputTokenEstimate = 7;
     const run: FollowableRun = {
       async *stream() {},
       cancel: async () => undefined,
@@ -444,12 +448,15 @@ describe("terminal run usage", () => {
       turn: { inputTokens: 30, outputTokens: 5, totalTokens: 37 },
     });
     expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
     expect(state.currentRunUsageUpdatedAt).toBeUndefined();
     expect(state.currentRunModelId).toBeUndefined();
+    expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
   test("records terminal usage when a run is cancelled", async () => {
     const state = runningSession();
+    state.currentTurnOutputTokenEstimate = 7;
     const run: FollowableRun = {
       async *stream() {},
       cancel: async () => undefined,
@@ -474,8 +481,10 @@ describe("terminal run usage", () => {
       lastTurnTokens: 15,
     });
     expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
     expect(state.currentRunUsageUpdatedAt).toBeUndefined();
     expect(state.currentRunModelId).toBeUndefined();
+    expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
   test("falls back to the turn-ended delta when neither terminal nor streamed usage exists", async () => {
@@ -510,17 +519,25 @@ describe("terminal run usage", () => {
     const state = runningSession();
     state.usage = {
       turn: { inputTokens: 90, outputTokens: 10, totalTokens: 100 },
+      sessionTokenFloor: 100,
       updatedAt: new Date(1).toISOString(),
     };
+    state.currentTurnOutputTokenEstimate = 5;
+    state.currentRunUsageUpdatedAt = new Date(2).toISOString();
     const run: FollowableRun = {
       async *stream() {},
       cancel: async () => undefined,
       wait: async () => ({ status: "finished" }),
     };
 
+    expect(publicContextUsage(state)).toMatchObject({ sessionTokens: 105, estimated: true });
+
     await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
 
     expect(state.usage?.turn).toEqual({ inputTokens: 90, outputTokens: 10, totalTokens: 100 });
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({ sessionTokens: 100 });
+    expect(publicContextUsage(state)).not.toHaveProperty("estimated");
   });
 
   test("recomputes the provider total when a streamed message omits it", async () => {

@@ -110,6 +110,7 @@ export async function createCommandFixtures() {
     closeLocalServerAdmission,
     CONTAINER_UNTRACKED_STATS_SCANNER,
     createCommandRegistry,
+    environmentBranchBase,
     ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
@@ -572,11 +573,12 @@ export async function createCommandFixtures() {
     return { context, updates, emitted };
   }
 
+  const localProjectForCreatePath = await createGitRepoOnBranch("main");
   const LOCAL_PROJECT_FOR_CREATE = {
     id: "project-1",
     name: "Project",
-    gitUrl: "https://github.com/acme/project.git",
-    localPath: process.cwd(),
+    gitUrl: localProjectForCreatePath,
+    localPath: localProjectForCreatePath,
     addedAt: new Date(0).toISOString(),
     order: 0,
   };
@@ -947,6 +949,7 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     const originalAgentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
     const originalAgentTestClaudeConfigDir =
       process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+    const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
     const originalDockerLog = process.env.FAKE_DOCKER_LOG;
     const originalDockerRmLog = process.env.FAKE_DOCKER_RM_LOG;
     const originalDockerExecLog = process.env.FAKE_DOCKER_EXEC_LOG;
@@ -956,11 +959,13 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     // the fake-docker logs written under /tmp, and makes every home-derived path in
     // these tests hermetic rather than dependent on the machine running them.
     process.env.HOME = home;
-    // Bun can cache os.homedir() before this helper changes HOME. Use the
-    // production agent-test overrides as well so credential discovery cannot
-    // fall back to the developer's real home or CLAUDE_CONFIG_DIR.
+    // Bun caches `os.homedir()` on some versions, so changing HOME alone is
+    // not a reliable credential boundary. Pin the explicit host paths consumed
+    // by `resolveContainerClaudeCredentials` and keep an inherited Claude
+    // config override from escaping the fixture home.
     process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = home;
     process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = path.join(home, ".claude");
+    delete process.env.CLAUDE_CONFIG_DIR;
     process.env.FAKE_DOCKER_LOG = all;
     process.env.FAKE_DOCKER_RM_LOG = rm;
     process.env.FAKE_DOCKER_EXEC_LOG = exec;
@@ -972,14 +977,17 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
       else process.env.PATH = originalPath;
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
-      if (originalAgentTestHostHome === undefined)
+      if (originalAgentTestHostHome === undefined) {
         delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
-      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = originalAgentTestHostHome;
-      if (originalAgentTestClaudeConfigDir === undefined)
+      } else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = originalAgentTestHostHome;
+      if (originalAgentTestClaudeConfigDir === undefined) {
         delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
-      else
+      } else {
         process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR =
           originalAgentTestClaudeConfigDir;
+      }
+      if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
       if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
       else process.env.FAKE_DOCKER_LOG = originalDockerLog;
       if (originalDockerRmLog === undefined) delete process.env.FAKE_DOCKER_RM_LOG;
@@ -1376,6 +1384,7 @@ exit 0
     configuredGitPushBehaviour,
     configuredGitUpstream,
     createCommandRegistry,
+    environmentBranchBase,
     createContext,
     createDeferred,
     createEnvironment,

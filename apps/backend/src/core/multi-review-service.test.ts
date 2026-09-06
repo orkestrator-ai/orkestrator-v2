@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+
+// This owner includes real lease timers and deliberately blocked provider
+// calls. Keep Bun's outer budget wider than its own diagnostic waits.
+jest.setTimeout(30_000);
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type StructuredReviewReport,
@@ -690,7 +694,16 @@ test("MultiReviewService resumes an interrupted address dispatch through the sup
       const resumed = await service.address(started.id);
       expect(resumed.addressPromptPending).toBe(true);
       expect(provider.statusCalls).toBe(statusCallsBeforeAddress);
-      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      await waitUntil(async () => {
+        const [workflow, environment] = await Promise.all([
+          snapshot(started.id),
+          storage.getEnvironment("env-address-resume"),
+        ]);
+        return (
+          workflow?.addressPromptPending !== true &&
+          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+        );
+      });
       expect(dispatches).toBe(2);
       await expect(service.address(started.id)).rejects.toThrow("not ready to address");
 
@@ -795,7 +808,16 @@ test("MultiReviewService dispatches a durable address intent without a renderer"
       });
 
       releaseDispatch();
-      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      await waitUntil(async () => {
+        const [workflow, environment] = await Promise.all([
+          snapshot(started.id),
+          storage.getEnvironment("env-address-backend"),
+        ]);
+        return (
+          workflow?.addressPromptPending !== true &&
+          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+        );
+      });
       expect(dispatched).toHaveLength(1);
       expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
         agentActivitySources: { "multi-review": { state: "idle" } },

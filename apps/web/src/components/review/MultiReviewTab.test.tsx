@@ -259,6 +259,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(firstIssueCount.className).toContain("text-amber-400");
     expect(firstGapCount.textContent).toBe("1");
     expect(firstGapCount.className).toContain("text-orange-400");
+    expect(firstIssueCount.parentElement).toBe(firstGapCount.parentElement);
+    expect(firstIssueCount.parentElement?.className).toContain("flex-col");
+    expect(firstIssueCount.parentElement?.className).toContain("items-end");
 
     const secondReviewer = screen.getByRole("button", {
       name: "Open Reviewer 2 transcript, 2 issues found, 0 coverage gaps found",

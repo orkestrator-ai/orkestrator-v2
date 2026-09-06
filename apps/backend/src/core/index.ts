@@ -202,6 +202,7 @@ export class OrkestratorBackend {
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginCoordinatorTurn(projectId);
         },
+        coordinatorDelegationAvailable: () => this.controlMcp.getSettings().running,
       },
     );
     context.nativeAgents = this.nativeAgents;

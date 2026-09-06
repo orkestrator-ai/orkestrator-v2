@@ -112,9 +112,16 @@ mock.module("@/lib/backend", () => ({
   closeCoordinatorConversation: closeConversation,
 }));
 
+const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
+  <div
+    data-testid="native-agent"
+    data-coordinator-project-id={String(props.coordinatorProjectId ?? "")}
+  />
+));
+
 mock.module("@/components/native-agent", () => ({
   ...nativeAgentSnapshot,
-  AgentNativeTab: () => <div data-testid="native-agent" />,
+  AgentNativeTab: renderAgentNativeTab,
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
@@ -133,6 +140,7 @@ describe("CoordinatorPanel", () => {
     switchBranch.mockClear();
     syncGit.mockClear();
     getCoordinator.mockClear();
+    renderAgentNativeTab.mockClear();
     ensuredSnapshot = snapshot;
     ensuredGit = gitStatus;
     ensureFailure = null;
@@ -150,6 +158,16 @@ describe("CoordinatorPanel", () => {
     });
     useUIStore.setState({ projectBoardTab: "coordinator" });
     useNativeAgentProjectionStore.getState().reset();
+  });
+
+  test("forwards the project id to the coordinator native-agent tab", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+
+    const agent = await screen.findByTestId("native-agent");
+    expect(agent.getAttribute("data-coordinator-project-id")).toBe("project-1");
+    expect(renderAgentNativeTab.mock.calls.at(-1)?.[0]).toMatchObject({
+      coordinatorProjectId: "project-1",
+    });
   });
 
   afterEach(cleanup);

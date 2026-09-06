@@ -3562,9 +3562,11 @@ describe("NativeAgentService", () => {
     const provider = createProviderStub("codex");
     const release = mock(() => undefined);
     const admit = mock(() => release);
+    let delegationAvailable = true;
     const service = new NativeAgentService(storage, refusingInvoke, {
       provider: async () => provider.provider,
       beginCoordinatorTurn: admit,
+      coordinatorDelegationAvailable: () => delegationAvailable,
     });
     try {
       const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
@@ -3586,6 +3588,8 @@ describe("NativeAgentService", () => {
       const sent = provider.send.mock.calls[0]![1];
       expect(sent.match(/<orkestrator-coordinator-context>/g)).toHaveLength(1);
       expect(sent).toContain("Inspect this");
+      expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
+      expect(sent).toContain("Codex subagents remain inside this coordinator session");
       expect(
         (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
@@ -3606,6 +3610,20 @@ describe("NativeAgentService", () => {
         (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
       ).toBe(3);
+      delegationAvailable = false;
+      await service.dispatchPrompt({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-without-delegation",
+        prompt: "Inspect without workers",
+      });
+      const sentWithoutDelegation = provider.send.mock.calls[1]![1];
+      expect(sentWithoutDelegation).not.toContain("launch_environment");
+      expect(sentWithoutDelegation).toContain(
+        "Orkestrator worker controls are unavailable in this session",
+      );
+      expect(sentWithoutDelegation).toContain("do not report them as workers");
       await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,
         lifecycleState: "paused",
@@ -3619,7 +3637,7 @@ describe("NativeAgentService", () => {
           prompt: "Do not send",
         }),
       ).rejects.toThrow("not ready");
-      expect(admit).toHaveBeenCalledTimes(2);
+      expect(admit).toHaveBeenCalledTimes(3);
 
       await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
         ...workspace!,

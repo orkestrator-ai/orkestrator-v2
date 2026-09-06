@@ -122,6 +122,95 @@ describe("coordinator command registry", () => {
     ).rejects.toThrow("different payload");
   });
 
+  test("returns the Codex catalogue for a live coordinator conversation", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+
+    await expect(
+      commands.get("get_native_agent_model_catalog")!({ environmentId }, context),
+    ).resolves.toEqual([]);
+
+    await storage.cacheAgentModelCatalog("codex", [
+      {
+        id: "gpt-coordinator",
+        name: "GPT Coordinator",
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "high",
+      },
+    ]);
+
+    const models = await commands.get("get_native_agent_model_catalog")!(
+      {
+        environmentId,
+      },
+      context,
+    );
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        platform: "codex",
+        id: "gpt-coordinator",
+        label: "GPT Coordinator",
+        defaultReasoningId: "high",
+      }),
+    ]);
+
+    await coordinator.closeConversation(project.id, conversation.id);
+    await expect(
+      commands.get("get_native_agent_model_catalog")!(
+        {
+          environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
+        },
+        context,
+      ),
+    ).rejects.toThrow("coordinator conversation is unavailable");
+  });
+
+  test("rejects invalid coordinator model-catalogue states", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const catalogue = commands.get("get_native_agent_model_catalog")!;
+
+    await expect(catalogue({ environmentId, ensureAgent: "cursor" }, context)).rejects.toThrow(
+      "supports Codex only",
+    );
+    await expect(
+      catalogue({ environmentId: coordinatorRuntimeId(snapshot.workspace.id) }, context),
+    ).rejects.toThrow("coordinator conversation is unavailable");
+
+    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      lifecycleState: "paused",
+    }));
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow("not ready");
+
+    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      lifecycleState: "ready",
+      conversations: workspace!.conversations.map((item) => ({
+        ...item,
+        agent: "claude",
+      })),
+    }));
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow("Only Codex is qualified");
+
+    await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      conversations: workspace!.conversations.map((item) => ({
+        ...item,
+        agent: "codex",
+      })),
+    }));
+    await storage.updateProject(project.id, { localPath: null });
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow(
+      "coordinator checkout is unavailable",
+    );
+  });
+
   test("rejects unpublished container commits before reserving or creating work", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);

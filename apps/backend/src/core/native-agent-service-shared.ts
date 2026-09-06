@@ -322,6 +322,8 @@ export interface NativeAgentServiceOptions {
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
   beginCoordinatorTurn?: (projectId: string) => () => void;
+  /** Authoritative availability of the scoped worker-delegation MCP. */
+  coordinatorDelegationAvailable?: () => boolean;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

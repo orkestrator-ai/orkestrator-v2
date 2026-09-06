@@ -2304,6 +2304,45 @@ describe("session lifecycle", () => {
       "read-only",
     );
   });
+
+  test("coordinator policy pins build mode to read-only without network access", async () => {
+    const previous = process.env.CODEX_BRIDGE_EXECUTION_POLICY;
+    const previousProfile = process.env.CODEX_BRIDGE_PERMISSION_PROFILE;
+    process.env.CODEX_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    process.env.CODEX_BRIDGE_PERMISSION_PROFILE = "coordinator-conversation-1";
+    try {
+      const h = await harness({
+        "thread/start": () => ({
+          thread: threadPayload("thread-1"),
+          activePermissionProfile: { id: "coordinator-conversation-1" },
+        }),
+      });
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: "inspect it",
+        requestId: "req-coordinator",
+        attachments: [],
+      });
+
+      expect(
+        h.child().requests.find((request) => request.method === "thread/start")!.params,
+      ).toMatchObject({
+        cwd: "/tmp/ws",
+        approvalPolicy: "never",
+      });
+      expect(
+        h.child().requests.find((request) => request.method === "thread/start")!.params.sandbox,
+      ).toBeUndefined();
+      expect(
+        h.child().requests.find((request) => request.method === "turn/start")!.params.sandboxPolicy,
+      ).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_BRIDGE_EXECUTION_POLICY;
+      else process.env.CODEX_BRIDGE_EXECUTION_POLICY = previous;
+      if (previousProfile === undefined) delete process.env.CODEX_BRIDGE_PERMISSION_PROFILE;
+      else process.env.CODEX_BRIDGE_PERMISSION_PROFILE = previousProfile;
+    }
+  });
 });
 
 describe("interrupt lifecycle", () => {

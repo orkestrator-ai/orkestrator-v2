@@ -5,7 +5,13 @@ import path from "node:path";
 import {
   AGENT_MAIL_MAX_IDEMPOTENCY_ROWS,
   AGENT_MAIL_MAX_STORE_BYTES,
+  AGENT_MAIL_MAX_THREAD_HOPS,
 } from "@orkestrator/protocol/agent-mail";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { StorageService } from "./storage.js";
 
@@ -125,6 +131,12 @@ describe("StorageService agent mail", () => {
           { requestId: "cross", toEnvironmentId: "e3", toTabId: "agent", body: "hello" },
         ),
       ).rejects.toMatchObject({ code: "policy-denied" });
+      await expect(
+        storage.sendAgentMail(
+          { kind: "system", projectId: "p1", source: "workflow", resourceId: "workflow-1" },
+          { requestId: "system-cross", toEnvironmentId: "e3", toTabId: "agent", body: "done" },
+        ),
+      ).resolves.toMatchObject({ trust: "cross-project", placement: "stored" });
 
       const inbound = await storage.sendAgentMail(
         { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
@@ -336,6 +348,130 @@ describe("StorageService agent mail", () => {
         { requestId: "lineage-out", toEnvironmentId: "e1", toTabId: "agent", body: "fresh" },
       );
       expect(outbound).toMatchObject({ injectDepth: 1, placement: "stored" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("holds coordinator exchange at the loop budget until the user resumes it", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const now = new Date(0).toISOString();
+      await storage.mutateCoordinatorWorkspace("p1", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "p1",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+            agent: "codex",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-1",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const coordinatorEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      const coordinator = {
+        kind: "coordinator" as const,
+        projectId: "p1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        environmentId: coordinatorEnvironmentId,
+        tabId: "coordinator-tab",
+      };
+      await expect(
+        storage.sendAgentMail(
+          { ...coordinator, coordinatorId: "forged-coordinator" },
+          {
+            requestId: "forged-coordinator",
+            toEnvironmentId: "e1",
+            toTabId: "agent",
+            body: "reject this",
+          },
+        ),
+      ).rejects.toMatchObject({ code: "capability-denied" });
+      await storage.updateAgentMailboxPolicy("e1", "agent", { inject: "off" });
+      const explicitlyOff = await storage.sendAgentMail(coordinator, {
+        requestId: "explicitly-off",
+        toEnvironmentId: "e1",
+        toTabId: "agent",
+        body: "store this",
+      });
+      expect(explicitlyOff.placement).toBe("stored");
+      await storage.updateAgentMailboxPolicy("e1", "agent", { inject: "inherit" });
+      let message = await storage.sendAgentMail(coordinator, {
+        requestId: "loop-0",
+        toEnvironmentId: "e1",
+        toTabId: "agent",
+        body: "start",
+      });
+      const firstMessageId = message.id;
+      for (let depth = 1; depth <= AGENT_MAIL_MAX_THREAD_HOPS; depth += 1) {
+        message =
+          depth % 2 === 1
+            ? await storage.replyAgentMail(
+                { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+                firstMessageId,
+                `loop-${depth}`,
+                `reply ${depth}`,
+              )
+            : await storage.sendAgentMail(coordinator, {
+                requestId: `loop-${depth}`,
+                toEnvironmentId: "e1",
+                toTabId: "agent",
+                replyToMessageId: firstMessageId,
+                body: `reply ${depth}`,
+              });
+      }
+
+      expect(message).toMatchObject({
+        placement: "inject-held",
+        placementReason: "loop-budget-exhausted",
+        threadDepth: AGENT_MAIL_MAX_THREAD_HOPS,
+      });
+      const resumed = await storage.retryAgentMailInject("e1", "agent", message.id);
+      expect(resumed).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
+      expect(
+        (await storage.listPendingAgentMailInjects()).map(({ message: pending }) => pending.id),
+      ).toContain(message.id);
+
+      let newSubject = resumed;
+      for (let depth = 1; depth <= AGENT_MAIL_MAX_THREAD_HOPS; depth += 1) {
+        newSubject =
+          depth % 2 === 1
+            ? await storage.sendAgentMail(
+                { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+                {
+                  requestId: `new-subject-${depth}`,
+                  toEnvironmentId: coordinatorEnvironmentId,
+                  toTabId: "coordinator-tab",
+                  subject: `New subject ${depth}`,
+                  body: `continue ${depth}`,
+                },
+              )
+            : await storage.sendAgentMail(coordinator, {
+                requestId: `new-subject-${depth}`,
+                toEnvironmentId: "e1",
+                toTabId: "agent",
+                subject: `New subject ${depth}`,
+                body: `continue ${depth}`,
+              });
+      }
+      expect(newSubject).toMatchObject({
+        placement: "inject-held",
+        placementReason: "loop-budget-exhausted",
+        threadDepth: AGENT_MAIL_MAX_THREAD_HOPS,
+      });
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

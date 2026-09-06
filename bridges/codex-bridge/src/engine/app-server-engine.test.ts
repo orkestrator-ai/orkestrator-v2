@@ -246,6 +246,45 @@ describe("thread lifecycle", () => {
     );
   });
 
+  test("uses and verifies a restricted permission profile without legacy sandbox overrides", async () => {
+    const config: EngineTurnConfig = {
+      ...PLAN,
+      permissionProfile: "coordinator-conversation-1",
+      networkAccessEnabled: false,
+    };
+    const h = harness({
+      "thread/start": () => ({
+        thread: thread("t1"),
+        activePermissionProfile: { id: "coordinator-conversation-1" },
+      }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    await h.engine.start();
+    const started = await h.engine.startThread({ config });
+    await h.engine.startTurn({
+      handle: started.handle,
+      input: [{ type: "text", text: "inspect it" }],
+      config,
+    });
+
+    const start = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    const turn = h.child().requests.find((request) => request.method === "turn/start")!.params;
+    expect(start.sandbox).toBeUndefined();
+    expect(turn.sandbox).toBeUndefined();
+    expect(turn.sandboxPolicy).toBeUndefined();
+
+    const rejected = harness({
+      "thread/start": () => ({
+        thread: thread("wrong"),
+        activePermissionProfile: { id: ":read-only" },
+      }),
+    });
+    await rejected.engine.start();
+    await expect(rejected.engine.startThread({ config })).rejects.toThrow(
+      "did not activate the required permission profile",
+    );
+  });
+
   test("resume returns reconstructed turns with their client ids", async () => {
     const h = harness({
       "thread/resume": () => ({

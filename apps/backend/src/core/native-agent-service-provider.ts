@@ -109,6 +109,11 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
+import {
+  agentSessionOwnerKey,
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 
 export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation {
   protected async provider(
@@ -311,6 +316,40 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
 
   protected async assertEnvironmentLive(environmentId: string): Promise<Environment> {
     this.assertAcceptingWork();
+    const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+    if (coordinatorId) {
+      const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
+      if (!workspace || workspace.lifecycleState !== "ready") {
+        throw new Error("Native agent coordinator is unavailable");
+      }
+      const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+      const conversation = workspace.conversations.find(
+        (item) => item.id === conversationId && !item.closedAt,
+      );
+      if (!conversation || conversation.agent !== "codex") {
+        throw new Error("The coordinator conversation is unavailable");
+      }
+      const project = await this.storage.getProject(workspace.projectId);
+      if (!project?.localPath) throw new Error("Native agent coordinator checkout is unavailable");
+      return {
+        id: environmentId,
+        projectId: workspace.projectId,
+        name: "Coordinator",
+        branch: workspace.repositoryStatus?.branch ?? "",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: workspace.createdAt,
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: project.localPath,
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      } as Environment;
+    }
     const environment = await this.storage.getEnvironment(environmentId);
     if (!environment || environment.deletionRequestedAt) {
       throw new Error("Native agent environment is unavailable");
@@ -331,7 +370,13 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       session.logicalSessionKey !== input.logicalSessionKey ||
       (input.origin !== undefined && session.origin !== input.origin) ||
       (input.interactionPolicy !== undefined &&
-        session.interactionPolicy.mode !== input.interactionPolicy.mode)
+        session.interactionPolicy.mode !== input.interactionPolicy.mode) ||
+      (input.owner !== undefined &&
+        session.owner !== undefined &&
+        agentSessionOwnerKey(session.owner) !== agentSessionOwnerKey(input.owner)) ||
+      (input.executionPolicy !== undefined &&
+        session.executionPolicy !== undefined &&
+        session.executionPolicy !== input.executionPolicy)
     ) {
       throw new Error("Native agent session key collision");
     }

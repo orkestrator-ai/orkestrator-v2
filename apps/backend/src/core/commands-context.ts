@@ -10,7 +10,13 @@ import type {
   StorageService,
   FeaturePlanningService,
 } from "./commands-dependencies.js";
-import type { ControlMcpSettings } from "./control-mcp-server.js";
+import type {
+  ControlMcpSettings,
+  CoordinatorControlConnection,
+  CoordinatorControlScope,
+} from "./control-mcp-server.js";
+import type { CoordinatorService } from "./coordinator-service.js";
+import type { ProjectGitService } from "./project-git-service.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -40,9 +46,13 @@ export type CommandContext = {
   loopedReviews?: LoopedReviewService;
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
+  coordinators?: CoordinatorService;
+  projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;
     rotateToken(): Promise<ControlMcpSettings>;
+    issueCoordinatorCredential(scope: CoordinatorControlScope): CoordinatorControlConnection;
+    revokeCoordinatorCredentials(coordinatorId: string, conversationId?: string): void;
   };
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;

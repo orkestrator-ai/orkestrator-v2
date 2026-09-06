@@ -3,6 +3,11 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
 import { StorageService } from "./storage.js";
 
@@ -139,6 +144,75 @@ describe("AgentMailService", () => {
       expect((await storage.getAgentMailMessage("recipient", "agent", message.id)).placement).toBe(
         "injected",
       );
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("honors an explicit off override applied before coordinator delivery drains", async () => {
+    const { storage, dataDir } = await fixture();
+    let dispatches = 0;
+    try {
+      const now = new Date(0).toISOString();
+      await storage.mutateCoordinatorWorkspace("project", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "project",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+            agent: "codex",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-1",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const message = await storage.sendAgentMail(
+        {
+          kind: "coordinator",
+          projectId: "project",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+          tabId: "coordinator-tab",
+        },
+        {
+          requestId: "coordinator-pending",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Wait for explicit permission.",
+        },
+      );
+      expect(message.placement).toBe("pending-inject");
+      await storage.updateAgentMailboxPolicy("recipient", "agent", { inject: "off" });
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          dispatchMailInject: async (input) => {
+            dispatches += 1;
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      expect(dispatches).toBe(0);
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "pending-inject",
+      });
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

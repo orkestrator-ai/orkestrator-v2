@@ -104,6 +104,7 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
+import { isAgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type {
   AgentActivityState,
   AgentActivitySource,
@@ -847,8 +848,11 @@ export function isPersistedNativeAgentSession(
     isAgentPlatform(value.agent) &&
     isNonBlankString(value.logicalSessionKey) &&
     isNonBlankString(value.providerSessionId) &&
+    (value.owner === undefined || isAgentSessionOwner(value.owner)) &&
+    (value.executionPolicy === undefined || value.executionPolicy === "coordinator-read-only") &&
     (value.origin === "interactive-native" ||
       value.origin === "interactive-tmux" ||
+      value.origin === "coordinator" ||
       value.origin === "build-pipeline" ||
       value.origin === "looped-review") &&
     isAgentInteractionPolicy(value.interactionPolicy) &&
@@ -1019,9 +1023,13 @@ export function resolveNativeAgentInteractionMetadata(input: {
       ? UNATTENDED_AGENT_INTERACTION_POLICY
       : INTERACTIVE_AGENT_INTERACTION_POLICY);
   if (
-    !["interactive-native", "interactive-tmux", "build-pipeline", "looped-review"].includes(
-      origin,
-    ) ||
+    ![
+      "interactive-native",
+      "interactive-tmux",
+      "coordinator",
+      "build-pipeline",
+      "looped-review",
+    ].includes(origin) ||
     !isAgentInteractionPolicy(interactionPolicy) ||
     (origin === "build-pipeline" || origin === "looped-review") !==
       (interactionPolicy.mode === "unattended")

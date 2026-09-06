@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
@@ -82,6 +83,7 @@ type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageReviews } from "./storage-reviews.ts";
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -149,6 +151,14 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageNative extends StorageReviews {
+  async getCoordinatorWorkspaceById(_coordinatorId: string): Promise<CoordinatorWorkspace | null> {
+    throw new Error("Coordinator storage is unavailable in this storage layer");
+  }
+
+  async listCoordinatorWorkspaces(): Promise<CoordinatorWorkspace[]> {
+    throw new Error("Coordinator storage is unavailable in this storage layer");
+  }
+
   private announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     deleted = false,
@@ -285,7 +295,12 @@ export abstract class StorageNative extends StorageReviews {
       PersistedNativeAgentSession,
       "key" | "environmentId" | "agent" | "logicalSessionKey"
     > &
-      Partial<Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy" | "controls">>,
+      Partial<
+        Pick<
+          PersistedNativeAgentSession,
+          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy"
+        >
+      >,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
@@ -318,6 +333,17 @@ export abstract class StorageNative extends StorageReviews {
             existing.interactionPolicy.mode !== input.interactionPolicy.mode)
         ) {
           throw new Error("Native agent session key collision");
+        }
+        if (!existing.owner && input.owner) {
+          const migratedOwner = {
+            ...existing,
+            owner: input.owner,
+            ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
+            updatedAt: nowIso(),
+          };
+          sessions[input.key] = migratedOwner;
+          await this.saveNativeAgentSessions(sessions, opaque);
+          return migratedOwner;
         }
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return existing;
@@ -352,7 +378,12 @@ export abstract class StorageNative extends StorageReviews {
       PersistedNativeAgentSession,
       "key" | "environmentId" | "agent" | "logicalSessionKey" | "providerSessionId"
     > &
-      Partial<Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy" | "controls">> & {
+      Partial<
+        Pick<
+          PersistedNativeAgentSession,
+          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy"
+        >
+      > & {
         expectedProviderSessionId?: string;
       },
   ): Promise<PersistedNativeAgentSession> {
@@ -400,10 +431,18 @@ export abstract class StorageNative extends StorageReviews {
           const controls = input.controls
             ? { ...existing.controls, ...input.controls }
             : existing.controls;
-          if (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) {
+          const ownerChanged = !existing.owner && Boolean(input.owner);
+          const policyChanged = !existing.executionPolicy && Boolean(input.executionPolicy);
+          if (
+            (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) ||
+            ownerChanged ||
+            policyChanged
+          ) {
             const updated: PersistedNativeAgentSession = {
               ...existing,
               controls,
+              ...(input.owner ? { owner: input.owner } : {}),
+              ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
               updatedAt: nowIso(),
             };
             sessions[input.key] = updated;
@@ -1078,6 +1117,34 @@ export abstract class StorageNative extends StorageReviews {
     environmentId: string,
     label: string,
   ): Promise<Environment> {
+    const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+    if (coordinatorId) {
+      const workspace = await this.getCoordinatorWorkspaceById(coordinatorId);
+      if (!workspace) throw new Error(`${label} coordinator not found: ${coordinatorId}`);
+      if (workspace.lifecycleState === "paused") {
+        throw new Error(`${label} coordinator is paused`);
+      }
+      const project = await this.getProject(workspace.projectId);
+      if (!project?.localPath) throw new Error(`${label} coordinator checkout is unavailable`);
+      return {
+        id: environmentId,
+        projectId: workspace.projectId,
+        name: "Coordinator",
+        branch: workspace.repositoryStatus?.branch ?? "",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: workspace.createdAt,
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: project.localPath,
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      } as Environment;
+    }
     const environment = await this.getEnvironment(environmentId);
     if (!environment) {
       throw new Error(`${label} environment not found: ${environmentId}`);

@@ -20,11 +20,16 @@ import {
   localOpenCodeServerPasswords,
   localServerEnvironmentOperations,
   localServerProcesses,
+  localServerWorkingDirectories,
   openCodeAgentToolsConfigurations,
   terminateProcessTreeImpl,
 } from "./commands-runtime-state.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 
 /**
  * Local agent-server process lifecycle and the environment's baseline commit.
@@ -180,9 +185,10 @@ export function localServerFields(kind: LocalServerKind): {
 export function releaseLocalServerOwnership(
   key: string,
   child: ChildProcessWithoutNullStreams,
-): void {
-  if (localServerProcesses.get(key) !== child) return;
+): boolean {
+  if (localServerProcesses.get(key) !== child) return false;
   localServerProcesses.delete(key);
+  localServerWorkingDirectories.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
   } else if (key.startsWith("claude:")) {
@@ -200,6 +206,7 @@ export function releaseLocalServerOwnership(
   } else if (key.startsWith("pi:")) {
     localPiBridgeTokens.delete(key.slice("pi:".length));
   }
+  return true;
 }
 
 export async function terminateLocalServerChild(
@@ -245,7 +252,31 @@ export async function stopLocalServerUnlocked(
   if (child) await terminateLocalServerChild(key, child);
   const { port, pid } = localServerFields(kind);
   const fields = { [port]: null, [pid]: null };
-  await context.storage.updateEnvironment(environmentId, fields);
+  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+  if (coordinatorId) {
+    const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
+    const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
+    if (conversationId) {
+      context.controlMcp?.revokeCoordinatorCredentials(coordinatorId, conversationId);
+    }
+    if (workspace && kind === "codex") {
+      await context.storage.mutateCoordinatorWorkspace(workspace.projectId, (current) =>
+        current && current.id === coordinatorId
+          ? {
+              ...current,
+              conversations: current.conversations.map((conversation) =>
+                conversation.id === conversationId
+                  ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                  : conversation,
+              ),
+              updatedAt: new Date().toISOString(),
+            }
+          : current,
+      );
+    }
+  } else {
+    await context.storage.updateEnvironment(environmentId, fields);
+  }
 }
 
 export async function stopLocalServersForEnvironmentUnlocked(

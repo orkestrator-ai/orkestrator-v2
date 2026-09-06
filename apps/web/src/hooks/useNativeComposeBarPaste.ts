@@ -47,6 +47,8 @@ interface UseNativeComposeBarPasteOptions {
   containerId: string | null;
   /** Worktree path for local environments */
   worktreePath?: string | null;
+  /** Optional trusted writer for runtimes whose attachments live outside a workspace. */
+  writeImage?: (filename: string, base64Data: string) => Promise<string>;
   /** Called once the image has been saved and an attachment is ready to add */
   onAttach: (attachment: PastedImageAttachment) => void;
   /**
@@ -163,6 +165,7 @@ export function useNativeComposeBarPaste({
   inputContainerRef,
   containerId,
   worktreePath,
+  writeImage,
   onAttach,
   canAttachImage,
   onImageRejected,
@@ -250,7 +253,9 @@ export function useNativeComposeBarPaste({
         }
 
         let savedPath: string | null = null;
-        if (containerId) {
+        if (writeImage) {
+          savedPath = await writeImage(filename, base64Data);
+        } else if (containerId) {
           await writeContainerFile(containerId, filePath, base64Data);
           savedPath = `/workspace/${filePath}`;
         } else if (worktreePath) {
@@ -286,6 +291,7 @@ export function useNativeComposeBarPaste({
     inputContainerRef,
     containerId,
     worktreePath,
+    writeImage,
     onAttach,
     canAttachImage,
     onImageRejected,

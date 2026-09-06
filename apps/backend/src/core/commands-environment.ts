@@ -95,6 +95,7 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import {
   resolveRemoteWorktreeStartPoint,
+  gitRefExists,
   enableGitScanCaches,
   resolveContainerGitHubToken,
   syncContainerGitHubCredential,
@@ -843,7 +844,7 @@ export async function startEnvironmentSetupAfterPreparation(
   context: CommandContext,
   preparationSessionId: string | undefined,
 ): Promise<EnvironmentSetupStartResult> {
-  const current = await ensureCreatedFromCommitBeforeSetup(environment, context, (chunk) => {
+  const current = await prepareEnvironmentForSetup(environment, context, (chunk) => {
     if (preparationSessionId && chunk) {
       emitTerminalOutput(preparationSessionId, toTerminalText(chunk), context.emit);
     }
@@ -925,6 +926,129 @@ export function startEnvironmentSetup(
   return task;
 }
 
+type DelegationCommandRunner = (
+  command: string,
+  args: string[],
+  options?: { timeoutMs?: number },
+) => Promise<{ stdout: string; stderr: string }>;
+
+export async function reconcileContainerDelegationBase(
+  environment: Pick<Environment, "branch" | "delegationBaseCommit">,
+  containerId: string,
+  execute: DelegationCommandRunner = runCommand,
+): Promise<void> {
+  const commit = environment.delegationBaseCommit;
+  if (!commit) return;
+  await execute(
+    "docker",
+    ["exec", containerId, "git", "-C", "/workspace", "cat-file", "-e", `${commit}^{commit}`],
+    { timeoutMs: 30_000 },
+  ).catch(() => {
+    throw new Error(
+      "The delegated commit is unavailable in the container clone; publish it to the remote or use a local worker",
+    );
+  });
+  const currentHead = (
+    await execute("docker", ["exec", containerId, "git", "-C", "/workspace", "rev-parse", "HEAD"], {
+      timeoutMs: 30_000,
+    })
+  ).stdout.trim();
+  const currentBranch = (
+    await execute(
+      "docker",
+      ["exec", containerId, "git", "-C", "/workspace", "branch", "--show-current"],
+      { timeoutMs: 30_000 },
+    )
+  ).stdout.trim();
+  if (currentHead === commit && currentBranch === environment.branch) return;
+
+  const dirty = (
+    await execute(
+      "docker",
+      ["exec", containerId, "git", "-C", "/workspace", "status", "--porcelain"],
+      { timeoutMs: 30_000 },
+    )
+  ).stdout.trim();
+  if (dirty) {
+    throw new Error(
+      "Cannot reconcile the delegated base commit because the worker checkout has changes",
+    );
+  }
+  if (currentBranch !== environment.branch) {
+    const branchExists = await execute(
+      "docker",
+      [
+        "exec",
+        containerId,
+        "git",
+        "-C",
+        "/workspace",
+        "show-ref",
+        "--verify",
+        "--quiet",
+        `refs/heads/${environment.branch}`,
+      ],
+      { timeoutMs: 30_000 },
+    ).then(
+      () => true,
+      () => false,
+    );
+    await execute(
+      "docker",
+      [
+        "exec",
+        containerId,
+        "git",
+        "-C",
+        "/workspace",
+        "switch",
+        ...(branchExists ? [] : ["-c"]),
+        environment.branch,
+        ...(branchExists ? [] : [commit]),
+      ],
+      { timeoutMs: 30_000 },
+    );
+  }
+  await execute(
+    "docker",
+    ["exec", containerId, "git", "-C", "/workspace", "reset", "--hard", commit],
+    { timeoutMs: 30_000 },
+  );
+}
+
+export async function reconcilePreparedContainerDelegation(
+  environment: Environment,
+  context: CommandContext,
+  reconcile: typeof reconcileContainerDelegationBase = reconcileContainerDelegationBase,
+): Promise<Environment> {
+  if (
+    environment.environmentType !== "containerized" ||
+    !environment.containerId ||
+    !environment.delegationBaseCommit ||
+    environment.createdFromCommit === environment.delegationBaseCommit
+  ) {
+    return environment;
+  }
+  await reconcile(environment, environment.containerId);
+  return context.storage.updateEnvironment(environment.id, {
+    createdFromCommit: environment.delegationBaseCommit,
+  });
+}
+
+export async function prepareEnvironmentForSetup(
+  environment: Environment,
+  context: CommandContext,
+  onPrepareOutput?: (chunk: string) => void,
+  prepare: typeof ensureCreatedFromCommitBeforeSetup = ensureCreatedFromCommitBeforeSetup,
+  reconcile: typeof reconcilePreparedContainerDelegation = reconcilePreparedContainerDelegation,
+): Promise<Environment> {
+  const prepared = await prepare(environment, context, onPrepareOutput);
+  // Container preparation owns the initial clone. Reconcile an explicit
+  // delegation base only after that clone exists, but before project setup
+  // scripts run against it.
+  return reconcile(prepared, context);
+}
+
 export async function startEnvironmentOnce(
   environmentId: string,
   context: CommandContext,
@@ -976,7 +1100,7 @@ export async function startEnvironmentOnce(
         project.localPath,
         project.name,
         environment.branch,
-        repoConfig.defaultBranch,
+        environment.delegationBaseCommit ?? repoConfig.defaultBranch,
         repoConfig.filesToCopy,
         getWorktreeBaseDir(context),
       );
@@ -1010,6 +1134,17 @@ export async function startEnvironmentOnce(
     await assertDockerContainerOwned(containerId, context);
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
     await ensureContainerProjectFilesAccess(containerId);
+    // An already-prepared delegated checkout is reconciled on every restart.
+    // A fresh checkout is handled by startEnvironmentSetupAfterPreparation,
+    // after prepareContainerWorkspace has cloned /workspace.
+    if (environment.delegationBaseCommit && environment.createdFromCommit) {
+      await reconcileContainerDelegationBase(environment, containerId);
+      if (environment.createdFromCommit !== environment.delegationBaseCommit) {
+        await storage.updateEnvironment(environment.id, {
+          createdFromCommit: environment.delegationBaseCommit,
+        });
+      }
+    }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveContainerGitHubToken(config.global);
@@ -1263,10 +1398,11 @@ export async function createLocalWorktree(
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
-  const startPoint = await resolveRemoteWorktreeStartPoint(
-    projectPath,
-    baseBranch?.trim() || "main",
-  );
+  const requestedBase = baseBranch?.trim() || "main";
+  const startPoint =
+    /^[0-9a-f]{40}$/i.test(requestedBase) && (await gitRefExists(projectPath, requestedBase))
+      ? requestedBase
+      : await resolveRemoteWorktreeStartPoint(projectPath, requestedBase);
   const gitBranchExists = await createGitBranchCollisionChecker({
     baseBranch: baseSlug,
     projectPath,

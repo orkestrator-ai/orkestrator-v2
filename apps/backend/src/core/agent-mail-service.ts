@@ -1,4 +1,5 @@
 import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { StorageService } from "./storage.js";
 import type { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -21,7 +22,8 @@ export class AgentMailService {
     const interrupted = await this.storage.listInterruptedAgentMailInjects();
     for (const { mailbox, message } of interrupted) {
       if (mailbox.kind !== "native" || !mailbox.agent || !message.injectRequestId) continue;
-      const logicalSessionKey = `env-${mailbox.environmentId}:${mailbox.tabId}`;
+      const logicalSessionKey =
+        mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
       let dispatched = false;
       try {
         dispatched =
@@ -59,18 +61,36 @@ export class AgentMailService {
     if (!settings?.enabled || settings.paused) return;
     const pending = await this.storage.listPendingAgentMailInjects(100);
     for (const { mailbox, message } of pending) {
-      if (mailbox.injectPolicy !== "idle" || mailbox.mutedInbound || mailbox.tombstonedAt) continue;
-      if (!mailbox.capabilities.canInject) continue;
-      const environment = await this.storage.getEnvironment(mailbox.environmentId);
-      if (!environment || environment.status !== "running") continue;
+      const coordinatorExchange =
+        message.trust === "same-project" &&
+        mailbox.injectOverride === "inherit" &&
+        (message.from.kind === "coordinator" ||
+          message.from.kind === "system" ||
+          mailbox.ownerKind === "coordinator");
       if (
-        environment.setupPhase !== "ready" &&
-        environment.setupScriptsComplete !== true &&
-        environment.setupOverride !== true
-      ) {
+        (mailbox.injectPolicy !== "idle" && !coordinatorExchange) ||
+        mailbox.mutedInbound ||
+        mailbox.tombstonedAt
+      )
         continue;
+      if (!mailbox.capabilities.canInject) continue;
+      const coordinatorId = coordinatorIdFromRuntimeId(mailbox.environmentId);
+      if (coordinatorId) {
+        const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
+        if (!workspace || workspace.lifecycleState !== "ready") continue;
+      } else {
+        const environment = await this.storage.getEnvironment(mailbox.environmentId);
+        if (!environment || environment.status !== "running") continue;
+        if (
+          environment.setupPhase !== "ready" &&
+          environment.setupScriptsComplete !== true &&
+          environment.setupOverride !== true
+        ) {
+          continue;
+        }
       }
-      const logicalSessionKey = `env-${mailbox.environmentId}:${mailbox.tabId}`;
+      const logicalSessionKey =
+        mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
       if (mailbox.kind === "native" && mailbox.agent) {
         const activity = this.nativeAgents.sessionActivitySnapshot(
           mailbox.environmentId,
@@ -107,7 +127,7 @@ export class AgentMailService {
                 environmentId: mailbox.environmentId,
                 agent: mailbox.agent!,
                 logicalSessionKey,
-                origin: "interactive-native",
+                origin: coordinatorId ? "coordinator" : "interactive-native",
                 prompt: carrier,
                 requestId: claimed.injectRequestId ?? `mail-inject-${claimed.id}`,
                 allowProviderCommands: false,

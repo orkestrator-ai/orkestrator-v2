@@ -724,7 +724,14 @@ export class AppServerEngine implements CodexEngine {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
       approvalPolicy: config.approvalPolicy ?? "never",
-      sandbox: config.sandbox ?? (config.mode === "plan" ? "read-only" : "danger-full-access"),
+      // Passing a legacy sandbox override makes Codex ignore an active
+      // permission profile, including its restricted filesystem reads.
+      ...(config.permissionProfile
+        ? {}
+        : {
+            sandbox:
+              config.sandbox ?? (config.mode === "plan" ? "read-only" : "danger-full-access"),
+          }),
       ...(config.model ? { model: config.model } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
@@ -735,7 +742,9 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
+      activePermissionProfile?: { id?: unknown } | null;
     }>("thread/start", this.toThreadParams(options.config));
+    this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
 
@@ -743,7 +752,9 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
+      activePermissionProfile?: { id?: unknown } | null;
     }>("thread/resume", { threadId, ...this.toThreadParams(options.config) });
+    this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
@@ -758,12 +769,26 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
+      activePermissionProfile?: { id?: unknown } | null;
     }>("thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
       ...this.toThreadParams(config),
     });
+    this.assertPermissionProfile(response.activePermissionProfile, config);
     return this.bindThread(response.thread, config, response.model);
+  }
+
+  private assertPermissionProfile(
+    active: { id?: unknown } | null | undefined,
+    config: EngineTurnConfig,
+  ): void {
+    if (!config.permissionProfile) return;
+    if (active?.id !== config.permissionProfile) {
+      throw new Error(
+        `Codex did not activate the required permission profile ${config.permissionProfile}`,
+      );
+    }
   }
 
   async compactThread(threadId: string): Promise<void> {
@@ -1109,7 +1134,9 @@ export class AppServerEngine implements CodexEngine {
       ...this.toThreadParams(options.config),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),
       // turn/start takes a resolved policy object, not the mode string.
-      sandboxPolicy: toSandboxPolicy(options.config),
+      ...(options.config.permissionProfile
+        ? {}
+        : { sandboxPolicy: toSandboxPolicy(options.config) }),
     };
     // `sandbox` belongs to thread/start; turn/start uses `sandboxPolicy`.
     delete (params as Record<string, unknown>).sandbox;

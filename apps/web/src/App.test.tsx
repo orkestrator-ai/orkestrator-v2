@@ -164,6 +164,9 @@ mock.module("@/components/projects", () => ({
     projectLauncherProps = props;
     return <div data-testid="project-launcher" />;
   },
+  ProjectWorkspace: ({ projectId }: { projectId: string }) => (
+    <div data-testid="project-workspace">{projectId}</div>
+  ),
 }));
 
 mock.module("@/contexts", () => ({
@@ -871,7 +874,7 @@ describe("App background processing mounts", () => {
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
 
-  test("routes a selected project without an environment to its board", async () => {
+  test("routes a selected project without an environment to its workspace", async () => {
     resetStores({
       environments: [],
       selectedProjectId: "project-1",
@@ -880,7 +883,7 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
     expect(screen.queryByTestId("project-launcher") === null).toBe(true);
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
@@ -901,7 +904,7 @@ describe("App background processing mounts", () => {
     });
 
     render(<App />);
-    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
 
     act(() => {
       activateFeatureBuildEnvironment("project-1", {
@@ -912,7 +915,7 @@ describe("App background processing mounts", () => {
     });
 
     expect(useUIStore.getState().selectedEnvironmentId).toBe(featureEnvironment.id);
-    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
 
     await act(async () => {
       resolveEnvironment?.(featureEnvironment);
@@ -920,7 +923,7 @@ describe("App background processing mounts", () => {
     });
 
     expect(await screen.findByTestId("terminal-env-feature")).toBeTruthy();
-    expect(screen.queryByTestId("kanban-board") === null).toBe(true);
+    expect(screen.queryByTestId("project-workspace") === null).toBe(true);
   });
 
   test("persists same-turn pane intents and flushes them on app teardown", async () => {

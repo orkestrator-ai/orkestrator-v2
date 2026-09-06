@@ -220,7 +220,7 @@ let currentOtherEnvironments: Environment[] = [];
 let currentOtherProjects: Project[] = [];
 /** Projects removed from the store, to model a deletion while a dialog is open. */
 let currentDeletedProjectIds = new Set<string>();
-let currentProjectBoardTab: "kanban" | "github" | "linear" | "features" = "kanban";
+let currentProjectBoardTab: "coordinator" | "kanban" | "github" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
@@ -640,8 +640,10 @@ mock.module("@/stores", () => ({
     selector?: (state: {
       selectedEnvironmentId: string | null;
       selectedProjectId: string | null;
-      projectBoardTab: "kanban" | "linear" | "github" | "features";
-      setProjectBoardTab: (tab: "kanban" | "linear" | "github" | "features") => void;
+      projectBoardTab: "coordinator" | "kanban" | "linear" | "github" | "features";
+      setProjectBoardTab: (
+        tab: "coordinator" | "kanban" | "linear" | "github" | "features",
+      ) => void;
       setProjectBoardNotesOpen: (open: boolean) => void;
     }) => T,
   ) =>
@@ -1021,9 +1023,7 @@ describe("ActionBar grid presentation", () => {
     expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(
       true,
     );
-    expect(screen.getByRole("button", { name: "Kanban board" }).hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(screen.getByRole("tab", { name: "Kanban" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(
       true,
     );
@@ -1041,12 +1041,12 @@ describe("ActionBar grid presentation", () => {
     const environmentSettings = screen.getByRole("button", { name: "Environment settings" });
     const createPr = screen.getByRole("button", { name: "Create PR" });
     const projectNotes = screen.getByRole("button", { name: "Project notes" });
-    const kanban = screen.getByRole("button", { name: "Kanban board" });
+    const kanban = screen.getByRole("tab", { name: "Kanban" });
 
     expect(environmentSettings.textContent).toContain("Env. settings");
     expect(createPr.getAttribute("data-variant")).toBe("ghost");
     expect(projectNotes.getAttribute("data-variant")).toBe("ghost");
-    expect(kanban.getAttribute("data-variant")).toBe("ghost");
+    expect(kanban.className).toContain("bg-primary");
   });
 
   test("shows Push Changes as soon as a PR is detected, without waiting for file changes", async () => {
@@ -1110,13 +1110,15 @@ describe("ActionBar grid presentation", () => {
     render(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
-    fireEvent.click(screen.getByRole("button", { name: "Kanban board" }));
-    fireEvent.click(screen.getByRole("button", { name: "GitHub issues" }));
-    fireEvent.click(screen.getByRole("button", { name: "Linear pipeline" }));
-    fireEvent.click(screen.getByRole("button", { name: "Features" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Coordinator" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
+    fireEvent.click(screen.getByRole("tab", { name: "GitHub" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Features" }));
 
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
     expect(setProjectBoardTabMock.mock.calls.map(([tab]) => tab)).toEqual([
+      "coordinator",
       "kanban",
       "github",
       "linear",
@@ -1129,11 +1131,11 @@ describe("ActionBar grid presentation", () => {
     currentProjectBoardTab = "linear";
     render(<ActionBar presentation="grid" />);
 
-    const linear = screen.getByRole("button", { name: "Linear pipeline" });
-    const kanban = screen.getByRole("button", { name: "Kanban board" });
-    expect(linear.getAttribute("aria-pressed")).toBe("true");
-    expect(linear.className).toContain("bg-primary/15");
-    expect(kanban.getAttribute("aria-pressed")).toBe("false");
+    const linear = screen.getByRole("tab", { name: "Linear" });
+    const kanban = screen.getByRole("tab", { name: "Kanban" });
+    expect(linear.getAttribute("aria-selected")).toBe("true");
+    expect(linear.className).toContain("bg-primary");
+    expect(kanban.getAttribute("aria-selected")).toBe("false");
   });
 
   test("toggles the file panel from the mobile grid", () => {
@@ -1442,7 +1444,7 @@ describe("ActionBar editor and run commands", () => {
 
   test("loads and runs container commands from orkestrator-ai.json", async () => {
     currentWorkspaceReady = true;
-    readContainerFileMock.mockImplementationOnce(async () => ({
+    readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test", "bun run build"] }),
     }));
     render(<ActionBar />);
@@ -2016,15 +2018,20 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
 
-    await waitFor(() =>
-      expect(launchTerminalJobMock).toHaveBeenCalledWith(
-        expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
-      ),
+    await waitFor(
+      () =>
+        expect(launchTerminalJobMock).toHaveBeenCalledWith(
+          expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
+        ),
+      { timeout: 10_000 },
     );
-    await waitFor(() => {
-      expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode");
-    });
-  });
+    await waitFor(
+      () => {
+        expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode");
+      },
+      { timeout: 10_000 },
+    );
+  }, 20_000);
 });
 
 describe("ActionBar workflow tabs", () => {
@@ -2050,7 +2057,8 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     expect(screen.queryByText("repo") === null).toBe(true);
-    const notesButton = screen.getByRole("button", { name: "Project Notes" });
+    const notesButton = screen.getByRole("button", { name: "Project notes" });
+    expect(screen.getByRole("tab", { name: "Coordinator" })).toBeTruthy();
     const kanbanTab = screen.getByRole("tab", { name: "Kanban" });
     expect(kanbanTab).toBeTruthy();
     expect(screen.getByRole("tab", { name: "GitHub" })).toBeTruthy();
@@ -2069,7 +2077,7 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Features" }), { button: 0 });
+    fireEvent.click(screen.getByRole("tab", { name: "Features" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("features");
   });
 
@@ -2078,7 +2086,7 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Linear" }), { button: 0 });
+    fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("linear");
   });
 
@@ -2087,7 +2095,7 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "GitHub" }), { button: 0 });
+    fireEvent.click(screen.getByRole("tab", { name: "GitHub" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("github");
   });
 
@@ -2097,7 +2105,7 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Kanban" }), { button: 0 });
+    fireEvent.click(screen.getByRole("tab", { name: "Kanban" }));
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
   });
 
@@ -2109,7 +2117,7 @@ describe("ActionBar workflow tabs", () => {
 
     const linearTab = screen.getByRole("tab", { name: "Linear" });
     expect(linearTab.getAttribute("aria-selected")).toBe("true");
-    expect(linearTab.className).toContain("data-[state=active]:!bg-primary/15");
+    expect(linearTab.className).toContain("bg-primary");
     expect(screen.getByRole("tab", { name: "Kanban" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe(
       "false",

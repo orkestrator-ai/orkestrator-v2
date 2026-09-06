@@ -954,10 +954,9 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
     const originalDockerRmLog = process.env.FAKE_DOCKER_RM_LOG;
     const originalDockerExecLog = process.env.FAKE_DOCKER_EXEC_LOG;
     process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-    // `os.homedir()` honours $HOME on POSIX, which is what `getHostClaudeCredentials`
-    // resolves against. Redirecting it keeps the developer's real credential out of
-    // the fake-docker logs written under /tmp, and makes every home-derived path in
-    // these tests hermetic rather than dependent on the machine running them.
+    // Bun caches `os.homedir()`, so set the explicit agent-test host-home override
+    // as well as HOME. This keeps developer credentials out of fake-docker logs and
+    // makes every home-derived path in these tests hermetic.
     process.env.HOME = home;
     // Bun caches `os.homedir()` on some versions, so changing HOME alone is
     // not a reliable credential boundary. Pin the explicit host paths consumed
@@ -979,7 +978,9 @@ printf '%s\\n' '{"slug":"${slug}"}' > "$out"
       else process.env.HOME = originalHome;
       if (originalAgentTestHostHome === undefined) {
         delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
-      } else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = originalAgentTestHostHome;
+      } else {
+        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = originalAgentTestHostHome;
+      }
       if (originalAgentTestClaudeConfigDir === undefined) {
         delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
       } else {

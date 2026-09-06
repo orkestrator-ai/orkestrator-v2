@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { Switch } from "@/components/ui/switch";
+import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
@@ -150,26 +151,13 @@ export function FeatureBuildFields({
           Build
         </Label>
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="inline-grid grid-cols-2 rounded-lg border border-divider bg-input-surface p-0.5">
-            {BUILD_INTENTS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onIntentChange(option.value)}
-                disabled={disabled}
-                aria-pressed={intent === option.value}
-                className={cn(
-                  "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50",
-                  intent === option.value
-                    ? "bg-primary font-bold text-primary-foreground shadow-sm"
-                    : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
-                )}
-              >
-                {option.icon}
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedSelector
+            value={intent}
+            options={BUILD_INTENTS}
+            onValueChange={onIntentChange}
+            disabled={disabled}
+            ariaLabel="Build intent"
+          />
           <p className="text-xs text-muted-foreground">{selectedIntent.description}</p>
         </div>
       </div>

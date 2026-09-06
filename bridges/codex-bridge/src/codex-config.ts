@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
@@ -35,6 +37,72 @@ export function codexAppServerConfigOverrides(
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
+  if (env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
+    const permissionProfile = env.CODEX_BRIDGE_PERMISSION_PROFILE?.trim();
+    const readableRuntimeRoot = env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT?.trim();
+    const projectRoot = env.CWD?.trim();
+    if (
+      !permissionProfile ||
+      !/^[A-Za-z0-9_-]+$/.test(permissionProfile) ||
+      !readableRuntimeRoot ||
+      !isAbsolute(readableRuntimeRoot) ||
+      !projectRoot ||
+      !isAbsolute(projectRoot)
+    ) {
+      throw new Error("Coordinator Codex permission profile configuration is invalid");
+    }
+    // Permission profiles replace the legacy sandbox override and make read
+    // access deny-by-default. The workspace root and the shipped Codex runtime
+    // are the only non-platform paths visible to sandboxed commands.
+    overrides.default_permissions = JSON.stringify(permissionProfile);
+    overrides[`permissions.${permissionProfile}.filesystem`] =
+      `{ ":root" = "deny", ":minimal" = "read", ":tmpdir" = "deny", ` +
+      `":slash_tmp" = "deny", ${JSON.stringify(readableRuntimeRoot)} = "read", ` +
+      `":workspace_roots" = { "." = "read" } }`;
+    overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
+    // A coordinator checkout is data, not trusted runtime configuration.
+    // Explicitly pin this project untrusted so repository-local config, hooks,
+    // and extensions stay disabled even if a future Codex release changes the
+    // trust side effect of starting a thread with a permission profile.
+    overrides[`projects.${JSON.stringify(projectRoot)}.trust_level`] = JSON.stringify("untrusted");
+    for (const feature of [
+      "apps",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "code_mode_host",
+      "computer_use",
+      "hooks",
+      "image_generation",
+      "in_app_browser",
+      "plugin_sharing",
+      "plugins",
+      "remote_plugin",
+      "skill_mcp_dependency_install",
+      "tool_call_mcp_elicitation",
+      "tool_suggest",
+      "workspace_dependencies",
+    ] as const) {
+      overrides[`features.${feature}`] = "false";
+    }
+    // These variables remain available to the trusted app-server process so it
+    // can authenticate, but never enter model-created shell processes. Keep
+    // Codex's own default secret exclusions enabled and add coordinator-specific
+    // runtime identities explicitly.
+    overrides["shell_environment_policy.inherit"] = JSON.stringify("core");
+    overrides["shell_environment_policy.ignore_default_excludes"] = "false";
+    overrides["shell_environment_policy.exclude"] = JSON.stringify([
+      "*_KEY",
+      "*_SECRET",
+      "*_TOKEN",
+      "CODEX_HOME",
+      "CODEX_BRIDGE_TOKEN",
+      "CODEX_BRIDGE_PERMISSION_PROFILE",
+      "CODEX_BRIDGE_READABLE_RUNTIME_ROOT",
+      ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+      ORKESTRATOR_AGENT_MCP_URL_ENV,
+    ]);
+  }
   if (rawUrl && token) {
     try {
       const url = new URL(rawUrl);

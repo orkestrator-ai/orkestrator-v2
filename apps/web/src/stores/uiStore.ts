@@ -18,7 +18,7 @@ const withoutFolder = (collapsed: string[], folder: string): string[] =>
 const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
   [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(0, RECENT_PROJECT_LIMIT);
 
-export type ProjectBoardTab = "kanban" | "github" | "linear" | "features";
+export type ProjectBoardTab = "coordinator" | "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
 
 interface UIState {
@@ -92,7 +92,7 @@ export const useUIStore = create<UIState>()(
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
-      projectBoardTab: "kanban",
+      projectBoardTab: "coordinator",
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],

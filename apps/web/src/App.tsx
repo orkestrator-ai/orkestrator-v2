@@ -11,8 +11,7 @@ import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
-import { KanbanBoard } from "@/components/kanban";
-import { ProjectLauncher } from "@/components/projects";
+import { ProjectLauncher, ProjectWorkspace } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
@@ -790,7 +789,7 @@ function App() {
                 </div>
               </div>
             ) : selectedProjectId ? (
-              <KanbanBoard projectId={selectedProjectId} />
+              <ProjectWorkspace projectId={selectedProjectId} />
             ) : (
               <ProjectLauncher
                 createEnvironment={createEnvironment}

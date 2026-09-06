@@ -246,6 +246,9 @@ export interface Environment {
    */
   frontendAgentActivityObservers?: Record<string, FrontendAgentActivityObserverSnapshot>;
   createdFromCommit?: string;
+  /** Immutable source selected by a coordinator delegation. */
+  delegationBaseBranch?: string;
+  delegationBaseCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];
   order: number;
@@ -509,6 +512,10 @@ export interface PersistedNativeAgentSession {
   version: typeof NATIVE_AGENT_SESSION_VERSION;
   key: string;
   environmentId: string;
+  /** Explicit durable owner. Records written before v2 migrate to environment ownership. */
+  owner?: import("@orkestrator/protocol/coordinator").AgentSessionOwner;
+  /** Immutable backend-owned execution policy; renderer inputs never replace it. */
+  executionPolicy?: "coordinator-read-only";
   agent: NativeAgentProvider;
   logicalSessionKey: string;
   providerSessionId: string;

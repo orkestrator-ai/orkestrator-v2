@@ -283,6 +283,8 @@ export abstract class BuildPipelineServiceBase {
       projectId: input.projectId,
       environmentId: existingEnvironmentId,
       environmentType: existingEnvironment?.environmentType ?? input.environmentType,
+      ...(input.delegationBaseBranch ? { delegationBaseBranch: input.delegationBaseBranch } : {}),
+      ...(input.delegationBaseCommit ? { delegationBaseCommit: input.delegationBaseCommit } : {}),
       // The build step's harness is the pipeline's agent: it is what the
       // environment default is configured for and what every stage without its
       // own configuration falls back to.

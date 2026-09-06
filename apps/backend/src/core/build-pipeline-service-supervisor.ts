@@ -196,6 +196,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             (pipeline.environmentType === "containerized" ? "restricted" : "full"),
           environmentType: pipeline.environmentType,
           buildPipelineId: pipeline.id,
+          ...(pipeline.delegationBaseBranch
+            ? { delegationBaseBranch: pipeline.delegationBaseBranch }
+            : {}),
+          ...(pipeline.delegationBaseCommit
+            ? { delegationBaseCommit: pipeline.delegationBaseCommit }
+            : {}),
           // An explicit name suppresses the rename-from-prompt path in
           // `create_environment`, so it is only sent when the user chose one.
           ...(pipeline.environmentOptions?.name?.trim()

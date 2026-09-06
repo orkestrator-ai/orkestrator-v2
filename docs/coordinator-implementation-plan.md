@@ -1,6 +1,6 @@
 # Project coordinator implementation plan
 
-Status: proposed implementation; no application changes made.
+Status: implemented.
 
 The project landing page will open a **Coordinator** tab by default. Its chat
 runs against the project's actual local checkout, can inspect the codebase and

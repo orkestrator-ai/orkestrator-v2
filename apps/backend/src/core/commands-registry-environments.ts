@@ -167,6 +167,8 @@ export function registerEnvironmentCommands(
         initialReasoningEffort,
         initialConversationMode,
         controlRequestId,
+        delegationBaseBranch,
+        delegationBaseCommit,
       },
       context,
     ) => {
@@ -221,6 +223,15 @@ export function registerEnvironmentCommands(
         remoteUrl: project.gitUrl,
       });
       env.controlRequestId = externalRequestId || undefined;
+      if (delegationBaseBranch !== undefined || delegationBaseCommit !== undefined) {
+        const baseBranch = asOptionalString(delegationBaseBranch)?.trim();
+        const baseCommit = asOptionalString(delegationBaseCommit)?.trim();
+        if (!baseBranch || !baseCommit || !/^[0-9a-f]{40}$/i.test(baseCommit)) {
+          throw new Error("delegationBaseBranch and a full delegationBaseCommit are required");
+        }
+        env.delegationBaseBranch = baseBranch;
+        env.delegationBaseCommit = baseCommit;
+      }
       if (agentSettings !== undefined) env.agentSettings = normalizedTier(agentSettings);
       if (pendingAgentLaunch === true) {
         env.pendingAgentLaunch = true;

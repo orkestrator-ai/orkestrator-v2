@@ -73,6 +73,8 @@ export function nextTerminalActivityGenerationValue(): number {
   return nextTerminalActivityGeneration;
 }
 export const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+/** Canonical workspace path captured by each live local bridge generation. */
+export const localServerWorkingDirectories = new Map<string, string>();
 /** Per-process bearer tokens for renderer → local Codex bridge requests. */
 export const localCodexBridgeTokens = new Map<string, string>();
 /** Per-process bearer tokens for renderer → local Claude bridge requests. */

@@ -477,6 +477,9 @@ export interface BuildPipeline {
   projectId: string;
   environmentId: string;
   environmentType: BuildPipelineEnvironmentType;
+  /** Immutable source revision selected when a coordinator delegated the work. */
+  delegationBaseBranch?: string;
+  delegationBaseCommit?: string;
   agentType: BuildPipelineAgent;
   /**
    * Per-step launch configuration. A missing step, or a missing field within
@@ -553,6 +556,9 @@ export interface StartBuildPipelineInput {
   taskId: string;
   projectId: string;
   environmentType: BuildPipelineEnvironmentType;
+  /** Coordinator-only delegation context, resolved before the workflow starts. */
+  delegationBaseBranch?: string;
+  delegationBaseCommit?: string;
   agentType: BuildPipelineAgent;
   /** Per-step harness, model and reasoning chosen in the build launcher. */
   steps?: BuildStepConfigs;
@@ -1054,6 +1060,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     value.projectId.length === 0 ||
     typeof value.environmentId !== "string" ||
     !ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType) ||
+    !isOptionalNonBlankString(value.delegationBaseBranch) ||
+    (value.delegationBaseCommit !== undefined &&
+      (typeof value.delegationBaseCommit !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(value.delegationBaseCommit))) ||
     !AGENTS.has(value.agentType as BuildPipelineAgent) ||
     (value.steps !== undefined && !isBuildStepConfigs(value.steps)) ||
     !BUILD_PHASES.has(value.phase as BuildPhase) ||
@@ -1169,6 +1179,11 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
     typeof value.taskTitle === "string" &&
     value.taskTitle.length > 0 &&
     ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType) &&
+    (value.delegationBaseBranch === undefined ||
+      (typeof value.delegationBaseBranch === "string" && value.delegationBaseBranch.length > 0)) &&
+    (value.delegationBaseCommit === undefined ||
+      (typeof value.delegationBaseCommit === "string" &&
+        /^[0-9a-f]{40}$/i.test(value.delegationBaseCommit))) &&
     AGENTS.has(value.agentType as BuildPipelineAgent) &&
     (value.steps === undefined || isBuildStepConfigs(value.steps)) &&
     (value.reviewers === undefined || isBuildStepConfigList(value.reviewers)) &&

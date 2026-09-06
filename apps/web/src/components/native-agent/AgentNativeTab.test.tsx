@@ -204,6 +204,7 @@ const getNativeAgentProjectionMock = mock(defaultProjection);
 const stopNativeAgentBackgroundTaskMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
+const getLocalFileTreeMock = mock(async (_worktreePath: string) => []);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -221,7 +222,7 @@ mock.module("@/lib/backend", () => ({
   stopNativeAgentSession: stopNativeAgentSessionMock,
   stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
   getFileTree: async () => [],
-  getLocalFileTree: async () => [],
+  getLocalFileTree: getLocalFileTreeMock,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
@@ -301,6 +302,7 @@ afterEach(() => {
   updateNativeAgentControlsMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+  getLocalFileTreeMock.mockClear();
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
     enabledAgentPlatforms: ["claude", "codex", "opencode"],
@@ -2715,6 +2717,34 @@ describe("AgentNativeTab", () => {
     }));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+  });
+
+  test("does not apply worker setup gating to a coordinator runtime", async () => {
+    useEnvironmentStore.setState({ environments: [] });
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab"
+        data={{
+          platform: "codex",
+          environmentId: "coordinator:workspace-1:conversation-1",
+          isLocal: true,
+        }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorWorkspacePath="/tmp/project"
+      />,
+    );
+
+    expect(screen.queryByText("Waiting for setup scripts to complete...") === null).toBe(true);
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith("/tmp/project"));
+    expect(ensureNativeAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "codex",
+        environmentId: "coordinator:workspace-1:conversation-1",
+      }),
+    );
   });
 
   test.each([...AGENT_PLATFORMS])(

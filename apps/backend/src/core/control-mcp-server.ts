@@ -16,6 +16,8 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_TRANSCRIPT_MESSAGES = 100;
 const MAX_TRANSCRIPT_BYTES = 1024 * 1024;
 const MAX_TERMINAL_OUTPUT_CHARS = 256 * 1024;
+const COORDINATOR_CREDENTIAL_TTL_MS = 12 * 60 * 60 * 1_000;
+const MAX_COORDINATOR_CREDENTIALS = 512;
 const TERMINAL_TAB_TYPES = new Set([
   "plain",
   "claude",
@@ -27,6 +29,45 @@ const TERMINAL_TAB_TYPES = new Set([
   "root",
   "claude-tmux",
 ]);
+
+const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
+  ["list_projects", "discovery"],
+  ["get_launch_options", "discovery"],
+  ["get_repository_context", "discovery"],
+  ["list_workflows", "discovery"],
+  ["adopt_workflow", "discovery"],
+  ["list_environments", "environments"],
+  ["get_environment", "environments"],
+  ["list_tabs", "environments"],
+  ["get_tab_state", "environments"],
+  ["get_tab_transcript", "environments"],
+  ["launch_environment", "environments"],
+  ["start_environment", "environments"],
+  ["stop_environment", "environments"],
+  ["list_tickets", "tickets"],
+  ["get_ticket", "tickets"],
+  ["create_ticket", "tickets"],
+  ["update_ticket", "tickets"],
+  ["add_ticket_comment", "tickets"],
+  ["launch_job", "jobs"],
+  ["send_prompt_to_tab", "jobs"],
+  ["start_build_pipeline", "build-pipelines"],
+  ["get_build_pipeline", "build-pipelines"],
+  ["pause_build_pipeline", "build-pipelines"],
+  ["resume_build_pipeline", "build-pipelines"],
+  ["cancel_build_pipeline", "build-pipelines"],
+  ["start_multi_review", "multi-review"],
+  ["get_multi_review", "multi-review"],
+  ["cancel_multi_review", "multi-review"],
+  ["address_multi_review", "multi-review"],
+  ["list_mailboxes", "mail"],
+  ["send_message", "mail"],
+  ["read_messages", "mail"],
+  ["get_message", "mail"],
+  ["get_message_status", "mail"],
+  ["ack_message", "mail"],
+]);
+const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
 export type ControlMcpInfo = {
   url: string;
@@ -46,7 +87,32 @@ export type ControlMcpServerOptions = {
   port?: number;
 };
 
+export type CoordinatorControlScope = {
+  role: "coordinator";
+  projectId: string;
+  coordinatorId: string;
+  conversationId: string;
+  mailboxIncarnationId: string;
+  capabilities: readonly string[];
+};
+
+export type CoordinatorControlConnection = {
+  url: string;
+  token: string;
+};
+
 export type ControlMcpInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+function configuredControlMcpPort(): number {
+  const configured = process.env.ORKESTRATOR_CONTROL_MCP_PORT?.trim();
+  if (!configured) return DEFAULT_CONTROL_MCP_PORT;
+  if (!/^\d+$/.test(configured)) throw new Error("ORKESTRATOR_CONTROL_MCP_PORT is invalid");
+  const port = Number(configured);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) {
+    throw new Error("ORKESTRATOR_CONTROL_MCP_PORT is invalid");
+  }
+  return port;
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -281,6 +347,41 @@ function ticketDetail(task: JsonRecord): JsonRecord {
   };
 }
 
+function workflowSummary(workflow: JsonRecord): JsonRecord {
+  return {
+    id: workflow.id,
+    projectId: workflow.projectId,
+    environmentId: workflow.environmentId,
+    taskId: workflow.taskId,
+    phase: workflow.phase,
+    error: workflow.error,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+    revision: workflow.revision ?? workflow.backendRevision,
+  };
+}
+
+function normalizedWorkflow(value: unknown): JsonRecord | null {
+  const transported = isRecord(value) && isRecord(value.record) ? value.record : value;
+  if (!isRecord(transported)) return null;
+  if (!isRecord(transported.snapshot)) return transported;
+  const snapshot = transported.snapshot;
+  return {
+    ...snapshot,
+    id: snapshot.id ?? transported.id,
+    projectId: snapshot.projectId ?? transported.projectId,
+    environmentId: snapshot.environmentId ?? transported.environmentId,
+    updatedAt: transported.updatedAt ?? snapshot.updatedAt,
+    revision: transported.revision ?? snapshot.revision ?? snapshot.backendRevision,
+  };
+}
+
+const agentSelectionSchema = z.object({
+  agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+  model: z.string().trim().min(1).max(500),
+  reasoningEffort: z.string().trim().min(1).max(100).optional(),
+});
+
 async function allEnvironments(
   invoke: ControlMcpInvoker,
   projectId?: string,
@@ -461,7 +562,10 @@ function readAnnotations() {
   };
 }
 
-async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
+async function createControlMcp(
+  invoke: ControlMcpInvoker,
+  coordinatorScope?: CoordinatorControlScope,
+): Promise<McpServer> {
   const config = await invoke<unknown>("get_config");
   const messagingEnabled =
     isRecord(config) &&
@@ -487,7 +591,9 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
       annotations: readAnnotations(),
     },
     async () => {
-      const projects = asArray(await invoke("get_projects")).map(projectSummary);
+      const projects = asArray(await invoke("get_projects"))
+        .filter((project) => !coordinatorScope || project.id === coordinatorScope.projectId)
+        .map(projectSummary);
       return toolResult({ projects, total: projects.length });
     },
   );
@@ -521,7 +627,7 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
       annotations: readAnnotations(),
     },
     async ({ projectId, status }) => {
-      const all = await allEnvironments(invoke, projectId);
+      const all = await allEnvironments(invoke, projectId ?? coordinatorScope?.projectId);
       const environments = all
         .filter((environment) => !status || environment.status === status)
         .map(environmentSummary);
@@ -835,6 +941,11 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         conversationMode: z.enum(["plan", "build"]).default("build"),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
+        baseBranch: z.string().trim().min(1).max(500).optional(),
+        baseCommit: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/i)
+          .optional(),
       }),
       annotations: {
         readOnlyHint: false,
@@ -844,8 +955,16 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
       },
     },
     async (input) => {
+      if (coordinatorScope && (!input.baseBranch || !input.baseCommit)) {
+        throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
+      }
+      const repository = coordinatorScope
+        ? await invoke<unknown>("get_project_git_status", {
+            projectId: coordinatorScope.projectId,
+          })
+        : null;
       await validateSelection(invoke, input);
-      const environment = await invoke<unknown>("create_environment", {
+      const createInput = {
         projectId: input.projectId,
         name: input.name,
         networkAccessMode: input.networkAccessMode,
@@ -860,13 +979,32 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         initialAgentModel: input.modelId,
         initialReasoningEffort: input.reasoningId,
         initialConversationMode: input.conversationMode,
-        controlRequestId: input.requestId,
-      });
+        ...(input.baseBranch ? { delegationBaseBranch: input.baseBranch } : {}),
+        ...(input.baseCommit ? { delegationBaseCommit: input.baseCommit } : {}),
+      };
+      const launch = coordinatorScope
+        ? await invoke<unknown>("launch_coordinator_environment", {
+            scope: coordinatorScope,
+            requestId: input.requestId,
+            input: createInput,
+          })
+        : {
+            environment: await invoke<unknown>("create_environment", {
+              ...createInput,
+              controlRequestId: input.requestId,
+            }),
+          };
+      const environment = isRecord(launch) ? launch.environment : null;
       if (!isRecord(environment) || typeof environment.id !== "string") {
         throw new Error("Environment creation returned no environment");
       }
-      let startError: string | undefined;
-      if (environment.status !== "running" && environment.status !== "creating") {
+      let startError =
+        isRecord(launch) && typeof launch.startError === "string" ? launch.startError : undefined;
+      if (
+        !coordinatorScope &&
+        environment.status !== "running" &&
+        environment.status !== "creating"
+      ) {
         try {
           await invoke("start_environment_background", { environmentId: environment.id });
         } catch (error) {
@@ -877,6 +1015,15 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         environmentId: environment.id,
         tabId: "startup-agent",
         status: startError ? "created" : "accepted",
+        ...(isRecord(repository)
+          ? {
+              delegationBaseBranch: input.baseBranch,
+              delegationBaseCommit: input.baseCommit,
+              liveCheckoutHasUncommittedChanges:
+                Number(repository.trackedChanges ?? 0) + Number(repository.untrackedChanges ?? 0) >
+                0,
+            }
+          : {}),
         ...(startError ? { error: startError } : {}),
       });
     },
@@ -919,7 +1066,16 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         modelId: input.modelId,
         reasoningId: input.reasoningId,
       });
-      const job = await invoke<unknown>("launch_control_job", input);
+      const job = await invoke<unknown>("launch_control_job", {
+        ...input,
+        ...(coordinatorScope
+          ? {
+              prompt:
+                `<orkestrator-coordinator-delegation>\nProject: ${coordinatorScope.projectId}\nCoordinator: ${coordinatorScope.coordinatorId}\nConversation: ${coordinatorScope.conversationId}\nThis is a server-attested same-project worker delegation. Work only inside this disposable environment under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.\n</orkestrator-coordinator-delegation>\n\n` +
+                input.prompt,
+            }
+          : {}),
+      });
       if (!isRecord(job)) throw new Error("Job launch returned no result");
       return toolResult(job);
     },
@@ -962,6 +1118,315 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
     },
   );
 
+  if (coordinatorScope) {
+    server.registerTool(
+      "get_repository_context",
+      {
+        title: "Get project repository context",
+        description:
+          "Read current branch, immutable HEAD commit, dirty state, and upstream freshness. This tool cannot mutate Git.",
+        inputSchema: z.object({}),
+        annotations: readAnnotations(),
+      },
+      async () => {
+        const status = await invoke<unknown>("get_project_git_status", {
+          projectId: coordinatorScope.projectId,
+        });
+        if (!isRecord(status)) throw new Error("Repository status returned no result");
+        return toolResult({ repository: status });
+      },
+    );
+    server.registerTool(
+      "list_workflows",
+      {
+        title: "List coordinator workflows",
+        description:
+          "List durable worker, build-pipeline, and multi-review associations for this project with bounded authoritative summaries.",
+        inputSchema: z.object({}),
+        annotations: readAnnotations(),
+      },
+      async () => {
+        const snapshot = await invoke<unknown>("get_project_coordinator", {
+          projectId: coordinatorScope.projectId,
+        });
+        const associations = isRecord(snapshot) ? asArray(snapshot.workflows).slice(-200) : [];
+        const workflows = await Promise.all(
+          associations.map(async (association) => {
+            const kind = association.kind;
+            const resourceId =
+              typeof association.resourceId === "string" ? association.resourceId : "";
+            let resource: JsonRecord | null = null;
+            try {
+              if (association.pending === true || resourceId.startsWith("pending:")) {
+                resource = { id: resourceId, status: "pending" };
+              } else if (kind === "environment") {
+                const environment = await invoke<unknown>("get_environment", {
+                  environmentId: resourceId,
+                });
+                resource = isRecord(environment) ? environmentSummary(environment) : null;
+              } else if (kind === "build-pipeline") {
+                const workflow = await invoke<unknown>("get_build_pipeline", {
+                  pipelineId: resourceId,
+                });
+                const record = normalizedWorkflow(workflow);
+                resource = record ? workflowSummary(record) : null;
+              } else if (kind === "multi-review") {
+                const workflow = await invoke<unknown>("get_multi_review_workflow", {
+                  workflowId: resourceId,
+                });
+                const record = normalizedWorkflow(workflow);
+                resource = record ? workflowSummary(record) : null;
+              }
+            } catch {
+              resource = { id: resourceId, status: "unavailable" };
+            }
+            return {
+              id: association.id,
+              kind,
+              resourceId,
+              requestId: association.requestId,
+              baseBranch: association.baseBranch,
+              baseCommit: association.baseCommit,
+              createdAt: association.createdAt,
+              resource,
+            };
+          }),
+        );
+        return toolResult({ workflows, total: workflows.length });
+      },
+    );
+    server.registerTool(
+      "adopt_workflow",
+      {
+        title: "Adopt a coordinator workflow",
+        description:
+          "Associate an orphaned or closed-tab workflow with this conversation so terminal notifications can be delivered here.",
+        inputSchema: z.object({ associationId: z.string().trim().min(1).max(200) }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ associationId }) => {
+        const association = await invoke<unknown>("adopt_coordinator_workflow", {
+          ...coordinatorScope,
+          associationId,
+        });
+        if (!isRecord(association)) throw new Error("Workflow adoption returned no result");
+        return toolResult({ association });
+      },
+    );
+    const scopedWorkflow = async (kind: "build" | "review", workflowId: string) => {
+      const raw = await invoke<unknown>(
+        kind === "build" ? "get_build_pipeline" : "get_multi_review_workflow",
+        kind === "build" ? { pipelineId: workflowId } : { workflowId },
+      );
+      const record = normalizedWorkflow(raw);
+      if (!record || record.projectId !== coordinatorScope.projectId) {
+        throw new Error(
+          `${kind === "build" ? "Build pipeline" : "Multi-review"} not found in this project`,
+        );
+      }
+      return record;
+    };
+
+    for (const [tool, command, title] of [
+      ["start_environment", "start_environment_background", "Start a worker environment"],
+      ["stop_environment", "stop_environment", "Stop a worker environment"],
+    ] as const) {
+      server.registerTool(
+        tool,
+        {
+          title,
+          description: `${title} that belongs to this coordinator's project.`,
+          inputSchema: z.object({ environmentId: z.string().trim().min(1).max(200) }),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: tool === "stop_environment",
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ environmentId }) => {
+          await invoke("get_environment", { environmentId });
+          await invoke(command, { environmentId });
+          return toolResult({ environmentId, accepted: true });
+        },
+      );
+    }
+
+    server.registerTool(
+      "start_build_pipeline",
+      {
+        title: "Start a structured build pipeline",
+        description:
+          "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment.",
+        inputSchema: z.object({
+          requestId: z.string().trim().min(1).max(256),
+          taskId: z.string().trim().min(1).max(200),
+          environmentType: z.enum(["local", "containerized"]).default("local"),
+          baseBranch: z.string().trim().min(1).max(500),
+          baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),
+          agentType: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+          taskTitle: z.string().trim().min(1).max(500),
+          taskSnapshot: z.object({
+            title: z.string().max(500),
+            description: z.string().max(100_000),
+            acceptanceCriteria: z.string().max(100_000),
+            comments: z
+              .array(z.object({ text: z.string().max(20_000) }))
+              .max(200)
+              .default([]),
+            images: z
+              .array(z.object({ filename: z.string().max(500), data: z.string().max(5_000_000) }))
+              .max(20)
+              .default([]),
+          }),
+          existingEnvironmentId: z.string().trim().min(1).max(200).optional(),
+          maxIterations: z.number().int().min(1).max(20).optional(),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async ({ requestId, baseBranch, baseCommit, ...input }) => {
+        if (input.existingEnvironmentId) {
+          await invoke("get_environment", { environmentId: input.existingEnvironmentId });
+        }
+        const workflow = await invoke<unknown>("start_coordinator_build_pipeline", {
+          scope: coordinatorScope,
+          requestId,
+          input: {
+            ...input,
+            projectId: coordinatorScope.projectId,
+            delegationBaseBranch: baseBranch,
+            delegationBaseCommit: baseCommit,
+          },
+        });
+        const record = normalizedWorkflow(workflow);
+        if (!record) throw new Error("Build pipeline returned no result");
+        return toolResult({ workflow: workflowSummary(record) });
+      },
+    );
+
+    server.registerTool(
+      "get_build_pipeline",
+      {
+        title: "Get a build pipeline",
+        description: "Read authoritative state for a coordinator-associated build pipeline.",
+        inputSchema: z.object({ pipelineId: z.string().trim().min(1).max(200) }),
+        annotations: readAnnotations(),
+      },
+      async ({ pipelineId }) =>
+        toolResult({ workflow: workflowSummary(await scopedWorkflow("build", pipelineId)) }),
+    );
+
+    for (const [tool, command, title] of [
+      ["pause_build_pipeline", "pause_build_pipeline", "Pause a build pipeline"],
+      ["resume_build_pipeline", "resume_build_pipeline", "Resume a build pipeline"],
+      ["cancel_build_pipeline", "cancel_build_pipeline", "Cancel a build pipeline"],
+    ] as const) {
+      server.registerTool(
+        tool,
+        {
+          title,
+          description: `${title} in this coordinator's project.`,
+          inputSchema: z.object({ pipelineId: z.string().trim().min(1).max(200) }),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: tool === "cancel_build_pipeline",
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ pipelineId }) => {
+          await scopedWorkflow("build", pipelineId);
+          const workflow = await invoke<unknown>(command, { pipelineId });
+          const record = normalizedWorkflow(workflow);
+          return toolResult({ workflow: record ? workflowSummary(record) : { id: pipelineId } });
+        },
+      );
+    }
+
+    server.registerTool(
+      "start_multi_review",
+      {
+        title: "Start a multi-review",
+        description: "Start a durable multi-model review in an existing worker environment.",
+        inputSchema: z.object({
+          requestId: z.string().trim().min(1).max(256),
+          buildPipelineId: z.string().trim().min(1).max(200),
+          environmentId: z.string().trim().min(1).max(200),
+          targetBranch: z.string().trim().min(1).max(500),
+          reviewInstruction: z.string().max(100_000).optional(),
+          reviewers: z.array(agentSelectionSchema).min(1).max(32),
+          fixModel: agentSelectionSchema,
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async ({ requestId, buildPipelineId, ...input }) => {
+        await invoke("get_environment", { environmentId: input.environmentId });
+        const workflow = await invoke<unknown>("start_coordinator_multi_review", {
+          scope: coordinatorScope,
+          requestId,
+          buildPipelineId,
+          input: { ...input, projectId: coordinatorScope.projectId },
+        });
+        const record = normalizedWorkflow(workflow);
+        if (!record) throw new Error("Multi-review returned no result");
+        return toolResult({ workflow: workflowSummary(record) });
+      },
+    );
+
+    server.registerTool(
+      "get_multi_review",
+      {
+        title: "Get a multi-review",
+        description: "Read authoritative state for a multi-review in this project.",
+        inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }),
+        annotations: readAnnotations(),
+      },
+      async ({ workflowId }) =>
+        toolResult({ workflow: workflowSummary(await scopedWorkflow("review", workflowId)) }),
+    );
+
+    for (const [tool, command, title] of [
+      ["cancel_multi_review", "cancel_multi_review", "Cancel a multi-review"],
+      ["address_multi_review", "address_multi_review", "Address multi-review findings"],
+    ] as const) {
+      server.registerTool(
+        tool,
+        {
+          title,
+          description: `${title} in the associated worker environment.`,
+          inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async ({ workflowId }) => {
+          await scopedWorkflow("review", workflowId);
+          const workflow = await invoke<unknown>(command, { workflowId });
+          const record = normalizedWorkflow(workflow);
+          return toolResult({ workflow: record ? workflowSummary(record) : { id: workflowId } });
+        },
+      );
+    }
+  }
+
   if (messagingEnabled) {
     server.registerTool(
       "list_mailboxes",
@@ -977,7 +1442,14 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         annotations: readAnnotations(),
       },
       async ({ q, offset, limit }) => {
-        const page = await invoke<unknown>("list_agent_mailboxes", { q, offset, limit });
+        const page = await invoke<unknown>("list_agent_mailboxes", {
+          q,
+          offset,
+          limit,
+          ...(coordinatorScope
+            ? { projectId: coordinatorScope.projectId, strictProjectScope: true }
+            : {}),
+        });
         if (!isRecord(page)) throw new Error("Mailbox directory returned no result");
         return toolResult(page);
       },
@@ -986,9 +1458,10 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
     server.registerTool(
       "send_message",
       {
-        title: "Send an external agent message",
-        description:
-          "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
+        title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
+        description: coordinatorScope
+          ? "Durably send an authenticated same-project delegation or reply from this coordinator conversation."
+          : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           toEnvironmentId: z.string().trim().min(1).max(200),
@@ -1001,6 +1474,7 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
               (value) => Buffer.byteLength(value, "utf8") <= 32 * 1024,
               "body must be at most 32 KiB UTF-8",
             ),
+          replyToMessageId: z.string().trim().min(1).max(300).optional(),
         }),
         annotations: {
           readOnlyHint: false,
@@ -1010,12 +1484,178 @@ async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
         },
       },
       async (input) => {
-        const message = await invoke<unknown>("send_external_agent_mail", input);
+        const message = await invoke<unknown>(
+          coordinatorScope ? "send_coordinator_agent_mail" : "send_external_agent_mail",
+          coordinatorScope ? { ...input, ...coordinatorScope } : input,
+        );
         if (!isRecord(message)) throw new Error("Message send returned no result");
         const { body: _body, ...summary } = message;
         return toolResult({ message: summary });
       },
     );
+
+    if (coordinatorScope)
+      server.registerTool(
+        "read_messages",
+        {
+          title: "Read mailbox messages",
+          description:
+            "Read a bounded mailbox page. Coordinator credentials may only read their own conversation mailbox.",
+          inputSchema: z.object({
+            environmentId: z.string().trim().min(1).max(200),
+            tabId: z.string().trim().min(1).max(200),
+            unreadOnly: z.boolean().default(false),
+            offset: z.number().int().min(0).default(0),
+            limit: z.number().int().min(1).max(200).default(100),
+          }),
+          annotations: readAnnotations(),
+        },
+        async (input) => {
+          if (coordinatorScope) {
+            const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+            const workspace = await invoke<unknown>("get_project_coordinator", {
+              projectId: coordinatorScope.projectId,
+            });
+            const conversations =
+              isRecord(workspace) &&
+              isRecord(workspace.workspace) &&
+              Array.isArray(workspace.workspace.conversations)
+                ? workspace.workspace.conversations
+                : [];
+            const own = conversations.find(
+              (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
+            );
+            if (
+              input.environmentId !== ownEnvironmentId ||
+              !isRecord(own) ||
+              input.tabId !== own.tabId
+            ) {
+              throw new Error("Coordinator credential may only read its own mailbox");
+            }
+          }
+          const page = await invoke<unknown>("get_agent_mail_mailbox", input);
+          if (!isRecord(page)) throw new Error("Mailbox returned no result");
+          return toolResult(page);
+        },
+      );
+
+    if (coordinatorScope)
+      server.registerTool(
+        "get_message",
+        {
+          title: "Get a mailbox message",
+          description: "Read one message body from this coordinator conversation's own mailbox.",
+          inputSchema: z.object({
+            environmentId: z.string().trim().min(1).max(200),
+            tabId: z.string().trim().min(1).max(200),
+            messageId: z.string().trim().min(1).max(300),
+          }),
+          annotations: readAnnotations(),
+        },
+        async (input) => {
+          const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+          const workspace = await invoke<unknown>("get_project_coordinator", {
+            projectId: coordinatorScope.projectId,
+          });
+          const conversations =
+            isRecord(workspace) &&
+            isRecord(workspace.workspace) &&
+            Array.isArray(workspace.workspace.conversations)
+              ? workspace.workspace.conversations
+              : [];
+          const own = conversations.find(
+            (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
+          );
+          if (
+            input.environmentId !== ownEnvironmentId ||
+            !isRecord(own) ||
+            input.tabId !== own.tabId
+          ) {
+            throw new Error("Coordinator credential may only read its own mailbox");
+          }
+          const message = await invoke<unknown>("get_agent_mail_message", input);
+          if (!isRecord(message)) throw new Error("Mailbox message was not found");
+          return toolResult({ message });
+        },
+      );
+
+    if (coordinatorScope)
+      server.registerTool(
+        "get_message_status",
+        {
+          title: "Get message delivery status",
+          description:
+            "Inspect durable stored, pending, injected, acknowledged, and seen state without returning the message body.",
+          inputSchema: z.object({ messageId: z.string().trim().min(1).max(300) }),
+          annotations: readAnnotations(),
+        },
+        async ({ messageId }) => {
+          const status = await invoke<unknown>("get_agent_mail_status", { messageId });
+          if (!isRecord(status)) throw new Error("Message status was not found");
+          const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+          const from = isRecord(status.from) ? status.from : null;
+          const allowedBySender = from?.projectId === coordinatorScope.projectId;
+          const destination =
+            typeof status.toEnvironmentId === "string" ? status.toEnvironmentId : "";
+          if (!allowedBySender && destination !== ownRuntime) {
+            const environment = await invoke<unknown>("get_environment", {
+              environmentId: destination,
+            });
+            if (!isRecord(environment) || environment.projectId !== coordinatorScope.projectId) {
+              throw new Error("Coordinator credential cannot inspect that message");
+            }
+          }
+          return toolResult({ message: status });
+        },
+      );
+
+    if (coordinatorScope)
+      server.registerTool(
+        "ack_message",
+        {
+          title: "Acknowledge a mailbox message",
+          description: "Mark a message handled without claiming that its task succeeded.",
+          inputSchema: z.object({
+            environmentId: z.string().trim().min(1).max(200),
+            tabId: z.string().trim().min(1).max(200),
+            messageId: z.string().trim().min(1).max(300),
+          }),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: false,
+          },
+        },
+        async (input) => {
+          if (coordinatorScope) {
+            const ownEnvironmentId = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+            const workspace = await invoke<unknown>("get_project_coordinator", {
+              projectId: coordinatorScope.projectId,
+            });
+            const conversations =
+              isRecord(workspace) &&
+              isRecord(workspace.workspace) &&
+              Array.isArray(workspace.workspace.conversations)
+                ? workspace.workspace.conversations
+                : [];
+            const own = conversations.find(
+              (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
+            );
+            if (
+              input.environmentId !== ownEnvironmentId ||
+              !isRecord(own) ||
+              input.tabId !== own.tabId
+            ) {
+              throw new Error("Coordinator credential may only acknowledge its own mailbox");
+            }
+          }
+          const result = await invoke<unknown>("ack_agent_mail", input);
+          if (!isRecord(result)) throw new Error("Message acknowledgement returned no result");
+          const { body: _body, ...summary } = result;
+          return toolResult({ message: summary });
+        },
+      );
   }
 
   return server;
@@ -1029,6 +1669,10 @@ export class ControlMcpServer {
   private lifecycle: Promise<void> = Promise.resolve();
   private readonly bindAddress: string;
   private readonly port: number;
+  private readonly coordinatorCredentials = new Map<
+    string,
+    { scope: CoordinatorControlScope; expiresAt: number }
+  >();
 
   constructor(
     private readonly dataDir: string,
@@ -1036,7 +1680,7 @@ export class ControlMcpServer {
     options: ControlMcpServerOptions = {},
   ) {
     this.bindAddress = options.bindAddress ?? "127.0.0.1";
-    this.port = options.port ?? DEFAULT_CONTROL_MCP_PORT;
+    this.port = options.port ?? configuredControlMcpPort();
   }
 
   getInfo(): ControlMcpInfo | null {
@@ -1052,6 +1696,42 @@ export class ControlMcpServer {
       token: enabled ? this.token : "",
       error: this.startError,
     };
+  }
+
+  issueCoordinatorCredential(scope: CoordinatorControlScope): CoordinatorControlConnection {
+    if (!this.server || !this.info || process.env.ORKESTRATOR_CONTROL_MCP_DISABLED === "1") {
+      throw new Error("Orkestrator control MCP is disabled or unavailable");
+    }
+    if (
+      scope.capabilities.length === 0 ||
+      scope.capabilities.some((capability) => !COORDINATOR_CAPABILITIES.has(capability))
+    ) {
+      throw new Error("Coordinator capabilities are invalid");
+    }
+    this.revokeCoordinatorCredentials(scope.coordinatorId, scope.conversationId);
+    while (this.coordinatorCredentials.size >= MAX_COORDINATOR_CREDENTIALS) {
+      const oldest = this.coordinatorCredentials.keys().next().value;
+      if (!oldest) break;
+      this.coordinatorCredentials.delete(oldest);
+    }
+    const token = randomBytes(32).toString("base64url");
+    this.coordinatorCredentials.set(token, {
+      scope: Object.freeze({ ...scope }),
+      expiresAt: Date.now() + COORDINATOR_CREDENTIAL_TTL_MS,
+    });
+    return { url: this.info.url, token };
+  }
+
+  revokeCoordinatorCredentials(coordinatorId: string, conversationId?: string): void {
+    for (const [token, credential] of this.coordinatorCredentials) {
+      const scope = credential.scope;
+      if (
+        scope.coordinatorId === coordinatorId &&
+        (conversationId === undefined || scope.conversationId === conversationId)
+      ) {
+        this.coordinatorCredentials.delete(token);
+      }
+    }
   }
 
   async start(): Promise<void> {
@@ -1116,6 +1796,7 @@ export class ControlMcpServer {
       const server = this.server;
       this.server = null;
       this.info = null;
+      this.coordinatorCredentials.clear();
       if (!server) return;
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -1187,7 +1868,18 @@ export class ControlMcpServer {
       response.end();
       return;
     }
-    if (!tokenMatches(bearerToken(request), this.token)) {
+    const presentedToken = bearerToken(request);
+    const coordinatorCredential = presentedToken
+      ? this.coordinatorCredentials.get(presentedToken)
+      : undefined;
+    if (presentedToken && coordinatorCredential && coordinatorCredential.expiresAt <= Date.now()) {
+      this.coordinatorCredentials.delete(presentedToken);
+    }
+    const coordinatorScope =
+      coordinatorCredential && coordinatorCredential.expiresAt > Date.now()
+        ? coordinatorCredential.scope
+        : undefined;
+    if (!tokenMatches(presentedToken, this.token) && !coordinatorScope) {
       response.setHeader("www-authenticate", 'Bearer realm="orkestrator-control"');
       jsonResponse(response, 401, { error: "Invalid control MCP credential" });
       return;
@@ -1201,7 +1893,82 @@ export class ControlMcpServer {
       });
       return;
     }
-    const handler = createMcpHandler(() => createControlMcp(this.invoke), {
+    if (coordinatorScope) {
+      const snapshot = await this.invoke<unknown>("get_project_coordinator", {
+        projectId: coordinatorScope.projectId,
+      });
+      const workspace =
+        isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+      const conversations =
+        workspace && Array.isArray(workspace.conversations) ? workspace.conversations : [];
+      const conversation = conversations.find(
+        (item) => isRecord(item) && item.id === coordinatorScope.conversationId,
+      );
+      if (
+        !workspace ||
+        workspace.id !== coordinatorScope.coordinatorId ||
+        !isRecord(conversation) ||
+        conversation.closedAt !== undefined ||
+        conversation.mailboxIncarnationId !== coordinatorScope.mailboxIncarnationId
+      ) {
+        this.coordinatorCredentials.delete(presentedToken!);
+        jsonResponse(response, 401, { error: "Coordinator credential is no longer valid" });
+        return;
+      }
+      if (workspace.lifecycleState !== "ready") {
+        jsonResponse(response, 409, { error: "Coordinator is paused or unavailable" });
+        return;
+      }
+      // Expire abandoned credentials without interrupting a healthy,
+      // long-lived coordinator bridge that continues to revalidate normally.
+      if (coordinatorCredential) {
+        coordinatorCredential.expiresAt = Date.now() + COORDINATOR_CREDENTIAL_TTL_MS;
+      }
+      const messages = Array.isArray(body) ? body : [body];
+      for (const message of messages) {
+        if (!isRecord(message) || message.method !== "tools/call") continue;
+        const requestedTool = isRecord(message.params) ? message.params.name : undefined;
+        if (typeof requestedTool !== "string") {
+          jsonResponse(response, 403, { error: "Coordinator capability denied" });
+          return;
+        }
+        const required = COORDINATOR_TOOL_CAPABILITY.get(requestedTool);
+        if (!required || !coordinatorScope.capabilities.includes(required)) {
+          jsonResponse(response, 403, { error: "Coordinator capability denied" });
+          return;
+        }
+      }
+    }
+    const scopedInvoke: ControlMcpInvoker = coordinatorScope
+      ? async <T>(command: string, args: Record<string, unknown> = {}) => {
+          const projectId = typeof args.projectId === "string" ? args.projectId : undefined;
+          if (projectId && projectId !== coordinatorScope.projectId) {
+            throw new Error("Coordinator credential cannot access another project");
+          }
+          if (typeof args.environmentId === "string") {
+            const ownRuntime = `coordinator:${coordinatorScope.coordinatorId}:${coordinatorScope.conversationId}`;
+            if (args.environmentId !== ownRuntime) {
+              const environment = await this.invoke<unknown>("get_environment", {
+                environmentId: args.environmentId,
+              });
+              if (!isRecord(environment) || environment.projectId !== coordinatorScope.projectId) {
+                throw new Error("Coordinator credential cannot access that environment");
+              }
+            }
+          }
+          const denied = new Set([
+            "update_config",
+            "remove_project",
+            "merge_environment",
+            "delete_environment",
+            "write_file",
+            "move_file",
+          ]);
+          if (denied.has(command)) throw new Error("Coordinator capability denied");
+          return this.invoke<T>(command, args);
+        }
+      : this.invoke;
+    const handler = createMcpHandler(() => createControlMcp(scopedInvoke, coordinatorScope), {
       legacy: "stateless",
     });
     try {

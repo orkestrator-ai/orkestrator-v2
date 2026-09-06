@@ -139,8 +139,9 @@ process.on("SIGTERM", () => void stop("SIGTERM"));
 
 // The Electron supervisor cannot deliver SIGTERM if it crashes or is
 // force-killed, and this process would otherwise keep every local bridge (and
-// each bridge's app-server tree) alive as orphans. Install this before the
-// ready contract too: readiness means every lifecycle observer is active.
+// each bridge's app-server tree) alive as orphans. When the parent that spawned
+// us disappears, run the same drain a SIGTERM would have. Install this before
+// the ready contract too: readiness means every lifecycle observer is active.
 startReparentWatchdog({
   initialParentPid,
   onReparented: () => {

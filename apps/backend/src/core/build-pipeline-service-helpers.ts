@@ -120,6 +120,8 @@ export function buildAdmissionKey(input: StartBuildPipelineInput): string {
         source: canonicalAdmissionSource(input.source),
         existingEnvironmentId: input.existingEnvironmentId?.trim() || null,
         featurePlanId: input.featurePlanId?.trim() || null,
+        delegationBaseBranch: input.delegationBaseBranch?.trim() || null,
+        delegationBaseCommit: input.delegationBaseCommit?.toLowerCase() || null,
       }),
     )
     .digest("hex");

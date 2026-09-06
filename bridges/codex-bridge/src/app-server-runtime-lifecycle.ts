@@ -157,7 +157,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       this.registry.restoreSession({
         id: persisted.bridgeSessionId,
         threadId: persisted.threadId,
-        config: persisted.config,
+        config:
+          process.env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only"
+            ? {
+                ...persisted.config,
+                cwd: this.options.cwd,
+                approvalPolicy: "never",
+                sandbox: "read-only",
+                networkAccessEnabled: false,
+                permissionProfile: requiredCoordinatorPermissionProfile(),
+              }
+            : persisted.config,
         title: persisted.title,
         titleSource: persisted.titleSource,
         titleGenerationAttempted: Boolean(persisted.title),
@@ -1640,6 +1650,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   protected toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
+    const coordinatorReadOnly =
+      process.env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only";
     const model =
       typeof body.model === "string" && body.model.trim().length > 0
         ? body.model.trim()
@@ -1654,8 +1666,20 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       serviceTier: body.fastMode === true ? "fast" : null,
       cwd: this.options.cwd,
       approvalPolicy: "never",
-      sandbox: mode === "plan" ? "read-only" : "danger-full-access",
-      networkAccessEnabled: true,
+      // A coordinator policy is process authority supplied by the trusted
+      // backend launcher. It is deliberately independent of conversation mode
+      // and re-applied for create, resume, config updates, forks and every turn.
+      sandbox: coordinatorReadOnly || mode === "plan" ? "read-only" : "danger-full-access",
+      networkAccessEnabled: coordinatorReadOnly ? false : true,
+      ...(coordinatorReadOnly ? { permissionProfile: requiredCoordinatorPermissionProfile() } : {}),
     };
   }
+}
+
+function requiredCoordinatorPermissionProfile(): string {
+  const profile = process.env.CODEX_BRIDGE_PERMISSION_PROFILE?.trim();
+  if (!profile || !/^[A-Za-z0-9_-]+$/.test(profile)) {
+    throw new Error("Coordinator Codex permission profile is unavailable");
+  }
+  return profile;
 }

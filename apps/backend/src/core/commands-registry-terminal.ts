@@ -105,6 +105,27 @@ import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
 } from "./review-worktree-fingerprint.js";
+import {
+  configureTerminalHistory,
+  disposeTerminalHistory,
+  getTerminalHistoryPage,
+  getTerminalStateSnapshot,
+  resumeTerminalHistory,
+  resizeTerminalHistory,
+} from "./terminal-history.js";
+
+function resizeTerminalHistoryBestEffort(sessionId: string, cols: number, rows: number): void {
+  try {
+    resizeTerminalHistory(sessionId, cols, rows);
+  } catch {
+    // History is an optional recovery surface. If its emulator rejects an
+    // unusual geometry, release that collector without failing a PTY resize
+    // that has already succeeded.
+    void Promise.resolve()
+      .then(() => disposeTerminalHistory(sessionId))
+      .catch(() => undefined);
+  }
+}
 
 export function registerTerminalCommands(
   register: CommandRegistrar,
@@ -311,10 +332,19 @@ export function registerTerminalCommands(
 
       const id = `${resolvedContainerId}:${randomUUID()}`;
       rememberStableTerminalSession(id, config, stableKey);
+      configureTerminalHistory({
+        sessionId: id,
+        dataDir: storage.getDataDir(),
+        stableIdentity: stableKey ?? id,
+        cols: config.cols,
+        rows: config.rows,
+        ...(requestedEnvironmentId ? { environmentId: requestedEnvironmentId } : {}),
+        ...(requestedTerminalKey ? { tabId: requestedTerminalKey } : {}),
+      });
       return { sessionId: id, created: true, bootstrapped: false };
     },
   );
-  register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
+  register("attach_terminal", ({ containerId, cols, rows, user }, { emit, storage }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
     const config = {
       kind: "container" as const,
@@ -324,6 +354,13 @@ export function registerTerminalCommands(
       user: asOptionalString(user),
     };
     rememberTerminalSession(id, config);
+    configureTerminalHistory({
+      sessionId: id,
+      dataDir: storage.getDataDir(),
+      stableIdentity: id,
+      cols: config.cols,
+      rows: config.rows,
+    });
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
@@ -357,6 +394,7 @@ export function registerTerminalCommands(
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Container terminal session is no longer available");
     }
+    await resumeTerminalHistory(id);
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
@@ -382,9 +420,13 @@ export function registerTerminalCommands(
     return { delivered: true };
   });
   register("terminal_resize", ({ sessionId, cols, rows }) => {
-    const terminalProcess = terminalProcesses.get(asString(sessionId, "sessionId"));
+    const id = asString(sessionId, "sessionId");
+    const terminalProcess = terminalProcesses.get(id);
     if (!terminalProcess) return { delivered: false };
-    terminalProcess.resize(asTerminalDimension(cols, 80), asTerminalDimension(rows, 24));
+    const resolvedCols = asTerminalDimension(cols, 80);
+    const resolvedRows = asTerminalDimension(rows, 24);
+    terminalProcess.resize(resolvedCols, resolvedRows);
+    resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
   register("detach_terminal", ({ sessionId }) => {
@@ -494,6 +536,41 @@ export function registerTerminalCommands(
     };
   });
 
+  register("get_terminal_state_snapshot", async ({ sessionId }, { storage }) => {
+    const id = asString(sessionId, "sessionId");
+    let snapshot = await getTerminalStateSnapshot(id);
+    if (!snapshot && isSetupTerminalSessionId(id)) {
+      const environmentId = id.slice(0, -":setup".length);
+      if (await storage.getEnvironment(environmentId)) {
+        configureTerminalHistory({
+          sessionId: id,
+          dataDir: storage.getDataDir(),
+          stableIdentity: `setup\0${environmentId}`,
+          cols: 80,
+          rows: 24,
+          environmentId,
+          tabId: "setup",
+          generation: terminalOutputGenerations.get(id) ?? 1,
+        });
+        snapshot = await getTerminalStateSnapshot(id);
+      }
+    }
+    return snapshot;
+  });
+
+  register("get_terminal_history_page", ({ sessionId, cursor }) =>
+    getTerminalHistoryPage(
+      asString(sessionId, "sessionId"),
+      cursor === undefined ? undefined : asString(cursor, "cursor"),
+    ),
+  );
+
+  // Browser gateways consume this locally to release their buffered live
+  // frames. Native/Electron callers still need the command to exist so the
+  // renderer can use one application barrier on every transport.
+  register("terminal_snapshot_applied", () => ({ acknowledged: true }));
+  register("terminal_snapshot_failed", () => ({ acknowledged: true }));
+
   register(
     "create_local_terminal_session",
     async ({ environmentId, terminalKey, cols, rows, trackEnvironmentActivity }, { storage }) => {
@@ -526,6 +603,15 @@ export function registerTerminalCommands(
 
       const id = `${resolvedEnvironmentId}:${randomUUID()}`;
       rememberStableTerminalSession(id, config, stableKey);
+      configureTerminalHistory({
+        sessionId: id,
+        dataDir: storage.getDataDir(),
+        stableIdentity: stableKey ?? id,
+        cols: config.cols,
+        rows: config.rows,
+        environmentId: resolvedEnvironmentId,
+        ...(asOptionalString(terminalKey) ? { tabId: asOptionalString(terminalKey) } : {}),
+      });
       return { sessionId: id, created: true, bootstrapped: false };
     },
   );
@@ -560,6 +646,7 @@ export function registerTerminalCommands(
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Local terminal session is no longer available");
     }
+    await resumeTerminalHistory(id);
     spawnTerminalProcess(
       id,
       resolveLocalShellPath(),
@@ -584,9 +671,13 @@ export function registerTerminalCommands(
     return { delivered: true };
   });
   register("local_terminal_resize", ({ sessionId, cols, rows }) => {
-    const terminalProcess = terminalProcesses.get(asString(sessionId, "sessionId"));
+    const id = asString(sessionId, "sessionId");
+    const terminalProcess = terminalProcesses.get(id);
     if (!terminalProcess) return { delivered: false };
-    terminalProcess.resize(asTerminalDimension(cols, 80), asTerminalDimension(rows, 24));
+    const resolvedCols = asTerminalDimension(cols, 80);
+    const resolvedRows = asTerminalDimension(rows, 24);
+    terminalProcess.resize(resolvedCols, resolvedRows);
+    resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
   register("close_local_terminal_session", ({ sessionId }) => {

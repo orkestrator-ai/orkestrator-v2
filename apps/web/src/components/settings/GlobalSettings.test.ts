@@ -29,6 +29,13 @@ describe("global settings synchronization", () => {
     expect(globalFormSignature(configured)).not.toBe(globalFormSignature(current));
   });
 
+  test("tracks the durable terminal-history opt-out", () => {
+    const current = globalConfig();
+    expect(globalFormSignature({ ...current, terminalHistoryEnabled: false })).not.toBe(
+      globalFormSignature(current),
+    );
+  });
+
   test("accepts auto-detection or an absolute SSH agent socket path", () => {
     expect(getSshAgentSocketPathValidationError("  ")).toBeNull();
     expect(getSshAgentSocketPathValidationError("/run/user/1000/agent.sock")).toBeNull();

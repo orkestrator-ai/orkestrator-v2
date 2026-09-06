@@ -20,7 +20,7 @@ export type TerminalSocketPayload = {
 };
 
 type Snapshot = { generation: number; revision: number };
-type TerminalCallback = (payload: TerminalSocketPayload) => void;
+type TerminalCallback = (payload: TerminalSocketPayload) => unknown;
 
 type DesiredChannel = {
   sessionId: string;
@@ -32,6 +32,7 @@ type DesiredChannel = {
   pendingRequestId: number | null;
   generation: number | null;
   revision: number | null;
+  receivedRevision: number | null;
   awaitingSnapshot: boolean;
   requiresResubscribe: boolean;
   buffered: TerminalSocketPayload[];
@@ -41,6 +42,7 @@ type DesiredChannel = {
   retryTimer: ReturnType<typeof setTimeout> | null;
   /** Consecutive failed subscription attempts, used to back off the retry. */
   subscribeAttempts: number;
+  applicationTail: Promise<void>;
 };
 
 type PendingOperation = {
@@ -113,6 +115,7 @@ export class TerminalWebSocketClient {
         pendingRequestId: null,
         generation: null,
         revision: null,
+        receivedRevision: null,
         awaitingSnapshot: false,
         requiresResubscribe: false,
         buffered: [],
@@ -121,6 +124,7 @@ export class TerminalWebSocketClient {
         unavailableNotified: false,
         retryTimer: null,
         subscribeAttempts: 0,
+        applicationTail: Promise.resolve(),
       };
       this.desired.set(sessionId, channel);
       this.ensureSocket();
@@ -241,6 +245,7 @@ export class TerminalWebSocketClient {
     if (!stale) {
       channel.generation = snapshot.generation;
       channel.revision = snapshot.revision;
+      channel.receivedRevision = snapshot.revision;
     }
     channel.awaitingSnapshot = false;
     if (generationChanged) channel.requiresResubscribe = true;
@@ -254,7 +259,11 @@ export class TerminalWebSocketClient {
     setTimeout(() => {
       if (this.desired.get(sessionId) !== channel || channel.awaitingSnapshot) return;
       this.flushBuffered(channel);
-      if (!channel.awaitingSnapshot) this.markReady(channel);
+      void channel.applicationTail.then(() => {
+        if (this.desired.get(sessionId) === channel && !channel.awaitingSnapshot) {
+          this.markReady(channel);
+        }
+      });
     }, 0);
   }
 
@@ -382,18 +391,20 @@ export class TerminalWebSocketClient {
           this.channels.set(frame.channelId, channel);
           if (frame.recovery === "snapshot-required") {
             channel.revision = null;
+            channel.receivedRevision = null;
             channel.awaitingSnapshot = true;
             channel.requiresResubscribe = false;
             this.clearBuffered(channel);
             this.markUnavailable(channel);
-            this.emit(channel, {
+            void this.emit(channel, {
               desynced: true,
               generation: frame.targetGeneration,
               revision: frame.targetRevision,
-            });
+            }).catch(() => undefined);
           } else {
             channel.generation = frame.baseGeneration;
             channel.revision = frame.baseRevision;
+            channel.receivedRevision = frame.baseRevision;
             channel.awaitingSnapshot = false;
             channel.requiresResubscribe = false;
             this.markReady(channel);
@@ -407,13 +418,14 @@ export class TerminalWebSocketClient {
           channel.awaitingSnapshot = true;
           channel.requiresResubscribe = true;
           channel.revision = null;
+          channel.receivedRevision = null;
           this.clearBuffered(channel);
           this.markUnavailable(channel);
-          this.emit(channel, {
+          void this.emit(channel, {
             desynced: true,
             generation: frame.generation,
             revision: frame.revision,
-          });
+          }).catch(() => undefined);
           break;
         }
         case "unsubscribed":
@@ -489,47 +501,74 @@ export class TerminalWebSocketClient {
           this.bufferAwaitingSnapshot(channel, payload);
           return;
         }
-        this.applyOutput(channel, payload);
+        this.enqueueOutput(channel, payload);
       })
       .catch(() => {
         if (socket === this.socket) socket.close(4004, "Unsupported server binary payload");
       });
   }
 
-  private applyOutput(channel: DesiredChannel, payload: TerminalSocketPayload): void {
+  private enqueueOutput(channel: DesiredChannel, payload: TerminalSocketPayload): void {
+    const application = channel.applicationTail.then(() => this.applyOutput(channel, payload));
+    channel.applicationTail = application.catch(() => {
+      if (this.desired.get(channel.sessionId) !== channel) return;
+      channel.awaitingSnapshot = true;
+      channel.requiresResubscribe = true;
+      channel.revision = null;
+      channel.receivedRevision = null;
+      this.clearBuffered(channel);
+      this.markUnavailable(channel);
+      this.unsubscribeForRecovery(channel);
+      this.scheduleSubscribe(channel);
+    });
+  }
+
+  private async applyOutput(
+    channel: DesiredChannel,
+    payload: TerminalSocketPayload,
+  ): Promise<void> {
     if (payload.bytes === undefined) return;
     if (channel.generation !== payload.generation) {
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = true;
       channel.revision = null;
+      channel.receivedRevision = null;
       this.clearBuffered(channel);
       this.bufferAwaitingSnapshot(channel, payload);
       this.markUnavailable(channel);
-      this.emit(channel, {
+      void this.emit(channel, {
         desynced: true,
         generation: payload.generation,
         revision: payload.revision,
-      });
+      }).catch(() => undefined);
       return;
     }
-    const revision = channel.revision ?? 0;
-    if (payload.revision <= revision) return;
-    if (payload.revision !== revision + 1) {
+    const receivedRevision = channel.receivedRevision ?? channel.revision ?? 0;
+    if (payload.revision <= receivedRevision) return;
+    if (payload.revision !== receivedRevision + 1) {
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = true;
       channel.revision = null;
+      channel.receivedRevision = null;
       this.clearBuffered(channel);
       this.bufferAwaitingSnapshot(channel, payload);
       this.markUnavailable(channel);
-      this.emit(channel, {
+      void this.emit(channel, {
         desynced: true,
         generation: payload.generation,
         revision: payload.revision,
-      });
+      }).catch(() => undefined);
       return;
     }
+    channel.receivedRevision = payload.revision;
+    await this.emit(channel, payload);
+    if (
+      this.desired.get(channel.sessionId) !== channel ||
+      channel.awaitingSnapshot ||
+      channel.generation !== payload.generation
+    )
+      return;
     channel.revision = payload.revision;
-    this.emit(channel, payload);
     if (channel.channelId !== null)
       this.send({
         type: "ack",
@@ -543,7 +582,7 @@ export class TerminalWebSocketClient {
     const buffered = channel.buffered.splice(0).sort((a, b) => a.revision - b.revision);
     channel.bufferedBytes = 0;
     for (const payload of buffered) {
-      this.applyOutput(channel, payload);
+      this.enqueueOutput(channel, payload);
       if (channel.awaitingSnapshot) return;
     }
   }
@@ -606,8 +645,8 @@ export class TerminalWebSocketClient {
     socket.send(JSON.stringify(frame));
   }
 
-  private emit(channel: DesiredChannel, payload: TerminalSocketPayload): void {
-    for (const callback of channel.callbacks.keys()) callback(payload);
+  private async emit(channel: DesiredChannel, payload: TerminalSocketPayload): Promise<void> {
+    await Promise.all(Array.from(channel.callbacks.keys(), (callback) => callback(payload)));
   }
 
   private resolveReady(channel: DesiredChannel): void {
@@ -724,13 +763,14 @@ export class TerminalWebSocketClient {
       channel.pendingRequestId = null;
       channel.awaitingSnapshot = true;
       channel.requiresResubscribe = false;
+      channel.receivedRevision = channel.revision;
       this.clearBuffered(channel);
       this.markUnavailable(channel);
-      this.emit(channel, {
+      void this.emit(channel, {
         desynced: true,
         generation: channel.generation ?? 0,
         revision: channel.revision ?? 0,
-      });
+      }).catch(() => undefined);
     }
   }
 

@@ -20,6 +20,7 @@ import {
 } from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
+import { deleteTerminalHistories } from "./terminal-history.js";
 
 export function registerTeardownCommands(
   register: CommandRegistrar,
@@ -123,6 +124,11 @@ export function registerTeardownCommands(
         }
       }
       for (const sessionId of sessionIds) explicitlyCloseTerminalSession(sessionId);
+      await deleteTerminalHistories({
+        dataDir: context.storage.getDataDir(),
+        environmentId: environment.id,
+        tabId: intent.tabId,
+      });
       if (intent.persistentSessionId) {
         const session = await context.storage.getSession(intent.persistentSessionId);
         if (session) {

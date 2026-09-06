@@ -34,6 +34,18 @@ import {
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
 import {
+  DEFAULT_TERMINAL_HISTORY_ENABLED,
+  DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+  MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  MAX_TERMINAL_HISTORY_RETENTION_DAYS,
+  MAX_TERMINAL_HISTORY_RETENTION_MB,
+  MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  MIN_TERMINAL_HISTORY_RETENTION_DAYS,
+  MIN_TERMINAL_HISTORY_RETENTION_MB,
+} from "@orkestrator/protocol/terminal-history";
+import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
@@ -96,6 +108,10 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
+    global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+    global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+    global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalCodexRawEventLogging ?? true,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -165,6 +181,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     typeof global.terminalScrollback === "number"
       ? global.terminalScrollback
       : DEFAULT_TERMINAL_SCROLLBACK,
+  );
+  const [terminalHistoryRetentionMb, setTerminalHistoryRetentionMb] = useState(
+    global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+  );
+  const [terminalHistoryEnabled, setTerminalHistoryEnabled] = useState(
+    global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
+  );
+  const [terminalHistoryGlobalRetentionMb, setTerminalHistoryGlobalRetentionMb] = useState(
+    global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  );
+  const [terminalHistoryRetentionDays, setTerminalHistoryRetentionDays] = useState(
+    global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   );
   const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
     global.experimentalCodexRawEventLogging ?? true,
@@ -259,6 +287,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalFontSize(appearance.fontSize);
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
+    setTerminalHistoryRetentionMb(
+      global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+    );
+    setTerminalHistoryGlobalRetentionMb(
+      global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+    );
+    setTerminalHistoryRetentionDays(
+      global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+    );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
@@ -404,6 +442,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalFontSize !== terminalAppearance.fontSize ||
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
+      terminalHistoryEnabled !==
+        (global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED) ||
+      terminalHistoryRetentionMb !==
+        (global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB) ||
+      terminalHistoryGlobalRetentionMb !==
+        (global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB) ||
+      terminalHistoryRetentionDays !==
+        (global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
       debugLogRetentionDays !== normalizeDebugLogRetentionDays(global.debugLogRetentionDays) ||
@@ -439,6 +485,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     terminalFontSize,
     terminalBackgroundColor,
     terminalScrollback,
+    terminalHistoryEnabled,
+    terminalHistoryRetentionMb,
+    terminalHistoryGlobalRetentionMb,
+    terminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     debugLogging,
     debugLogRetentionDays,
@@ -542,6 +592,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         codexMaxConcurrentThreads: number;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
+        terminalHistoryEnabled: boolean;
+        terminalHistoryRetentionMb: number;
+        terminalHistoryGlobalRetentionMb: number;
+        terminalHistoryRetentionDays: number;
         experimentalCodexRawEventLogging: boolean;
         debugLogging: boolean;
         debugLogRetentionDays: number;
@@ -566,6 +620,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           backgroundColor: terminalBackgroundColor,
         },
         terminalScrollback,
+        terminalHistoryEnabled,
+        terminalHistoryRetentionMb,
+        terminalHistoryGlobalRetentionMb,
+        terminalHistoryRetentionDays,
         experimentalCodexRawEventLogging,
         debugLogging,
         debugLogRetentionDays,
@@ -757,6 +815,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalFontSize(appearance.fontSize);
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
+    setTerminalHistoryRetentionMb(
+      global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+    );
+    setTerminalHistoryGlobalRetentionMb(
+      global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+    );
+    setTerminalHistoryRetentionDays(
+      global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+    );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
@@ -825,6 +893,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalHistoryEnabled,
+    setTerminalHistoryEnabled,
+    terminalHistoryRetentionMb,
+    setTerminalHistoryRetentionMb,
+    terminalHistoryGlobalRetentionMb,
+    setTerminalHistoryGlobalRetentionMb,
+    terminalHistoryRetentionDays,
+    setTerminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
     debugLogging,
@@ -901,6 +977,23 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       });
     }
     if (colorError) blockers.push({ section: "terminal", message: colorError });
+    if (
+      terminalHistoryEnabled &&
+      (!Number.isInteger(terminalHistoryRetentionMb) ||
+        terminalHistoryRetentionMb < MIN_TERMINAL_HISTORY_RETENTION_MB ||
+        terminalHistoryRetentionMb > MAX_TERMINAL_HISTORY_RETENTION_MB ||
+        !Number.isInteger(terminalHistoryGlobalRetentionMb) ||
+        terminalHistoryGlobalRetentionMb < MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
+        terminalHistoryGlobalRetentionMb > MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
+        !Number.isInteger(terminalHistoryRetentionDays) ||
+        terminalHistoryRetentionDays < MIN_TERMINAL_HISTORY_RETENTION_DAYS ||
+        terminalHistoryRetentionDays > MAX_TERMINAL_HISTORY_RETENTION_DAYS)
+    ) {
+      blockers.push({
+        section: "terminal",
+        message: "Terminal history retention values are outside their allowed ranges.",
+      });
+    }
     if (!isValidDebugLogRetentionDays(debugLogRetentionDays)) {
       blockers.push({
         section: "debug",
@@ -920,6 +1013,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   }, [
     domainErrors,
     colorError,
+    terminalHistoryEnabled,
+    terminalHistoryRetentionMb,
+    terminalHistoryGlobalRetentionMb,
+    terminalHistoryRetentionDays,
     debugLogRetentionDays,
     gatewayTokenValidationError,
     reviewInstructionValidationError,

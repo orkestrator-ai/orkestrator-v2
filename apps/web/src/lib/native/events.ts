@@ -41,7 +41,7 @@ export const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connecte
 
 export async function listen<T>(
   event: string,
-  handler: (event: NativeEvent<T>) => void,
+  handler: (event: NativeEvent<T>) => unknown,
   options: ListenOptions = {},
 ): Promise<UnlistenFn> {
   if (!window.orkestrator) {
@@ -49,7 +49,7 @@ export async function listen<T>(
   }
 
   const nativeUnlisten = window.orkestrator.listen<T>(event, (payload) => {
-    handler({ payload });
+    return handler({ payload });
   });
   let listening = true;
   let rejectAbort: ((error: Error) => void) | null = null;

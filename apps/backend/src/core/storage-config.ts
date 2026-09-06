@@ -2,6 +2,7 @@ import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
@@ -463,6 +464,12 @@ export abstract class StorageConfig extends StorageProjects {
     // partial entry must be dropped here rather than persisted and later
     // applied to a launch the user cannot see being configured.
     const agentSettings = normalizeAgentSettings(reviewValidated.agentSettings);
+    const terminalHistoryRetention = normalizeTerminalHistoryRetention({
+      enabled: reviewValidated.terminalHistoryEnabled,
+      sessionMb: reviewValidated.terminalHistoryRetentionMb,
+      globalMb: reviewValidated.terminalHistoryGlobalRetentionMb,
+      days: reviewValidated.terminalHistoryRetentionDays,
+    });
     const rawSshAgentSocketPath = reviewValidated.sshAgentSocketPath as unknown;
     if (rawSshAgentSocketPath !== undefined && typeof rawSshAgentSocketPath !== "string") {
       throw new Error("SSH agent socket path must be a string");
@@ -483,6 +490,10 @@ export abstract class StorageConfig extends StorageProjects {
       ...reviewValidated,
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
       debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
+      terminalHistoryEnabled: terminalHistoryRetention.enabled,
+      terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
+      terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
+      terminalHistoryRetentionDays: terminalHistoryRetention.days,
       enabledAgentPlatforms,
       agentSettings: {
         ...agentSettings,

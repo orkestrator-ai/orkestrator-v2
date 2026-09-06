@@ -516,6 +516,14 @@ export interface GlobalConfig {
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */
   terminalScrollback: number;
+  /** Whether terminal output is retained in the backend archive. */
+  terminalHistoryEnabled?: boolean;
+  /** Maximum retained archive size per terminal, in MiB. */
+  terminalHistoryRetentionMb?: number;
+  /** Maximum retained terminal archive size across the application, in MiB. */
+  terminalHistoryGlobalRetentionMb?: number;
+  /** Number of days completed terminal archives remain on disk. */
+  terminalHistoryRetentionDays?: number;
   /** Capture raw Codex bridge events for subagent transcript debugging */
   experimentalCodexRawEventLogging?: boolean;
   /** Enable debug logging to disk (requires app restart) */

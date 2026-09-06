@@ -107,7 +107,7 @@ test("real browser gateway exercises an authoritative local environment", async 
     await invoke("start_local_terminal_session", { sessionId: terminal.sessionId });
     await invoke("local_terminal_write", {
       sessionId: terminal.sessionId,
-      data: "sleep 1; printf 'background-done\\n'; printf 'changed\\n' > smoke-change.txt\n",
+      data: "sleep 1; i=0; while [ $i -lt 1100 ]; do printf '%0480d\\n' \"$i\"; i=$((i + 1)); done; printf 'background-done\\n'; printf 'changed\\n' > smoke-change.txt\n",
     });
 
     // Exercise the inactive-environment contract through unrelated authoritative
@@ -120,10 +120,29 @@ test("real browser gateway exercises an authoritative local environment", async 
     });
 
     await expect
-      .poll(() => invoke<string>("get_terminal_output_buffer", { sessionId: terminal.sessionId }), {
-        timeout: 15_000,
-      })
-      .toContain("background-done");
+      .poll(
+        async () => {
+          const snapshot = await invoke<{
+            mode: string;
+            output: string;
+            revision: number;
+            historyTruncated: boolean;
+          } | null>("get_terminal_state_snapshot", { sessionId: terminal.sessionId });
+          return {
+            current: snapshot?.mode === "state" && snapshot.output.includes("background-done"),
+            retainedWithinBudget:
+              (snapshot?.output.length ?? Number.POSITIVE_INFINITY) <= 2 * 1024 * 1024,
+            rolledOver: snapshot?.historyTruncated === true,
+          };
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual({ current: true, retainedWithinBudget: true, rolledOver: true });
+    const historyPage = await invoke<{
+      rows: Array<{ text: string }>;
+      previousCursor: string | null;
+    } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
+    expect(historyPage?.rows.some((row) => row.text.includes("background-done"))).toBe(true);
     await invoke<void>("refresh_environment_diff_stats", {
       environmentId: environment.id,
     });
@@ -206,6 +225,37 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
       tail: "1",
     });
     expect(typeof ownedLogs).toBe("string");
+
+    const terminal = await invoke<{ sessionId: string }>("create_terminal_session", {
+      containerId: containerFixture!.containerId,
+      environmentId: containerFixture!.id,
+      terminalKey: "agent-docker-history",
+      cols: 80,
+      rows: 24,
+      trackEnvironmentActivity: true,
+    });
+    try {
+      await invoke("start_terminal_session", { sessionId: terminal.sessionId });
+      await invoke("terminal_write", {
+        sessionId: terminal.sessionId,
+        data: "sleep 1; printf 'docker-background-done\\n'\n",
+      });
+      await invoke("get_projects");
+      await expect
+        .poll(
+          async () => {
+            const snapshot = await invoke<{ output: string } | null>(
+              "get_terminal_state_snapshot",
+              { sessionId: terminal.sessionId },
+            );
+            return snapshot?.output.includes("docker-background-done") ?? false;
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+    } finally {
+      await invoke("detach_terminal", { sessionId: terminal.sessionId }).catch(() => undefined);
+    }
   } finally {
     spawnSync("docker", ["rm", "-f", foreignContainerId], { encoding: "utf8" });
   }

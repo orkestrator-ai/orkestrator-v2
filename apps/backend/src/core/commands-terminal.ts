@@ -38,6 +38,11 @@ import type {
   ClientEnvironmentSetupStartResult,
 } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
+import {
+  appendTerminalHistory,
+  disposeTerminalHistory,
+  terminalHistoryTesting,
+} from "./terminal-history.js";
 
 /**
  * Every key `ClientEnvironment` omits must be destructured away here.
@@ -244,6 +249,7 @@ export function deleteRetainedTerminalOutputBuffer(sessionId: string): void {
 }
 
 export function resetTerminalOutputBuffers(): void {
+  terminalHistoryTesting.clear();
   resetTerminalOutputRetentionMs();
   for (const timer of terminalOutputRetentionTimers.values()) clearTimeout(timer);
   terminalOutputRetentionTimers.clear();
@@ -354,6 +360,12 @@ export function emitTerminalOutput(
 ): void {
   const revision = appendTerminalOutputBuffer(sessionId, data);
   const generation = terminalOutputGenerations.get(sessionId) ?? 1;
+  appendTerminalHistory(
+    sessionId,
+    Buffer.isBuffer(data) ? data.toString("utf8") : data,
+    revision,
+    generation,
+  );
   emit(`terminal-output-${sessionId}`, terminalOutputPayload(data, revision, generation));
 }
 
@@ -735,6 +747,7 @@ export function cleanupTerminalSession(id: string, options: { explicit?: boolean
 export function explicitlyCloseTerminalSession(id: string): void {
   terminalProcesses.get(id)?.kill();
   cleanupTerminalSession(id, { explicit: true });
+  disposeTerminalHistory(id);
 }
 
 export function terminalStableKeyEnvironmentId(id: string): string | null {
@@ -743,7 +756,7 @@ export function terminalStableKeyEnvironmentId(id: string): string | null {
 }
 
 export function cleanupTerminalSessionsForEnvironment(environmentId: string): void {
-  const sessionIds = new Set<string>();
+  const sessionIds = new Set<string>([setupTerminalSessionId(environmentId)]);
   for (const [id, config] of terminalSessionConfigs) {
     if (
       (config.kind === "local" && config.environmentId === environmentId) ||

@@ -44,6 +44,19 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("enables durable terminal history by default and persists an opt-out", async () => {
+    expect(defaultConfig().global.terminalHistoryEnabled).toBe(true);
+    await withTemporaryStorage(async (storage) => {
+      const current = (await storage.loadConfig()).global;
+      const updated = await storage.updateGlobalConfig({
+        ...current,
+        terminalHistoryEnabled: false,
+      });
+      expect(updated.global.terminalHistoryEnabled).toBe(false);
+      expect((await storage.loadConfig()).global.terminalHistoryEnabled).toBe(false);
+    });
+  });
+
   test("uses native Claude sessions by default", () => {
     expect(defaultConfig().global.agentSettings?.platforms?.claude?.mode).toBe("native");
   });

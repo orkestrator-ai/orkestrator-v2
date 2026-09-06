@@ -2038,6 +2038,8 @@ describe("backend command wrapper coverage", () => {
       "createLocalTerminalSession",
       "createTerminalSession",
       "getTerminalOutputSnapshot",
+      "getTerminalStateSnapshot",
+      "getTerminalHistoryPage",
       "getResourceRevisionManifest",
       "getScopedResourceRevisionManifest",
       "getScopedResourceSnapshots",

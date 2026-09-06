@@ -957,9 +957,10 @@ export abstract class StorageDrafts extends StoragePrompts {
   async saveSessionBuffer(sessionId: string, buffer: string): Promise<void> {
     await fs.mkdir(this.buffersDir(), { recursive: true });
     const maxBufferSize = 500 * 1024;
-    const contents =
-      buffer.length > maxBufferSize ? buffer.slice(buffer.length - maxBufferSize) : buffer;
-    await fs.writeFile(this.bufferFile(sessionId), contents);
+    if (Buffer.byteLength(buffer, "utf8") > maxBufferSize) {
+      throw new Error("Serialized terminal buffer exceeds the 500 KiB limit");
+    }
+    await fs.writeFile(this.bufferFile(sessionId), buffer);
   }
 
   async loadSessionBuffer(sessionId: string): Promise<string | null> {

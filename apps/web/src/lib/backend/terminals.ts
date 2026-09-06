@@ -1,4 +1,10 @@
 import { invoke } from "@/lib/native/backend";
+import {
+  isTerminalHistoryPage,
+  isTerminalStateSnapshot,
+  type TerminalHistoryPage,
+  type TerminalStateSnapshot,
+} from "@orkestrator/protocol/terminal-history";
 import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
 import type { EnvironmentSetupSession } from "@/types";
 import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./shared";
@@ -106,6 +112,42 @@ export interface TerminalOutputEvent {
   text: string;
   revision: number;
   generation: number;
+}
+
+export type {
+  TerminalHistoryPage,
+  TerminalStateSnapshot,
+} from "@orkestrator/protocol/terminal-history";
+
+export async function getTerminalStateSnapshot(
+  sessionId: string,
+): Promise<TerminalStateSnapshot | null> {
+  const value = await invoke<unknown>("get_terminal_state_snapshot", { sessionId });
+  if (value === null || isTerminalStateSnapshot(value)) return value;
+  throw new Error("Backend returned an invalid terminal state snapshot");
+}
+
+export async function getTerminalHistoryPage(
+  sessionId: string,
+  cursor?: string,
+): Promise<TerminalHistoryPage | null> {
+  const value = await invoke<unknown>("get_terminal_history_page", {
+    sessionId,
+    ...(cursor ? { cursor } : {}),
+  });
+  if (value === null || isTerminalHistoryPage(value)) return value;
+  throw new Error("Backend returned an invalid terminal history page");
+}
+
+export async function acknowledgeTerminalSnapshot(
+  sessionId: string,
+  snapshot: { generation: number; revision: number },
+): Promise<void> {
+  await invoke("terminal_snapshot_applied", { sessionId, ...snapshot });
+}
+
+export async function rejectTerminalSnapshot(sessionId: string): Promise<void> {
+  await invoke("terminal_snapshot_failed", { sessionId });
 }
 
 export async function getTerminalOutputSnapshot(

@@ -87,6 +87,7 @@ function createContext(
     emit: mock(() => undefined),
     storage: {
       getEnvironment: mock(async () => environment),
+      getDataDir: () => path.join(os.tmpdir(), `ork-commands-io-history-${process.pid}`),
     },
   } as unknown as CommandContext;
 }

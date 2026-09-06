@@ -1480,6 +1480,11 @@ describe("web gateway browser API", () => {
     expect(fallbackSignals.get("terminal-output-session-2")?.aborted).toBe(false);
 
     await api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" });
+    await api.invoke("terminal_snapshot_applied", {
+      sessionId: "session-1",
+      generation: 1,
+      revision: 0,
+    });
     await waitForCondition(
       () => fallbackSignals.get("terminal-output-session-1")?.aborted === true,
       "Snapshot completion did not retire fallback",
@@ -1514,6 +1519,7 @@ describe("web gateway browser API", () => {
     await expect(
       api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" }),
     ).rejects.toThrow("snapshot unavailable");
+    await api.invoke("terminal_snapshot_failed", { sessionId: "session-1" });
     await waitForCondition(
       () => sentControlFrames(socket).some((frame) => frame.type === "unsubscribe"),
       "Snapshot failure did not reset the WebSocket subscription",

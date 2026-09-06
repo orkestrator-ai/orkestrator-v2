@@ -284,7 +284,7 @@ export function asPositiveInteger(value: unknown, name: string): number {
 
 export function asTerminalDimension(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
+    ? Math.min(1_000, Math.floor(value))
     : fallback;
 }
 

@@ -731,6 +731,10 @@ export interface AppConfig {
       backgroundColor: string;
     };
     terminalScrollback: number;
+    terminalHistoryEnabled?: boolean;
+    terminalHistoryRetentionMb?: number;
+    terminalHistoryGlobalRetentionMb?: number;
+    terminalHistoryRetentionDays?: number;
     experimentalCodexRawEventLogging?: boolean;
     debugLogging?: boolean;
     /** Number of days production application logs remain on disk. */

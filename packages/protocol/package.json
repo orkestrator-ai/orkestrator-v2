@@ -49,6 +49,7 @@
     "./task-list": "./src/task-list.ts",
     "./tab-teardown": "./src/tab-teardown.ts",
     "./terminal-agent-launch": "./src/terminal-agent-launch.ts",
+    "./terminal-history": "./src/terminal-history.ts",
     "./terminal-websocket": "./src/terminal-websocket.ts",
     "./tool-diff": "./src/tool-diff.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",

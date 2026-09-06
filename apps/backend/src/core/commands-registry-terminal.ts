@@ -107,10 +107,25 @@ import {
 } from "./review-worktree-fingerprint.js";
 import {
   configureTerminalHistory,
+  disposeTerminalHistory,
   getTerminalHistoryPage,
   getTerminalStateSnapshot,
+  resumeTerminalHistory,
   resizeTerminalHistory,
 } from "./terminal-history.js";
+
+function resizeTerminalHistoryBestEffort(sessionId: string, cols: number, rows: number): void {
+  try {
+    resizeTerminalHistory(sessionId, cols, rows);
+  } catch {
+    // History is an optional recovery surface. If its emulator rejects an
+    // unusual geometry, release that collector without failing a PTY resize
+    // that has already succeeded.
+    void Promise.resolve()
+      .then(() => disposeTerminalHistory(sessionId))
+      .catch(() => undefined);
+  }
+}
 
 export function registerTerminalCommands(
   register: CommandRegistrar,
@@ -379,6 +394,7 @@ export function registerTerminalCommands(
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Container terminal session is no longer available");
     }
+    await resumeTerminalHistory(id);
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
@@ -409,8 +425,8 @@ export function registerTerminalCommands(
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
     const resolvedRows = asTerminalDimension(rows, 24);
-    resizeTerminalHistory(id, resolvedCols, resolvedRows);
     terminalProcess.resize(resolvedCols, resolvedRows);
+    resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
   register("detach_terminal", ({ sessionId }) => {
@@ -630,6 +646,7 @@ export function registerTerminalCommands(
     if (storedConfig && terminalSessionConfigs.get(id) !== storedConfig) {
       throw new Error("Local terminal session is no longer available");
     }
+    await resumeTerminalHistory(id);
     spawnTerminalProcess(
       id,
       resolveLocalShellPath(),
@@ -659,8 +676,8 @@ export function registerTerminalCommands(
     if (!terminalProcess) return { delivered: false };
     const resolvedCols = asTerminalDimension(cols, 80);
     const resolvedRows = asTerminalDimension(rows, 24);
-    resizeTerminalHistory(id, resolvedCols, resolvedRows);
     terminalProcess.resize(resolvedCols, resolvedRows);
+    resizeTerminalHistoryBestEffort(id, resolvedCols, resolvedRows);
     return { delivered: true };
   });
   register("close_local_terminal_session", ({ sessionId }) => {

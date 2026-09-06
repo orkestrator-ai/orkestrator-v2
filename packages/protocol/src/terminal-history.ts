@@ -4,6 +4,7 @@ export const TERMINAL_STATE_MAX_BYTES = 2 * 1024 * 1024;
 export const TERMINAL_PARSER_CARRY_MAX_BYTES = 64 * 1024;
 export const TERMINAL_HISTORY_PAGE_MAX_BYTES = 256 * 1024;
 export const TERMINAL_HISTORY_PAGE_MAX_ROWS = 1_000;
+export const DEFAULT_TERMINAL_HISTORY_ENABLED = true;
 export const DEFAULT_TERMINAL_HISTORY_RETENTION_MB = 64;
 export const MIN_TERMINAL_HISTORY_RETENTION_MB = 8;
 export const MAX_TERMINAL_HISTORY_RETENTION_MB = 512;
@@ -29,11 +30,13 @@ function normalizeInteger(
 }
 
 export function normalizeTerminalHistoryRetention(value: {
+  enabled?: unknown;
   sessionMb?: unknown;
   globalMb?: unknown;
   days?: unknown;
-}): { sessionMb: number; globalMb: number; days: number } {
+}): { enabled: boolean; sessionMb: number; globalMb: number; days: number } {
   return {
+    enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_TERMINAL_HISTORY_ENABLED,
     sessionMb: normalizeInteger(
       value.sessionMb,
       DEFAULT_TERMINAL_HISTORY_RETENTION_MB,

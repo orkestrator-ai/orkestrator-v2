@@ -44,6 +44,7 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
+  DEFAULT_TERMINAL_HISTORY_ENABLED,
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -1581,6 +1582,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   );
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const terminalHistoryRetention = normalizeTerminalHistoryRetention({
+    enabled: global.terminalHistoryEnabled,
     sessionMb: global.terminalHistoryRetentionMb,
     globalMb: global.terminalHistoryGlobalRetentionMb,
     days: global.terminalHistoryRetentionDays,
@@ -1688,6 +1690,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
+    global.terminalHistoryEnabled === terminalHistoryRetention.enabled &&
     global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
     global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
     global.terminalHistoryRetentionDays === terminalHistoryRetention.days &&
@@ -1711,6 +1714,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ...nextGlobal,
       codexMaxConcurrentThreads,
       debugLogRetentionDays,
+      terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,
@@ -1838,6 +1842,7 @@ export function defaultConfig(): AppConfig {
         backgroundColor: "#0e1014",
       },
       terminalScrollback: 1000,
+      terminalHistoryEnabled: DEFAULT_TERMINAL_HISTORY_ENABLED,
       terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
       terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
       terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,

@@ -58,4 +58,74 @@ describe("TerminalHistoryPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getByText("recent line")).toBeDefined());
   });
+
+  test("preserves the scroll anchor and ignores concurrent load requests", async () => {
+    render(<TerminalHistoryPanel sessionId="session-1" onClose={() => undefined} />);
+    expect(await screen.findByText("recent line")).toBeDefined();
+    const scroller = screen
+      .getByRole("region", { name: "Earlier terminal output" })
+      .querySelector(".overflow-auto") as HTMLDivElement;
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      get: () => (getTerminalHistoryPage.mock.calls.length > 1 ? 160 : 100),
+    });
+    scroller.scrollTop = 25;
+
+    const earlier = new Promise<Awaited<ReturnType<typeof getTerminalHistoryPage>>>((resolve) => {
+      setTimeout(
+        () =>
+          resolve({
+            formatVersion: 1,
+            historyId: "history",
+            rows: [{ id: "1:0", text: "anchored line" }],
+            previousCursor: null,
+            earliestAvailable: true,
+            historyTruncated: false,
+            historyGap: false,
+          }),
+        5,
+      );
+    });
+    getTerminalHistoryPage.mockImplementationOnce(() => earlier);
+    const loadEarlier = screen.getByRole("button", { name: "Load earlier" });
+    fireEvent.click(loadEarlier);
+    fireEvent.click(loadEarlier);
+
+    expect(await screen.findByText("anchored line")).toBeDefined();
+    expect(getTerminalHistoryPage).toHaveBeenCalledTimes(2);
+    expect(scroller.scrollTop).toBe(85);
+  });
+
+  test("keeps the page cache bounded during repeated backward paging", async () => {
+    let page = 20;
+    getTerminalHistoryPage.mockImplementation(async (_sessionId) => ({
+      formatVersion: 1,
+      historyId: "history",
+      rows: [{ id: `${page}:0`, text: `page-${page}` }],
+      previousCursor: page > 1 ? `cursor-${page - 1}` : null,
+      earliestAvailable: page <= 1,
+      historyTruncated: false,
+      historyGap: false,
+    }));
+    render(<TerminalHistoryPanel sessionId="session-1" onClose={() => undefined} />);
+    expect(await screen.findByText("page-20")).toBeDefined();
+    const scroller = screen
+      .getByRole("region", { name: "Earlier terminal output" })
+      .querySelector(".overflow-auto") as HTMLDivElement;
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 160 });
+    for (page = 19; page >= 1; page -= 1) {
+      const expectedCalls = 21 - page;
+      if (page === 4) scroller.scrollTop = 25;
+      fireEvent.click(screen.getByRole("button", { name: "Load earlier" }));
+      await waitFor(() => expect(getTerminalHistoryPage).toHaveBeenCalledTimes(expectedCalls));
+      if (page >= 5) expect(await screen.findByText(`page-${page}`)).toBeDefined();
+    }
+    const visiblePages = screen
+      .getByRole("region", { name: "Earlier terminal output" })
+      .querySelectorAll(".whitespace-pre-wrap");
+    expect(visiblePages.length).toBeLessThanOrEqual(16);
+    expect(screen.getByText("page-20")).toBeDefined();
+    expect(screen.queryByText("page-1")).toBeNull();
+    expect(scroller.scrollTop).toBe(25);
+  });
 });

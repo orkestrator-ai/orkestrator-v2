@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isTerminalHistoryPage, isTerminalStateSnapshot } from "./terminal-history";
+import {
+  isTerminalHistoryPage,
+  isTerminalStateSnapshot,
+  normalizeTerminalHistoryRetention,
+} from "./terminal-history";
 
 describe("terminal history protocol", () => {
   test("validates complete state snapshots", () => {
@@ -40,5 +44,11 @@ describe("terminal history protocol", () => {
     expect(isTerminalHistoryPage({ formatVersion: 1, rows: [{ id: 1, text: "line" }] })).toBe(
       false,
     );
+  });
+
+  test("normalizes the durable-history enabled flag", () => {
+    expect(normalizeTerminalHistoryRetention({}).enabled).toBe(true);
+    expect(normalizeTerminalHistoryRetention({ enabled: false }).enabled).toBe(false);
+    expect(normalizeTerminalHistoryRetention({ enabled: "false" }).enabled).toBe(true);
   });
 });

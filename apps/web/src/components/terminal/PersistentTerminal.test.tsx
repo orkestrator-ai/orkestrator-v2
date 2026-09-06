@@ -2203,6 +2203,44 @@ describe("PersistentTerminal", () => {
     expect(screen.getByRole("status").textContent).toContain("Earlier output may be unavailable");
   });
 
+  it("opens earlier output and returns to the live terminal", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_terminal_history_page") {
+        return {
+          formatVersion: 1,
+          historyId: "history",
+          rows: [{ id: "1:0", text: "retained output" }],
+          previousCursor: null,
+          earliestAvailable: true,
+          historyTruncated: false,
+          historyGap: true,
+        };
+      }
+      return undefined;
+    });
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open earlier terminal output" }));
+    expect(await screen.findByText("retained output")).toBeDefined();
+    expect(screen.getByRole("status").textContent).toContain("Archive has a gap");
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(screen.queryByRole("region", { name: "Earlier terminal output" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Open earlier terminal output" })).toBeDefined();
+  });
+
   it("replaces a truncated tail with late durable history plus post-snapshot live output", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(

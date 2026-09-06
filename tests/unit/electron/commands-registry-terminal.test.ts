@@ -99,6 +99,16 @@ const {
   writeBridgeServer,
 } = await createCommandFixtures();
 
+const {
+  configureTerminalHistory,
+  configureTerminalHistoryRetention,
+  flushTerminalHistories,
+  getTerminalStateSnapshot,
+  terminalHistoryTesting,
+} = await import("../../../apps/backend/src/core/terminal-history");
+const { beginSetupPreparationSession } =
+  await import("../../../apps/backend/src/core/commands-environment");
+
 import type {
   ChildProcessWithoutNullStreams,
   CommandContext,
@@ -1999,6 +2009,115 @@ exit 0
       running: false,
       bootstrapped: false,
     });
+  });
+
+  test("still resizes the PTY when terminal-history memory is saturated", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-resize-budget-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    for (let index = 0; index < 8; index += 1) {
+      configureTerminalHistory({
+        sessionId: `saturated-${index}`,
+        dataDir: context.storage.getDataDir(),
+        stableIdentity: `saturated-terminal-${index}`,
+        cols: 80,
+        rows: 24,
+      });
+    }
+
+    expect(
+      commands.get("local_terminal_resize")?.({ sessionId, cols: 1_000, rows: 1_000 }, context),
+    ).toEqual({ delivered: true });
+    expect(ptyProcesses[0]?.resize).toHaveBeenCalledWith(1_000, 1_000);
+    await flushTerminalHistories();
+  });
+
+  test("contains terminal-history checkpoint failures on PTY exit", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-history-exit-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    let serializationAttempted = false;
+    terminalHistoryTesting.setSerializeHook(() => {
+      serializationAttempted = true;
+      throw new Error("snapshot too large");
+    });
+    try {
+      ptyProcesses[0]?.emitExit({ exitCode: 0 });
+      await waitForCondition(
+        () => serializationAttempted,
+        "the terminal history completion checkpoint",
+      );
+    } finally {
+      terminalHistoryTesting.setSerializeHook(null);
+    }
+
+    const snapshot = await getTerminalStateSnapshot(sessionId);
+    expect(snapshot).toMatchObject({ completed: true, historyGap: true });
+    terminalHistoryTesting.clear();
+  });
+
+  test("creates and attaches terminals and setup sessions when history admission is exhausted", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-history-admission-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    configureTerminalHistoryRetention({ sessionMb: 8, globalMb: 128, days: 7 });
+    for (let index = 0; index < 42; index += 1) {
+      configureTerminalHistory({
+        sessionId: `admission-${index}`,
+        dataDir: context.storage.getDataDir(),
+        stableIdentity: `admission-terminal-${index}`,
+        cols: 1,
+        rows: 1,
+      });
+    }
+
+    const created = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    );
+    expect(created.created).toBe(true);
+    expect(created.sessionId).toBeString();
+    expect(await getTerminalStateSnapshot(created.sessionId)).toBeNull();
+    const containerCreated = terminalSessionResult(
+      await commands.get("create_terminal_session")?.(
+        { containerId: "container-created-without-history", cols: 80, rows: 24 },
+        context,
+      ),
+    );
+    expect(containerCreated.created).toBe(true);
+    expect(containerCreated.sessionId).toBeString();
+    expect(await getTerminalStateSnapshot(containerCreated.sessionId)).toBeNull();
+    const attached = commands.get("attach_terminal")?.(
+      { containerId: "container-without-history", cols: 80, rows: 24 },
+      context,
+    );
+    expect(attached).toBeString();
+    expect(await getTerminalStateSnapshot(String(attached))).toBeNull();
+    const setupSessionId = beginSetupPreparationSession(environment, context);
+    expect(setupSessionId).toBe(`${environment.id}:setup`);
+    expect(await getTerminalStateSnapshot(setupSessionId)).toBeNull();
+    await flushTerminalHistories();
+    terminalHistoryTesting.clear();
   });
 
   test("atomically bootstraps a terminal session at most once", async () => {

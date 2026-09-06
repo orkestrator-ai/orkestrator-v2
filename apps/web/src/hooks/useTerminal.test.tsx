@@ -53,7 +53,9 @@ const getTerminalOutputSnapshotMock = mock(
 const getTerminalStateSnapshotMock = mock(
   async (_sessionId: string): Promise<realBackend.TerminalStateSnapshot | null> => null,
 );
-const acknowledgeTerminalSnapshotMock = mock(async () => undefined);
+const acknowledgeTerminalSnapshotMock = mock(
+  async (_sessionId: string, _snapshot: { generation: number; revision: number }) => undefined,
+);
 const rejectTerminalSnapshotMock = mock(async () => undefined);
 const detachTerminalMock = mock(async (_sessionId: string) => undefined);
 const resizeLocalTerminalMock = mock(
@@ -1819,6 +1821,128 @@ describe("useTerminal reconnect behavior", () => {
 
     await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(3));
     expect(received).toEqual(["three"]);
+  });
+
+  it("retries reconciliation after two snapshots remain behind a buffered gap", async () => {
+    let outputHandler:
+      | ((event: { payload: { data: number[]; revision: number; generation: number } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event.startsWith("terminal-output-")) outputHandler = handler;
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock
+      .mockResolvedValueOnce({ output: "one", revision: 1, generation: 1 })
+      .mockResolvedValueOnce({ output: "still one", revision: 1, generation: 1 })
+      .mockResolvedValueOnce({ output: "still one again", revision: 1, generation: 1 })
+      .mockResolvedValueOnce({ output: "one through three", revision: 3, generation: 1 });
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({ payload: { data: [51], revision: 3, generation: 1 } });
+    });
+
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(4));
+    expect(acknowledgeTerminalSnapshotMock.mock.calls.at(-1)?.[1]).toMatchObject({
+      revision: 3,
+      generation: 1,
+    });
+  });
+
+  it("cancels a queued reconciliation retry when the connection generation is disposed", async () => {
+    let outputHandler:
+      | ((event: { payload: { data: number[]; revision: number; generation: number } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event.startsWith("terminal-output-")) outputHandler = handler;
+      return unlistenMock;
+    });
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      output: "still one",
+      revision: 1,
+      generation: 1,
+    });
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    act(() => {
+      outputHandler?.({ payload: { data: [51], revision: 3, generation: 1 } });
+    });
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      await result.current.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops an overflowing pending buffer and recovers from an authoritative snapshot", async () => {
+    let outputHandler:
+      | ((event: { payload: { data: number[]; revision: number; generation: number } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event.startsWith("terminal-output-")) outputHandler = handler;
+      return unlistenMock;
+    });
+    let resolveInitial!: (snapshot: TestTerminalOutputSnapshot) => void;
+    getTerminalOutputSnapshotMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<TestTerminalOutputSnapshot>((resolve) => {
+            resolveInitial = resolve;
+          }),
+      )
+      .mockResolvedValue({ output: "authoritative", revision: 1_025, generation: 1 });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    let connecting!: Promise<void>;
+    act(() => {
+      connecting = result.current.connect();
+    });
+    await waitFor(() => expect(outputHandler).toBeDefined());
+    act(() => {
+      for (let revision = 1; revision <= 1_025; revision += 1) {
+        outputHandler?.({ payload: { data: [120], revision, generation: 1 } });
+      }
+      resolveInitial({ output: "stale", revision: 0, generation: 1 });
+    });
+    await act(async () => {
+      await connecting;
+    });
+
+    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
+    expect(received).toEqual([]);
+    act(() => {
+      outputHandler?.({ payload: { data: [121], revision: 1_026, generation: 1 } });
+    });
+    expect(received).toEqual(["y"]);
   });
 
   it("decodes the backend's bytesBase64 wire payload during a live attachment", async () => {

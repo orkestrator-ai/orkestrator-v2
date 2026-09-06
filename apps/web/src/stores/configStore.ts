@@ -6,6 +6,7 @@ import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-plat
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
 import {
+  DEFAULT_TERMINAL_HISTORY_ENABLED,
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -108,6 +109,7 @@ const DEFAULT_CONFIG: AppConfig = {
       backgroundColor: TERMINAL_BACKGROUND_COLOR,
     },
     terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
+    terminalHistoryEnabled: DEFAULT_TERMINAL_HISTORY_ENABLED,
     terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,

@@ -170,7 +170,7 @@ export function spawnTerminalProcess(
       });
     }
     hooks.onExit?.();
-    void completeTerminalHistory(id);
+    void completeTerminalHistory(id).catch(() => undefined);
     cleanupTerminalSession(id);
   });
   return terminalProcess;

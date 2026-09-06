@@ -34,6 +34,7 @@ import {
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
 import {
+  DEFAULT_TERMINAL_HISTORY_ENABLED,
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
   DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
@@ -107,6 +108,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.fontSize ?? 0,
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
     global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
@@ -182,6 +184,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [terminalHistoryRetentionMb, setTerminalHistoryRetentionMb] = useState(
     global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+  );
+  const [terminalHistoryEnabled, setTerminalHistoryEnabled] = useState(
+    global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
   );
   const [terminalHistoryGlobalRetentionMb, setTerminalHistoryGlobalRetentionMb] = useState(
     global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
@@ -282,6 +287,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalFontSize(appearance.fontSize);
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
     setTerminalHistoryRetentionMb(
       global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     );
@@ -436,6 +442,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalFontSize !== terminalAppearance.fontSize ||
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
+      terminalHistoryEnabled !==
+        (global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED) ||
       terminalHistoryRetentionMb !==
         (global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB) ||
       terminalHistoryGlobalRetentionMb !==
@@ -477,6 +485,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     terminalFontSize,
     terminalBackgroundColor,
     terminalScrollback,
+    terminalHistoryEnabled,
     terminalHistoryRetentionMb,
     terminalHistoryGlobalRetentionMb,
     terminalHistoryRetentionDays,
@@ -583,6 +592,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         codexMaxConcurrentThreads: number;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
+        terminalHistoryEnabled: boolean;
         terminalHistoryRetentionMb: number;
         terminalHistoryGlobalRetentionMb: number;
         terminalHistoryRetentionDays: number;
@@ -610,6 +620,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           backgroundColor: terminalBackgroundColor,
         },
         terminalScrollback,
+        terminalHistoryEnabled,
         terminalHistoryRetentionMb,
         terminalHistoryGlobalRetentionMb,
         terminalHistoryRetentionDays,
@@ -804,6 +815,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalFontSize(appearance.fontSize);
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
     setTerminalHistoryRetentionMb(
       global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     );
@@ -881,6 +893,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalHistoryEnabled,
+    setTerminalHistoryEnabled,
     terminalHistoryRetentionMb,
     setTerminalHistoryRetentionMb,
     terminalHistoryGlobalRetentionMb,
@@ -964,15 +978,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     }
     if (colorError) blockers.push({ section: "terminal", message: colorError });
     if (
-      !Number.isInteger(terminalHistoryRetentionMb) ||
-      terminalHistoryRetentionMb < MIN_TERMINAL_HISTORY_RETENTION_MB ||
-      terminalHistoryRetentionMb > MAX_TERMINAL_HISTORY_RETENTION_MB ||
-      !Number.isInteger(terminalHistoryGlobalRetentionMb) ||
-      terminalHistoryGlobalRetentionMb < MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
-      terminalHistoryGlobalRetentionMb > MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
-      !Number.isInteger(terminalHistoryRetentionDays) ||
-      terminalHistoryRetentionDays < MIN_TERMINAL_HISTORY_RETENTION_DAYS ||
-      terminalHistoryRetentionDays > MAX_TERMINAL_HISTORY_RETENTION_DAYS
+      terminalHistoryEnabled &&
+      (!Number.isInteger(terminalHistoryRetentionMb) ||
+        terminalHistoryRetentionMb < MIN_TERMINAL_HISTORY_RETENTION_MB ||
+        terminalHistoryRetentionMb > MAX_TERMINAL_HISTORY_RETENTION_MB ||
+        !Number.isInteger(terminalHistoryGlobalRetentionMb) ||
+        terminalHistoryGlobalRetentionMb < MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
+        terminalHistoryGlobalRetentionMb > MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB ||
+        !Number.isInteger(terminalHistoryRetentionDays) ||
+        terminalHistoryRetentionDays < MIN_TERMINAL_HISTORY_RETENTION_DAYS ||
+        terminalHistoryRetentionDays > MAX_TERMINAL_HISTORY_RETENTION_DAYS)
     ) {
       blockers.push({
         section: "terminal",
@@ -998,6 +1013,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   }, [
     domainErrors,
     colorError,
+    terminalHistoryEnabled,
     terminalHistoryRetentionMb,
     terminalHistoryGlobalRetentionMb,
     terminalHistoryRetentionDays,

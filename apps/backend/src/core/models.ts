@@ -724,6 +724,7 @@ export interface AppConfig {
       backgroundColor: string;
     };
     terminalScrollback: number;
+    terminalHistoryEnabled?: boolean;
     terminalHistoryRetentionMb?: number;
     terminalHistoryGlobalRetentionMb?: number;
     terminalHistoryRetentionDays?: number;

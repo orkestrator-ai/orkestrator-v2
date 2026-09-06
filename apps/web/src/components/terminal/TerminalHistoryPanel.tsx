@@ -43,19 +43,19 @@ export function TerminalHistoryPanel({
         }
         setPages((existing) => {
           const combined = (requestedCursor ? [page, ...existing] : [page]).slice(
-            0,
-            MAX_CACHED_PAGES,
+            -MAX_CACHED_PAGES,
           );
           let bytes = 0;
           const retained: TerminalHistoryPage[] = [];
-          for (const candidate of combined) {
+          for (let index = combined.length - 1; index >= 0; index -= 1) {
+            const candidate = combined[index]!;
             const pageBytes = candidate.rows.reduce(
               (sum, row) => sum + new TextEncoder().encode(row.text).length,
               0,
             );
             if (retained.length > 0 && bytes + pageBytes > MAX_CACHED_BYTES) break;
             bytes += pageBytes;
-            retained.push(candidate);
+            retained.unshift(candidate);
           }
           return retained;
         });

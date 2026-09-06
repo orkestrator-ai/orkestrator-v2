@@ -465,6 +465,7 @@ export abstract class StorageConfig extends StorageProjects {
     // applied to a launch the user cannot see being configured.
     const agentSettings = normalizeAgentSettings(reviewValidated.agentSettings);
     const terminalHistoryRetention = normalizeTerminalHistoryRetention({
+      enabled: reviewValidated.terminalHistoryEnabled,
       sessionMb: reviewValidated.terminalHistoryRetentionMb,
       globalMb: reviewValidated.terminalHistoryGlobalRetentionMb,
       days: reviewValidated.terminalHistoryRetentionDays,
@@ -489,6 +490,7 @@ export abstract class StorageConfig extends StorageProjects {
       ...reviewValidated,
       sshAgentSocketPath: requestedSshAgentSocketPath || undefined,
       debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
+      terminalHistoryEnabled: terminalHistoryRetention.enabled,
       terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,

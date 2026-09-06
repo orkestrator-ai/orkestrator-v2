@@ -35,7 +35,11 @@ import {
   EnvironmentLifecycleTaskTracker,
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./environment-lifecycle-tasks.js";
-import { configureTerminalHistoryRetention, flushTerminalHistories } from "./terminal-history.js";
+import {
+  configureTerminalHistoryRetention,
+  flushTerminalHistories,
+  pruneTerminalHistoryStorage,
+} from "./terminal-history.js";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
@@ -268,10 +272,12 @@ export class OrkestratorBackend {
     await this.context.storage.init();
     const terminalHistoryConfig = (await this.context.storage.loadConfig()).global;
     configureTerminalHistoryRetention({
+      enabled: terminalHistoryConfig.terminalHistoryEnabled,
       sessionMb: terminalHistoryConfig.terminalHistoryRetentionMb,
       globalMb: terminalHistoryConfig.terminalHistoryGlobalRetentionMb,
       days: terminalHistoryConfig.terminalHistoryRetentionDays,
     });
+    await pruneTerminalHistoryStorage(this.context.storage.getDataDir());
     if (!this.terminalStartupReconciled) {
       // A terminal session id names state owned by this backend process. On a
       // renderer-only reload the backend stays alive and the id remains valid;
@@ -617,7 +623,7 @@ export class OrkestratorBackend {
           console.warn("[backend] Failed to drain tmux prompt queues:", error);
         }
         await lifecycleDrain;
-        await flushTerminalHistories();
+        await flushTerminalHistories(true);
         await shutdownLocalServers({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });

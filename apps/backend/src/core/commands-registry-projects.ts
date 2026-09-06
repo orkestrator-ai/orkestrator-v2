@@ -689,6 +689,7 @@ export function registerProjectCommands(
     );
     const savedGlobal = (await storage.loadConfig()).global;
     configureTerminalHistoryRetention({
+      enabled: savedGlobal.terminalHistoryEnabled,
       sessionMb: savedGlobal.terminalHistoryRetentionMb,
       globalMb: savedGlobal.terminalHistoryGlobalRetentionMb,
       days: savedGlobal.terminalHistoryRetentionDays,
@@ -711,6 +712,7 @@ export function registerProjectCommands(
       { preserveCredentials: true },
     );
     configureTerminalHistoryRetention({
+      enabled: updated.global.terminalHistoryEnabled,
       sessionMb: updated.global.terminalHistoryRetentionMb,
       globalMb: updated.global.terminalHistoryGlobalRetentionMb,
       days: updated.global.terminalHistoryRetentionDays,

@@ -512,6 +512,8 @@ export interface GlobalConfig {
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */
   terminalScrollback: number;
+  /** Whether terminal output is retained in the backend archive. */
+  terminalHistoryEnabled?: boolean;
   /** Maximum retained archive size per terminal, in MiB. */
   terminalHistoryRetentionMb?: number;
   /** Maximum retained terminal archive size across the application, in MiB. */

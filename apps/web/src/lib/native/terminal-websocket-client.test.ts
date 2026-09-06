@@ -290,6 +290,34 @@ describe("TerminalWebSocketClient", () => {
     });
   });
 
+  test("resubscribes for snapshot recovery when the renderer rejects output", async () => {
+    const { client, sockets, channelUnavailable } = createHarness();
+    client.subscribe("session-a", () => Promise.reject(new Error("renderer write failed")));
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("cannot paint"),
+      }),
+    );
+    await tick();
+    await tick();
+
+    expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 11 });
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+    expect(channelUnavailable).toHaveBeenCalledWith("session-a");
+    expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(2);
+    const retry = subscribeFrame(socket, "session-a");
+    expect(retry.knownGeneration).toBeUndefined();
+    expect(retry.knownRevision).toBeUndefined();
+  });
+
   test("authenticates, waits for ready before subscribing, rotates tokens, and rebuilds when visible", async () => {
     const { client, sockets } = createHarness({ token: "old-token" });
     client.subscribe("session-a", () => undefined);

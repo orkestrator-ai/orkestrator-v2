@@ -202,6 +202,8 @@ export interface AgentInteractionRequest {
   state: AgentInteractionState;
   revision: number;
   presentation: AgentInteractionPresentation;
+  /** False keeps the interaction actionable without blocking normal session work. */
+  blocking?: boolean;
   /** Authority-owned absolute epoch milliseconds. */
   createdAt: number;
   updatedAt: number;
@@ -412,6 +414,7 @@ const REQUEST_KEYS = new Set([
   "state",
   "revision",
   "presentation",
+  "blocking",
   "createdAt",
   "updatedAt",
   "expiresAt",
@@ -628,6 +631,7 @@ export function isAgentInteractionRequest(value: unknown): value is AgentInterac
     typeof value.state !== "string" ||
     !STATES.has(value.state) ||
     !isNonNegativeInteger(value.revision) ||
+    (value.blocking !== undefined && typeof value.blocking !== "boolean") ||
     !isEpochMilliseconds(value.createdAt) ||
     !isEpochMilliseconds(value.updatedAt) ||
     value.updatedAt < value.createdAt ||

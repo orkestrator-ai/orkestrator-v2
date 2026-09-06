@@ -2041,6 +2041,7 @@ describe("codex-client interactions", () => {
     itemId: "item-1",
     requestedAt: 1,
     expiresAt: 2,
+    isBlocking: false,
     questions: [QUESTION],
   };
 
@@ -2055,6 +2056,7 @@ describe("codex-client interactions", () => {
         itemId: "item-1",
         requestedAt: 1,
         expiresAt: 2,
+        isBlocking: false,
         questions: [
           {
             id: "q-1",
@@ -2065,6 +2067,14 @@ describe("codex-client interactions", () => {
             options: [{ label: "staging", description: "safe" }, { label: "production" }],
           },
         ],
+      });
+    });
+
+    test("preserves legacy blocking interactions that omit isBlocking", () => {
+      expect(parseInteraction({ ...VALID_INTERACTION, isBlocking: undefined })).toMatchObject({
+        interactionId: "int-1",
+        isBlocking: true,
+        expiresAt: 2,
       });
     });
 

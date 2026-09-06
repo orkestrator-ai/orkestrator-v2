@@ -320,6 +320,8 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** Reports newly persisted, content-free background questions to the shell. */
+  onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
   beginCoordinatorTurn?: (projectId: string) => () => void;
   /** Authoritative availability of the scoped worker-delegation MCP. */

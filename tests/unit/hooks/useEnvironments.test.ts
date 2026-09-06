@@ -8,7 +8,8 @@ import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewS
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { useSessionStore } from "../../../apps/web/src/stores/sessionStore";
-import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import { usePaneLayoutStore } from "../../../apps/web/src/stores/paneLayoutStore";
+import { mockToastError, mockToastInfo, mockToastSuccess } from "../../mocks/sonner";
 import type {
   Environment,
   EnvironmentType,
@@ -147,6 +148,7 @@ describe("useEnvironments", () => {
       deletingEnvironments: new Set(),
     });
     useUIStore.setState({ unreadEnvironmentIds: [] });
+    usePaneLayoutStore.setState({ environments: new Map(), activeEnvironmentId: null });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -2518,9 +2520,106 @@ describe("useEnvironments", () => {
     expect(eventNames).not.toContain("environment-renamed");
   });
 
+  test("toasts for an async Codex question in an inactive environment", async () => {
+    const callbacks = new Map<string, (event: { payload: unknown }) => void>();
+    mockListen.mockImplementation((eventName: string, callback: (event: never) => void) => {
+      callbacks.set(eventName, callback as (event: { payload: unknown }) => void);
+      return Promise.resolve(() => {});
+    });
+    const environment = createMockEnvironment({
+      id: "env-question",
+      projectId: "project-1",
+      name: "Background work",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    renderHook(() => useEnvironmentLifecycleService());
+    await waitFor(() => expect(callbacks.has("native-agent-async-question")).toBe(true));
+
+    act(() => {
+      callbacks.get("native-agent-async-question")?.({
+        payload: { environment_id: environment.id, session_key: "codex-session" },
+      });
+    });
+
+    expect(mockToastInfo).toHaveBeenCalledWith("Codex has a question", {
+      description: "Open Background work to answer it.",
+    });
+  });
+
+  test("does not toast when the owning Codex tab is visible", async () => {
+    let callback: ((event: { payload: unknown }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, listener: (event: never) => void) => {
+      if (eventName === "native-agent-async-question") {
+        callback = listener as (event: { payload: unknown }) => void;
+      }
+      return Promise.resolve(() => {});
+    });
+    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    usePaneLayoutStore.getState().initialize(null, "env-active");
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "question-tab",
+        type: "agent-native",
+        nativeAgentData: { environmentId: "env-active", platform: "codex" },
+      },
+      "env-active",
+    );
+    renderHook(() => useEnvironmentLifecycleService());
+    await waitFor(() => expect(callback).toBeDefined());
+
+    act(() => {
+      callback?.({
+        payload: { environment_id: "env-active", session_key: "env-env-active:question-tab" },
+      });
+    });
+
+    expect(mockToastInfo).not.toHaveBeenCalled();
+  });
+
+  test("toasts when the selected environment is showing a different tab", async () => {
+    let callback: ((event: { payload: unknown }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, listener: (event: never) => void) => {
+      if (eventName === "native-agent-async-question") {
+        callback = listener as (event: { payload: unknown }) => void;
+      }
+      return Promise.resolve(() => {});
+    });
+    const environment = createMockEnvironment({
+      id: "env-active",
+      projectId: "project-1",
+      name: "Current work",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    useUIStore.setState({ selectedEnvironmentId: "env-active" });
+    usePaneLayoutStore.getState().initialize(null, "env-active");
+    usePaneLayoutStore
+      .getState()
+      .addTab("default", { id: "terminal-tab", type: "plain" }, "env-active");
+    renderHook(() => useEnvironmentLifecycleService());
+    await waitFor(() => expect(callback).toBeDefined());
+
+    act(() => {
+      callback?.({
+        payload: { environment_id: "env-active", session_key: "env-env-active:question-tab" },
+      });
+    });
+
+    expect(mockToastInfo).toHaveBeenCalledWith("Codex has a question", {
+      description: "Open Current work to answer it.",
+    });
+  });
+
   test("disposes listeners that finish registering after unmount", async () => {
     const resolvers: Array<(unlisten: () => void) => void> = [];
-    const unlisteners = [mock(() => {}), mock(() => {}), mock(() => {}), mock(() => {})];
+    const unlisteners = [
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+    ];
     mockListen.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -2531,15 +2630,16 @@ describe("useEnvironments", () => {
       useEnvironmentLifecycleService();
       useEnvironments(null);
     });
-    await waitFor(() => expect(resolvers).toHaveLength(3));
+    await waitFor(() => expect(resolvers).toHaveLength(4));
 
     unmount();
     await act(async () => {
       resolvers[0]?.(unlisteners[0]!);
       resolvers[1]?.(unlisteners[1]!);
       resolvers[2]?.(unlisteners[2]!);
-      await Promise.resolve();
       resolvers[3]?.(unlisteners[3]!);
+      await Promise.resolve();
+      resolvers[4]?.(unlisteners[4]!);
       await Promise.resolve();
     });
 
@@ -2547,6 +2647,7 @@ describe("useEnvironments", () => {
     expect(unlisteners[1]).toHaveBeenCalledTimes(1);
     expect(unlisteners[2]).toHaveBeenCalledTimes(1);
     expect(unlisteners[3]).toHaveBeenCalledTimes(1);
+    expect(unlisteners[4]).toHaveBeenCalledTimes(1);
   });
 
   // --- environment-renamed event listener tests ---

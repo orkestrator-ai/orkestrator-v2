@@ -1168,6 +1168,59 @@ export abstract class StorageProjects extends StorageBase {
     });
   }
 
+  /**
+   * Marks content-free agent attention exactly once per key.
+   *
+   * The dedupe keys and unread bit share the same environment write, so a
+   * replayed provider snapshot cannot re-light a badge after the user clears it.
+   */
+  async recordEnvironmentAgentAttention(
+    environmentId: string,
+    attentionKeys: readonly string[],
+    occurredAt: string,
+  ): Promise<{ environment: Environment; recorded: boolean }> {
+    if (!isAgentActivityTimestamp(occurredAt)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const normalized = Array.from(
+      new Set(
+        attentionKeys.filter(
+          (key) => typeof key === "string" && key.length > 0 && key.length <= 2_048,
+        ),
+      ),
+    ).slice(0, 64);
+    if (normalized.length === 0) throw new Error("attentionKeys must not be empty");
+    const occurredTime = Date.parse(occurredAt);
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const known = new Set(
+        (Array.isArray(environment.agentAttentionKeys) ? environment.agentAttentionKeys : [])
+          .filter(
+            (key): key is string =>
+              typeof key === "string" && key.length > 0 && key.length <= 2_048,
+          )
+          .slice(-1_000),
+      );
+      const unseen = normalized.filter((key) => !known.has(key));
+      if (unseen.length === 0) return { environment, recorded: false };
+
+      environment.agentAttentionKeys = [...known, ...unseen].slice(-1_000);
+      const previousTime = Date.parse(environment.lastActivityAt ?? "");
+      const acceptedTime =
+        Number.isFinite(previousTime) && previousTime >= occurredTime
+          ? previousTime + 1
+          : occurredTime;
+      environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      environment.hasUnreadWork = true;
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return { environment, recorded: true };
+    });
+  }
+
   async setEnvironmentUnread(
     environmentId: string,
     unread: boolean,

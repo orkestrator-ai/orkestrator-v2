@@ -25,6 +25,7 @@ import {
   TaskGroupPart,
   ToolGroupPart,
 } from "./NativeMessage.agent-parts";
+import { NativeAsyncQuestionCard } from "./NativeAsyncQuestionCard";
 
 export function DeferredToolMessagePart({
   part,
@@ -186,6 +187,8 @@ export function MessagePart({
           expansionKey={`${partKey}/json`}
         />
       );
+    case "async-question":
+      return <NativeAsyncQuestionCard part={part} />;
     case "tool-invocation":
       // ACP identifies file mutations through diff content as well as tool kind.
       // Render any part carrying an actual diff with the edit treatment, while a

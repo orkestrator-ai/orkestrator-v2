@@ -21,6 +21,7 @@ import {
   type AgentSessionProvider,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
+  type ProviderActivityObservation,
   type ProviderActivityState,
   type ProviderInteractiveSnapshot,
   type ProviderSendOptions,
@@ -69,6 +70,7 @@ function createProviderStub(
     send?: (sessionId: string, prompt: string, options: ProviderSendOptions) => Promise<void>;
     status?: (sessionId: string) => Promise<ProviderStatus>;
     activity?: (sessionId: string) => Promise<ProviderActivityState>;
+    observeActivity?: (sessionId: string) => Promise<ProviderActivityObservation>;
     activityBatch?: (sessionIds: readonly string[]) => Promise<Map<string, ProviderActivityState>>;
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
@@ -89,6 +91,7 @@ function createProviderStub(
   const send = mock(behaviour.send ?? (async () => undefined));
   const status = mock(behaviour.status ?? (async () => "idle" as ProviderStatus));
   const activity = behaviour.activity ? mock(behaviour.activity) : undefined;
+  const observeActivity = behaviour.observeActivity ? mock(behaviour.observeActivity) : undefined;
   const activityBatch = behaviour.activityBatch ? mock(behaviour.activityBatch) : undefined;
   const registerSession = mock((_sessionId: string) => undefined);
   const dispose = mock(async () => undefined);
@@ -118,6 +121,7 @@ function createProviderStub(
     send,
     status,
     activity,
+    observeActivity,
     activityBatch,
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
@@ -144,6 +148,7 @@ function createProviderStub(
     send,
     status,
     activity,
+    observeActivity,
     activityBatch,
     abort,
     stopBackgroundTask,
@@ -224,6 +229,7 @@ async function withService(
     interactionMonitorRetryBaseMs?: number;
     interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
+    onAsyncQuestionAttention?: NativeAgentServiceOptions["onAsyncQuestionAttention"];
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
@@ -262,6 +268,9 @@ async function withService(
       ? {}
       : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
+    ...(setup.onAsyncQuestionAttention
+      ? { onAsyncQuestionAttention: setup.onAsyncQuestionAttention }
+      : {}),
     ...(setup.onInteractionObservation
       ? { onInteractionObservation: setup.onInteractionObservation }
       : {}),
@@ -1159,6 +1168,82 @@ describe("NativeAgentService", () => {
             state: "waiting",
           },
         ]);
+      },
+    );
+  });
+
+  test("records async-question attention while its tab is inactive", async () => {
+    const { provider, observeActivity } = createProviderStub("codex", {
+      observeActivity: async () => ({
+        state: "working",
+        asyncQuestionItemIds: ["question-1"],
+      }),
+    });
+    const attention = mock(() => undefined);
+    await withService(
+      {
+        prefix: "orkestrator-native-background-question-",
+        provider: async () => provider,
+        onAsyncQuestionAttention: attention,
+      },
+      async ({ storage, service }) => {
+        const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect(observeActivity).toHaveBeenCalledWith("provider-1");
+        expect(attention).toHaveBeenCalledTimes(1);
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(true);
+
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.reconcileAgentActivity();
+        expect(attention).toHaveBeenCalledTimes(1);
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
+      },
+    );
+  });
+
+  test("does not evict the provider when async-question attention persistence fails", async () => {
+    const { provider, observeActivity, dispose } = createProviderStub("codex", {
+      observeActivity: async () => ({
+        state: "working",
+        asyncQuestionItemIds: ["question-1"],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-background-question-write-failure-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        for (const [logicalSessionKey, providerSessionId] of [
+          ["tab-1", "provider-1"],
+          ["tab-2", "provider-2"],
+        ] as const) {
+          await storage.adoptNativeAgentSession({
+            key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey,
+            providerSessionId,
+          });
+        }
+        storage.recordEnvironmentAgentAttention = async () => {
+          throw new Error("disk unavailable");
+        };
+
+        await captureWarnings(() => service.reconcileAgentActivity());
+
+        expect(observeActivity).toHaveBeenCalledTimes(2);
+        expect(dispose).not.toHaveBeenCalled();
+        expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("working");
+        expect(internals(service).activityRetryAt.size).toBe(0);
       },
     );
   });

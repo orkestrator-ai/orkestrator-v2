@@ -172,6 +172,8 @@ export interface Environment {
    * a per-window guess.
    */
   hasUnreadWork?: boolean;
+  /** Backend-owned dedupe state; clients should not mutate it. */
+  agentAttentionKeys?: string[];
   /**
    * Durable intent to open the configured agent once setup is ready. The
    * backend owns this flag so mobile page eviction cannot lose the launch.

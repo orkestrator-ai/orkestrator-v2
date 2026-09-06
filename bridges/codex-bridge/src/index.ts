@@ -1165,7 +1165,7 @@ app.get("/session/:id/status", (c) => {
  * Unlike `/status` this must never touch the session: see `getActivity`.
  */
 app.get("/session/:id/activity", (c) => {
-  return c.json({ activity: appServerRuntime.getActivity(c.req.param("id")) });
+  return c.json(appServerRuntime.getActivitySnapshot(c.req.param("id")));
 });
 
 /**

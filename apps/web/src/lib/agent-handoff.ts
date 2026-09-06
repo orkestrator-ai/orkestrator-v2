@@ -167,6 +167,7 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     typeof value.content !== "string" ||
     ![
       "text",
+      "async-question",
       "thinking",
       "file",
       "tool-invocation",
@@ -180,6 +181,22 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     !hasValidToolDiff(value.toolDiff)
   ) {
     return false;
+  }
+  if (value.type === "async-question") {
+    const asyncQuestion = value.asyncQuestion;
+    return (
+      isRecord(asyncQuestion) &&
+      typeof asyncQuestion.itemId === "string" &&
+      Array.isArray(asyncQuestion.questions) &&
+      asyncQuestion.questions.every(
+        (question) =>
+          isRecord(question) &&
+          typeof question.id === "string" &&
+          typeof question.title === "string" &&
+          Array.isArray(question.options) &&
+          question.options.every((option) => typeof option === "string"),
+      )
+    );
   }
   if (value.type === "tool-group" || value.type === "agent-group") {
     return Array.isArray(value.parts) && value.parts.every(isNativeMessagePart);
@@ -677,7 +694,7 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
     // in the imported visual transcript when the source surfaced it.
     return [];
   }
-  if (part.type === "text") {
+  if (part.type === "text" || part.type === "async-question") {
     return part.content.trim() ? [`${indent}${part.content.trim()}`] : [];
   }
   if (part.type === "file") {

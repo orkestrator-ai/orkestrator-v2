@@ -77,6 +77,52 @@ describe("describeInteraction: params coercion", () => {
 });
 
 describe("describeInteraction: questions", () => {
+  test("an explicitly blocking question has no automatic expiry", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: true,
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: true });
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: true,
+        questions: [question()],
+      })?.expiresAt,
+    ).toBeUndefined();
+  });
+
+  test("a non-blocking question retains the bounded product deadline", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: false,
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: false, expiresAt: DEFAULT_EXPIRES_AT });
+  });
+
+  test("a legacy question remains blocking but keeps its bounded deadline", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: true, expiresAt: DEFAULT_EXPIRES_AT });
+  });
+
+  test("rejects a malformed isBlocking value", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: "yes",
+        questions: [question()],
+      }),
+    ).toBeNull();
+  });
+
   test("carries the whole question set with its ids, options and flags", () => {
     const described = describeWith(QUESTION, {
       threadId: "thread-1",

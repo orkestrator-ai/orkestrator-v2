@@ -22,8 +22,19 @@ export interface ToolDiffMetadata {
 }
 
 export interface NormalizedPart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file" | "subagent";
+  type:
+    | "text"
+    | "thinking"
+    | "tool-invocation"
+    | "tool-result"
+    | "file"
+    | "subagent"
+    | "async-question";
   content: string;
+  asyncQuestion?: {
+    itemId: string;
+    questions: Array<{ id: string; title: string; options: string[] }>;
+  };
   /**
    * Original attachment name, when `content` holds a staged path whose basename
    * is not what the user picked. The renderer titles the row with this.

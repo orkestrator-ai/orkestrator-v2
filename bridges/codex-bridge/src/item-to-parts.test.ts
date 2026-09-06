@@ -46,6 +46,33 @@ describe("itemToParts", () => {
     expect(parts).toEqual([{ type: "text", content: "Hello, world!" }]);
   });
 
+  test("converts an asynchronous question to a structured transcript part", async () => {
+    const item: ThreadItem = {
+      id: "ask-1",
+      type: "agent_message",
+      text: "Which target?",
+      delivery: "async",
+      questions: [
+        { title: "Which target?", options: ["Staging", "Production"] },
+        { title: "Any constraints?" },
+      ],
+    };
+
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([
+      {
+        type: "async-question",
+        content: "Which target?",
+        asyncQuestion: {
+          itemId: "ask-1",
+          questions: [
+            { id: "ask-1:0", title: "Which target?", options: ["Staging", "Production"] },
+            { id: "ask-1:1", title: "Any constraints?", options: [] },
+          ],
+        },
+      },
+    ]);
+  });
+
   test("converts reasoning to thinking part", async () => {
     const item: ThreadItem = {
       id: "reason-1",

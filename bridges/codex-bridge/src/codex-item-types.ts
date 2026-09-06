@@ -78,6 +78,14 @@ export interface AgentMessageItem {
   type: "agent_message";
   /** Either natural-language text or JSON when structured output is requested. */
   text: string;
+  /** Non-blocking user input request embedded in the transcript by Codex. */
+  delivery?: "async";
+  questions?: AsyncUserInputQuestion[];
+}
+
+export interface AsyncUserInputQuestion {
+  title: string;
+  options?: string[];
 }
 
 export interface ReasoningItem {

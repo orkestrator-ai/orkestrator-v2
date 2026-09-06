@@ -809,12 +809,16 @@ export abstract class StorageNative extends StorageReviews {
 
     return this.enqueueNativeAgentSessionMutation(async () => {
       const loaded = await this.loadNativeAgentSessions();
-      const { sessions, opaque } = loaded;
+      const { sessions, opaque, migrated } = loaded;
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
       if (session.pendingDispatch) {
         throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
+      }
+      if (session.dispatchedRequestIds?.includes(pendingSteer.requestId) && !session.pendingSteer) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return { outcome: "applied" };
       }
       if (session.pendingSteer) {
         if (session.pendingSteer.requestId !== pendingSteer.requestId) {
@@ -858,6 +862,13 @@ export abstract class StorageNative extends StorageReviews {
       sessions[key] = {
         ...session,
         pendingSteer: undefined,
+        ...(outcome.outcome === "applied"
+          ? {
+              dispatchedRequestIds: session.dispatchedRequestIds?.includes(pendingSteer.requestId)
+                ? session.dispatchedRequestIds
+                : [...(session.dispatchedRequestIds ?? []).slice(-999), pendingSteer.requestId],
+            }
+          : {}),
         updatedAt: nowIso(),
       };
       await this.saveNativeAgentSessions(sessions, opaque);
@@ -880,7 +891,14 @@ export abstract class StorageNative extends StorageReviews {
         if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
-      sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
+      sessions[key] = {
+        ...session,
+        pendingSteer: undefined,
+        dispatchedRequestIds: session.dispatchedRequestIds?.includes(requestId)
+          ? session.dispatchedRequestIds
+          : [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
+        updatedAt: nowIso(),
+      };
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentSteerBackups(key, requestId);
       this.announceNativeAgentRecord(sessions[key]!);
@@ -889,7 +907,24 @@ export abstract class StorageNative extends StorageReviews {
   }
 
   async clearPendingNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
-    return this.confirmNativeAgentSteer(key, requestId);
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Native agent steer identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingSteer?.requestId !== requestId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentSteerBackups(key, requestId);
+      this.announceNativeAgentRecord(sessions[key]!);
+      return true;
+    });
   }
 
   async setOpenCodeIncompleteTurnNotice(

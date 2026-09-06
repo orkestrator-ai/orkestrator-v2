@@ -4,11 +4,17 @@ import type { PromptAttachment } from "./prompt-attachments.js";
 import {
   type BridgeConnection,
   PromptRejectedError,
+  type ProviderActivityObservation,
   type ProviderSendOptions,
   ProviderUnavailableError,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
-import { asRecord, isTransientHttpStatus, nonEmptyString } from "./agent-provider-runtime.js";
+import {
+  asRecord,
+  isProviderActivityState,
+  isTransientHttpStatus,
+  nonEmptyString,
+} from "./agent-provider-runtime.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -89,6 +95,44 @@ export function isConnectPhaseFailure(error: unknown): boolean {
 export interface HttpBridgeProviderDependencies {
   fetch?: typeof fetch;
   stageImages?: (images: NonNullable<ProviderSendOptions["images"]>) => Promise<PromptAttachment[]>;
+}
+
+export async function readProviderActivityObservation(
+  connection: BridgeConnection,
+  sessionId: string,
+  fetchImpl: typeof fetch,
+): Promise<ProviderActivityObservation> {
+  const response = await bridgeFetch(
+    connection,
+    `/session/${encodeURIComponent(sessionId)}/activity`,
+    {},
+    fetchImpl,
+  );
+  assertOk(response, `${connection.agent} activity read`);
+  const body = (await response.json()) as {
+    activity?: unknown;
+    asyncQuestionItemIds?: unknown;
+  };
+  if (!isProviderActivityState(body.activity)) {
+    throw new ProviderUnavailableError(
+      `${connection.agent} returned a malformed activity snapshot`,
+    );
+  }
+  if (body.asyncQuestionItemIds === undefined) return { state: body.activity };
+  if (
+    !Array.isArray(body.asyncQuestionItemIds) ||
+    body.asyncQuestionItemIds.length > 64 ||
+    !body.asyncQuestionItemIds.every(
+      (itemId) => typeof itemId === "string" && itemId.length > 0 && itemId.length <= 2_048,
+    )
+  ) {
+    throw new ProviderUnavailableError(`${connection.agent} returned malformed attention metadata`);
+  }
+  const asyncQuestionItemIds = Array.from(new Set(body.asyncQuestionItemIds));
+  return {
+    state: body.activity,
+    ...(asyncQuestionItemIds.length ? { asyncQuestionItemIds } : {}),
+  };
 }
 
 /** Validate the provider-neutral prompt-admission state at the bridge boundary. */

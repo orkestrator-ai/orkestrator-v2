@@ -782,6 +782,19 @@ describe("interactive questions and MCP elicitation", () => {
     expect(h.transcript.at(-1)?.message).toContain("timed out");
   });
 
+  test("an explicitly blocking question remains parked without a timer", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 20 });
+    const blocking = questionRequest();
+    blocking.params = { ...(blocking.params as object), isBlocking: true };
+    h.router.handle(blocking, 1);
+    await settle();
+    await Bun.sleep(50);
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(1);
+    expect(h.presented[0]?.expiresAt).toBeUndefined();
+  });
+
   test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
     const h = interactionHarness({ approvalTimeoutMs: 5_000 });
     h.router.handle(

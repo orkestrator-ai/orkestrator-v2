@@ -899,7 +899,9 @@ describe("StorageService native agent sessions", () => {
         second.dispatchNativeAgentSteerOnce(input.key, pending, exactRetry),
       ).resolves.toEqual({ outcome: "applied" });
       expect(exactRetry).toHaveBeenCalledTimes(1);
-      expect((await first.getNativeAgentSession(input.key))?.pendingSteer).toBeUndefined();
+      const confirmedSession = await first.getNativeAgentSession(input.key);
+      expect(confirmedSession?.pendingSteer).toBeUndefined();
+      expect(confirmedSession?.dispatchedRequestIds).toEqual([pending.requestId]);
 
       const escapedText = '"'.repeat(64 * 1024);
       const escapedPending = {
@@ -1070,6 +1072,9 @@ describe("StorageService native agent sessions", () => {
       }));
       expect(await first.clearPendingNativeAgentSteer(input.key, discardedSteer.requestId)).toBe(
         true,
+      );
+      expect((await first.getNativeAgentSession(input.key))?.dispatchedRequestIds).not.toContain(
+        discardedSteer.requestId,
       );
       expect((await allNativeSessionFiles()).join("\n")).not.toContain(discardedSteerSecret);
 

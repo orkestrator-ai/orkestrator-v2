@@ -85,6 +85,37 @@ function makeStandaloneSubagentPart(
   };
 }
 
+describe("NativeMessage asynchronous questions", () => {
+  afterEach(cleanup);
+
+  test("renders a structured question when its accompanying message text is empty", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "async-question",
+            content: "",
+            asyncQuestion: {
+              itemId: "question-empty-text",
+              questions: [
+                {
+                  id: "question-empty-text:0",
+                  title: "Any constraints?",
+                  options: [],
+                },
+              ],
+            },
+          },
+        ])}
+        assistantLabel="Codex"
+      />,
+    );
+
+    expect(screen.getByText("Any constraints?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send answer" })).toBeTruthy();
+  });
+});
+
 describe("NativeMessage assistant attribution", () => {
   test("shows the backend-confirmed model instead of the static provider label", () => {
     render(

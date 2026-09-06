@@ -107,6 +107,100 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+describe("scoped resource snapshot commands", () => {
+  test("batches allowlisted reads with stable revisions and bounded input", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [{ resource: "config", id: "global", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toHaveLength(1);
+      expect(batch.entries[0]).toMatchObject({
+        resource: "config",
+        id: "global",
+        status: "ok",
+        command: "get_config",
+        args: {},
+      });
+      expect(batch.entries[0]?.generation).toMatch(/^[a-f0-9]{32}$/);
+      expect(batch.entries[0]?.revision).toMatch(/^[a-f0-9]{32}$/);
+
+      await expect(
+        invoke("get_scoped_resource_snapshots", {
+          changes: Array.from({ length: 33 }, (_, index) => ({
+            resource: "config",
+            id: `global-${index}`,
+            revision: index + 1,
+          })),
+        }),
+      ).rejects.toThrow("at most 32");
+    });
+  });
+
+  test("keeps native-agent scopes distinct when they share an environment", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [
+          {
+            resource: "native-agent-session",
+            id: "e1",
+            revision: 1,
+            agent: "codex",
+            logicalSessionKey: "env-e1:tab-1",
+          },
+          {
+            resource: "native-agent-session",
+            id: "e1",
+            revision: 2,
+            agent: "claude",
+            logicalSessionKey: "env-e1:tab-2",
+          },
+        ],
+      })) as { entries: Array<Record<string, unknown>> };
+
+      // Two agents in one environment are two scopes. Collapsing them on
+      // `resource\0id` would silently answer for only one of them.
+      expect(batch.entries).toHaveLength(2);
+      expect(batch.entries.every((entry) => entry.status === "deferred")).toBe(true);
+    });
+  });
+
+  test("collapses repeated changes for the same scope", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [
+          { resource: "config", id: "global", revision: 1 },
+          { resource: "config", id: "global", revision: 2 },
+        ],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toHaveLength(1);
+    });
+  });
+
+  test("defers a resource with no batchable read command", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        // An environment change without a project id names no readable scope.
+        changes: [{ resource: "environment", id: "e1", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toEqual([{ resource: "environment", id: "e1", status: "deferred" }]);
+    });
+  });
+
+  test("defers an entry that would blow the response byte budget", async () => {
+    await withCommands(async (invoke, storage) => {
+      // A single snapshot larger than the per-entry cap is deferred rather
+      // than returned, so the client falls back to an individual read.
+      await storage.saveProjectNotes("proj-1", "x".repeat(3 * 1024 * 1024));
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [{ resource: "project-notes", id: "proj-1", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toEqual([
+        { resource: "project-notes", id: "proj-1", status: "deferred" },
+      ]);
+    });
+  });
+});
+
 /** `updateGlobalConfig` replaces the whole block, so edit a loaded copy. */
 async function setOpenCodeModelProviders(
   storage: StorageService,

@@ -181,6 +181,57 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("get_native_agent_sync_capabilities", () => ({
+    projectionSyncVersions: [1],
+    historyPagingVersions: [1],
+  }));
+
+  register("get_native_agent_projection_update", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
+    if (
+      !args.liveWindow ||
+      typeof args.liveWindow !== "object" ||
+      Array.isArray(args.liveWindow) ||
+      (args.liveWindow as { messages?: unknown }).messages !== 100 ||
+      (args.liveWindow as { targetBytes?: unknown }).targetBytes !== 512 * 1024
+    ) {
+      throw new Error("Native agent live window is unsupported");
+    }
+    return context.nativeAgents.getProjectionUpdate({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      syncVersion: 1,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      knownToken:
+        args.knownToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+      forceSnapshot:
+        args.forceSnapshot === undefined
+          ? undefined
+          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+    });
+  });
+
+  register("get_native_agent_message_page", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.syncVersion !== 1) throw new Error("Native agent sync version is unsupported");
+    return context.nativeAgents.getMessagePage({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      syncVersion: 1,
+      before: asBoundedNonBlankString(args.before, "before", 1024),
+      limit: args.limit === undefined ? undefined : asPositiveInteger(args.limit, "limit"),
+      targetBytes:
+        args.targetBytes === undefined
+          ? undefined
+          : asPositiveInteger(args.targetBytes, "targetBytes"),
+    });
+  });
+
   register("get_native_agent_tool_details", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

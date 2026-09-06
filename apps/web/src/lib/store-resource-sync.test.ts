@@ -177,6 +177,11 @@ beforeEach(() => {
     config: structuredClone(useConfigStore.getInitialState().config),
     isLoading: false,
     error: null,
+    // Actions, not just data: a case below replaces `setConfig` with a spy, and
+    // Zustand stores are module singletons shared with every other suite in the
+    // same registry. Leaving the spy installed makes a later file's
+    // `setConfig(...)` a silent no-op.
+    setConfig: useConfigStore.getInitialState().setConfig,
   });
   useAgentMailStore.setState(useAgentMailStore.getInitialState());
   detach = startTestStoreResourceSync();
@@ -355,12 +360,16 @@ describe("config binding", () => {
     // Config is global, so unlike the project-scoped bindings there is no
     // scope guard to satisfy — every client wants every config change.
     const setConfig = mock(() => {});
+    const realSetConfig = useConfigStore.getState().setConfig;
     useConfigStore.setState({ setConfig } as never);
+    try {
+      dispatchResourceChange({ resource: "config", id: "app", revision: 1 });
+      await tick();
 
-    dispatchResourceChange({ resource: "config", id: "app", revision: 1 });
-    await tick();
-
-    expect(setConfig).toHaveBeenCalledTimes(1);
+      expect(setConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      useConfigStore.setState({ setConfig: realSetConfig });
+    }
   });
 });
 

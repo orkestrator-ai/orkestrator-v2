@@ -1488,7 +1488,8 @@ export function SharedNativeAgentController({
                 ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
                 : "Earlier messages are not shown."}
             </span>
-            {projection.messageWindow.truncationReason !== "bytes" ? (
+            {projection.messageWindow.truncationReason !== "bytes" &&
+            projection.messageWindow.canLoadEarlier !== false ? (
               <Button
                 type="button"
                 size="sm"

@@ -149,6 +149,19 @@ export type StorageLayerTypes = [
 ];
 
 export abstract class StorageNative extends StorageReviews {
+  private announceNativeAgentRecord(
+    session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
+    deleted = false,
+  ): void {
+    this.announce(
+      "native-agent-session",
+      session.environmentId,
+      undefined,
+      { agent: session.agent, logicalSessionKey: session.logicalSessionKey },
+      deleted,
+    );
+  }
+
   async getAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
     return this.enqueueAgentInteractionJournalMutation(async () =>
       pruneAgentInteractionResolutionJournal(await this.loadAgentInteractionResolutionJournal()),
@@ -329,7 +342,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       sessions[input.key] = saved;
       await this.saveNativeAgentSessions(sessions, opaque);
-      this.announce("native-agent-session", input.environmentId);
+      this.announceNativeAgentRecord(saved);
       return saved;
     });
   }
@@ -395,7 +408,7 @@ export abstract class StorageNative extends StorageReviews {
             };
             sessions[input.key] = updated;
             await this.saveNativeAgentSessions(sessions, opaque);
-            this.announce("native-agent-session", input.environmentId);
+            this.announceNativeAgentRecord(updated);
             return updated;
           }
           if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
@@ -433,7 +446,7 @@ export abstract class StorageNative extends StorageReviews {
           existing.pendingDispatch.requestId,
         );
       }
-      this.announce("native-agent-session", input.environmentId);
+      this.announceNativeAgentRecord(saved);
       return saved;
     });
   }
@@ -462,7 +475,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
-      this.announce("native-agent-session", existing.environmentId);
+      this.announceNativeAgentRecord(updated);
       return updated;
     });
   }
@@ -486,7 +499,7 @@ export abstract class StorageNative extends StorageReviews {
         this.nativeAgentSessionsFile(),
         (storedKey) => storedKey !== key,
       );
-      this.announce("native-agent-session", existing.environmentId);
+      this.announceNativeAgentRecord(existing, true);
       return true;
     });
   }
@@ -617,7 +630,7 @@ export abstract class StorageNative extends StorageReviews {
             sessions[key] = updated;
             await this.saveNativeAgentSessions(sessions, opaque);
             await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-            this.announce("native-agent-session", session.environmentId);
+            this.announceNativeAgentRecord(updated);
             return { session: updated, dispatched: false };
           }
           if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
@@ -636,7 +649,7 @@ export abstract class StorageNative extends StorageReviews {
         sessions[key] = updated;
         await this.saveNativeAgentSessions(sessions, opaque);
         await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-        this.announce("native-agent-session", session.environmentId);
+        this.announceNativeAgentRecord(updated);
         return { session: updated, dispatched: false };
       }
       const updated: PersistedNativeAgentSession = {
@@ -650,7 +663,7 @@ export abstract class StorageNative extends StorageReviews {
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(updated);
       return { session: updated, dispatched: true };
     });
   }
@@ -691,7 +704,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(sessions[key]!);
       return true;
     });
   }
@@ -716,7 +729,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(sessions[key]!);
       return true;
     });
   }
@@ -799,7 +812,7 @@ export abstract class StorageNative extends StorageReviews {
           updatedAt: nowIso(),
         };
         await this.saveNativeAgentSessions(sessions, opaque);
-        this.announce("native-agent-session", session.environmentId);
+        this.announceNativeAgentRecord(sessions[key]!);
         return { ...outcome, requestId: pendingSteer.requestId };
       }
 
@@ -810,7 +823,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentSteerBackups(key, pendingSteer.requestId);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(sessions[key]!);
       return outcome;
     });
   }
@@ -831,7 +844,7 @@ export abstract class StorageNative extends StorageReviews {
       sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
       await this.saveNativeAgentSessions(sessions, opaque);
       await this.scrubPendingNativeAgentSteerBackups(key, requestId);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(sessions[key]!);
       return true;
     });
   }
@@ -876,7 +889,7 @@ export abstract class StorageNative extends StorageReviews {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
-      this.announce("native-agent-session", session.environmentId);
+      this.announceNativeAgentRecord(updated);
       return true;
     });
   }

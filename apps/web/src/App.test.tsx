@@ -232,6 +232,10 @@ const mockGetResourceRevisionManifest = mock(async () => ({
   reset: false,
   revisions: {},
 }));
+const mockGetScopedResourceRevisionManifest = mock(async () => {
+  throw new Error("Unknown backend command: get_scoped_resource_revision_manifest");
+});
+const mockGetScopedResourceSnapshots = mock(async () => ({ entries: [] }));
 const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
     useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
@@ -334,6 +338,8 @@ mock.module("@/lib/backend", () => ({
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
+  getScopedResourceRevisionManifest: mockGetScopedResourceRevisionManifest,
+  getScopedResourceSnapshots: mockGetScopedResourceSnapshots,
   getEnvironment: mockGetEnvironment,
   prepareEnvironmentAgentLaunch: mockPrepareEnvironmentAgentLaunch,
   listBuildPipelines: mockListBuildPipelines,
@@ -489,6 +495,12 @@ function resetAppMocks() {
     reset: false,
     revisions: {},
   }));
+  mockGetScopedResourceRevisionManifest.mockReset();
+  mockGetScopedResourceRevisionManifest.mockImplementation(async () => {
+    throw new Error("Unknown backend command: get_scoped_resource_revision_manifest");
+  });
+  mockGetScopedResourceSnapshots.mockReset();
+  mockGetScopedResourceSnapshots.mockResolvedValue({ entries: [] });
   mockGetEnvironment.mockClear();
   mockPrepareEnvironmentAgentLaunch.mockClear();
   mockGetEnvironment.mockImplementation(

@@ -833,6 +833,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return {
         status,
         messages,
+        messagesComplete: !transcript.truncated,
         ...(typeof payload?.title === "string" && payload.title.trim()
           ? { title: payload.title.trim() }
           : {}),
@@ -954,6 +955,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return {
         status,
         messages,
+        messagesComplete: !transcript.truncated,
         ...(typeof payload.title === "string" && payload.title.trim()
           ? { title: payload.title.trim() }
           : {}),

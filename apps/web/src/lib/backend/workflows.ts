@@ -48,6 +48,15 @@ import type {
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
   NativeAgentToolDetails,
+  NativeAgentMessagePage,
+  NativeAgentLiveWindow,
+  NativeAgentProjectionUpdate,
+} from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentMessagePage,
+  isNativeAgentProjectionUpdate,
+  NATIVE_AGENT_SYNC_MAX_PAGE_BYTES,
+  NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES,
 } from "@orkestrator/protocol/native-agent";
 import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 /** PR detection result containing URL, state, and merge conflict status */
@@ -336,6 +345,74 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
   messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("get_native_agent_projection", input);
+}
+
+export async function getNativeAgentSyncCapabilities(): Promise<{
+  projectionSyncVersions: number[];
+  historyPagingVersions: number[];
+}> {
+  const response = await invoke<unknown>("get_native_agent_sync_capabilities");
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new Error("Invalid native agent sync capabilities response");
+  }
+  const candidate = response as Record<string, unknown>;
+  if (
+    !Array.isArray(candidate.projectionSyncVersions) ||
+    candidate.projectionSyncVersions.length > 16 ||
+    !candidate.projectionSyncVersions.every(Number.isSafeInteger) ||
+    !Array.isArray(candidate.historyPagingVersions) ||
+    candidate.historyPagingVersions.length > 16 ||
+    !candidate.historyPagingVersions.every(Number.isSafeInteger)
+  ) {
+    throw new Error("Invalid native agent sync capabilities response");
+  }
+  return response as {
+    projectionSyncVersions: number[];
+    historyPagingVersions: number[];
+  };
+}
+
+export async function getNativeAgentProjectionUpdate<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  syncVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}): Promise<NativeAgentProjectionUpdate<TMessage>> {
+  const response = await invoke<unknown>("get_native_agent_projection_update", input);
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength >
+    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+  ) {
+    throw new Error("Native agent projection update response exceeded 20 MiB");
+  }
+  if (!isNativeAgentProjectionUpdate(response)) {
+    throw new Error("Invalid native agent projection update response");
+  }
+  return response as NativeAgentProjectionUpdate<TMessage>;
+}
+
+export async function getNativeAgentMessagePage<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  syncVersion: 1;
+  before: string;
+  limit?: number;
+  targetBytes?: number;
+}): Promise<NativeAgentMessagePage<TMessage>> {
+  const response = await invoke<unknown>("get_native_agent_message_page", input);
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength > NATIVE_AGENT_SYNC_MAX_PAGE_BYTES
+  ) {
+    throw new Error("Native agent message page response exceeded its limit");
+  }
+  if (!isNativeAgentMessagePage(response)) {
+    throw new Error("Invalid native agent message page response");
+  }
+  return response as NativeAgentMessagePage<TMessage>;
 }
 
 export async function getNativeAgentToolDetails(input: {

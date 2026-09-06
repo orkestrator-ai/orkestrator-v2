@@ -81,6 +81,7 @@ import {
   type ResourceKind,
   type ResourceManifestKind,
   type ResourceRevisionManifest,
+  type ScopedResourceRevisionManifest,
   type ResourceRevisionMap,
   type ResourceSnapshotRevision,
 } from "@orkestrator/protocol/resource-events";
@@ -2016,6 +2017,7 @@ export type {
   ResourceKind,
   ResourceManifestKind,
   ResourceRevisionManifest,
+  ScopedResourceRevisionManifest,
   ResourceRevisionMap,
   ResourceSnapshotRevision,
   AgentModel,

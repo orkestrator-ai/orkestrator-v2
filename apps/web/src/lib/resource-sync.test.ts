@@ -5,6 +5,7 @@ import {
   RESOURCE_MANIFEST_KINDS,
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
+  type ScopedResourceRevisionManifest,
 } from "@orkestrator/protocol/resource-events";
 
 /**
@@ -52,6 +53,7 @@ afterAll(() => {
   mock.module("@/lib/native/events", () => realEventsSnapshot);
 });
 
+const { readPrefetchedCommandResponse } = await import("./prefetched-command-responses");
 const {
   dispatchResourceChange,
   onResourceChanged,
@@ -847,5 +849,250 @@ describe("manifest reconciliation", () => {
 
     expect(argumentsSeen).toHaveLength(2);
     expect(argumentsSeen[1]).toEqual({ generation: undefined, revisions: {} });
+  });
+});
+
+describe("scoped resource reconciliation", () => {
+  test("delivers scoped changes and waits for asynchronous handlers", async () => {
+    const completed: string[] = [];
+    onResourceChanged("project-notes", async (received) => {
+      await tick(10);
+      completed.push(received.id);
+    });
+    const manifest: ScopedResourceRevisionManifest = {
+      generation: "a".repeat(32),
+      cursor: 1,
+      highWater: 1,
+      reset: false,
+      resetResources: [],
+      changes: [{ resource: "project-notes", id: "project-1", revision: 1 }],
+      revisions: {},
+      hasMore: false,
+    };
+    const loadScopedManifest = mock(async () => manifest);
+
+    startResourceSync({ loadScopedManifest });
+    await tick(30);
+
+    expect(loadScopedManifest).toHaveBeenCalledTimes(1);
+    expect(completed).toEqual(["project-1"]);
+  });
+
+  test("requests a bounded snapshot batch before delivering scoped handlers", async () => {
+    const delivered: string[] = [];
+    onResourceChanged("project-notes", async ({ id }) => {
+      delivered.push(id);
+    });
+    const changes = [{ resource: "project-notes" as const, id: "project-1", revision: 1 }];
+    const loadScopedSnapshots = mock(async (requested: ResourceChange[]) => ({
+      entries: requested.map(({ resource, id }) => ({ resource, id, status: "deferred" as const })),
+    }));
+    startResourceSync({
+      loadScopedManifest: async () => ({
+        generation: "a".repeat(32),
+        cursor: 1,
+        highWater: 1,
+        reset: false,
+        resetResources: [],
+        changes,
+        revisions: {},
+        hasMore: false,
+      }),
+      loadScopedSnapshots,
+    });
+    await tick(30);
+
+    expect(loadScopedSnapshots).toHaveBeenCalledWith(changes);
+    expect(delivered).toEqual(["project-1"]);
+  });
+
+  test("loads every scoped snapshot through bounded batch chunks", async () => {
+    const delivered: string[] = [];
+    onResourceChanged("project-notes", ({ id }) => {
+      delivered.push(id);
+    });
+    const changes = Array.from({ length: 65 }, (_, index) => ({
+      resource: "project-notes" as const,
+      id: `project-${index}`,
+      revision: index + 1,
+    }));
+    const batchSizes: number[] = [];
+    startResourceSync({
+      loadScopedManifest: async () => ({
+        generation: "a".repeat(32),
+        cursor: 65,
+        highWater: 65,
+        reset: false,
+        resetResources: [],
+        changes,
+        revisions: {},
+        hasMore: false,
+      }),
+      loadScopedSnapshots: async (requested) => {
+        batchSizes.push(requested.length);
+        return {
+          entries: requested.map(({ resource, id }) => ({
+            resource,
+            id,
+            status: "deferred" as const,
+          })),
+        };
+      },
+    });
+    await tick(30);
+
+    expect(batchSizes).toEqual([32, 32, 1]);
+    expect(delivered).toHaveLength(65);
+  });
+});
+
+describe("scoped reconciliation across pages", () => {
+  function page(
+    overrides: Partial<ScopedResourceRevisionManifest>,
+  ): ScopedResourceRevisionManifest {
+    return {
+      generation: "a".repeat(32),
+      cursor: 1,
+      highWater: 1,
+      reset: false,
+      resetResources: [],
+      changes: [],
+      revisions: {},
+      hasMore: false,
+      ...overrides,
+    };
+  }
+
+  test("applies an owner change on an intermediate page through the store resync", async () => {
+    const applied: Array<ReadonlySet<string> | null> = [];
+    // The store bindings are always mounted and consume resync requests; the
+    // sidebar hook that subscribes to `project` changes may not be mounted at
+    // all, which is exactly the case an intermediate page has to survive.
+    onResourceResync(({ resources }) => {
+      applied.push(resources);
+    });
+    const requests: Array<{ cursor: number; knownRevisions: Partial<ResourceRevisionMap> }> = [];
+    const loadScopedManifest = mock(
+      async (
+        _generation: string | undefined,
+        cursor: number,
+        knownRevisions: Partial<ResourceRevisionMap>,
+      ) => {
+        requests.push({ cursor, knownRevisions: { ...knownRevisions } });
+        return cursor === 0
+          ? page({
+              cursor: 1,
+              highWater: 2,
+              changes: [{ resource: "project", id: "project-1", revision: 1 }],
+              revisions: { project: "c".repeat(32) },
+              hasMore: true,
+            })
+          : page({
+              cursor: 2,
+              highWater: 2,
+              changes: [{ resource: "project-notes", id: "project-1", revision: 2 }],
+            });
+      },
+    );
+
+    startResourceSync({ loadScopedManifest });
+    await tick(30);
+
+    expect(applied.some((resources) => resources?.has("project") === true)).toBe(true);
+    // The owner revision is only acknowledged after that application.
+    expect(requests[1]?.knownRevisions.project).toBe("c".repeat(32));
+  });
+
+  test("does not acknowledge an intermediate page whose owner application failed", async () => {
+    onResourceResync(({ resources }) => {
+      if (resources?.has("project")) throw new Error("store refused the project snapshot");
+    });
+    const requests: Array<{ cursor: number; knownRevisions: Partial<ResourceRevisionMap> }> = [];
+    const loadScopedManifest = mock(
+      async (
+        _generation: string | undefined,
+        cursor: number,
+        knownRevisions: Partial<ResourceRevisionMap>,
+      ) => {
+        requests.push({ cursor, knownRevisions: { ...knownRevisions } });
+        return cursor === 0
+          ? page({
+              cursor: 1,
+              highWater: 2,
+              changes: [{ resource: "project", id: "project-1", revision: 1 }],
+              revisions: { project: "c".repeat(32) },
+              hasMore: true,
+            })
+          : page({ cursor: 2, highWater: 2 });
+      },
+    );
+
+    startResourceSync({ loadScopedManifest });
+    await tick(30);
+
+    // The page is abandoned where it failed rather than acknowledged, so the
+    // owner change is still pending the next time reconciliation runs.
+    expect(requests).toEqual([{ cursor: 0, knownRevisions: {} }]);
+  });
+
+  test("delivers a dependent change on an intermediate page to its subscriber", async () => {
+    const delivered: string[] = [];
+    onResourceChanged("kanban", ({ id }) => {
+      delivered.push(id);
+    });
+    let served = 0;
+    startResourceSync({
+      loadScopedManifest: async (_generation, cursor) => {
+        served += 1;
+        return cursor === 0
+          ? page({
+              cursor: 1,
+              highWater: 2,
+              changes: [{ resource: "kanban", id: "project-1", revision: 1 }],
+              hasMore: true,
+            })
+          : page({
+              cursor: 2,
+              highWater: 2,
+              changes: [{ resource: "kanban", id: "project-2", revision: 2 }],
+            });
+      },
+    });
+    await tick(30);
+
+    expect(served).toBeGreaterThanOrEqual(2);
+    expect(delivered).toEqual(["project-1", "project-2"]);
+  });
+
+  test("a primed snapshot reaches the handler that refetches the resource", async () => {
+    const observed: unknown[] = [];
+    onResourceChanged("kanban", ({ id }) => {
+      observed.push(
+        readPrefetchedCommandResponse("get_kanban_tasks", { projectId: id }).value ?? "not-primed",
+      );
+    });
+    startResourceSync({
+      loadScopedManifest: async () =>
+        page({ changes: [{ resource: "kanban", id: "project-1", revision: 1 }] }),
+      loadScopedSnapshots: async (changes) => ({
+        entries: changes.map(({ resource, id }) => ({
+          resource,
+          id,
+          status: "ok" as const,
+          command: "get_kanban_tasks",
+          args: { projectId: id },
+          generation: "a".repeat(32),
+          revision: "b".repeat(32),
+          snapshot: [{ id: "task-1" }],
+        })),
+      }),
+    });
+    await tick(30);
+
+    expect(observed).toEqual([[{ id: "task-1" }]]);
+    // The batch is released once delivery finishes, so nothing later reads it.
+    expect(readPrefetchedCommandResponse("get_kanban_tasks", { projectId: "project-1" })).toEqual({
+      found: false,
+    });
   });
 });

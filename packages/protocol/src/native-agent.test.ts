@@ -25,6 +25,9 @@ import {
   isBackgroundCapableShellTool,
   isBackgroundTaskLaunchCandidate,
   recoverBackgroundTaskLaunchId,
+  applyNativeAgentProjectionDelta,
+  isNativeAgentProjectionUpdate,
+  type NativeAgentSessionProjection,
 } from "./native-agent";
 
 describe("native agent capability table", () => {
@@ -122,6 +125,205 @@ describe("native agent capability table", () => {
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
       expect(nativeAgentCapabilities(platform).actions).toEqual({});
     }
+  });
+});
+
+describe("native agent projection synchronization", () => {
+  const projection = (): NativeAgentSessionProjection<{ id: string; content: string }> => ({
+    platform: "codex",
+    environmentId: "env-1",
+    sessionId: "session-1",
+    connection: "connected",
+    turn: { phase: "running" },
+    messages: [
+      { id: "old", content: "complete" },
+      { id: "live", content: "one" },
+    ],
+    interactions: [],
+    composerControls: [],
+    capabilities: nativeAgentCapabilities("codex"),
+    revision: 1,
+    generation: "generation-1",
+  });
+
+  test("applies exact message membership and optional-field removals atomically", () => {
+    const next = applyNativeAgentProjectionDelta(projection(), {
+      messageUpserts: [{ id: "live", content: "two" }],
+      liveMessageIds: ["live"],
+      deletedMessageIds: [],
+      setFields: { title: "Updated" },
+      unsetFields: ["sessionId"],
+      revision: 2,
+      generation: "generation-1",
+      cursor: "generation-1:2",
+    });
+    expect(next).toMatchObject({
+      title: "Updated",
+      revision: 2,
+      cursor: "generation-1:2",
+      messages: [{ id: "live", content: "two" }],
+    });
+    expect(next).not.toHaveProperty("sessionId");
+  });
+
+  test("rejects duplicate or unknown ordered message ids", () => {
+    expect(
+      applyNativeAgentProjectionDelta(projection(), {
+        messageUpserts: [],
+        liveMessageIds: ["missing", "missing"],
+        deletedMessageIds: [],
+        setFields: {},
+        unsetFields: [],
+        revision: 2,
+        generation: "generation-1",
+      }),
+    ).toBeNull();
+  });
+
+  test("removes an expired provider cursor explicitly", () => {
+    const current = { ...projection(), cursor: "generation-1:1" };
+    const next = applyNativeAgentProjectionDelta(current, {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      setFields: {},
+      unsetFields: ["cursor"],
+      revision: 2,
+      generation: "generation-1",
+    });
+    expect(next).not.toHaveProperty("cursor");
+  });
+
+  test("rejects an upsert the ordering never places", () => {
+    // Membership changes are described by `liveMessageIds`. A delta that
+    // upserts a message without one is ambiguous, and inserting it into the
+    // map while rebuilding from the old ordering would silently drop it.
+    expect(
+      applyNativeAgentProjectionDelta(projection(), {
+        messageUpserts: [{ id: "brand-new", content: "unplaced" }],
+        deletedMessageIds: [],
+        setFields: {},
+        unsetFields: [],
+        revision: 2,
+        generation: "generation-1",
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects an upsert the ordering excludes", () => {
+    expect(
+      applyNativeAgentProjectionDelta(projection(), {
+        messageUpserts: [{ id: "brand-new", content: "unplaced" }],
+        liveMessageIds: ["old", "live"],
+        deletedMessageIds: [],
+        setFields: {},
+        unsetFields: [],
+        revision: 2,
+        generation: "generation-1",
+      }),
+    ).toBeNull();
+  });
+
+  test("accepts an authoritative deletion that the ordering accounts for", () => {
+    const next = applyNativeAgentProjectionDelta(projection(), {
+      messageUpserts: [],
+      liveMessageIds: ["live"],
+      deletedMessageIds: ["old"],
+      setFields: {},
+      unsetFields: [],
+      revision: 2,
+      generation: "generation-1",
+    });
+    expect(next?.messages).toEqual([{ id: "live", content: "one" }]);
+  });
+
+  test("rejects a deletion the ordering still lists", () => {
+    expect(
+      applyNativeAgentProjectionDelta(projection(), {
+        messageUpserts: [],
+        deletedMessageIds: ["old"],
+        setFields: {},
+        unsetFields: [],
+        revision: 2,
+        generation: "generation-1",
+      }),
+    ).toBeNull();
+  });
+
+  test("distinguishes a message that aged out of the tail from one that was deleted", () => {
+    // Ageing out is an ordering change with no deletion: the message is still
+    // part of the conversation and remains reachable through history paging.
+    const agedOut = applyNativeAgentProjectionDelta(projection(), {
+      messageUpserts: [{ id: "newest", content: "three" }],
+      liveMessageIds: ["live", "newest"],
+      deletedMessageIds: [],
+      setFields: {},
+      unsetFields: [],
+      revision: 2,
+      generation: "generation-1",
+    });
+    expect(agedOut?.messages.map(({ id }) => id)).toEqual(["live", "newest"]);
+  });
+
+  test("rejects a base projection with duplicate message ids", () => {
+    const duplicated = projection();
+    duplicated.messages = [
+      { id: "live", content: "one" },
+      { id: "live", content: "two" },
+    ];
+    expect(
+      applyNativeAgentProjectionDelta(duplicated, {
+        messageUpserts: [],
+        liveMessageIds: ["live"],
+        deletedMessageIds: [],
+        setFields: {},
+        unsetFields: [],
+        revision: 2,
+        generation: "generation-1",
+      }),
+    ).toBeNull();
+  });
+
+  test("rejects a wire delta whose upserts duplicate an id", () => {
+    expect(
+      isNativeAgentProjectionUpdate({
+        syncVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        historyEpoch: "epoch",
+        historyComplete: true,
+        delta: {
+          messageUpserts: [{ id: "live" }, { id: "live" }],
+          liveMessageIds: ["live"],
+          deletedMessageIds: [],
+          setFields: {},
+          unsetFields: [],
+          revision: 2,
+          generation: "generation-1",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects wire deltas that try to unset required projection fields", () => {
+    expect(
+      isNativeAgentProjectionUpdate({
+        syncVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        historyEpoch: "epoch",
+        historyComplete: true,
+        delta: {
+          messageUpserts: [],
+          deletedMessageIds: [],
+          setFields: {},
+          unsetFields: ["capabilities"],
+          revision: 2,
+          generation: "generation-1",
+        },
+      }),
+    ).toBe(false);
   });
 });
 

@@ -223,7 +223,7 @@ export abstract class StorageProjects extends StorageBase {
       await this.saveJson(this.projectsFile(), filtered);
     });
     await this.deleteComposeDraftsByProject(projectId);
-    this.announce("project", projectId);
+    this.announce("project", projectId, undefined, undefined, true);
   }
 
   async getProject(projectId: string): Promise<Project | null> {
@@ -418,7 +418,7 @@ export abstract class StorageProjects extends StorageBase {
       }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
-      this.announce("environment", environmentId, removed?.projectId);
+      this.announce("environment", environmentId, removed?.projectId, undefined, true);
     });
   }
 

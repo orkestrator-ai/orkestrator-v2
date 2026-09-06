@@ -508,6 +508,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.modelCatalogRefreshes.clear();
     this.slashCommandRefreshes.clear();
     this.projectionCache.clear();
+    this.projectionSync.clear();
+    this.projectionSyncBytes = 0;
+    this.projectionHistory.clear();
+    this.projectionHistoryBytes = 0;
     this.toolDetailCache.clear();
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;

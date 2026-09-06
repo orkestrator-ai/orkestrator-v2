@@ -200,6 +200,8 @@ export interface ProviderSendOptions {
 export interface ProviderInteractiveSnapshot {
   status: ProviderStatus;
   messages: unknown[];
+  /** False when the provider supplied only a bounded transcript tail. */
+  messagesComplete?: boolean;
   title?: string;
   shareUrl?: string | null;
   composer?: NativeAgentComposerState;

@@ -222,6 +222,7 @@ mock.module("@/lib/backend", () => ({
   stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
+  getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,

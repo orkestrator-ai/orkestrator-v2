@@ -11,17 +11,16 @@ import type {
 } from "@/types";
 import {
   isResourceRevisionManifest,
+  isScopedResourceRevisionManifest,
+  isScopedResourceSnapshotBatch,
+  SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES,
+  type ResourceChange,
+  type ScopedResourceSnapshotBatch,
+  type ScopedResourceRevisionManifest,
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 /** PR detection result containing URL, state, and merge conflict status */
-
-/** PR detection result containing URL, state, and merge conflict status */
-export interface PrDetectionResult {
-  url: string;
-  state: PrState;
-  hasMergeConflicts: boolean | null;
-}
 
 export interface PrDetectionResult {
   url: string;
@@ -43,6 +42,40 @@ export async function getResourceRevisionManifest(
   });
   if (!isResourceRevisionManifest(response)) {
     throw new Error("Invalid resource revision manifest response");
+  }
+  return response;
+}
+
+export async function getScopedResourceRevisionManifest(
+  knownGeneration?: string,
+  cursor = 0,
+  knownRevisions: Partial<ResourceRevisionMap> = {},
+  highWater?: number,
+): Promise<ScopedResourceRevisionManifest> {
+  const response = await invoke<unknown>("get_scoped_resource_revision_manifest", {
+    ...(knownGeneration === undefined ? {} : { knownGeneration }),
+    cursor,
+    knownRevisions,
+    ...(highWater === undefined ? {} : { highWater }),
+  });
+  if (!isScopedResourceRevisionManifest(response)) {
+    throw new Error("Invalid scoped resource revision manifest response");
+  }
+  return response;
+}
+
+export async function getScopedResourceSnapshots(
+  changes: ResourceChange[],
+): Promise<ScopedResourceSnapshotBatch> {
+  const response = await invoke<unknown>("get_scoped_resource_snapshots", { changes });
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength >
+    SCOPED_RESOURCE_SNAPSHOT_BATCH_MAX_BYTES
+  ) {
+    throw new Error("Scoped resource snapshot batch response exceeded its limit");
+  }
+  if (!isScopedResourceSnapshotBatch(response)) {
+    throw new Error("Invalid scoped resource snapshot batch response");
   }
   return response;
 }

@@ -953,6 +953,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return {
       status: terminal?.kind === "error" ? "error" : status,
       messages,
+      messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
       composer: {

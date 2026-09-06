@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -33,6 +33,10 @@ import type {
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
   NativeAgentMessageWindow,
+  NativeAgentLiveWindow,
+  NativeAgentMessagePage,
+  NativeAgentProjectionDelta,
+  NativeAgentProjectionUpdate,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,
@@ -171,7 +175,62 @@ export interface NativeAgentProjectionInput {
    * cannot shrink a transcript the tab has expanded.
    */
   messageLimit?: number;
+  /** Internal cache namespace for the fixed remote-sync representation. */
+  representation?: "sync-v1";
 }
+
+export interface NativeAgentProjectionUpdateInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  syncVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}
+
+export interface NativeAgentMessagePageInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  syncVersion: 1;
+  before: string;
+  limit?: number;
+  targetBytes?: number;
+}
+
+export interface NativeAgentSyncRevision {
+  token: string;
+  projection: NativeAgentSessionProjection;
+  bytes: number;
+  createdAt: number;
+}
+
+export interface NativeAgentHistoryState {
+  sessionId: string;
+  epoch: string;
+  messages: unknown[];
+  messageFingerprints: string[];
+  /** First message that was part of the mutable live tail on the last read. */
+  mutableTailStart: number;
+  complete: boolean;
+  bytes: number;
+  updatedAt: number;
+}
+
+export interface NativeAgentSyncState {
+  incarnation: string;
+  identity: string;
+  currentToken?: string;
+  revisions: NativeAgentSyncRevision[];
+  revisionBytes: number;
+}
+
+export type NativeAgentSyncProtocolTypes = [
+  NativeAgentMessagePage,
+  NativeAgentProjectionDelta,
+  NativeAgentProjectionUpdate,
+];
 
 export function controlsFromSessionInput(
   input: EnsureNativeAgentSessionInput,
@@ -329,6 +388,14 @@ export const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
  */
 export const NATIVE_MISSING_SESSION_GRACE_MS = 15_000;
 export const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
+/**
+ * Retained shared revision counters, one per logical session.
+ *
+ * Deliberately larger than the projection cache: an evicted counter is
+ * re-seeded from whatever remains cached for that session, and holding the
+ * cheap `{generation, revision}` pair for longer keeps that re-seed exact.
+ */
+export const NATIVE_PROJECTION_REVISION_LIMIT = 4_096;
 export const NATIVE_PROJECTION_MAX_MESSAGES = 512;
 /**
  * Ceiling for an explicitly expanded transcript window.
@@ -339,6 +406,20 @@ export const NATIVE_PROJECTION_MAX_MESSAGES = 512;
  */
 export const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
 export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
+export const NATIVE_SYNC_LIVE_MESSAGES = 100;
+export const NATIVE_SYNC_LIVE_TARGET_BYTES = 512 * 1024;
+export const NATIVE_SYNC_MAX_REVISIONS = 128;
+export const NATIVE_SYNC_MAX_REVISION_BYTES = 2 * 1024 * 1024;
+export const NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES = 32 * 1024 * 1024;
+export const NATIVE_SYNC_REVISION_TTL_MS = 60_000;
+export const NATIVE_SYNC_MAX_DELTA_BYTES = 1024 * 1024;
+export const NATIVE_SYNC_MAX_SNAPSHOT_BYTES = 20 * 1024 * 1024;
+export const NATIVE_SYNC_MAX_DELTA_OPERATIONS = 1_024;
+export const NATIVE_HISTORY_PAGE_MAX_MESSAGES = 200;
+export const NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES = 100;
+export const NATIVE_HISTORY_PAGE_DEFAULT_BYTES = 512 * 1024;
+export const NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES = 1024 * 1024;
+export const NATIVE_HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES = 4_096;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_MAX_BYTES = 4 * 1024 * 1024;
@@ -529,6 +610,7 @@ export type PromptDispatchPreparation =
 
 export {
   createHash,
+  randomUUID,
   BUILD_PIPELINE_AGENTS,
   isActiveBuildPhase,
   isBuildPipeline,
@@ -577,6 +659,9 @@ export type {
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
   NativeAgentMessageWindow,
+  NativeAgentMessagePage,
+  NativeAgentProjectionDelta,
+  NativeAgentProjectionUpdate,
   NativeAgentReadiness,
   NativeAgentResumeEntry,
   NativeAgentSessionProjection,

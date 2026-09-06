@@ -1,6 +1,9 @@
 import {
   isResourceChange,
+  isResourceManifestKind,
   isResourceRevisionManifest,
+  isScopedResourceRevisionManifest,
+  isScopedResourceSnapshotBatch,
   RESOURCE_MANIFEST_KINDS,
   RESOURCE_CHANGED_EVENT,
   type ResourceChange,
@@ -8,8 +11,11 @@ import {
   type ResourceManifestKind,
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
+  type ScopedResourceRevisionManifest,
+  type ScopedResourceSnapshotBatch,
 } from "@orkestrator/protocol/resource-events";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
+import { primePrefetchedCommandResponses } from "@/lib/prefetched-command-responses";
 
 /**
  * Client half of the backend change feed.
@@ -30,7 +36,7 @@ import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/
  * is restored consistently across mobile, web, and desktop reconnects.
  */
 
-type ResourceHandler = (change: ResourceChange) => void;
+type ResourceHandler = (change: ResourceChange) => unknown | Promise<unknown>;
 export interface ResourceResyncRequest {
   /** `null` is the deliberately retained diagnostic/full-recovery path. */
   resources: ReadonlySet<ResourceManifestKind> | null;
@@ -44,6 +50,13 @@ export interface ResourceSyncOptions {
     knownGeneration?: string,
     knownRevisions?: Partial<ResourceRevisionMap>,
   ) => Promise<ResourceRevisionManifest>;
+  loadScopedManifest?: (
+    knownGeneration: string | undefined,
+    cursor: number,
+    knownRevisions: Partial<ResourceRevisionMap>,
+    highWater?: number,
+  ) => Promise<ScopedResourceRevisionManifest>;
+  loadScopedSnapshots?: (changes: ResourceChange[]) => Promise<ScopedResourceSnapshotBatch>;
 }
 
 const handlers = new Map<ResourceKind, Set<ResourceHandler>>();
@@ -82,7 +95,7 @@ const pending = new Map<string, PendingDispatch>();
 const activeTransportStops = new Set<() => void>();
 
 function coalesceKey(change: ResourceChange): string {
-  return `${change.resource}\u0000${change.id}`;
+  return `${change.resource}\u0000${change.id}\u0000${change.agent ?? ""}\u0000${change.logicalSessionKey ?? ""}`;
 }
 
 /**
@@ -139,17 +152,27 @@ export function requestResourceResync(): void {
   void deliverResourceResync({ resources: null, reason: "explicit" });
 }
 
-function deliver(change: ResourceChange): void {
+async function deliver(change: ResourceChange): Promise<boolean> {
   const set = handlers.get(change.resource);
-  if (!set) return;
+  if (!set) return true;
+  let succeeded = true;
+  const deliveries: Promise<unknown>[] = [];
   // Snapshot before iterating: a handler may unsubscribe itself.
   for (const handler of Array.from(set)) {
     try {
-      handler(change);
+      deliveries.push(
+        Promise.resolve(handler(change)).catch((error) => {
+          succeeded = false;
+          console.error(`[resource-sync] Handler for ${change.resource} threw:`, error);
+        }),
+      );
     } catch (error) {
+      succeeded = false;
       console.error(`[resource-sync] Handler for ${change.resource} threw:`, error);
     }
   }
+  await Promise.all(deliveries);
+  return succeeded;
 }
 
 /**
@@ -166,7 +189,7 @@ export function dispatchResourceChange(change: ResourceChange): void {
   }
   const timer = setTimeout(() => {
     pending.delete(key);
-    deliver(change);
+    void deliver(change);
   }, COALESCE_MS);
   pending.set(key, { change, timer });
 }
@@ -186,6 +209,8 @@ export function resetResourceSync(): void {
  */
 export function startResourceSync(options: ResourceSyncOptions = {}): () => void {
   const loadManifest = options.loadManifest;
+  const loadScopedManifest = options.loadScopedManifest;
+  const loadScopedSnapshots = options.loadScopedSnapshots;
   const unlistens: UnlistenFn[] = [];
   let disposed = false;
   let lastRevision: number | null = null;
@@ -194,12 +219,115 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
   let bootResyncAt: number | null = null;
   let knownGeneration: string | undefined;
   let knownRevisions: Partial<ResourceRevisionMap> = {};
+  let scopedCursor = 0;
+  let scopedDisabled = false;
+  let scopedSnapshotsDisabled = false;
   let manifestRunning = false;
   let manifestRequested = false;
 
+  const deliverChangedResources = async (
+    changed: ReadonlySet<ResourceManifestKind>,
+  ): Promise<boolean> => {
+    let succeeded = true;
+    if (changed.has("project")) {
+      succeeded = await deliverResourceResync({
+        resources: new Set(["project"]),
+        reason: "manifest",
+      });
+    }
+    if (succeeded && changed.has("environment")) {
+      succeeded = await deliverResourceResync({
+        resources: new Set(["environment"]),
+        reason: "manifest",
+      });
+    }
+    const dependent = new Set(changed);
+    dependent.delete("project");
+    dependent.delete("environment");
+    if (succeeded && dependent.size > 0) {
+      succeeded = await deliverResourceResync({ resources: dependent, reason: "manifest" });
+    }
+    return succeeded;
+  };
+
+  const deliverScopedChanges = async (changes: ResourceChange[]): Promise<boolean> => {
+    const latest = new Map<string, ResourceChange>();
+    for (const change of changes) {
+      const key = coalesceKey(change);
+      const previous = latest.get(key);
+      if (!previous || previous.revision < change.revision) latest.set(key, change);
+    }
+    const ordered = Array.from(latest.values()).sort((a, b) => a.revision - b.revision);
+    let clearPrefetched: () => void = () => {};
+    if (loadScopedSnapshots && !scopedSnapshotsDisabled && ordered.length > 0) {
+      const prefetched: Array<{
+        command: string;
+        args: Record<string, unknown>;
+        snapshot: unknown;
+      }> = [];
+      for (let offset = 0; offset < ordered.length; offset += 32) {
+        try {
+          const batch = await loadScopedSnapshots(ordered.slice(offset, offset + 32));
+          if (!isScopedResourceSnapshotBatch(batch)) {
+            throw new Error("Invalid scoped resource snapshot batch");
+          }
+          prefetched.push(
+            ...batch.entries.filter(
+              (entry): entry is Extract<(typeof batch.entries)[number], { status: "ok" }> =>
+                entry.status === "ok",
+            ),
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("Unknown backend command: get_scoped_resource_snapshots")) {
+            scopedSnapshotsDisabled = true;
+            break;
+          }
+          console.warn(
+            "[resource-sync] Scoped snapshot batch failed; using individual reads:",
+            error,
+          );
+        }
+      }
+      clearPrefetched = primePrefetchedCommandResponses(prefetched);
+    }
+    const deliverSerial = async (items: ResourceChange[]): Promise<boolean> => {
+      for (const change of items) {
+        if (!(await deliver(change))) return false;
+      }
+      return true;
+    };
+    const deliverConcurrent = async (items: ResourceChange[]): Promise<boolean> => {
+      let index = 0;
+      let succeeded = true;
+      const worker = async (): Promise<void> => {
+        while (succeeded && index < items.length) {
+          const change = items[index++]!;
+          if (!(await deliver(change))) succeeded = false;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, items.length) }, () => worker()));
+      return succeeded;
+    };
+    try {
+      const projectChanges = ordered.filter((change) => change.resource === "project");
+      const environmentChanges = ordered.filter((change) => change.resource === "environment");
+      const dependentChanges = ordered.filter(
+        (change) => change.resource !== "project" && change.resource !== "environment",
+      );
+      return (
+        (await deliverSerial(projectChanges)) &&
+        (await deliverSerial(environmentChanges)) &&
+        (await deliverConcurrent(dependentChanges))
+      );
+    } finally {
+      clearPrefetched();
+    }
+  };
+
   const requestManifestResync = (): void => {
     if (disposed) return;
-    if (!loadManifest) {
+    if (!loadManifest && !loadScopedManifest) {
       requestResourceResync();
       return;
     }
@@ -210,6 +338,86 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
       try {
         do {
           manifestRequested = false;
+          if (loadScopedManifest && !scopedDisabled) {
+            try {
+              let highWater: number | undefined;
+              let pageSucceeded = true;
+              do {
+                const scoped = await loadScopedManifest(
+                  knownGeneration,
+                  scopedCursor,
+                  knownRevisions,
+                  highWater,
+                );
+                if (!isScopedResourceRevisionManifest(scoped)) {
+                  throw new Error("Invalid scoped resource revision manifest");
+                }
+                highWater ??= scoped.highWater;
+                const resetResources = new Set(scoped.resetResources);
+                if (scoped.reset || knownGeneration !== scoped.generation) {
+                  knownRevisions = {};
+                  scopedCursor = 0;
+                }
+                /*
+                 * Only the final page reports project/environment through
+                 * `resetResources`, and it reports them relative to the
+                 * revisions this client has already acknowledged. An owner
+                 * change carried by an intermediate page would therefore be
+                 * delivered to `onResourceChanged` subscribers alone — which no
+                 * unmounted UI has — and then acknowledged, so the
+                 * always-mounted stores would never see it at all. Promote
+                 * those to the same authoritative resync the final page uses.
+                 */
+                const authoritative = new Set(resetResources);
+                if (scoped.hasMore) {
+                  for (const change of scoped.changes) {
+                    if (change.resource === "project" || change.resource === "environment") {
+                      authoritative.add(change.resource);
+                    }
+                  }
+                }
+                if (authoritative.size > 0) {
+                  pageSucceeded = await deliverChangedResources(authoritative);
+                }
+                if (pageSucceeded) {
+                  pageSucceeded = await deliverScopedChanges(
+                    scoped.changes.filter(
+                      (change) =>
+                        !isResourceManifestKind(change.resource) ||
+                        !authoritative.has(change.resource),
+                    ),
+                  );
+                }
+                if (!pageSucceeded) break;
+                knownGeneration = scoped.generation;
+                scopedCursor = scoped.cursor;
+                for (const [resource, revision] of Object.entries(scoped.revisions)) {
+                  knownRevisions[resource as ResourceManifestKind] = revision;
+                }
+                if (!scoped.hasMore) break;
+              } while (!disposed);
+              if (pageSucceeded) continue;
+              continue;
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (
+                message.includes("Unknown backend command: get_scoped_resource_revision_manifest")
+              ) {
+                scopedDisabled = true;
+              } else {
+                console.warn(
+                  "[resource-sync] Scoped manifest check failed; using full reconciliation:",
+                  error,
+                );
+                await deliverResourceResync({ resources: null, reason: "explicit" });
+                continue;
+              }
+            }
+          }
+          if (!loadManifest) {
+            await deliverResourceResync({ resources: null, reason: "explicit" });
+            continue;
+          }
           let manifest: ResourceRevisionManifest;
           try {
             manifest = await loadManifest(knownGeneration, knownRevisions);
@@ -235,33 +443,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
             changed.add(resource as ResourceManifestKind);
           }
 
-          // Collection ownership is layered. Projects must exist before their
-          // environment lists can be refreshed, and environments must exist
-          // before session/queue/review/pane stores enumerate them. Running the
-          // phases in this order is what makes a generation reset converge a
-          // client that was inactive while whole scopes were added or removed.
-          let succeeded = true;
-          if (changed.has("project")) {
-            succeeded = await deliverResourceResync({
-              resources: new Set(["project"]),
-              reason: "manifest",
-            });
-          }
-          if (succeeded && changed.has("environment")) {
-            succeeded = await deliverResourceResync({
-              resources: new Set(["environment"]),
-              reason: "manifest",
-            });
-          }
-          const dependent = new Set(changed);
-          dependent.delete("project");
-          dependent.delete("environment");
-          if (succeeded && dependent.size > 0) {
-            succeeded = await deliverResourceResync({
-              resources: dependent,
-              reason: "manifest",
-            });
-          }
+          const succeeded = await deliverChangedResources(changed);
           if (!succeeded) continue;
 
           if (manifest.reset || knownGeneration !== manifest.generation) {

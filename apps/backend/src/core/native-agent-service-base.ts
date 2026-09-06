@@ -51,6 +51,8 @@ type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
 type AdoptNativeAgentSessionInput = shared.AdoptNativeAgentSessionInput;
 type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
 type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
+type NativeAgentSyncState = shared.NativeAgentSyncState;
+type NativeAgentHistoryState = shared.NativeAgentHistoryState;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
@@ -119,6 +121,26 @@ export abstract class NativeAgentServiceBase {
   protected readonly providerConnections = new Map<string, string>();
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   protected readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
+  /** Bounded wire revisions for conditional/delta projection reads. */
+  protected readonly projectionSync = new Map<string, NativeAgentSyncState>();
+  /**
+   * One revision sequence per logical native-agent session.
+   *
+   * The legacy full-projection representation and the sync-v1 live tail are
+   * cached under different keys but describe the same session and carry the
+   * same generation, and the renderer compares `revision` as a single ordering.
+   * Allocating from separate per-key counters let the sync counter run ahead,
+   * so an authoritative projection returned by a mutation could arrive with a
+   * lower revision than the client already held and be discarded as stale.
+   */
+  protected readonly projectionRevisions = new Map<
+    string,
+    { generation: string; revision: number }
+  >();
+  protected projectionSyncBytes = 0;
+  /** Bounded normalized transcript source for independent history pages. */
+  protected readonly projectionHistory = new Map<string, NativeAgentHistoryState>();
+  protected projectionHistoryBytes = 0;
   /**
    * When each projection key's current run of `missing` provider reads began.
    *

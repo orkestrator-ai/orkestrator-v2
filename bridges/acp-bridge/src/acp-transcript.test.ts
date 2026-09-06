@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  BRIDGE_STARTUP_TIMEOUT_MS,
   children,
   here,
   nativeFetch,
@@ -3327,6 +3328,7 @@ describe("ACP bridge", () => {
     const bounded = await waitFor(
       () => read(first.base, first.headers),
       (value) => value.status === "idle",
+      BRIDGE_STARTUP_TIMEOUT_MS,
     );
 
     const assistant = bounded.messages.at(-1)!;

@@ -20,6 +20,8 @@ export interface FakeRunScript {
   hold?: Promise<void>;
   /** Rejects `send` itself, standing in for a run that never started. */
   failToStart?: Error;
+  /** Updates emitted synchronously before a start failure is reported. */
+  updatesBeforeStartFailure?: unknown[];
   /**
    * Holds `send` open, standing in for the SDK taking its time to start a run.
    * This is the window in which the session is already `running` but no run
@@ -44,7 +46,12 @@ export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
     async send(message: unknown, options: { onDelta?: (args: { update: unknown }) => void } = {}) {
       sends.push({ message, options });
       if (script.holdSend) await script.holdSend;
-      if (script.failToStart) throw script.failToStart;
+      if (script.failToStart) {
+        for (const update of script.updatesBeforeStartFailure ?? []) {
+          options.onDelta?.({ update });
+        }
+        throw script.failToStart;
+      }
 
       // Delivered synchronously, exactly as the translator's no-await contract
       // assumes: if this ever needed to be awaited, the production path would

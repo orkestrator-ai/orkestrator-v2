@@ -12,6 +12,7 @@ import { authToken } from "./config.js";
 import { route } from "./http.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
+import { applyInteractionUpdate } from "./translate.js";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, credentialStore } from "./credentials.js";
 
 let server: Server;
@@ -160,6 +161,29 @@ describe("session creation", () => {
     expect(payload.composer).toMatchObject({
       selectedModelId: "composer-2",
       selectedModeId: "plan",
+    });
+  });
+
+  test("status exposes token-delta progress while the first model call is running", async () => {
+    const state = await createSession({ model: "grok-4.6" });
+    state.status = "running";
+    state.currentRunModelId = "grok-4.6";
+    state.currentTurnUsage = {};
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 17 });
+
+    const status = (await (await call(`/session/${state.id}/status`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(status).toMatchObject({
+      status: "running",
+      contextUsage: {
+        modelId: "grok-4.6",
+        usedTokens: 17,
+        lastTurnTokens: 17,
+        sessionTokens: 17,
+        estimated: true,
+      },
     });
   });
 
@@ -320,7 +344,13 @@ describe("prompt dispatch", () => {
 
   test("a run that fails to start rolls the turn back rather than wedging it", async () => {
     const state = await createSession();
-    attachFake(state, { failToStart: new Error("provider refused") });
+    const revision = state.revision;
+    attachFake(state, {
+      // A defensive simulation of an SDK that emits progress before `send`
+      // rejects. The rollback must clear state created in that narrow window.
+      updatesBeforeStartFailure: [{ type: "token-delta", tokens: 9 }],
+      failToStart: new Error("provider refused"),
+    });
 
     const response = await call(`/session/${state.id}/prompt`, {
       method: "POST",
@@ -328,9 +358,36 @@ describe("prompt dispatch", () => {
     });
     expect(response.status).toBe(500);
     expect(state.status).toBe("error");
+    // Prompt claim, delivered token delta, then rollback. This proves the
+    // estimate existed inside the failure window before the rollback cleared it.
+    expect(state.revision).toBe(revision + 3);
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect((await (await call(`/session/${state.id}/status`)).json()) as object).not.toHaveProperty(
+      "contextUsage.estimated",
+    );
     // The id was released, so the caller may retry under the same one: nothing
     // ran, and that is provable rather than assumed.
     expect(state.promptJournal.has("r1")).toBe(false);
+  });
+
+  test("starting a prompt clears an estimate left by the previous run", async () => {
+    const state = await createSession();
+    let release = () => undefined as void;
+    attachFake(state, { hold: new Promise<void>((resolve) => (release = () => resolve())) });
+    state.currentTurnOutputTokenEstimate = 42;
+    state.currentRunUsageUpdatedAt = new Date(1).toISOString();
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "next", requestId: "r1" }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    release();
+    await waitFor(() => state.status !== "running");
   });
 
   test("a turn that ends in error is reported as a failed session", async () => {

@@ -179,6 +179,34 @@ describe("startReparentWatchdog", () => {
     expect(fired).toBe(0);
   });
 
+  test("detects reparenting that happened before the watchdog was installed", async () => {
+    let fired = 0;
+    let resolveFired!: () => void;
+    const firedOnce = new Promise<void>((resolve) => {
+      resolveFired = resolve;
+    });
+    const stop = startReparentWatchdog({
+      initialParentPid: 500,
+      pollIntervalMs: 5,
+      // Startup awaited after capturing PID 500; by installation time the
+      // parent has exited and the process is already owned by init.
+      readParentPid: () => 1,
+      onReparented: () => {
+        fired += 1;
+        resolveFired();
+      },
+    });
+    expect(stop).not.toBeNull();
+
+    try {
+      await firedOnce;
+      await tick(20);
+      expect(fired).toBe(1);
+    } finally {
+      stop?.();
+    }
+  });
+
   test("declines to start when the ppid is unavailable", async () => {
     let fired = 0;
     const stop = startReparentWatchdog({

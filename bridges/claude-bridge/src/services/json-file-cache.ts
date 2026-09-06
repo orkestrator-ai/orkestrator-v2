@@ -43,8 +43,8 @@ const slices = new Map<string, CacheEntry>();
  */
 const inFlightParses = new Map<string, Promise<unknown>>();
 
-/** Parses performed (not served from cache). Test-only instrumentation. */
-let parseCount = 0;
+/** Parses performed per path (not served from cache). Test-only instrumentation. */
+const parseCounts = new Map<string, number>();
 
 function fingerprintOf(stats: { mtimeMs: number; size: number; ino: number; dev: number }): string {
   // `ino`/`dev` catch an atomic replace that happens to preserve mtime and
@@ -74,7 +74,7 @@ function parseOnce(filePath: string, fingerprint: string): Promise<unknown> {
   if (existing) return existing;
 
   const parse = (async () => {
-    parseCount += 1;
+    parseCounts.set(filePath, (parseCounts.get(filePath) ?? 0) + 1);
     try {
       return JSON.parse(await readFile(filePath, "utf-8")) as unknown;
     } catch {
@@ -159,7 +159,7 @@ export async function readJsonFileCached<T>(filePath: string): Promise<T | null>
 export function clearJsonFileCache(): void {
   slices.clear();
   inFlightParses.clear();
-  parseCount = 0;
+  parseCounts.clear();
 }
 
 /**
@@ -167,6 +167,6 @@ export function clearJsonFileCache(): void {
  * `clearJsonFileCache()`. Exported so tests can assert the cache and the
  * in-flight dedupe are doing their job; not used in production.
  */
-export function getJsonFileParseCount(): number {
-  return parseCount;
+export function getJsonFileParseCount(filePath: string): number {
+  return parseCounts.get(filePath) ?? 0;
 }

@@ -1650,7 +1650,7 @@ describe("ActionBar editor and run commands", () => {
 
   test("opens script configuration on long press without also running commands", async () => {
     currentWorkspaceReady = true;
-    readContainerFileMock.mockImplementationOnce(async () => ({
+    readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
     render(<ActionBar presentation="grid" />);
@@ -2000,7 +2000,7 @@ describe("ActionBar toolbar interactions", () => {
 
   test("runs commands and opens the editor from keyboard shortcuts", async () => {
     currentWorkspaceReady = true;
-    readContainerFileMock.mockImplementationOnce(async () => ({
+    readContainerFileMock.mockImplementation(async () => ({
       content: JSON.stringify({ run: ["bun test"] }),
     }));
     render(<ActionBar />);
@@ -2008,6 +2008,11 @@ describe("ActionBar toolbar interactions", () => {
       expect(
         screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
       ).toBe("false");
+    });
+    // The button render and the window-listener effect are separate React
+    // commits. Flush the passive effect before exercising its shortcut.
+    await act(async () => {
+      await Promise.resolve();
     });
 
     fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true });
@@ -5210,7 +5215,10 @@ describe("ActionBar run commands", () => {
 
   test("reports a backend terminal launch failure", async () => {
     currentWorkspaceReady = true;
-    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    // The component may re-read its configuration while mounting. Keep the
+    // fixture stable for every read instead of racing a one-shot value against
+    // whichever effect happens to arrive first.
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
     launchTerminalJobMock.mockRejectedValueOnce(new Error("PTY unavailable"));
     render(<ActionBar />);
 
@@ -5695,13 +5703,16 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
     currentWorkspaceReady = true;
     currentTabCount = 1;
-    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    readContainerFileMock.mockResolvedValue({ content: '{"run":["bun test"]}' });
     render(<ActionBar />);
     await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
       ).toBe("false"),
     );
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });

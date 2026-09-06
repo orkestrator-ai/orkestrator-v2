@@ -216,6 +216,8 @@ export interface Environment {
   lifecycleError?: string | null;
   name: string;
   branch: string;
+  /** Backend-owned generation that prevents a later rename from reusing branch history. */
+  branchRevision?: number;
   containerId: string | null;
   status: EnvironmentStatus;
   prUrl: string | null;
@@ -343,6 +345,7 @@ export type ClientEnvironment = Omit<
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
   | "controlRequestId"
+  | "branchRevision"
 > & {
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.

@@ -13,6 +13,10 @@ import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 
 assertSupportedPlatform();
 fixPath();
+// Capture this before startup awaits. If Electron dies while the backend is
+// initializing, reading process.ppid later would see init and lose the only
+// identity that lets the orphan watchdog recognize the transition.
+const initialParentPid = process.ppid;
 const options = parseOptions(process.argv.slice(2));
 if (
   (options.tailscaleServe || options.desktopWebClient) &&
@@ -135,22 +139,21 @@ process.on("SIGTERM", () => void stop("SIGTERM"));
 
 // The Electron supervisor cannot deliver SIGTERM if it crashes or is
 // force-killed, and this process would otherwise keep every local bridge (and
-// each bridge's codex app-server tree) alive as orphans. When the parent that
-// spawned us disappears — ppid is reparented — run the same drain a SIGTERM
-// would have. Started under a service manager the ppid is already 1, so the
-// watchdog declines to start and this never fires there.
+// each bridge's app-server tree) alive as orphans. When the parent that spawned
+// us disappears, run the same drain a SIGTERM would have. Install this before
+// the ready contract too: readiness means every lifecycle observer is active.
 startReparentWatchdog({
+  initialParentPid,
   onReparented: () => {
     console.warn("[Backend] Parent process exited; shutting down local servers");
     void stop("SIGTERM");
   },
 });
 
-// Install every shutdown path before publishing readiness. Supervisors are
-// allowed to stop the process as soon as this frame is visible; emitting it
-// earlier leaves a small race where SIGTERM takes Bun's default exit path.
-// Authentication material stays in the mode-0600 auth file and must never
-// enter logs.
+// Machine-readable startup means both serving and lifecycle handling are ready.
+// Install signal handling and parent-death detection first so a supervisor
+// cannot act on this line before graceful shutdown is fully armed.
+// Authentication material stays in the mode-0600 auth file and must never enter logs.
 process.stdout.write(
   `${JSON.stringify({
     type: "orkestrator-backend-ready",

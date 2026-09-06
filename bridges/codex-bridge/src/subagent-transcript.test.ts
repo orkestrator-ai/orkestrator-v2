@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import {
   applyTranscriptToolOutput,
   capActionOutput,
@@ -14,6 +14,10 @@ import {
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
   type TranscriptRecord,
 } from "./subagent-transcript.js";
+
+// Structured and circular output serialization can be descheduled behind the
+// bridge integration suites, but must still complete with its bounded result.
+jest.setTimeout(30_000);
 
 describe("exec transcript previews", () => {
   test("extracts a static nested exec_command command without evaluating input", () => {

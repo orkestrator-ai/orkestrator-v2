@@ -8,7 +8,6 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import {
   createEnvironment,
   defaultEnvironmentName,
-  sanitizeBranchName,
   sanitizeEnvironmentName,
   discoverAgentExtensions,
 } from "./commands-dependencies.js";
@@ -29,8 +28,8 @@ import {
   asPortMappings,
   asEnvironmentType,
   makeUniqueEnvironmentSlug,
+  allocateEnvironmentBranchName,
   createExtensionCommandRunner,
-  listGitBranchesAtPath,
   renameEnvironmentToName,
   renameEnvironmentFromPrompt,
   parsePrState,
@@ -200,14 +199,7 @@ export function registerEnvironmentCommands(
         ? sanitizeEnvironmentName(explicitName)
         : defaultEnvironmentName();
       const existingEnvironments = await storage.getEnvironmentsByProject(project.id);
-      const existingGitBranches = project.localPath
-        ? await listGitBranchesAtPath(project.localPath, false)
-        : [];
-      const uniqueName = makeUniqueEnvironmentSlug(
-        baseName,
-        existingEnvironments,
-        existingGitBranches,
-      );
+      const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments);
       const env = createEnvironment(project.id, {
         name: uniqueName,
         buildPipelineId: asOptionalString(buildPipelineId),
@@ -222,6 +214,13 @@ export function registerEnvironmentCommands(
         environmentType: requestedEnvironmentType,
         entryPort: repoConfig.entryPort,
         pendingRenamePrompt,
+      });
+      env.branch = await allocateEnvironmentBranchName({
+        name: env.name,
+        environmentId: env.id,
+        siblingEnvironments: existingEnvironments,
+        projectPath: requestedEnvironmentType === "local" ? project.localPath : null,
+        remoteUrl: project.gitUrl,
       });
       env.controlRequestId = externalRequestId || undefined;
       if (delegationBaseBranch !== undefined || delegationBaseCommit !== undefined) {
@@ -272,12 +271,7 @@ export function registerEnvironmentCommands(
     const newName = sanitizeEnvironmentName(asString(name, "name"));
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
-    const updated = await renameEnvironmentToName(
-      environment,
-      newName,
-      sanitizeBranchName(newName),
-      context,
-    );
+    const updated = await renameEnvironmentToName(environment, newName, context);
     await syncPrMonitorTracking(context);
     return toClientEnvironment(updated);
   });

@@ -825,6 +825,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
 
+    const modelForReview = context.modelId ?? session.config.model;
     const assistantMessage: NormalizedMessage = {
       id: createMessageId(),
       role: "assistant",
@@ -832,7 +833,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
       revision: 1,
-      ...(context.modelId ? { modelId: context.modelId } : {}),
+      ...(modelForReview ? { modelId: modelForReview } : {}),
     };
     const streamingState = this.stateFor(context.threadId);
     streamingState.publishedMessageId = assistantMessage.id;

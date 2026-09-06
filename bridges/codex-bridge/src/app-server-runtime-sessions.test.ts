@@ -445,7 +445,7 @@ describe("environment refresh", () => {
 });
 
 describe("models", () => {
-  test("publishes app-server's resolved and rerouted model on the assistant message", async () => {
+  test("publishes the selected, resolved, and rerouted model on the assistant message", async () => {
     let turnNumber = 0;
     const h = await harness({
       "thread/start": () => ({
@@ -559,7 +559,128 @@ describe("models", () => {
     assistants = (await h.runtime.getMessages(sessionId))?.filter(
       (message) => message.role === "assistant",
     );
-    expect(assistants?.[2]?.modelId).toBeUndefined();
+    // turn/start accepts the configured model but does not echo it or guarantee
+    // a settings notification. The selected canonical id still attributes the
+    // live response, and a later model/rerouted event can replace it.
+    expect(assistants?.[2]?.modelId).toBe("gpt-new-request");
+  });
+
+  test("attributes the first live turn when thread/start omits a resolved model", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-5.6-sol",
+    });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "Use Sol",
+      requestId: "req-selected-model",
+      attachments: [],
+    });
+
+    expect(
+      (await h.runtime.getMessages(sessionId))?.find((message) => message.role === "assistant")
+        ?.modelId,
+    ).toBe("gpt-5.6-sol");
+    expect(
+      h.events.some((event) => {
+        if (event.type !== "message.updated") return false;
+        const message = (event.data as { message?: { role?: string; modelId?: string } })?.message;
+        return message?.role === "assistant" && message.modelId === "gpt-5.6-sol";
+      }),
+    ).toBe(true);
+  });
+
+  test("uses a config update accepted while thread/start is in flight", async () => {
+    let releaseThreadStart!: () => void;
+    let threadStartEntered = false;
+    const threadStartGate = new Promise<void>((resolve) => {
+      releaseThreadStart = resolve;
+    });
+    const h = await harness({
+      "thread/start": async () => {
+        threadStartEntered = true;
+        await threadStartGate;
+        return { thread: threadPayload("thread-1") };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-before-start",
+    });
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "Use the latest model",
+      requestId: "req-thread-start-config-race",
+      attachments: [],
+    });
+    await waitUntil(() => threadStartEntered, "thread/start did not begin");
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        model: "gpt-after-start",
+      }),
+    ).toBe("updated");
+    releaseThreadStart();
+
+    expect(await pending).toMatchObject({ ok: true });
+    expect(
+      h.child().requests.find((request) => request.method === "thread/start")?.params.model,
+    ).toBe("gpt-before-start");
+    expect(
+      h.child().requests.find((request) => request.method === "turn/start")?.params.model,
+    ).toBe("gpt-after-start");
+    expect(
+      (await h.runtime.getMessages(sessionId))?.find((message) => message.role === "assistant")
+        ?.modelId,
+    ).toBe("gpt-after-start");
+  });
+
+  test("does not persist a configured attribution as an engine confirmation", async () => {
+    const h = await harness({
+      "thread/start": () => ({ thread: threadPayload("thread-unconfirmed-model") }),
+    });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-selected-only",
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Keep confirmation provenance",
+      requestId: "req-unconfirmed-model",
+      attachments: [],
+    });
+
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    expect(
+      (await store.load()).find((record) => record.bridgeSessionId === sessionId)
+        ?.confirmedModelsByTurn?.["turn-1"],
+    ).toBeUndefined();
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-unconfirmed-model",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    writeRolloutWithTurns("thread-unconfirmed-model", [
+      {
+        turnId: "turn-1",
+        user: "Keep confirmation provenance",
+        assistant: "Done",
+        model: "gpt-rollout-observed",
+      },
+    ]);
+    await h.runtime.stop();
+
+    const restarted = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-unconfirmed-model") }),
+    });
+    expect(
+      (await restarted.runtime.getMessages(sessionId))?.find(
+        (message) => message.role === "assistant",
+      )?.modelId,
+    ).toBe("gpt-rollout-observed");
   });
 
   test("applies a post-steer reroute to every assistant segment of the turn", async () => {
@@ -1827,6 +1948,34 @@ describe("native review", () => {
       turnId: "turn-review",
     });
     expect(h.runtime.getStatus(sessionId)?.status).toBe("idle");
+  });
+
+  test("attributes a review to the selected model after a model switch", async () => {
+    const { h, sessionId } = await reviewableSession();
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        model: "gpt-review-selected",
+      }),
+    ).toBe("updated");
+
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "accepted",
+      turnId: "turn-review",
+    });
+    expect((await h.runtime.getMessages(sessionId))?.at(-1)).toMatchObject({
+      role: "assistant",
+      modelId: "gpt-review-selected",
+      turnId: "turn-review",
+    });
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "message.updated" &&
+          (event.data as { message?: { modelId?: string } }).message?.modelId ===
+            "gpt-review-selected",
+      ),
+    ).toBe(true);
   });
 
   test("a review cannot start while a turn is running", async () => {

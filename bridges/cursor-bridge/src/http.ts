@@ -452,6 +452,7 @@ async function handlePrompt(
   state.promptSequence += 1;
   state.turnStartedAt = Date.now();
   state.currentRunUsage = undefined;
+  state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunDeltaUsage = undefined;
   state.currentRunStreamUsage = undefined;
   state.currentRunUsageUpdatedAt = undefined;
@@ -478,6 +479,7 @@ async function handlePrompt(
     state.error = errorText(error);
     state.dispatching = false;
     state.currentRunUsage = undefined;
+    state.currentTurnOutputTokenEstimate = undefined;
     state.currentRunDeltaUsage = undefined;
     state.currentRunStreamUsage = undefined;
     state.currentRunUsageUpdatedAt = undefined;

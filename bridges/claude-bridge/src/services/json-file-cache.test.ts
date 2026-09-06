@@ -33,7 +33,7 @@ describe("json file cache", () => {
     expect(first).toEqual({ value: 1 });
     // Same object: the file was parsed once, which is the whole point.
     expect(second).toBe(first);
-    expect(getJsonFileParseCount()).toBe(1);
+    expect(getJsonFileParseCount(file)).toBe(1);
   });
 
   test("re-reads after the file changes", async () => {
@@ -69,7 +69,7 @@ describe("json file cache", () => {
     await writeFile(file, "{ not valid json");
     expect(await readJsonFileCached(file)).toBeNull();
     expect(await readJsonFileCached(file)).toBeNull();
-    expect(getJsonFileParseCount()).toBe(1);
+    expect(getJsonFileParseCount(file)).toBe(1);
 
     await new Promise((resolve) => setTimeout(resolve, 10));
     await writeFile(file, JSON.stringify({ value: "fixed" }));
@@ -148,7 +148,7 @@ describe("json file cache", () => {
       expect(global).toEqual({ alpha: { command: "alpha-server" } });
       expect(project).toEqual({ beta: { command: "beta-server" } });
       expect(whole).toEqual(config);
-      expect(getJsonFileParseCount()).toBe(1);
+      expect(getJsonFileParseCount(file)).toBe(1);
     });
 
     test("caches an absent slice without re-parsing, and revalidates on change", async () => {
@@ -168,7 +168,7 @@ describe("json file cache", () => {
           (parsed) => parsed.mcpServers,
         ),
       ).toBeNull();
-      expect(getJsonFileParseCount()).toBe(1);
+      expect(getJsonFileParseCount(file)).toBe(1);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
       await writeFile(file, JSON.stringify({ mcpServers: { gamma: {} } }));

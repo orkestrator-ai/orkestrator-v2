@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Circle,
+  CircleAlert,
+  FileWarning,
   Loader2,
   Play,
   RefreshCw,
@@ -179,6 +181,19 @@ const NOTE_TONE_CLASS = {
   warning: "text-amber-500",
   destructive: "text-destructive",
 } as const;
+
+function findingCountLabel(count: number, singular: string): string {
+  return `${count} ${count === 1 ? singular : `${singular}s`} found`;
+}
+
+function reviewerTranscriptLabel(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+  index: number,
+): string {
+  const action = `Open Reviewer ${index + 1} transcript`;
+  if (!reviewer.report) return action;
+  return `${action}, ${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`;
+}
 
 function MultiReviewOverviewTab({
   data,
@@ -505,7 +520,7 @@ function MultiReviewOverviewTab({
                         <button
                           type="button"
                           disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
-                          aria-label={`Open Reviewer ${index + 1} transcript`}
+                          aria-label={reviewerTranscriptLabel(reviewer, index)}
                           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
                           onClick={() => {
                             if (openReviewer) {
@@ -530,7 +545,7 @@ function MultiReviewOverviewTab({
                           ) : (
                             <Circle className="size-4 shrink-0 text-muted-foreground" />
                           )}
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate text-xs font-medium">
                               Reviewer {index + 1} · {reviewer.agent}
                             </p>
@@ -557,6 +572,34 @@ function MultiReviewOverviewTab({
                               </p>
                             ) : null}
                           </div>
+                          {reviewer.report ? (
+                            <div
+                              className="ml-auto flex shrink-0 items-center gap-2.5 pl-2"
+                              aria-hidden="true"
+                            >
+                              <span
+                                className="flex items-center gap-1 text-amber-400"
+                                title={findingCountLabel(reviewer.report.issues.length, "issue")}
+                              >
+                                <CircleAlert className="size-3.5" aria-hidden="true" />
+                                <span className="font-mono text-xs tabular-nums">
+                                  {reviewer.report.issues.length}
+                                </span>
+                              </span>
+                              <span
+                                className="flex items-center gap-1 text-orange-400"
+                                title={findingCountLabel(
+                                  reviewer.report.testCoverageGaps.length,
+                                  "coverage gap",
+                                )}
+                              >
+                                <FileWarning className="size-3.5" aria-hidden="true" />
+                                <span className="font-mono text-xs tabular-nums">
+                                  {reviewer.report.testCoverageGaps.length}
+                                </span>
+                              </span>
+                            </div>
+                          ) : null}
                         </button>
                         {stoppable && (
                           <Button

@@ -93,6 +93,14 @@ import {
   MIN_DEBUG_LOG_RETENTION_DAYS,
   isValidDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
+import {
+  MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  MAX_TERMINAL_HISTORY_RETENTION_DAYS,
+  MAX_TERMINAL_HISTORY_RETENTION_MB,
+  MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  MIN_TERMINAL_HISTORY_RETENTION_DAYS,
+  MIN_TERMINAL_HISTORY_RETENTION_MB,
+} from "@orkestrator/protocol/terminal-history";
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -181,6 +189,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     terminalBackgroundColor,
     terminalScrollback,
     setTerminalScrollback,
+    terminalHistoryRetentionMb,
+    setTerminalHistoryRetentionMb,
+    terminalHistoryGlobalRetentionMb,
+    setTerminalHistoryGlobalRetentionMb,
+    terminalHistoryRetentionDays,
+    setTerminalHistoryRetentionDays,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
     debugLogging,
@@ -1193,6 +1207,56 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           <p className="text-xs text-muted-foreground">
             More lines keep more history but use more memory.
           </p>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <Label>Backend history retention</Label>
+            <p className="text-xs text-muted-foreground">
+              Output is collected while this app is disconnected. Lower limits remove the oldest
+              archived output; they do not change the live terminal scrollback above.
+            </p>
+          </div>
+          <div className="grid max-w-2xl gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="terminal-history-session-mb">Per terminal (MiB)</Label>
+              <Input
+                id="terminal-history-session-mb"
+                type="number"
+                min={MIN_TERMINAL_HISTORY_RETENTION_MB}
+                max={MAX_TERMINAL_HISTORY_RETENTION_MB}
+                step={1}
+                value={terminalHistoryRetentionMb}
+                onChange={(event) => setTerminalHistoryRetentionMb(Number(event.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="terminal-history-global-mb">All terminals (MiB)</Label>
+              <Input
+                id="terminal-history-global-mb"
+                type="number"
+                min={MIN_TERMINAL_HISTORY_GLOBAL_RETENTION_MB}
+                max={MAX_TERMINAL_HISTORY_GLOBAL_RETENTION_MB}
+                step={1}
+                value={terminalHistoryGlobalRetentionMb}
+                onChange={(event) =>
+                  setTerminalHistoryGlobalRetentionMb(Number(event.target.value))
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="terminal-history-days">Completed history (days)</Label>
+              <Input
+                id="terminal-history-days"
+                type="number"
+                min={MIN_TERMINAL_HISTORY_RETENTION_DAYS}
+                max={MAX_TERMINAL_HISTORY_RETENTION_DAYS}
+                step={1}
+                value={terminalHistoryRetentionDays}
+                onChange={(event) => setTerminalHistoryRetentionDays(Number(event.target.value))}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Background Color */}

@@ -38,8 +38,10 @@ import type {
   StorageService,
   AgentToolConnection,
 } from "./commands-dependencies.js";
+import { completeTerminalHistory, configureTerminalHistory } from "./terminal-history.js";
 import {
   terminalProcesses,
+  terminalOutputGenerations,
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
   SETUP_FAILED_OSC_SEQUENCE,
@@ -166,6 +168,7 @@ export function spawnTerminalProcess(
       });
     }
     hooks.onExit?.();
+    void completeTerminalHistory(id);
     cleanupTerminalSession(id);
   });
   return terminalProcess;
@@ -483,6 +486,16 @@ export function beginSetupPreparationSession(
 ): string {
   const sessionId = setupTerminalSessionId(environment.id);
   resetTerminalOutputBuffer(sessionId);
+  configureTerminalHistory({
+    sessionId,
+    dataDir: context.storage.getDataDir(),
+    stableIdentity: `setup\0${environment.id}`,
+    cols: 80,
+    rows: 24,
+    environmentId: environment.id,
+    tabId: "setup",
+    generation: terminalOutputGenerations.get(sessionId) ?? 1,
+  });
   environmentSetupSessions.set(environment.id, {
     environmentId: environment.id,
     sessionId,
@@ -579,6 +592,16 @@ export async function spawnSetupTerminal(
     sessionId,
     running: true,
     startedAt: existingSession?.startedAt ?? new Date().toISOString(),
+  });
+  configureTerminalHistory({
+    sessionId,
+    dataDir: context.storage.getDataDir(),
+    stableIdentity: `setup\0${environment.id}`,
+    cols: 80,
+    rows: 24,
+    environmentId: environment.id,
+    tabId: "setup",
+    generation: terminalOutputGenerations.get(sessionId) ?? 1,
   });
 
   if (environment.environmentType === "local") {

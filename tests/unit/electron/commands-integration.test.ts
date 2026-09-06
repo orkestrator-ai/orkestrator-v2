@@ -123,6 +123,7 @@ describe("storage-backed command delegation", () => {
     };
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
     const storage = {
+      getDataDir: () => worktree,
       loadProjects: mock(async () => [project]),
       addProject: mock(async (value: Record<string, unknown>) => value),
       removeProject: mock(async (id: string) => id),

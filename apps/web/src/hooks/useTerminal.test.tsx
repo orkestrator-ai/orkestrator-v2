@@ -50,6 +50,11 @@ const getTerminalOutputSnapshotMock = mock(
     generation: 1,
   }),
 );
+const getTerminalStateSnapshotMock = mock(
+  async (_sessionId: string): Promise<realBackend.TerminalStateSnapshot | null> => null,
+);
+const acknowledgeTerminalSnapshotMock = mock(async () => undefined);
+const rejectTerminalSnapshotMock = mock(async () => undefined);
 const detachTerminalMock = mock(async (_sessionId: string) => undefined);
 const resizeLocalTerminalMock = mock(
   async (_sessionId: string, _cols: number, _rows: number) => undefined,
@@ -69,6 +74,9 @@ mock.module("@/lib/backend", () => ({
   createTerminalSession: createTerminalSessionMock,
   startTerminalSession: startTerminalSessionMock,
   getTerminalOutputSnapshot: getTerminalOutputSnapshotMock,
+  getTerminalStateSnapshot: getTerminalStateSnapshotMock,
+  acknowledgeTerminalSnapshot: acknowledgeTerminalSnapshotMock,
+  rejectTerminalSnapshot: rejectTerminalSnapshotMock,
   detachTerminal: detachTerminalMock,
   resizeLocalTerminal: resizeLocalTerminalMock,
   resizeTerminal: resizeTerminalMock,
@@ -94,6 +102,9 @@ describe("useTerminal reconnect behavior", () => {
     createTerminalSessionMock.mockClear();
     startTerminalSessionMock.mockClear();
     getTerminalOutputSnapshotMock.mockClear();
+    getTerminalStateSnapshotMock.mockClear();
+    acknowledgeTerminalSnapshotMock.mockClear();
+    rejectTerminalSnapshotMock.mockClear();
     detachTerminalMock.mockClear();
     resizeLocalTerminalMock.mockClear();
     resizeTerminalMock.mockClear();
@@ -123,6 +134,7 @@ describe("useTerminal reconnect behavior", () => {
       revision: 0,
       generation: 1,
     }));
+    getTerminalStateSnapshotMock.mockImplementation(async () => null);
     detachTerminalMock.mockImplementation(async () => undefined);
     resizeLocalTerminalMock.mockImplementation(async () => undefined);
     resizeTerminalMock.mockImplementation(async () => undefined);
@@ -922,8 +934,8 @@ describe("useTerminal reconnect behavior", () => {
       revision: 1,
       generation: 4,
     });
-    expect(replayed).toEqual(["before disconnect"]);
-    expect(received).toEqual(["\r\nmissed output"]);
+    expect(replayed).toEqual(["before disconnect", "\r\nmissed output"]);
+    expect(received).toEqual([]);
   });
 
   it("replaces the view when a live event belongs to a new output generation", async () => {
@@ -1919,7 +1931,7 @@ describe("useTerminal reconnect behavior", () => {
     expect(replayed).toEqual(["before gap", "after gap"]);
   });
 
-  it("marks a truncated snapshot as degraded replay", async () => {
+  it("does not acknowledge or advance an unsafe truncated snapshot", async () => {
     getTerminalOutputSnapshotMock.mockResolvedValue({
       output: "bounded tail",
       revision: 9,
@@ -1947,12 +1959,72 @@ describe("useTerminal reconnect behavior", () => {
       await result.current.connect();
     });
 
-    expect(replayed).toEqual([
-      {
-        output: "bounded tail",
-        degraded: "truncated",
-      },
-    ]);
+    expect(replayed).toEqual([{ output: "", degraded: "snapshot-error" }]);
+    expect(acknowledgeTerminalSnapshotMock).not.toHaveBeenCalled();
+    expect(rejectTerminalSnapshotMock).toHaveBeenCalledWith("session-old");
+  });
+
+  it("applies a safe current-state snapshot after raw history rollover", async () => {
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      output: "unsafe bounded tail",
+      revision: 2_050,
+      generation: 7,
+      truncated: true,
+    });
+    getTerminalStateSnapshotMock.mockResolvedValue({
+      formatVersion: 1,
+      mode: "state",
+      output: "initial-marker\r\nfinal-marker",
+      pendingOutput: "",
+      generation: 7,
+      revision: 2_050,
+      historyId: "history",
+      incarnation: "incarnation",
+      cols: 80,
+      rows: 24,
+      earliestSequence: 1_000,
+      latestSequence: 2_050,
+      historyTruncated: true,
+      historyGap: false,
+      completed: true,
+    });
+    const applied: Array<{ output: string; truncated?: boolean }> = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        replayOutputBuffer: true,
+        onReplay: async (data, metadata) => {
+          await Promise.resolve();
+          applied.push({
+            output: new TextDecoder().decode(data),
+            truncated: metadata.historyTruncated,
+          });
+        },
+      }),
+    );
+
+    await act(async () => result.current.connect());
+
+    expect(applied).toEqual([{ output: "initial-marker\r\nfinal-marker", truncated: true }]);
+    expect(acknowledgeTerminalSnapshotMock).toHaveBeenCalledWith("session-old", {
+      formatVersion: 1,
+      mode: "state",
+      output: "initial-marker\r\nfinal-marker",
+      pendingOutput: "",
+      generation: 7,
+      revision: 2_050,
+      historyId: "history",
+      incarnation: "incarnation",
+      cols: 80,
+      rows: 24,
+      earliestSequence: 1_000,
+      latestSequence: 2_050,
+      historyTruncated: true,
+      historyGap: false,
+      completed: true,
+    });
   });
 
   it("contains resize and write failures without dropping the active session", async () => {

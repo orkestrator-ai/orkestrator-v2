@@ -5,6 +5,11 @@ import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/consta
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
+import {
+  DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+} from "@orkestrator/protocol/terminal-history";
 
 const DEFAULT_CONFIG: AppConfig = {
   schemaVersion: 2,
@@ -103,6 +108,9 @@ const DEFAULT_CONFIG: AppConfig = {
       backgroundColor: TERMINAL_BACKGROUND_COLOR,
     },
     terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
+    terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+    terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+    terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalCodexRawEventLogging: true,
     debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
     webClientEnabled: true,

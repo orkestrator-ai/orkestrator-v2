@@ -358,7 +358,7 @@ function createMockTerminal(): MockTerminal {
     open: mock(() => {}),
     clear: mock(() => {}),
     reset: mock(() => {}),
-    write: mock(() => {}),
+    write: mock((_data: unknown, callback?: () => void) => callback?.()),
     scrollToBottom: mock(() => {}),
     parser: {
       registerOscHandler: mock((_: number, handler: (data: string) => boolean) => {
@@ -1292,9 +1292,11 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(7);
-    expect(buttons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    const terminalKeyButtons = screen
+      .getAllByRole("button")
+      .filter((button) => button.closest('[role="toolbar"]'));
+    expect(terminalKeyButtons).toHaveLength(7);
+    expect(terminalKeyButtons.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
   });
 
   it("reserves safe-area space and raises the compose bar above mobile keys", () => {
@@ -1695,13 +1697,13 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
     const replay = new TextEncoder().encode("authoritative output\r\n");
 
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(replay, { preserveExisting: false });
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(replay, { preserveExisting: false });
     });
 
     expect(terminal.clear).toHaveBeenCalledTimes(1);
     expect(terminal.reset).toHaveBeenCalledTimes(1);
-    expect(terminal.write).toHaveBeenCalledWith(replay);
+    expect(terminal.write).toHaveBeenCalledWith(replay, expect.any(Function));
     expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
   });
 
@@ -1732,13 +1734,13 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
     const emptyReplay = new Uint8Array();
 
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(emptyReplay, { preserveExisting: false });
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(emptyReplay, { preserveExisting: false });
     });
 
     expect(terminal.clear).toHaveBeenCalledTimes(1);
     expect(terminal.reset).toHaveBeenCalledTimes(1);
-    expect(terminal.write).toHaveBeenCalledWith(emptyReplay);
+    expect(terminal.write).toHaveBeenCalledWith(emptyReplay, expect.any(Function));
     expect(terminal.write).toHaveBeenCalledTimes(1);
     expect(new TextDecoder().decode(terminal.write.mock.calls[0]![0] as Uint8Array)).toBe("");
     expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
@@ -1770,8 +1772,8 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
 
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
         preserveExisting: true,
       });
     });
@@ -1830,8 +1832,8 @@ describe("PersistentTerminal", () => {
       expect(lastUseTerminalOptions?.onReplay).toBeDefined();
       expect(resolvePersistentBuffer).toBeDefined();
     });
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
         preserveExisting: true,
       });
     });
@@ -1884,8 +1886,8 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
         preserveExisting: false,
         degraded: "snapshot-error",
         error: "backend detail that should not be exposed",
@@ -1903,8 +1905,10 @@ describe("PersistentTerminal", () => {
     expect(screen.getByRole("status").textContent).not.toContain("backend detail");
 
     const live = new TextEncoder().encode("live after failure\r\n");
-    act(() => terminalOnData?.(live));
-    expect(terminal.write).toHaveBeenLastCalledWith(live);
+    act(() => {
+      void terminalOnData?.(live);
+    });
+    expect(terminal.write).toHaveBeenLastCalledWith(live, expect.any(Function));
   });
 
   it("preserves the current xterm parser when snapshot synchronization fails without durable history", async () => {
@@ -1927,8 +1931,8 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
         preserveExisting: false,
         degraded: "snapshot-error",
         error: "snapshot failed",
@@ -1940,8 +1944,10 @@ describe("PersistentTerminal", () => {
     expect(terminal.write).not.toHaveBeenCalled();
 
     const live = new TextEncoder().encode("post-failure live output\r\n");
-    act(() => terminalOnData?.(live));
-    expect(terminal.write).toHaveBeenLastCalledWith(live);
+    act(() => {
+      void terminalOnData?.(live);
+    });
+    expect(terminal.write).toHaveBeenLastCalledWith(live, expect.any(Function));
   });
 
   it("preserves newer rendered output when snapshot synchronization fails with an older durable checkpoint", async () => {
@@ -1970,12 +1976,14 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
     const currentOutput = new TextEncoder().encode("newer live terminal state\r\n");
-    act(() => terminalOnData?.(currentOutput));
+    act(() => {
+      void terminalOnData?.(currentOutput);
+    });
 
     terminal.clear.mockClear();
     terminal.reset.mockClear();
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
         preserveExisting: false,
         degraded: "snapshot-error",
         error: "snapshot failed",
@@ -1984,7 +1992,7 @@ describe("PersistentTerminal", () => {
 
     expect(terminal.clear).not.toHaveBeenCalled();
     expect(terminal.reset).not.toHaveBeenCalled();
-    expect(terminal.write).toHaveBeenLastCalledWith(currentOutput);
+    expect(terminal.write).toHaveBeenLastCalledWith(currentOutput, expect.any(Function));
   });
 
   it("uses only valid durable serialization when the backend snapshot is truncated", async () => {
@@ -2373,8 +2381,8 @@ describe("PersistentTerminal", () => {
       expect(lastUseTerminalOptions?.onReplay).toBeDefined();
       expect(resolvePersistentBuffer).toBeDefined();
     });
-    act(() => {
-      lastUseTerminalOptions!.onReplay!(new Uint8Array(), { preserveExisting: true });
+    await act(async () => {
+      await lastUseTerminalOptions!.onReplay!(new Uint8Array(), { preserveExisting: true });
       terminalOnData?.(new Uint8Array(600 * 1024));
       terminalOnData?.(new Uint8Array(600 * 1024));
     });
@@ -2482,7 +2490,9 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    act(() => terminalOnData?.(new TextEncoder().encode(output)));
+    act(() => {
+      void terminalOnData?.(new TextEncoder().encode(output));
+    });
     await waitFor(() => {
       expect(onReady).toHaveBeenCalledWith({
         persistSetupComplete: false,
@@ -2554,7 +2564,9 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
     expect(bootstrapWrites()).not.toContain("echo non-first-ready\n");
-    act(() => terminalOnData?.(new TextEncoder().encode(output)));
+    act(() => {
+      void terminalOnData?.(new TextEncoder().encode(output));
+    });
     await waitFor(() => {
       expect(bootstrapWrites()).toContain("echo non-first-ready\n");
     });
@@ -2832,7 +2844,9 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
-    act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
+    act(() => {
+      void terminalOnData?.(new TextEncoder().encode("workspace $ "));
+    });
     await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
 
     writeMock.mockClear();
@@ -2852,7 +2866,9 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    act(() => terminalOnData?.(new TextEncoder().encode("replacement $ ")));
+    act(() => {
+      void terminalOnData?.(new TextEncoder().encode("replacement $ "));
+    });
     await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
   });
 
@@ -4697,7 +4713,9 @@ describe("PersistentTerminal", () => {
     });
 
     const view = render(<PersistentTerminal {...props(["echo ready"])} />);
-    act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
+    act(() => {
+      void terminalOnData?.(new TextEncoder().encode("workspace $ "));
+    });
     await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
 
     // Equal contents, brand new array — exactly what `pane-layout-restore`

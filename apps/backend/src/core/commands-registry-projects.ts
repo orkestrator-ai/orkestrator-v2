@@ -28,6 +28,10 @@ import type {
   AgentModel,
   AgentReasoningOption,
 } from "./commands-dependencies.js";
+import {
+  configureTerminalHistoryRetention,
+  pruneTerminalHistoryStorage,
+} from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import {
   syncDiffStatsTracking,
@@ -683,6 +687,13 @@ export function registerProjectCommands(
       },
       { preserveCredentials: true },
     );
+    const savedGlobal = (await storage.loadConfig()).global;
+    configureTerminalHistoryRetention({
+      sessionMb: savedGlobal.terminalHistoryRetentionMb,
+      globalMb: savedGlobal.terminalHistoryGlobalRetentionMb,
+      days: savedGlobal.terminalHistoryRetentionDays,
+    });
+    await pruneTerminalHistoryStorage(storage.getDataDir());
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void syncDiffStatsTracking(context).catch(() => undefined);
@@ -699,6 +710,12 @@ export function registerProjectCommands(
       stripRendererCredentials(asRecord(global, "global")),
       { preserveCredentials: true },
     );
+    configureTerminalHistoryRetention({
+      sessionMb: updated.global.terminalHistoryRetentionMb,
+      globalMb: updated.global.terminalHistoryGlobalRetentionMb,
+      days: updated.global.terminalHistoryRetentionDays,
+    });
+    await pruneTerminalHistoryStorage(storage.getDataDir());
     return redactAppConfig(updated);
   });
   register("set_github_token", async ({ token }, { storage }) => {

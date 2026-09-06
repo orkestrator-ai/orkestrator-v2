@@ -44,6 +44,12 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
+  DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+  DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+  normalizeTerminalHistoryRetention,
+} from "@orkestrator/protocol/terminal-history";
+import {
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
@@ -1574,6 +1580,11 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.codexMaxConcurrentThreads,
   );
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
+  const terminalHistoryRetention = normalizeTerminalHistoryRetention({
+    sessionMb: global.terminalHistoryRetentionMb,
+    globalMb: global.terminalHistoryGlobalRetentionMb,
+    days: global.terminalHistoryRetentionDays,
+  });
   const sshAgentSocketPath =
     typeof global.sshAgentSocketPath === "string" &&
     global.sshAgentSocketPath.trim().length <= MAX_SSH_AGENT_SOCKET_PATH_CHARS &&
@@ -1677,6 +1688,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.debugLogRetentionDays === debugLogRetentionDays &&
+    global.terminalHistoryRetentionMb === terminalHistoryRetention.sessionMb &&
+    global.terminalHistoryGlobalRetentionMb === terminalHistoryRetention.globalMb &&
+    global.terminalHistoryRetentionDays === terminalHistoryRetention.days &&
     global.sshAgentSocketPath === sshAgentSocketPath &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
@@ -1697,6 +1711,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       ...nextGlobal,
       codexMaxConcurrentThreads,
       debugLogRetentionDays,
+      terminalHistoryRetentionMb: terminalHistoryRetention.sessionMb,
+      terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
+      terminalHistoryRetentionDays: terminalHistoryRetention.days,
       sshAgentSocketPath,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
@@ -1821,6 +1838,9 @@ export function defaultConfig(): AppConfig {
         backgroundColor: "#0e1014",
       },
       terminalScrollback: 1000,
+      terminalHistoryRetentionMb: DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+      terminalHistoryGlobalRetentionMb: DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+      terminalHistoryRetentionDays: DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
       experimentalCodexRawEventLogging: true,
       debugLogging: false,
       debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,

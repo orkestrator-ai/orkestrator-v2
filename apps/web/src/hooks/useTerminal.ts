@@ -5,6 +5,10 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
 
+const TERMINAL_RECONCILE_BUFFER_MAX_BYTES = 2 * 1024 * 1024;
+const TERMINAL_RECONCILE_BUFFER_MAX_FRAMES = 1_024;
+const TERMINAL_RECONCILE_RETRY_MS = 100;
+
 /**
  * Wire shape of a `terminal-output-<sessionId>` event.
  *
@@ -83,16 +87,19 @@ interface UseTerminalOptions {
   isLocal?: boolean;
   cols?: number;
   rows?: number;
-  onData?: (data: Uint8Array) => void;
+  onData?: (data: Uint8Array) => unknown;
   /** Reconcile the client view with an authoritative backend buffer snapshot. */
   onReplay?: (
     data: Uint8Array,
     metadata: {
       preserveExisting: boolean;
+      append?: boolean;
+      historyTruncated?: boolean;
+      historyGap?: boolean;
       degraded?: "snapshot-error" | "truncated";
       error?: string;
     },
-  ) => void;
+  ) => unknown;
   /** Stable tab identity used by the backend to make session creation idempotent. */
   terminalKey?: string;
   /** Existing session ID to reconnect to (for tab moves between panes) */
@@ -376,86 +383,178 @@ export function useTerminal({
       const listenAbortController = new AbortController();
       listenAbortControllerRef.current = listenAbortController;
       const pendingLiveOutput: PendingOutput[] = [];
+      let pendingLiveBytes = 0;
+      let pendingLiveOverflow = false;
       let disposed = false;
       // Buffer immediately; output can arrive after the output listener is
       // registered but before the lifecycle listener and first snapshot exist.
       let snapshotPending = replayOutputBuffer;
       let activeGeneration: number | null = null;
       let lastAppliedRevision = 0;
+      let lastReceivedRevision = 0;
+      let liveApplicationTail = Promise.resolve();
       let reconciliationQueued = false;
       let reconciliationPromise: Promise<void> | null = null;
+      let reconciliationRetryTimer: ReturnType<typeof setTimeout> | null = null;
       let snapshotErrorActive = false;
+
+      const bufferLiveOutput = (pending: PendingOutput): void => {
+        if (
+          pendingLiveOutput.length >= TERMINAL_RECONCILE_BUFFER_MAX_FRAMES ||
+          pendingLiveBytes + pending.data.byteLength > TERMINAL_RECONCILE_BUFFER_MAX_BYTES
+        ) {
+          pendingLiveOutput.length = 0;
+          pendingLiveBytes = 0;
+          pendingLiveOverflow = true;
+          reconciliationQueued = true;
+          return;
+        }
+        pendingLiveOutput.push(pending);
+        pendingLiveBytes += pending.data.byteLength;
+      };
+
+      const applyReplay = async (
+        data: Uint8Array,
+        metadata: Parameters<NonNullable<UseTerminalOptions["onReplay"]>>[1],
+      ): Promise<void> => {
+        const application = Promise.resolve(onReplayRef.current?.(data, metadata));
+        if (listenAbortController.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        let onAbort: (() => void) | null = null;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          onAbort = () => reject(new DOMException("Aborted", "AbortError"));
+          listenAbortController.signal.addEventListener("abort", onAbort, { once: true });
+        });
+        try {
+          await Promise.race([application, aborted]);
+        } finally {
+          if (onAbort) listenAbortController.signal.removeEventListener("abort", onAbort);
+        }
+      };
+
+      const applyLiveOutput = (pending: PendingOutput): Promise<void> => {
+        let outputApplication: unknown;
+        try {
+          // Invoke immediately so xterm receives frames in transport order. Its
+          // completion promise is then sequenced with earlier applications.
+          outputApplication = onDataRef.current?.(pending.data);
+        } catch (error) {
+          outputApplication = Promise.reject(error);
+        }
+        const application = Promise.all([liveApplicationTail, outputApplication]).then(() => {
+          if (
+            pending.revision !== null &&
+            pending.generation !== null &&
+            pending.generation === activeGeneration
+          ) {
+            lastAppliedRevision = Math.max(lastAppliedRevision, pending.revision);
+          }
+        });
+        liveApplicationTail = application.catch(() => undefined);
+        return application;
+      };
 
       const deliverWithoutSnapshot = (pending: PendingOutput): void => {
         // Legacy payloads have no cursor and therefore cannot be deduplicated.
         if (pending.revision === null || pending.generation === null) {
-          onDataRef.current?.(pending.data);
+          void applyLiveOutput(pending);
           return;
         }
 
         if (activeGeneration !== pending.generation) {
           activeGeneration = pending.generation;
           lastAppliedRevision = 0;
+          lastReceivedRevision = 0;
         }
-        if (pending.revision <= lastAppliedRevision) return;
-        onDataRef.current?.(pending.data);
-        lastAppliedRevision = pending.revision;
+        if (pending.revision <= lastReceivedRevision) return;
+        lastReceivedRevision = pending.revision;
+        void applyLiveOutput(pending);
       };
 
       const reconcileOnce = async (): Promise<void> => {
         snapshotPending = true;
         try {
+          await liveApplicationTail;
           const requestedCursor =
             activeGeneration === null
               ? undefined
               : { revision: lastAppliedRevision, generation: activeGeneration };
-          const snapshot = requestedCursor
-            ? await backend.getTerminalOutputSnapshot(id, requestedCursor)
-            : await backend.getTerminalOutputSnapshot(id);
+          let snapshot: backend.TerminalOutputSnapshot | backend.TerminalStateSnapshot | null =
+            requestedCursor ? await backend.getTerminalOutputSnapshot(id, requestedCursor) : null;
+          let stateSnapshot: Awaited<ReturnType<typeof backend.getTerminalStateSnapshot>> = null;
+          if (!snapshot || snapshot.mode !== "delta") {
+            stateSnapshot = await backend.getTerminalStateSnapshot(id).catch(() => null);
+            if (!stateSnapshot && !snapshot) snapshot = await backend.getTerminalOutputSnapshot(id);
+          }
           if (disposed || !isCurrentConnect()) return;
 
           if (
-            snapshot.mode === "delta" &&
+            snapshot?.mode === "delta" &&
             requestedCursor &&
             snapshot.generation === requestedCursor.generation
           ) {
             if (snapshot.output) {
-              onDataRef.current?.(new TextEncoder().encode(snapshot.output));
+              await applyReplay(new TextEncoder().encode(snapshot.output), {
+                preserveExisting: true,
+                append: true,
+              });
             }
+          } else if (stateSnapshot) {
+            await applyReplay(
+              new TextEncoder().encode(`${stateSnapshot.output}${stateSnapshot.pendingOutput}`),
+              {
+                preserveExisting: false,
+                historyTruncated: stateSnapshot.historyTruncated,
+                historyGap: stateSnapshot.historyGap,
+              },
+            );
+            snapshot = stateSnapshot;
           } else {
-            onReplayRef.current?.(new TextEncoder().encode(snapshot.output), {
+            if (!snapshot) throw new Error("Backend returned no terminal recovery snapshot");
+            if ("truncated" in snapshot && snapshot.truncated) {
+              throw new Error("Backend cannot provide a safe current-state terminal snapshot");
+            }
+            await applyReplay(new TextEncoder().encode(snapshot.output), {
               // A reconciliation fallback replaces the local view exactly.
               preserveExisting: requestedCursor ? false : preserveExisting,
-              degraded: snapshot.truncated ? "truncated" : undefined,
             });
           }
+          if (disposed || !isCurrentConnect()) return;
+          if (!snapshot) throw new Error("Backend returned no terminal recovery snapshot");
+          await backend.acknowledgeTerminalSnapshot(id, snapshot).catch(() => undefined);
           activeGeneration = snapshot.generation;
           lastAppliedRevision = snapshot.revision;
+          lastReceivedRevision = snapshot.revision;
           if (snapshotErrorActive) {
             snapshotErrorActive = false;
             setError(null);
           }
 
           const buffered = pendingLiveOutput.splice(0);
+          pendingLiveBytes = 0;
+          if (pendingLiveOverflow) {
+            pendingLiveOverflow = false;
+            reconciliationQueued = true;
+            return;
+          }
           snapshotPending = false;
           for (const pending of buffered) {
             if (pending.revision === null || pending.generation === null) {
-              onDataRef.current?.(pending.data);
+              await applyLiveOutput(pending);
               continue;
             }
             if (pending.generation !== activeGeneration) {
-              pendingLiveOutput.push(pending);
+              bufferLiveOutput(pending);
               reconciliationQueued = true;
               continue;
             }
             if (pending.revision <= lastAppliedRevision) continue;
-            if (pending.revision !== lastAppliedRevision + 1) {
-              pendingLiveOutput.push(pending);
+            if (pending.revision !== lastReceivedRevision + 1) {
+              bufferLiveOutput(pending);
               reconciliationQueued = true;
               continue;
             }
-            onDataRef.current?.(pending.data);
-            lastAppliedRevision = pending.revision;
+            lastReceivedRevision = pending.revision;
+            await applyLiveOutput(pending);
           }
         } catch (snapshotError) {
           if (disposed || !isCurrentConnect()) return;
@@ -467,16 +566,23 @@ export function useTerminal({
           const message =
             snapshotError instanceof Error ? snapshotError.message : "Unknown snapshot error";
           setError(`Failed to synchronize terminal output: ${message}`);
-          onReplayRef.current?.(new Uint8Array(), {
-            preserveExisting,
-            degraded: "snapshot-error",
-            error: message,
-          });
+          try {
+            await applyReplay(new Uint8Array(), {
+              preserveExisting,
+              degraded: "snapshot-error",
+              error: message,
+            });
+          } catch {
+            if (disposed || !isCurrentConnect()) return;
+          }
+          void backend.rejectTerminalSnapshot(id).catch(() => undefined);
 
           // Keep the existing view. Live output should continue even though
           // history cannot be made authoritative until a later reconnect.
           snapshotPending = false;
           const buffered = pendingLiveOutput.splice(0);
+          pendingLiveBytes = 0;
+          pendingLiveOverflow = false;
           for (const pending of buffered) deliverWithoutSnapshot(pending);
         } finally {
           snapshotPending = false;
@@ -513,6 +619,13 @@ export function useTerminal({
           })
           .finally(() => {
             reconciliationPromise = null;
+            if (reconciliationQueued && !disposed && isCurrentConnect()) {
+              if (reconciliationRetryTimer) clearTimeout(reconciliationRetryTimer);
+              reconciliationRetryTimer = setTimeout(() => {
+                reconciliationRetryTimer = null;
+                void reconcileSnapshot();
+              }, TERMINAL_RECONCILE_RETRY_MS);
+            }
           });
         return reconciliationPromise;
       };
@@ -523,8 +636,7 @@ export function useTerminal({
           const payload = event.payload;
           const data = decodeTerminalOutputPayload(payload);
           if (data === null) {
-            void reconcileSnapshot();
-            return;
+            return reconcileSnapshot();
           }
           const cursor = terminalOutputCursor(payload);
           const pending: PendingOutput = {
@@ -534,30 +646,28 @@ export function useTerminal({
           };
 
           if (snapshotPending) {
-            pendingLiveOutput.push(pending);
+            bufferLiveOutput(pending);
             return;
           }
           if (pending.revision === null || pending.generation === null) {
-            onDataRef.current?.(pending.data);
-            return;
+            return applyLiveOutput(pending);
           }
           if (activeGeneration === null) {
             activeGeneration = pending.generation;
-            lastAppliedRevision = pending.revision;
-            onDataRef.current?.(pending.data);
-            return;
+            lastAppliedRevision = 0;
+            lastReceivedRevision = pending.revision;
+            return applyLiveOutput(pending);
           }
           if (
             pending.generation !== activeGeneration ||
-            pending.revision > lastAppliedRevision + 1
+            pending.revision > lastReceivedRevision + 1
           ) {
-            pendingLiveOutput.push(pending);
-            void reconcileSnapshot();
-            return;
+            bufferLiveOutput(pending);
+            return reconcileSnapshot();
           }
-          if (pending.revision <= lastAppliedRevision) return;
-          onDataRef.current?.(pending.data);
-          lastAppliedRevision = pending.revision;
+          if (pending.revision <= lastReceivedRevision) return;
+          lastReceivedRevision = pending.revision;
+          return applyLiveOutput(pending);
         },
         { signal: listenAbortController.signal },
       );
@@ -580,6 +690,8 @@ export function useTerminal({
         }
         safelyUnlisten(outputUnlisten);
         safelyUnlisten(reconnectUnlisten);
+        if (reconciliationRetryTimer) clearTimeout(reconciliationRetryTimer);
+        reconciliationRetryTimer = null;
       };
 
       // Publish the generation-local disposer before lifecycle registration.

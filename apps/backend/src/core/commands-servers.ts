@@ -85,6 +85,7 @@ import {
   resolveBunBinary,
 } from "./commands-agent-support.js";
 import { cleanupTerminalSessionsForEnvironment } from "./commands-terminal.js";
+import { deleteTerminalHistories } from "./terminal-history.js";
 import {
   assertDockerContainerOwned,
   cleanupEnvironmentSetupState,
@@ -1088,6 +1089,10 @@ export async function deleteEnvironment(
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
       cleanupTerminalSessionsForEnvironment(environmentId);
+      await deleteTerminalHistories({
+        dataDir: storage.getDataDir(),
+        environmentId,
+      });
       if (environment)
         await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       // Before the container is removed and before the worktree is deleted:
@@ -1154,6 +1159,10 @@ export async function deleteEnvironment(
       // storage or filesystem I/O during the first sweep. Close anything that
       // became visible before deletion completed.
       cleanupTerminalSessionsForEnvironment(environmentId);
+      await deleteTerminalHistories({
+        dataDir: storage.getDataDir(),
+        environmentId,
+      });
       cleanupEnvironmentSetupState(environmentId);
       // Releases the watcher and discards the counts. This is the one case where
       // discarding is right: the worktree they described is gone.

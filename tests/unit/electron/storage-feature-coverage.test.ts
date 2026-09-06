@@ -103,16 +103,15 @@ describe("StorageService feature edge cases", () => {
     await expect(storage.getSession(created.id)).resolves.not.toBeNull();
   });
 
-  test("truncates oversized session buffers to their trailing 500 KiB", async () => {
+  test("rejects oversized serialized session buffers instead of slicing terminal state", async () => {
     const { storage } = await createStorage("ork-storage-buffer-limit-");
     const prefix = "discarded-prefix";
     const retained = "x".repeat(500 * 1024);
 
-    await storage.saveSessionBuffer("session-1", prefix + retained);
-
-    const loaded = await storage.loadSessionBuffer("session-1");
-    expect(loaded).toBe(retained);
-    expect(Buffer.byteLength(loaded!, "utf8")).toBe(500 * 1024);
+    await expect(storage.saveSessionBuffer("session-1", prefix + retained)).rejects.toThrow(
+      "exceeds the 500 KiB limit",
+    );
+    await expect(storage.loadSessionBuffer("session-1")).resolves.toBeNull();
   });
 
   test("handles absent and entirely-live buffer directories without deleting anything", async () => {

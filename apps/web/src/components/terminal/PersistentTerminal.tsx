@@ -53,10 +53,11 @@ import {
 } from "@/components/ui/context-menu";
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, History } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
+import { TerminalHistoryPanel } from "./TerminalHistoryPanel";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -66,6 +67,7 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 // replacement-session output to bridge a slow storage read, but never retain an
 // unbounded second copy of a noisy terminal while that read is hung.
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
+const LEGACY_TERMINAL_BUFFER_MAX_BYTES = 500 * 1024;
 const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
 const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
 // A connection can fail while the desktop event stream or backend process is
@@ -81,8 +83,30 @@ const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
 const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
+function serializeLegacyTerminalBuffer(
+  serialize: (options?: { scrollback?: number }) => string,
+  configuredScrollback: unknown,
+): string {
+  let scrollback =
+    typeof configuredScrollback === "number" && Number.isFinite(configuredScrollback)
+      ? Math.max(0, Math.floor(configuredScrollback))
+      : DEFAULT_TERMINAL_SCROLLBACK;
+  let output = serialize();
+  while (new TextEncoder().encode(output).byteLength > LEGACY_TERMINAL_BUFFER_MAX_BYTES) {
+    if (scrollback === 0) {
+      throw new Error("Current terminal screen exceeds the legacy buffer limit");
+    }
+    scrollback = Math.floor(scrollback / 2);
+    output = serialize({ scrollback });
+  }
+  return output;
+}
+
 type ReplayMetadata = {
   preserveExisting: boolean;
+  append?: boolean;
+  historyTruncated?: boolean;
+  historyGap?: boolean;
   degraded?: "snapshot-error" | "truncated";
   error?: string;
 };
@@ -498,7 +522,7 @@ export function PersistentTerminal({
 
   // Handle terminal data from backend
   const handleData = useCallback(
-    (data: Uint8Array) => {
+    (data: Uint8Array, onApplied?: () => void): Promise<void> => {
       const pendingReplay = pendingDurableReplayRef.current;
       if (pendingReplay && !pendingReplay.overflowed) {
         if (pendingReplay.byteLength + data.length <= MAX_PENDING_DURABLE_REPLAY_BYTES) {
@@ -517,7 +541,12 @@ export function PersistentTerminal({
         }
       }
 
-      terminal.write(data);
+      const applied = new Promise<void>((resolve) =>
+        terminal.write(data, () => {
+          onApplied?.();
+          resolve();
+        }),
+      );
       if (data.length > 0) {
         hasRenderedOutputRef.current = true;
       }
@@ -603,13 +632,14 @@ export function PersistentTerminal({
           dataBufferRef.current = dataBufferRef.current.slice(-512);
         }
       }
+      return applied;
     },
     [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady],
   );
 
   const handleReplay = useCallback(
-    (data: Uint8Array, metadata: ReplayMetadata) => {
-      const { preserveExisting, degraded } = metadata;
+    async (data: Uint8Array, metadata: ReplayMetadata) => {
+      const { preserveExisting, append, historyTruncated, historyGap, degraded } = metadata;
       dataBufferRef.current = "";
 
       if (degraded === "snapshot-error") {
@@ -618,8 +648,22 @@ export function PersistentTerminal({
         );
       } else if (degraded === "truncated") {
         setReplayWarning("Terminal history was truncated. Earlier output may be unavailable.");
+      } else if (historyGap) {
+        setReplayWarning(
+          "Some archived terminal output is unavailable. Current output is synchronized.",
+        );
+      } else if (historyTruncated) {
+        setReplayWarning(
+          "Current output is synchronized. Use Earlier output to view retained history.",
+        );
       } else {
         setReplayWarning(null);
+      }
+
+      if (append) {
+        await handleData(data);
+        terminal.scrollToBottom();
+        return;
       }
 
       // A truncated snapshot can begin inside an ANSI escape sequence or UTF-8
@@ -632,7 +676,7 @@ export function PersistentTerminal({
         if (serializedBuffer && !hasRenderedOutputRef.current) {
           terminal.clear();
           terminal.reset();
-          handleData(new TextEncoder().encode(serializedBuffer));
+          await handleData(new TextEncoder().encode(serializedBuffer));
         } else if (persistentBufferLoadPendingRef.current) {
           // Do not retain a truncated snapshot for the later reset. Only bytes
           // received after the snapshot cursor are safe to append to the durable
@@ -666,7 +710,7 @@ export function PersistentTerminal({
 
       terminal.clear();
       terminal.reset();
-      handleData(replayData);
+      await handleData(replayData);
       if (trackUntilDurableHistoryLoads) {
         // Persistent storage can finish loading after the replacement session
         // attaches. Keep the snapshot and any subsequent live bytes so the
@@ -1495,7 +1539,10 @@ export function PersistentTerminal({
       // This captures the full buffer content for restoration if needed after remount
       // The effect will decide whether to use this based on whether pane actually changed
       try {
-        const bufferContent = serializeAddon.serialize();
+        const bufferContent = serializeLegacyTerminalBuffer(
+          (options) => serializeAddon.serialize(options),
+          terminal.options.scrollback,
+        );
         const currentStoreBuffer = useTerminalSessionStore
           .getState()
           .sessions.get(sessionKey)?.serializedBuffer;
@@ -1899,6 +1946,7 @@ export function PersistentTerminal({
   );
 
   const [manuallyCompleted, setManuallyCompleted] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const handleMarkSetupComplete = useCallback(() => {
     if (!setupCompleteRef.current) {
       console.log("[PersistentTerminal] Manually marking setup complete for tab:", tabId);
@@ -1935,6 +1983,22 @@ export function PersistentTerminal({
     <>
       {visibleWarning !== null && isActive && (
         <TerminalWarningBanner message={visibleWarning} onDismiss={handleDismissWarning} />
+      )}
+      {isActive && sessionId && !historyOpen && (
+        <div className="absolute top-1 left-2 z-20">
+          <button
+            type="button"
+            aria-label="Open earlier terminal output"
+            title="Earlier output"
+            onClick={() => setHistoryOpen(true)}
+            className="rounded-md border border-zinc-700/50 bg-zinc-800/90 p-1.5 text-zinc-400 shadow-md backdrop-blur-sm hover:bg-zinc-700 hover:text-zinc-100"
+          >
+            <History className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+      {isActive && historyOpen && sessionId && (
+        <TerminalHistoryPanel sessionId={sessionId} onClose={() => setHistoryOpen(false)} />
       )}
       {isSetupTab &&
         isActive &&

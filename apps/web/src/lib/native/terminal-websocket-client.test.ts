@@ -257,6 +257,39 @@ describe("TerminalWebSocketClient", () => {
     unsubscribeB();
   });
 
+  test("acknowledges output only after the renderer application barrier resolves", async () => {
+    const { client, sockets } = createHarness();
+    let resolveApplied: () => void = () => undefined;
+    const applied = new Promise<void>((resolve) => {
+      resolveApplied = resolve;
+    });
+    client.subscribe("session-a", () => applied);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("pending paint"),
+      }),
+    );
+    await tick();
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+
+    resolveApplied();
+    await tick();
+    expect(sentControls(socket)).toContainEqual({
+      type: "ack",
+      channelId: 11,
+      generation: 1,
+      revision: 1,
+    });
+  });
+
   test("authenticates, waits for ready before subscribing, rotates tokens, and rebuilds when visible", async () => {
     const { client, sockets } = createHarness({ token: "old-token" });
     client.subscribe("session-a", () => undefined);

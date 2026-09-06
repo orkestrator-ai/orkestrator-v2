@@ -42,7 +42,7 @@ export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 /** How long a shared-stream filter narrowing waits for its siblings. */
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
-type EventCallback<T> = (payload: T) => void;
+type EventCallback<T> = (payload: T) => unknown;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
 
 const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
@@ -899,10 +899,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     startTerminalEventFallback(stream);
     const sessionId = stream.event.slice(TERMINAL_OUTPUT_EVENT_PREFIX.length);
     const socket = ensureTerminalSocket();
-    stream.socketUnlisten = socket.subscribe(sessionId, (payload: TerminalSocketPayload) => {
+    stream.socketUnlisten = socket.subscribe(sessionId, async (payload: TerminalSocketPayload) => {
       const callbacks = listeners.get(stream.event);
       if (!callbacks) return;
-      for (const callback of callbacks) callback(payload);
+      await Promise.all(Array.from(callbacks, (callback) => callback(payload)));
     });
     void socket.ready(sessionId).catch(() => startTerminalEventFallback(stream));
   };
@@ -976,40 +976,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     args?: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> => {
-    const snapshotSessionId =
-      command === "get_terminal_output_snapshot" && typeof args?.sessionId === "string"
-        ? args.sessionId
-        : null;
-    try {
-      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
-        method: "POST",
-        credentials,
-        headers: requestHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({ command, args: args ?? {} }),
-        signal,
-      });
-      const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
-      const result = payload.result as T;
-      if (snapshotSessionId) {
-        if (
-          result &&
-          typeof result === "object" &&
-          Number.isSafeInteger((result as { generation?: unknown }).generation) &&
-          Number.isSafeInteger((result as { revision?: unknown }).revision)
-        ) {
-          terminalSocket?.observeSnapshot(
-            snapshotSessionId,
-            result as unknown as { generation: number; revision: number },
-          );
-        } else {
-          terminalSocket?.observeSnapshotFailure(snapshotSessionId);
-        }
-      }
-      return result;
-    } catch (error) {
-      if (snapshotSessionId) terminalSocket?.observeSnapshotFailure(snapshotSessionId);
-      throw error;
-    }
+    const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
+      method: "POST",
+      credentials,
+      headers: requestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ command, args: args ?? {} }),
+      signal,
+    });
+    const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
+    return payload.result as T;
   };
 
   const terminalInputBatcher = new TerminalHttpInputBatcher(
@@ -1269,6 +1244,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const api = {
     async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+      if (
+        command === "terminal_snapshot_applied" &&
+        typeof args?.sessionId === "string" &&
+        Number.isSafeInteger(args.generation) &&
+        Number.isSafeInteger(args.revision)
+      ) {
+        terminalSocket?.observeSnapshot(args.sessionId, {
+          generation: args.generation as number,
+          revision: args.revision as number,
+        });
+        return { acknowledged: true } as T;
+      }
+      if (command === "terminal_snapshot_failed" && typeof args?.sessionId === "string") {
+        terminalSocket?.observeSnapshotFailure(args.sessionId);
+        return { acknowledged: true } as T;
+      }
       const terminalInput = parseTerminalInputRequest(command, args);
       if (terminalInput) {
         if (terminalInputDisposedReason) throw terminalInputDisposedReason;

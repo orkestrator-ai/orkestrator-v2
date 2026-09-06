@@ -116,7 +116,274 @@ describe("StorageService agent mail", () => {
       expect((await second.getAgentMailStatus(sent.id)).bodyBytes).toBe(
         Buffer.byteLength(input.body),
       );
+      expect((await second.listAgentMailSentByMailbox("e1", "agent")).map(({ id }) => id)).toEqual([
+        sent.id,
+      ]);
       expect((await fs.stat(path.join(dataDir, "agent-mail.json"))).mode & 0o777).toBe(0o600);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("excludes expired messages from tab and user sent-history queries", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.sendAgentMail(
+        { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+        {
+          requestId: "expired-tab-sent",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "old tab message",
+        },
+      );
+      await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "expired-user-sent",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "old user message",
+        },
+      );
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, retentionDays: 1 },
+        },
+      });
+      const file = path.join(dataDir, "agent-mail.json");
+      const persisted = JSON.parse(await fs.readFile(file, "utf8"));
+      for (const stored of persisted.mailboxes["e2\0agent"].messages) {
+        stored.createdAt = new Date(0).toISOString();
+      }
+      await fs.writeFile(file, `${JSON.stringify(persisted, null, 2)}\n`);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.listAgentMailSentByMailbox("e1", "agent")).toEqual([]);
+      expect(await restarted.listUserSentAgentMail()).toEqual([]);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("uses the shared naming order and environment-wide ordinal", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const session = await storage.createSession("e1", "local", "agent", "claude");
+      await storage.updateSession(session.id, { name: "Renamed parser" });
+      storage.setAgentMailRuntimeProvider(() => ({ title: "Automatic title" }));
+      await storage.synchronizeAgentMailboxes();
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.displayName).toBe(
+        "Claude 1 · Renamed parser",
+      );
+
+      await storage.removeSession(session.id);
+      await storage.synchronizeAgentMailboxes();
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.displayName).toBe(
+        "Claude 1 · Automatic title",
+      );
+
+      storage.setAgentMailRuntimeProvider(null);
+      await storage.synchronizeAgentMailboxes();
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.displayName).toBe(
+        "Claude 1 · e1 agent",
+      );
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("read paths use the synchronized directory without touching pane layouts", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const sent = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+        {
+          requestId: "read-only-directory",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "hello",
+        },
+      );
+      storage.loadPaneLayoutsForReconciliation = async () => {
+        throw new Error("read path touched pane layouts");
+      };
+      await expect(storage.getAgentMailSummary()).resolves.toBeDefined();
+      await expect(storage.getAgentMailMailbox("e2", "agent")).resolves.toBeDefined();
+      await expect(
+        storage.getAgentMailMailboxes([{ environmentId: "e2", tabId: "agent" }]),
+      ).resolves.toBeDefined();
+      await expect(storage.getAgentMailInboxSnapshot()).resolves.toBeDefined();
+      await expect(storage.listAgentMailboxes()).resolves.toBeDefined();
+      await expect(storage.listPendingAgentMailInjects()).resolves.toBeDefined();
+      expect((await storage.listAgentMailSentByMailbox("e1", "agent"))[0]?.id).toBe(sent.id);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("refreshes the directory on send only when a pane-layout revision changed", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      let synchronizations = 0;
+      const synchronize = storage.synchronizeAgentMailboxes.bind(storage);
+      storage.synchronizeAgentMailboxes = async () => {
+        synchronizations += 1;
+        await synchronize();
+      };
+      await storage.sendAgentMail(
+        { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+        {
+          requestId: "unchanged-layout",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "Existing mailbox.",
+        },
+      );
+      expect(synchronizations).toBe(0);
+
+      const layout = await storage.getPaneLayout("e2");
+      if (!layout) throw new Error("fixture layout missing");
+      await storage.savePaneLayout(
+        "e2",
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "pane",
+          root: {
+            kind: "leaf",
+            id: "pane",
+            tabs: [
+              {
+                id: "agent",
+                type: "agent-native",
+                displayTitle: "e2 agent",
+                nativeAgentData: { environmentId: "e2", platform: "claude" },
+              },
+              {
+                id: "new-agent",
+                type: "agent-native",
+                nativeAgentData: { environmentId: "e2", platform: "codex" },
+              },
+            ],
+            activeTabId: "new-agent",
+          },
+        },
+        layout.revision,
+      );
+      await expect(
+        storage.sendAgentMail(
+          { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+          {
+            requestId: "changed-layout",
+            toEnvironmentId: "e2",
+            toTabId: "new-agent",
+            body: "New mailbox.",
+          },
+        ),
+      ).resolves.toMatchObject({ toTabId: "new-agent" });
+      expect(synchronizations).toBe(1);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("treats synchronized coordinator mailboxes as directory-fresh without pane layouts", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const now = new Date(0).toISOString();
+      await storage.mutateCoordinatorWorkspace("p1", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "p1",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+            agent: "codex",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-1",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      let synchronizations = 0;
+      storage.synchronizeAgentMailboxes = async () => {
+        synchronizations += 1;
+      };
+      await (
+        storage as unknown as {
+          ensureAgentMailDirectoryFresh: (environmentIds: string[]) => Promise<void>;
+        }
+      ).ensureAgentMailDirectoryFresh([coordinatorRuntimeId("coordinator-1", "conversation-1")]);
+      expect(synchronizations).toBe(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("backs off held injection and suppresses repeated hold announcements", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const config = await storage.loadConfig();
+      config.global.agentMessaging = {
+        ...config.global.agentMessaging!,
+        defaultInjectPolicy: "idle",
+      };
+      await storage.saveConfig(config);
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+        {
+          requestId: "held-backoff",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "wait",
+        },
+      );
+      const descriptor = (await storage.getAgentMailMailbox("e2", "agent")).descriptor;
+      const changes: string[] = [];
+      storage.addResourceChangeListener((change) => changes.push(change.resource));
+
+      await storage.beginAgentMailInject(
+        descriptor.mailboxId,
+        message.id,
+        descriptor.incarnationId,
+      );
+      await storage.finishAgentMailInject(descriptor.mailboxId, message.id, {
+        outcome: "held",
+        reason: "busy",
+      });
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+      expect(
+        await storage.listPendingAgentMailInjects(100, { includeDeferred: true }),
+      ).toMatchObject([{ deferredUntil: expect.any(String) }]);
+      expect(changes).toContain("agent-mail-summary");
+
+      await storage.retryAgentMailInject("e2", "agent", message.id);
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+      changes.length = 0;
+      await storage.beginAgentMailInject(
+        descriptor.mailboxId,
+        message.id,
+        descriptor.incarnationId,
+      );
+      await storage.finishAgentMailInject(descriptor.mailboxId, message.id, {
+        outcome: "held",
+        reason: "busy",
+      });
+      expect(changes).toEqual([]);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -280,6 +547,32 @@ describe("StorageService agent mail", () => {
       expect(
         (await storage.listPendingAgentMailInjects()).map(({ message }) => message.id),
       ).toContain(message.id);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("promotes pull-only stored mail when the user enables idle delivery", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "off" });
+      const stored = await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "promote-pull-only",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "Deliver this after explicit promotion.",
+        },
+      );
+      expect(stored.placement).toBe("stored");
+
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "idle" });
+      await expect(storage.retryAgentMailInject("e2", "agent", stored.id)).resolves.toMatchObject({
+        placement: "pending-inject",
+        injectRequestId: `mail-inject-${stored.id}`,
+      });
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

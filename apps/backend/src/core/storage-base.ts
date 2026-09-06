@@ -169,6 +169,7 @@ export abstract class StorageBase {
   protected agentMailMutation: Promise<unknown> = Promise.resolve();
   protected coordinatorMutation: Promise<unknown> = Promise.resolve();
   protected changeListener: ResourceChangeListener | null = null;
+  private readonly resourceChangeObservers = new Set<ResourceChangeListener>();
   protected changeRevision = 0;
   protected readonly scopedChanges: Array<{
     change: ResourceChange;
@@ -211,6 +212,12 @@ export abstract class StorageBase {
     this.changeListener = listener;
   }
 
+  /** Subscribe backend services without replacing the gateway's broadcast sink. */
+  addResourceChangeListener(listener: ResourceChangeListener): () => void {
+    this.resourceChangeObservers.add(listener);
+    return () => this.resourceChangeObservers.delete(listener);
+  }
+
   /**
    * Announces a committed mutation. Called only after the write has landed, so
    * a client that refetches in response is guaranteed to observe the new value
@@ -250,12 +257,14 @@ export abstract class StorageBase {
       this.scopedChangeBytes -= Buffer.byteLength(JSON.stringify(removed.change));
     }
     const listener = this.changeListener;
-    if (!listener) return;
-    try {
-      listener(change);
-    } catch (error) {
-      // A broken client transport must never fail the mutation that succeeded.
-      console.error("[Storage] Resource change listener threw:", error);
+    for (const subscriber of [listener, ...this.resourceChangeObservers]) {
+      if (!subscriber) continue;
+      try {
+        subscriber(change);
+      } catch (error) {
+        // A broken client transport/service observer must never fail a committed mutation.
+        console.error("[Storage] Resource change listener threw:", error);
+      }
     }
   }
 

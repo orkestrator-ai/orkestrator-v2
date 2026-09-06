@@ -735,6 +735,18 @@ export class AppServerEngine implements CodexEngine {
       ...(config.model ? { model: config.model } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
+      ...(config.agentMcp
+        ? {
+            config: {
+              "mcp_servers.orkestrator.url": config.agentMcp.url,
+              "mcp_servers.orkestrator.http_headers": {
+                Authorization: `Bearer ${config.agentMcp.token}`,
+              },
+              "mcp_servers.orkestrator.required": false,
+              "mcp_servers.orkestrator.startup_timeout_sec": 3,
+            },
+          }
+        : {}),
     };
   }
 

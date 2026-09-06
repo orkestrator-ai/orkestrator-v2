@@ -55,6 +55,7 @@ export type MailboxPresence =
   | "idle"
   | "working"
   | "waiting"
+  | "draft"
   | "environment_stopped"
   | "environment_unready"
   | "tab_closed"
@@ -151,6 +152,10 @@ export interface MailboxDescriptor {
   tabId: string;
   tabType: string;
   title: string | null;
+  /** Human-facing name shared with the tab strip and message carriers. */
+  displayName: string;
+  /** One-based environment-wide tab ordinal. */
+  tabOrdinal: number;
   agent: AgentPlatform | null;
   kind: MailboxKind;
   presence: MailboxPresence;
@@ -160,7 +165,13 @@ export interface MailboxDescriptor {
   mutedInbound: boolean;
   mutedOutbound: boolean;
   unreadCount: number;
+  userUnseenCount: number;
+  agentUnackedCount: number;
+  pendingInjectCount: number;
+  failedInjectCount: number;
   capabilities: MailboxCapabilities;
+  /** Set by caller-scoped directory tools; persisted descriptors leave it false. */
+  self?: boolean;
   ownerKind?: "environment" | "coordinator";
   coordinatorId?: string;
   conversationId?: string;
@@ -193,9 +204,55 @@ export interface AgentMailSummaryEntry {
   environmentId: string;
   tabId: string;
   unreadCount: number;
+  userUnseenCount: number;
+  agentUnackedCount: number;
   pendingInjectCount: number;
   failedInjectCount: number;
   revision: number;
+}
+
+export interface AgentMailIdentity {
+  environmentId: string;
+  tabId: string;
+  title: string;
+  resolved: "credential" | "unique" | "claimed";
+}
+
+export interface ResolveTabDisplayNameInput {
+  tabType: string;
+  tabOrdinal: number;
+  agent?: AgentPlatform | null;
+  workflowLabel?: string | null;
+  customSessionName?: string | null;
+  nativeSessionTitle?: string | null;
+  displayTitle?: string | null;
+}
+
+/** Resolve the canonical name shown by the tab strip, mailbox directory and carrier. */
+export function resolveTabDisplayName(input: ResolveTabDisplayNameInput): string {
+  const ordinal = Math.max(1, Math.trunc(input.tabOrdinal) || 1);
+  if (input.workflowLabel?.trim()) return `${input.workflowLabel.trim()} ${ordinal}`;
+  const platform =
+    input.agent === "claude"
+      ? "Claude"
+      : input.agent === "codex"
+        ? "Codex"
+        : input.agent === "opencode"
+          ? "OpenCode"
+          : input.agent === "cursor"
+            ? "Cursor"
+            : input.agent === "grok"
+              ? "Grok"
+              : input.agent === "pi"
+                ? "Pi"
+                : input.tabType === "plain" || input.tabType === "root"
+                  ? "Terminal"
+                  : "Agent";
+  const detail =
+    input.customSessionName?.trim() ||
+    input.nativeSessionTitle?.trim() ||
+    input.displayTitle?.trim();
+  return detail ? `${platform} ${ordinal} · ${detail}` : `${platform} ${ordinal}`;
 }
 
 export interface AgentMailSummarySnapshot {
@@ -284,6 +341,7 @@ export function escapeAgentMailJson(value: unknown): string {
 export function renderAgentMailCarrier(message: AgentMailMessage): string {
   const payload = escapeAgentMailJson({
     from: message.from,
+    to: { environmentId: message.toEnvironmentId, tabId: message.toTabId },
     trust: message.trust,
     messageId: message.id,
     threadId: message.threadId,

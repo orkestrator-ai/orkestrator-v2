@@ -40,6 +40,7 @@ export type CommandContext = {
       tabId?: string,
     ): AgentToolConnection;
     revokeEnvironment(environmentId: string): void;
+    revokeTab?(environmentId: string, tabId: string): void;
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
@@ -56,6 +57,7 @@ export type CommandContext = {
   };
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
+  drainAgentMail?: () => Promise<void>;
 };
 
 export type CommandHandler = (

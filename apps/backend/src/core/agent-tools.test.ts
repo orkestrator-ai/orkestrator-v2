@@ -41,8 +41,6 @@ const ALL_AGENT_TOOL_NAMES = [
   "update_ticket",
   "add_ticket_comment",
 ];
-const KANBAN_AGENT_TOOL_NAMES = ALL_AGENT_TOOL_NAMES.slice(7);
-
 describe("agent Kanban tools", () => {
   let dataDir: string;
   let storage: StorageService;
@@ -205,7 +203,7 @@ describe("agent Kanban tools", () => {
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
-  test("binds a unique environment credential but withholds mail tools when identity is ambiguous", async () => {
+  test("keeps mail tools stable and resolves unique or explicitly claimed environment identities", async () => {
     await addMessagingEnvironment("env-one", "project-mail", ["only-agent"]);
     const unique = server.connection("env-one", "project-mail", "host");
     expect(
@@ -213,6 +211,16 @@ describe("agent Kanban tools", () => {
         (tool) => tool.name,
       ),
     ).toEqual(ALL_AGENT_TOOL_NAMES);
+    const uniqueInbox = await rpc(unique.url, unique.token, "tools/call", {
+      name: "check_inbox",
+      arguments: {},
+    });
+    expect(uniqueInbox.body.result?.structuredContent?.identity).toEqual({
+      environmentId: "env-one",
+      tabId: "only-agent",
+      title: "Claude 1 · only-agent",
+      resolved: "unique",
+    });
 
     await addMessagingEnvironment("env-many", "project-mail", ["agent-a", "agent-b"]);
     const ambiguous = server.connection("env-many", "project-mail", "host");
@@ -220,7 +228,39 @@ describe("agent Kanban tools", () => {
       (await rpc(ambiguous.url, ambiguous.token, "tools/list")).body.result?.tools?.map(
         (tool) => tool.name,
       ),
-    ).toEqual(KANBAN_AGENT_TOOL_NAMES);
+    ).toEqual(ALL_AGENT_TOOL_NAMES);
+
+    const missingClaim = await rpc(ambiguous.url, ambiguous.token, "tools/call", {
+      name: "check_inbox",
+      arguments: {},
+    });
+    expect(missingClaim.body.result?.isError).toBe(true);
+    expect(missingClaim.body.result?.content?.[0]?.text).toContain("several agent mailboxes");
+
+    const claimed = await rpc(ambiguous.url, ambiguous.token, "tools/call", {
+      name: "list_mailboxes",
+      arguments: { tabId: "agent-b" },
+    });
+    expect(claimed.body.result?.structuredContent?.identity).toEqual({
+      environmentId: "env-many",
+      tabId: "agent-b",
+      title: "Claude 2 · agent-b",
+      resolved: "claimed",
+    });
+    const claimedRows = claimed.body.result?.structuredContent?.mailboxes as Array<{
+      tabId: string;
+      self: boolean;
+    }>;
+    expect(claimedRows.find((mailbox) => mailbox.tabId === "agent-b")?.self).toBe(true);
+
+    for (const tabId of ["browser-tab", "only-agent"]) {
+      const denied = await rpc(ambiguous.url, ambiguous.token, "tools/call", {
+        name: "check_inbox",
+        arguments: { tabId },
+      });
+      expect(denied.body.result?.isError).toBe(true);
+      expect(denied.body.result?.content?.[0]?.text).toContain("capability-denied");
+    }
   });
 
   test("binds messaging actions to the credential's tab and covers send/read/ack/reply/status", async () => {
@@ -303,6 +343,24 @@ describe("agent Kanban tools", () => {
       arguments: { tabId: "agent-b" },
     });
     expect(crossTabRead.body.result?.isError).toBe(true);
+  });
+
+  test("builds messaging instructions with one directory read instead of one read per tab", async () => {
+    await addMessagingEnvironment("env-mail", "project-mail", ["agent-a", "agent-b", "agent-c"]);
+    const connection = server.connection("env-mail", "project-mail", "host", "agent-a");
+    const listMailboxes = storage.listAgentMailboxes.bind(storage);
+    let directoryReads = 0;
+    storage.listAgentMailboxes = async (options) => {
+      directoryReads += 1;
+      return listMailboxes(options);
+    };
+    storage.getAgentMailMailbox = async () => {
+      throw new Error("per-mailbox instruction read");
+    };
+
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.response.status).toBe(200);
+    expect(directoryReads).toBe(1);
   });
 
   test("enforces minute and daily mail limits with per-tab isolation", () => {
@@ -552,6 +610,13 @@ describe("agent Kanban tools", () => {
       title: "Other project",
       comments: [],
     });
+
+    const firstTab = server.connection("env-1", "project-1", "host", "tab-1");
+    const secondTab = server.connection("env-1", "project-1", "host", "tab-2");
+    server.revokeTab("env-1", "tab-1");
+    expect((await rpc(firstTab.url, firstTab.token, "tools/list")).response.status).toBe(401);
+    expect((await rpc(secondTab.url, secondTab.token, "tools/list")).response.status).toBe(200);
+    expect((await rpc(projectOne.url, projectOne.token, "tools/list")).response.status).toBe(200);
 
     server.revokeEnvironment("env-1");
     const revoked = await rpc(projectOne.url, projectOne.token, "tools/list");

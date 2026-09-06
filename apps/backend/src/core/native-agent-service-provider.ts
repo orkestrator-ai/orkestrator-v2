@@ -387,12 +387,31 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     input: EnsureNativeAgentSessionInput,
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);
+    const environment = await this.storage.getEnvironment(input.environmentId);
+    const prefix = `env-${input.environmentId}:`;
+    const tabId = input.logicalSessionKey.startsWith(prefix)
+      ? input.logicalSessionKey.slice(prefix.length)
+      : "";
+    const agentMcp =
+      (input.agent === "claude" || input.agent === "codex") &&
+      input.owner?.kind === "environment" &&
+      tabId &&
+      environment &&
+      this.options.resolveAgentToolConnection
+        ? this.options.resolveAgentToolConnection(
+            input.environmentId,
+            input.owner.projectId,
+            tabId,
+            environment.environmentType === "local" ? "host" : "container",
+          )
+        : undefined;
     const options = {
       clientSessionKey: input.logicalSessionKey,
       model: input.model,
       effort: input.reasoningEffort,
       mode: input.sessionMode,
       fastMode: input.fastMode,
+      agentMcp,
       interaction: {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:

@@ -322,6 +322,12 @@ export interface NativeAgentServiceOptions {
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
   beginCoordinatorTurn?: (projectId: string) => () => void;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    tabId: string,
+    target: "host" | "container",
+  ) => { url: string; token: string };
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

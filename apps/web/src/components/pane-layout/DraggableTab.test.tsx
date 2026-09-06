@@ -13,6 +13,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { useConfigStore } from "@/stores/configStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -152,7 +153,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 2);
 
-    expect(screen.getByText("Custom 3")).toBeDefined();
+    expect(screen.getByText("Claude 3 · Custom")).toBeDefined();
   });
 
   test("review tabs keep their numbered workflow title after the agent names the session", () => {
@@ -354,7 +355,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab);
 
-    expect(screen.getByText("OpenCode title")).toBeDefined();
+    expect(screen.getByText("OpenCode 1 · OpenCode title")).toBeDefined();
     expect(screen.queryByText("Implementation 1") === null).toBe(true);
   });
 
@@ -391,7 +392,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 2);
 
-    expect(screen.getByText("Pinned name 3")).toBeDefined();
+    expect(screen.getByText("Codex 3 · Pinned name")).toBeDefined();
     expect(screen.queryByText("Codex title") === null).toBe(true);
   });
 
@@ -405,7 +406,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 0);
 
-    expect(screen.getByText("Review 1")).toBeDefined();
+    expect(screen.getByText("Codex 1 · Review")).toBeDefined();
   });
 
   test("displayTitle includes the tab number from index + 1", () => {
@@ -451,7 +452,7 @@ describe("DraggableTab title precedence", () => {
       claudeTmuxData: { environmentId: "env-1" },
     };
     renderTab(tab, 2);
-    expect(screen.getByText("Custom Tmux 3")).toBeDefined();
+    expect(screen.getByText("Claude 3 · Custom Tmux")).toBeDefined();
   });
 
   test("browser tabs use the browser label", () => {
@@ -592,7 +593,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 0);
 
-    expect(screen.getByText("Claude title")).toBeDefined();
+    expect(screen.getByText("Claude 1 · Claude title")).toBeDefined();
     expect(screen.queryByText("Codex title") === null).toBe(true);
     expect(screen.queryByText("OpenCode title") === null).toBe(true);
   });
@@ -617,7 +618,7 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 0);
 
-    expect(screen.getByText("Review 1")).toBeDefined();
+    expect(screen.getByText("Claude 1 · Review")).toBeDefined();
   });
 
   test("build tabs use the pipeline task title", () => {
@@ -974,6 +975,46 @@ describe("DraggableTab tooltip and context menu structure", () => {
     fireEvent.click(screen.getByText("Refresh"));
 
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows mail context actions only while agent messaging is enabled", () => {
+    const tab: TabInfo = {
+      id: "tab-claude",
+      type: "agent-native",
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
+    };
+    const config = structuredClone(useConfigStore.getInitialState().config);
+    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: false };
+    useConfigStore.setState({ config });
+    const view = renderTab(tab);
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    expect(screen.queryByText("Message this tab…") === null).toBe(true);
+    expect(screen.queryByText("Inbox settings…") === null).toBe(true);
+
+    config.global.agentMessaging.enabled = true;
+    useConfigStore.setState({ config: structuredClone(config) });
+    view.rerender(
+      <DraggableTab
+        tab={tab}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    const openEvents: unknown[] = [];
+    const recordOpenEvent = (event: Event) => {
+      openEvents.push((event as CustomEvent).detail);
+    };
+    window.addEventListener("orkestrator:open-agent-mail", recordOpenEvent);
+    const messageAction = screen.getByText("Message this tab…");
+    expect(messageAction).toBeTruthy();
+    expect(screen.getByText("Inbox settings…")).toBeTruthy();
+    fireEvent.click(messageAction);
+    window.removeEventListener("orkestrator:open-agent-mail", recordOpenEvent);
+    expect(openEvents).toEqual([{ environmentId: "env-1", tabId: "tab-claude", mode: "compose" }]);
   });
 
   test("hides the file tooltip again on mouse leave", async () => {

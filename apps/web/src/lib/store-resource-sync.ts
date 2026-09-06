@@ -117,7 +117,19 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     if (enabled !== true) return;
     const snapshot = await (options.getAgentMailSummary ?? getAgentMailSummary)();
-    if (!disposed) useAgentMailStore.getState().setSummary(snapshot);
+    if (!disposed) {
+      const store = useAgentMailStore.getState();
+      store.setSummary(snapshot);
+      const addresses = Array.from(
+        new Map(
+          Array.from(store.sent.values()).map(({ environmentId, tabId }) => [
+            `${environmentId}\0${tabId}`,
+            { environmentId, tabId },
+          ]),
+        ).values(),
+      );
+      if (addresses.length > 0) await store.refreshMailboxes(addresses);
+    }
   };
 
   const refreshBuildPipelinesForProject = async (projectId: string): Promise<void> => {

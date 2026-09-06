@@ -89,6 +89,26 @@ describe("BridgeSessionStore", () => {
     expect((await stat(recordPathFor(codexHome, "private"))).mode & 0o777).toBe(0o600);
   });
 
+  test("never persists a per-thread MCP credential", async () => {
+    const { codexHome, store } = await makeStore();
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "scoped-mcp",
+        threadId: "thread-scoped-mcp",
+        cwd: "/workspace",
+        config: {
+          mode: "build",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "do-not-persist" },
+        },
+      }),
+    );
+
+    const raw = await Bun.file(recordPathFor(codexHome, "scoped-mcp")).text();
+    expect(raw).not.toContain("do-not-persist");
+    expect(raw).not.toContain("agentMcp");
+    expect((await store.load())[0]?.config).toEqual({ mode: "build" });
+  });
+
   test("tightens permissions on existing directories and records during load", async () => {
     const now = Date.parse("2026-07-25T12:00:00.000Z");
     const { codexHome, store } = await makeStore({ now: () => now });

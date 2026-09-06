@@ -224,6 +224,7 @@ export function registerTeardownCommands(
     intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
+    context.agentTools?.revokeTab?.(environmentId, intent.tabId);
     await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };
 

@@ -518,12 +518,15 @@ describe("session detail route outcomes", () => {
 
   test("serves the activity state for a known session", async () => {
     await withRuntimeMethod(
-      "getActivity",
-      () => "waiting",
+      "getActivitySnapshot",
+      () => ({ activity: "waiting", asyncQuestionItemIds: ["question-1"] }),
       async () => {
         const response = await app.request("/session/session-1/activity");
         expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({ activity: "waiting" });
+        expect(await response.json()).toEqual({
+          activity: "waiting",
+          asyncQuestionItemIds: ["question-1"],
+        });
       },
     );
   });

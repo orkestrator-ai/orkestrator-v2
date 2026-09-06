@@ -1,5 +1,6 @@
 import * as shared from "./native-agent-service-shared.js";
 import { randomUUID } from "node:crypto";
+import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
@@ -344,9 +345,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       if (session?.pendingSteer?.requestId !== requestId) return undefined;
       const status = await provider.steerStatus(session.providerSessionId, requestId);
       if (status === "dispatched") {
-        return (await this.storage.confirmNativeAgentSteer(key, requestId))
-          ? "dispatched"
-          : undefined;
+        if (!(await this.storage.confirmNativeAgentSteer(key, requestId))) return undefined;
+        await this.acknowledgeQueuedAsyncQuestionAnswer(input, requestId);
+        return "dispatched";
       }
       if (status === "absent") {
         return (await this.storage.clearPendingNativeAgentSteer(key, requestId))
@@ -357,6 +358,17 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     } catch {
       return undefined;
     }
+  }
+
+  private async acknowledgeQueuedAsyncQuestionAnswer(
+    input: NativeAgentProjectionInput,
+    requestId: string,
+  ): Promise<void> {
+    if (!nativeAsyncQuestionItemId(requestId)) return;
+    await this.storage.acknowledgePromptQueueDispatch(
+      `${input.agent}\0${input.logicalSessionKey}`,
+      requestId,
+    );
   }
 
   protected scheduleAmbiguousSteerSettle(
@@ -437,6 +449,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       );
       this.invalidateProjection(key);
       if (outcome.outcome === "applied") {
+        await this.acknowledgeQueuedAsyncQuestionAnswer(input, input.requestId);
         return { outcome: "accepted", requestId: input.requestId };
       }
       if (outcome.outcome === "unknown") {
@@ -638,6 +651,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       provider: NativeAgentRuntimeProvider;
     },
     action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
+    requestId: string = randomUUID(),
   ): Promise<NativeAgentSessionActionOutcome> {
     const text = action.text.trim();
     if (!text) throw new Error("Steering text must not be blank");
@@ -677,7 +691,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     }
 
     const pending: PersistedNativeAgentPendingSteer = {
-      requestId: randomUUID(),
+      requestId,
       text,
       inputDigest: createHash("sha256").update(text).digest("hex"),
       expectedRunId: active.runId,
@@ -692,6 +706,22 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     );
     this.invalidateProjection(resolved.key);
     return outcome;
+  }
+
+  protected async dispatchQueuedAsyncQuestionAnswer(
+    input: NativeAgentProjectionInput,
+    resolved: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+    },
+    text: string,
+    requestId: string,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if (!nativeAsyncQuestionItemId(requestId)) {
+      throw new Error("Queued response is not an asynchronous-question answer");
+    }
+    return this.performProjectionSteer(input, resolved, { kind: "steer", text }, requestId);
   }
 
   private async dispatchPersistedSteer(

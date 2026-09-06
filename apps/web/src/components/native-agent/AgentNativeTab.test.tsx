@@ -16,6 +16,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
+import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
@@ -238,6 +239,7 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
+const { enqueueNativeAsyncQuestionResponse } = await import("./AgentNativeTab.controller");
 const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 
 // Favorites and enabled platforms live in the shared config store, which no
@@ -4874,6 +4876,77 @@ describe("AgentNativeTab", () => {
       // The steering text must not also be queued as a follow-up prompt.
       expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test("queues an async-question answer with stable identity and composer settings", async () => {
+      renderVirtualizedMessages = true;
+      const itemId = "question/item-1";
+      seedProjection({
+        phase: "running",
+        composer: {
+          selectedModelId: "model-a",
+          selectedReasoningId: "high",
+          selectedModeId: "plan",
+          fastModeAvailable: true,
+          fastModeEnabled: true,
+        },
+        messages: [
+          {
+            id: "assistant-question",
+            role: "assistant",
+            content: "Which target?",
+            parts: [
+              {
+                type: "async-question",
+                content: "Choose the deployment target.",
+                asyncQuestion: {
+                  itemId,
+                  questions: [
+                    {
+                      id: `${itemId}:0`,
+                      title: "Which target?",
+                      options: ["Staging", "Production"],
+                    },
+                  ],
+                },
+              },
+            ],
+            createdAt: "2026-09-06T10:00:00.000Z",
+          },
+        ],
+      });
+      const tabId = "tab-async-question";
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Send answer" }));
+
+      await waitFor(() =>
+        expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+          `codex\0${createSessionKey("env-1", tabId)}`,
+          "env-1",
+          expect.objectContaining({
+            id: nativeAsyncQuestionRequestId(itemId),
+            text: "Answers to your questions:\n\n- Which target?: Staging",
+            model: "model-a",
+            reasoningEffort: "high",
+            mode: "plan",
+            fastMode: true,
+          }),
+        ),
+      );
+    });
+
+    test("rejects async-question delivery for non-Codex platforms", async () => {
+      const enqueue = mock(async () => undefined);
+      await expect(
+        enqueueNativeAsyncQuestionResponse({
+          platform: "pi",
+          itemId: "question-1",
+          response: "Answer",
+          enqueue,
+        }),
+      ).rejects.toThrow("Only Codex supports asynchronous questions");
+      expect(enqueue).not.toHaveBeenCalled();
     });
 
     test.each([

@@ -30,6 +30,12 @@ import type { PromptAttachment } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "blocked" | "idle" | "error" | "missing";
 export type ProviderActivityState = AgentActivityState | "missing";
+
+export interface ProviderActivityObservation {
+  state: ProviderActivityState;
+  /** Content-free provider item ids that require attention in this session. */
+  asyncQuestionItemIds?: string[];
+}
 export type ProviderExecutionMode = "plan" | "build";
 export type ProviderAgent = AgentInteractionProvider;
 
@@ -271,6 +277,11 @@ export interface AgentSessionProvider {
    * the coarser status contract.
    */
   activity?(sessionId: string): Promise<ProviderActivityState>;
+  /**
+   * Activity plus content-free attention metadata from the same no-touch read.
+   * The background reconciler prefers this when available.
+   */
+  observeActivity?(sessionId: string): Promise<ProviderActivityObservation>;
   /**
    * Read authoritative activity for several sessions from one provider
    * snapshot. Providers whose upstream API is session-scoped may omit this and

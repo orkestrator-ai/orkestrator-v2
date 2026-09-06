@@ -795,6 +795,54 @@ describe("item adaptation", () => {
     });
   });
 
+  test("agentMessage preserves valid asynchronous questions", () => {
+    expect(
+      adaptAppServerItem({
+        id: "ask-1",
+        type: "agentMessage",
+        text: "Which target?\n\n- Staging\n- Production",
+        delivery: "async",
+        questions: [{ title: "Which target?", options: ["Staging", "Production"] }],
+      }).item,
+    ).toEqual({
+      id: "ask-1",
+      type: "agent_message",
+      text: "Which target?\n\n- Staging\n- Production",
+      delivery: "async",
+      questions: [{ title: "Which target?", options: ["Staging", "Production"] }],
+    });
+  });
+
+  test("agentMessage preserves free-text questions with an empty options array", () => {
+    expect(
+      adaptAppServerItem({
+        id: "ask-free-text",
+        type: "agentMessage",
+        text: "Any constraints?",
+        delivery: "async",
+        questions: [{ title: "Any constraints?", options: [] }],
+      }).item,
+    ).toEqual({
+      id: "ask-free-text",
+      type: "agent_message",
+      text: "Any constraints?",
+      delivery: "async",
+      questions: [{ title: "Any constraints?" }],
+    });
+  });
+
+  test("agentMessage degrades malformed asynchronous questions to text", () => {
+    expect(
+      adaptAppServerItem({
+        id: "ask-1",
+        type: "agentMessage",
+        text: "Readable fallback",
+        delivery: "async",
+        questions: [{ title: "" }],
+      }).item,
+    ).toEqual({ id: "ask-1", type: "agent_message", text: "Readable fallback" });
+  });
+
   test("reasoning prefers summary and falls back to content", () => {
     expect(
       adaptAppServerItem({ id: "r1", type: "reasoning", summary: ["a", "b"], content: ["raw"] })

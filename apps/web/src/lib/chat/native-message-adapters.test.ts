@@ -3005,6 +3005,20 @@ describe("messageHasVisibleContent", () => {
   test("treats non-empty text and thinking parts as visible", () => {
     expect(messageHasVisibleContent(makeMessage([{ type: "text", content: "Answer" }]))).toBe(true);
     expect(
+      messageHasVisibleContent(
+        makeMessage([
+          {
+            type: "async-question",
+            content: "",
+            asyncQuestion: {
+              itemId: "question-1",
+              questions: [{ id: "question-1:0", title: "Which target?", options: [] }],
+            },
+          },
+        ]),
+      ),
+    ).toBe(true);
+    expect(
       messageHasVisibleContent(makeMessage([{ type: "thinking", content: "Reasoning" }])),
     ).toBe(true);
   });

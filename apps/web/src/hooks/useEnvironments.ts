@@ -11,7 +11,12 @@ import {
   useEnvironmentStore,
   useErrorDialogStore,
   useTerminalSessionStore,
+  useUIStore,
+  usePaneLayoutStore,
+  getAllLeaves,
 } from "@/stores";
+import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
+import { getNativeAgentData } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -70,6 +75,11 @@ interface EnvironmentSetupCompletePayload {
   success: boolean;
   environment?: Environment;
   error?: string;
+}
+
+interface NativeAgentAsyncQuestionPayload {
+  environment_id: string;
+  session_key: string;
 }
 
 interface UseEnvironmentsOptions {
@@ -512,6 +522,47 @@ export function useEnvironmentLifecycleService(): void {
       disposed = true;
       unlistenStarted?.();
       unlistenComplete?.();
+    };
+  }, []);
+
+  // The durable unread bit is authoritative. This root-mounted listener adds
+  // only a transient hint when the question arrived outside the active
+  // environment; no prompt content crosses the global event channel.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let disposed = false;
+
+    void listen<NativeAgentAsyncQuestionPayload>("native-agent-async-question", (event) => {
+      const selectedEnvironmentId = useUIStore.getState().selectedEnvironmentId;
+      if (selectedEnvironmentId === event.payload.environment_id) {
+        const root = usePaneLayoutStore.getState().getRoot(selectedEnvironmentId);
+        const owningTabIsVisible = getAllLeaves(root).some((pane) => {
+          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          const data = activeTab ? getNativeAgentData(activeTab) : null;
+          return (
+            data?.platform === "codex" &&
+            createNativeSessionKey(selectedEnvironmentId, activeTab!.id) ===
+              event.payload.session_key
+          );
+        });
+        if (owningTabIsVisible) return;
+      }
+      const environment = useEnvironmentStore
+        .getState()
+        .getEnvironmentById(event.payload.environment_id);
+      toast.info("Codex has a question", {
+        description: environment
+          ? `Open ${environment.name} to answer it.`
+          : "Open the agent session to answer it.",
+      });
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   }, []);
 

@@ -14,6 +14,7 @@ export function nativeAgentLatestActivity(part: NativeAgentActivityPart): string
 
 export function summarizeNativeAgentAction(part: NativeMessagePart): string {
   if (part.type === "text") return part.content.trim() || "Response";
+  if (part.type === "async-question") return part.content.trim() || "Question";
   if (part.type === "thinking") return "Thinking";
   if (part.type === "file") return part.content.trim() || "File";
 

@@ -175,6 +175,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
+        asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
       this.lastPersistedAccess.set(persisted.bridgeSessionId, Date.parse(persisted.lastAccessed));
@@ -548,6 +549,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       if (context.messages.length === 0) {
         const hydrated = await hydrateMessagesFromPersistedSession(threadId);
         context.messages = hydrated.messages;
+        this.registry.indexHydratedAsyncQuestions(context);
         this.applyPersistedModelOverrides(context);
         if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
         if (!session.title) {
@@ -1556,6 +1558,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       });
       message.parts = rendered.parts;
       message.content = rendered.content;
+      if (this.registry.recordAsyncQuestionMessages(context, message)) {
+        for (const sessionId of context.bridgeSessionIds) {
+          const session = this.registry.getSession(sessionId);
+          if (session) void this.persistSession(session);
+        }
+      }
       snapshotChars += normalizedMessageSnapshotChars(message);
       // Sampled before the render, so an item that mutated while it was awaited
       // still shows as pending work rather than being recorded as rendered.

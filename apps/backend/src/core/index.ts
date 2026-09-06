@@ -197,6 +197,12 @@ export class OrkestratorBackend {
             this.probeForAgentCreatedPullRequest(event.environmentId, context);
           }
         },
+        onAsyncQuestionAttention: (event) => {
+          options.emit("native-agent-async-question", {
+            environment_id: event.environmentId,
+            session_key: event.sessionKey,
+          });
+        },
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");

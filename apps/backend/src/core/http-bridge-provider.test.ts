@@ -1135,6 +1135,34 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("reads bounded Codex async-question ids from the activity observation", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          activity: "working",
+          asyncQuestionItemIds: ["question-1", "question-1", "question-2"],
+        }),
+      codexConnection,
+    );
+
+    await expect(provider.observeActivity?.("session/1")).resolves.toEqual({
+      state: "working",
+      asyncQuestionItemIds: ["question-1", "question-2"],
+    });
+  });
+
+  test("rejects malformed Codex activity attention metadata", async () => {
+    for (const asyncQuestionItemIds of ["question-1", [""], ["x".repeat(2_049)]]) {
+      const { provider } = httpProvider(
+        () => Response.json({ activity: "working", asyncQuestionItemIds }),
+        codexConnection,
+      );
+      await expect(provider.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+    }
+  });
+
   test.each([
     ["claude" as const, claudeConnection],
     ["codex" as const, codexConnection],

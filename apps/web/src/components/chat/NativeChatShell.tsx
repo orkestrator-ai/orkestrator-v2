@@ -19,7 +19,10 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
-import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentAsyncQuestionResponse,
+  NativeAgentToolDetails,
+} from "@orkestrator/protocol/native-agent";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { TranscriptAnnotation } from "@/lib/chat/transcript-annotations";
 
@@ -107,6 +110,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * referentially stable per the note on `messageActions`.
    */
   stopBackgroundTask?: (taskId: string) => Promise<boolean>;
+  asyncQuestionResponses?: readonly NativeAgentAsyncQuestionResponse[];
+  respondToAsyncQuestion?: (itemId: string, response: string) => Promise<void>;
   /**
    * Extra content in the dock's top strip, beside the scroll-to-bottom button
    * — Claude's prompt-suggestion chip.
@@ -174,6 +179,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   resolveModelLabel,
   loadToolDetails,
   stopBackgroundTask,
+  asyncQuestionResponses,
+  respondToAsyncQuestion,
   topAccessory,
   annotations = [],
   annotationInteractionEnabled = true,
@@ -336,6 +343,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               resolveModelLabel={resolveModelLabel}
               loadToolDetails={loadToolDetails}
               stopBackgroundTask={stopBackgroundTask}
+              asyncQuestionResponses={asyncQuestionResponses}
+              respondToAsyncQuestion={respondToAsyncQuestion}
               platform={platform}
             />
           )}

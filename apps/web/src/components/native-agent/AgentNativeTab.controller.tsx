@@ -1,7 +1,10 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, LogIn, X } from "lucide-react";
-import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAsyncQuestionRequestId,
+  resolveReasoningId,
+} from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -34,7 +37,7 @@ import { useComposerFileSearchFeedback } from "@/hooks/useComposerFileSearchFeed
 import { useComposerMountFocus } from "@/hooks/useComposerMountFocus";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
-import { useNativeAgentSession } from "@/hooks/useNativeAgentSession";
+import { useNativeAgentSession, type NativeAgentSendOptions } from "@/hooks/useNativeAgentSession";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { useEscapeToStop } from "@/hooks/useEscapeToStop";
 import { useManualSessionRefresh } from "@/hooks/useManualSessionRefresh";
@@ -117,6 +120,28 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
+
+export async function enqueueNativeAsyncQuestionResponse(input: {
+  platform: string;
+  itemId: string;
+  response: string;
+  model?: NativeAgentSendOptions["model"];
+  reasoningEffort?: NativeAgentSendOptions["reasoningEffort"];
+  mode?: NativeAgentSendOptions["mode"];
+  fastMode?: NativeAgentSendOptions["fastMode"];
+  enqueue: (response: string, options?: NativeAgentSendOptions) => Promise<unknown>;
+}): Promise<void> {
+  if (input.platform !== "codex") {
+    throw new Error("Only Codex supports asynchronous questions");
+  }
+  await input.enqueue(input.response, {
+    requestId: nativeAsyncQuestionRequestId(input.itemId),
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
+    mode: input.mode,
+    fastMode: input.fastMode,
+  });
+}
 
 export function SharedNativeAgentController({
   tabId,
@@ -654,6 +679,28 @@ export function SharedNativeAgentController({
       }
     },
     [stopBackgroundTask],
+  );
+  const respondToAsyncQuestion = useCallback(
+    async (itemId: string, response: string) => {
+      await enqueueNativeAsyncQuestionResponse({
+        platform,
+        itemId,
+        response,
+        model: composer?.selectedModelId,
+        reasoningEffort: composer?.selectedReasoningId,
+        mode: composer?.selectedModeId,
+        fastMode: composer?.fastModeEnabled ?? undefined,
+        enqueue,
+      });
+    },
+    [
+      composer?.fastModeEnabled,
+      composer?.selectedModeId,
+      composer?.selectedModelId,
+      composer?.selectedReasoningId,
+      enqueue,
+      platform,
+    ],
   );
   const discardProvisionalDraft = useCallback(() => {
     void discardComposeDraft(composeDraftKey("agent-native", data.environmentId, sessionKey)).catch(
@@ -1489,6 +1536,8 @@ export function SharedNativeAgentController({
       stopBackgroundTask={
         adapter.capabilities.backgroundTasks ? stopBackgroundTaskFromCard : undefined
       }
+      asyncQuestionResponses={projection?.asyncQuestionResponses}
+      respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       isLoading={isTurnActive}
       statusLabel={phaseStatusLabel}
       elapsedSeconds={elapsedSeconds}

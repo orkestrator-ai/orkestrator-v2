@@ -123,7 +123,9 @@ export function markdownToAgentSearchText(markdown: string): string {
 }
 
 function textPartSources(parts: readonly NativeMessagePart[]): string[] {
-  return parts.filter((part) => part.type === "text").map((part) => part.content);
+  return parts
+    .filter((part) => part.type === "text" || part.type === "async-question")
+    .map((part) => part.content);
 }
 
 /**

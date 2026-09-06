@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { type BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
+import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 
 import {
   AmbiguousPromptDispatchError,
@@ -1693,6 +1694,143 @@ describe("NativeAgentService", () => {
   });
 
   describe("queue draining", () => {
+    test("steers an async-question answer into the active Codex turn", async () => {
+      const requestId = nativeAsyncQuestionRequestId("question-1");
+      const stub = createProviderStub("codex", {
+        status: async () => "running",
+        activeSteerRun: async () => ({ state: "running", runId: "turn-7" }),
+        steerStatus: async () => "unknown",
+        performSessionAction: async (_sessionId, action) => ({
+          outcome: "applied",
+          requestId: action.kind === "steer" ? action.requestId : undefined,
+        }),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-drain-async-question-",
+          provider: async () => stub.provider,
+        },
+        async ({ storage, service }) => {
+          const logicalSessionKey = "env-env-1:tab-question";
+          const queueKey = `codex\0${logicalSessionKey}`;
+          await service.ensureSession({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey,
+          });
+          await storage.savePromptQueue(queueKey, "env-1", [
+            { id: requestId, text: "Answers to your questions:\n\n- Target: Staging" },
+          ]);
+
+          await internals(service).drainPromptQueues();
+
+          expect(stub.performSessionAction).toHaveBeenCalledWith(
+            "provider-session",
+            expect.objectContaining({
+              kind: "steer",
+              requestId,
+              expectedRunId: "turn-7",
+              text: "Answers to your questions:\n\n- Target: Staging",
+            }),
+          );
+          expect(stub.send).not.toHaveBeenCalled();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({ messages: [] });
+          expect(
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+              )
+            )?.dispatchedRequestIds,
+          ).toContain(requestId);
+        },
+      );
+    });
+
+    test("keeps an ambiguous async answer queued until its stable steer retry is confirmed", async () => {
+      const requestId = nativeAsyncQuestionRequestId("question-ambiguous");
+      let outcome: "unknown" | "applied" = "unknown";
+      const stub = createProviderStub("codex", {
+        status: async () => "running",
+        activeSteerRun: async () => ({ state: "running", runId: "turn-8" }),
+        steerStatus: async () => "unknown",
+        performSessionAction: async (_sessionId, action) => ({
+          outcome,
+          ...(outcome === "unknown" && action.kind === "steer"
+            ? { requestId: action.requestId }
+            : {}),
+        }),
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-drain-async-question-retry-",
+          provider: async () => stub.provider,
+        },
+        async ({ storage, service }) => {
+          const logicalSessionKey = "env-env-1:tab-question-retry";
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey,
+          };
+          const queueKey = `codex\0${logicalSessionKey}`;
+          await service.ensureSession(identity);
+          await storage.savePromptQueue(queueKey, "env-1", [
+            { id: requestId, text: "Answers to your questions:\n\n- Target: Production" },
+          ]);
+
+          await internals(service).drainPromptQueues();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+            inFlight: { requestId },
+          });
+
+          outcome = "applied";
+          await expect(
+            service.retryRecoverableDispatch({ ...identity, requestId }),
+          ).resolves.toEqual({ outcome: "accepted", requestId });
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({ messages: [] });
+        },
+      );
+    });
+
+    test("falls back to a normal queued turn when the asking turn has ended", async () => {
+      const requestId = nativeAsyncQuestionRequestId("question-ended");
+      let status: "running" | "idle" = "running";
+      const stub = createProviderStub("codex", {
+        status: async () => status,
+        activeSteerRun: async () => ({ state: "idle" }),
+        steerStatus: async () => "unknown",
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-drain-async-question-ended-",
+          provider: async () => stub.provider,
+        },
+        async ({ storage, service }) => {
+          const logicalSessionKey = "env-env-1:tab-question-ended";
+          const queueKey = `codex\0${logicalSessionKey}`;
+          await service.ensureSession({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey,
+          });
+          await storage.savePromptQueue(queueKey, "env-1", [
+            { id: requestId, text: "Answers to your questions:\n\n- Target: Staging" },
+          ]);
+
+          await internals(service).drainPromptQueues();
+          expect(stub.send).not.toHaveBeenCalled();
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({
+            inFlight: { requestId },
+          });
+
+          status = "idle";
+          await internals(service).drainPromptQueues();
+          expect(stub.send).toHaveBeenCalledTimes(1);
+          expect(await storage.getPromptQueue(queueKey)).toMatchObject({ messages: [] });
+        },
+      );
+    });
+
     test("starts a newly persisted queue immediately when notified", async () => {
       let markDispatched!: () => void;
       const dispatched = new Promise<void>((resolve) => {

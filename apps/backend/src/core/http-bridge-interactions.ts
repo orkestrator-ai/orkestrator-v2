@@ -402,12 +402,17 @@ export class HttpBridgeInteractionAdapter {
     const providerRequestId = nonEmptyString(request?.interactionId);
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
+    // Older bridge builds omitted this field and treated every question as
+    // blocking. Preserve that meaning during a rolling backend/bridge update.
+    const isBlocking = request?.isBlocking !== false;
     const kind = request?.kind;
     if (
       !request ||
       !providerRequestId ||
       !Number.isSafeInteger(requestedAt) ||
-      !Number.isSafeInteger(expiresAt) ||
+      (expiresAt !== undefined && !Number.isSafeInteger(expiresAt)) ||
+      (request.isBlocking !== undefined && typeof request.isBlocking !== "boolean") ||
+      (request.isBlocking !== true && expiresAt === undefined) ||
       (kind !== "question" && kind !== "mcp-form" && kind !== "mcp-url")
     ) {
       throw new ProviderUnavailableError("Codex returned a malformed interaction request");
@@ -440,7 +445,8 @@ export class HttpBridgeInteractionAdapter {
       },
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
-      expiresAt: expiresAt as number,
+      blocking: isBlocking as boolean,
+      ...(expiresAt === undefined ? {} : { expiresAt: expiresAt as number }),
     });
   }
 

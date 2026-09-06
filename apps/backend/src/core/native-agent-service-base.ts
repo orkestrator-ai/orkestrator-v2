@@ -1,9 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
+import { COORDINATOR_EXECUTION_POLICY } from "@orkestrator/protocol/coordinator";
 import {
-  COORDINATOR_EXECUTION_POLICY,
-  coordinatorConversationIdFromRuntimeId,
-  coordinatorIdFromRuntimeId,
-} from "@orkestrator/protocol/coordinator";
+  coordinatorRuntimeUnavailableMessage,
+  resolveCoordinatorRuntime,
+} from "./coordinator-runtime.js";
 import {
   BUILD_PIPELINE_AGENTS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -356,8 +356,8 @@ export abstract class NativeAgentServiceBase {
   protected async trustedSessionInput<T extends EnsureNativeAgentSessionInput>(
     input: T,
   ): Promise<T> {
-    const coordinatorId = coordinatorIdFromRuntimeId(input.environmentId);
-    if (!coordinatorId) {
+    const coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
+    if (coordinator.status === "not-coordinator") {
       const environment = await this.storage.getEnvironment(input.environmentId);
       return {
         ...input,
@@ -373,17 +373,12 @@ export abstract class NativeAgentServiceBase {
         executionPolicy: undefined,
       };
     }
-    const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
-    if (!workspace) throw new Error("Coordinator workspace is unavailable");
-    const conversationId = coordinatorConversationIdFromRuntimeId(input.environmentId);
-    const conversation = workspace.conversations.find(
-      (item) => item.id === conversationId && !item.closedAt,
-    );
-    if (!conversation || conversation.agent !== input.agent) {
-      throw new Error("Coordinator conversation is unavailable");
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
     }
-    if (workspace.lifecycleState !== "ready") {
-      throw new Error("Coordinator workspace is not ready");
+    const { coordinatorId, workspace } = coordinator;
+    if (coordinator.conversation.agent !== input.agent) {
+      throw new Error("Coordinator conversation is unavailable");
     }
     if (
       workspace.repositoryStatus?.operationState !== undefined &&
@@ -407,6 +402,9 @@ export abstract class NativeAgentServiceBase {
       !input.prompt.startsWith("<orkestrator-coordinator-context>")
     ) {
       const status = workspace.repositoryStatus;
+      const delegation = this.options.coordinatorDelegationAvailable?.()
+        ? `Delegation: create workers with the Orkestrator launch_environment tool. Codex subagents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n`
+        : `Delegation: Orkestrator worker controls are unavailable in this session. Codex subagents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,
         prompt:
@@ -414,6 +412,7 @@ export abstract class NativeAgentServiceBase {
           `Project: ${workspace.projectId}\n` +
           `Coordinator: ${coordinatorId}\n` +
           `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          delegation +
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +
           `Commit: ${status?.headCommit ?? "unknown"}\n` +

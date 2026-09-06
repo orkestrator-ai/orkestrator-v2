@@ -504,6 +504,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             isActive
             ownsGlobalShortcuts
             executionPolicy="coordinator-read-only"
+            coordinatorProjectId={projectId}
             coordinatorWorkspacePath={snapshot.projectPath}
           />
         )}

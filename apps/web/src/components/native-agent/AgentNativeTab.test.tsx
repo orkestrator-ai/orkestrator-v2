@@ -2747,6 +2747,39 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("applies repository model defaults to a coordinator runtime", async () => {
+    useEnvironmentStore.setState({ environments: [] });
+    useConfigStore.getState().setRepositoryConfig("coordinator-project", {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentSettings: {
+        platforms: { codex: { model: "gpt-repository", reasoningEffort: "high" } },
+      },
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-defaults-tab"
+        data={{
+          platform: "codex",
+          environmentId: "coordinator:workspace-1:conversation-defaults",
+          isLocal: true,
+        }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="coordinator-project"
+        coordinatorWorkspacePath="/tmp/project"
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      environmentId: "coordinator:workspace-1:conversation-defaults",
+      model: "gpt-repository",
+      reasoningEffort: "high",
+    });
+  });
+
   test.each([...AGENT_PLATFORMS])(
     "loads a transferred conversation for a %s tab",
     async (platform) => {

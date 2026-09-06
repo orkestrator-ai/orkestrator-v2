@@ -135,6 +135,7 @@ export function SharedNativeAgentController({
   consumedAgentHandoffId,
   refreshRequestId = 0,
   executionPolicy,
+  coordinatorProjectId,
   coordinatorWorkspacePath,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
@@ -148,7 +149,7 @@ export function SharedNativeAgentController({
   // to another.
   const configured = resolvedPlatformSettings(
     config,
-    environment?.projectId,
+    environment?.projectId ?? coordinatorProjectId,
     environment,
     platform,
   );

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import type { AgentSkill, AgentSkillProvider, AgentSkillScan } from "@/lib/backend";
@@ -735,19 +735,51 @@ describe("SkillsSettings", () => {
 
     render(<SkillsSettings />);
     const copyButton = await screen.findByRole("button", { name: "Copy skill path" });
-    fireEvent.click(copyButton);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith("/a/SKILL.md"));
+    await act(async () => {
+      fireEvent.click(copyButton);
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith("/a/SKILL.md");
     expect(screen.getByRole("button", { name: "Skill path copied" })).toBeTruthy();
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy(),
-      { timeout: 2_000 },
-    );
-
+    // Exercise the rejection from a fresh mount. Waiting for the real 1.5 s
+    // confirmation timer made this unrelated assertion depend on host load.
+    cleanup();
     writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
-    fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
+    render(<SkillsSettings />);
+    const rejectedCopyButton = await screen.findByRole("button", { name: "Copy skill path" });
+    await act(async () => {
+      fireEvent.click(rejectedCopyButton);
+      await Promise.resolve();
+    });
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Could not copy the path to the clipboard"),
     );
+  });
+
+  test("clears the copied confirmation when its timer expires", async () => {
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [skill({ name: "alpha", filePath: "/a/SKILL.md" })],
+    };
+
+    render(<SkillsSettings />);
+    const copyButton = await screen.findByRole("button", { name: "Copy skill path" });
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(copyButton);
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("button", { name: "Skill path copied" })).toBeTruthy();
+
+      act(() => jest.advanceTimersByTime(1_499));
+      expect(screen.getByRole("button", { name: "Skill path copied" })).toBeTruthy();
+
+      act(() => jest.advanceTimersByTime(1));
+      expect(screen.getByRole("button", { name: "Copy skill path" })).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("reveals the selected path and reports reveal failures", async () => {

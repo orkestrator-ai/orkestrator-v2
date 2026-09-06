@@ -1755,11 +1755,10 @@ describe("TerminalContainer", () => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
     await waitFor(() => {
-      expect(setupTabIds()).toEqual([]);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+        { id: "default", type: "plain" },
+      ]);
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
-      { id: "default", type: "plain" },
-    ]);
   });
 
   test("rechecks an already-bound setup tab after setup finishes", async () => {
@@ -1806,10 +1805,10 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
       expect(setupTabIds()).toEqual([]);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+        { id: "default", type: "plain" },
+      ]);
     });
-    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
-      { id: "default", type: "plain" },
-    ]);
   });
 
   test("keeps a completed setup transcript after its PTY exits", async () => {

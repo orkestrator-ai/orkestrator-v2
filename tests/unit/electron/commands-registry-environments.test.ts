@@ -108,6 +108,48 @@ import type {
 } from "./command-fixtures";
 
 describe("environment status and settings commands", () => {
+  test("fake Docker pins and exactly restores host credential paths", async () => {
+    const names = [
+      "ORKESTRATOR_AGENT_TEST_HOST_HOME",
+      "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR",
+      "CLAUDE_CONFIG_DIR",
+    ] as const;
+    const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    const fakeDocker = "#!/bin/sh\nexit 0\n";
+
+    try {
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = "/before/host";
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = "/before/claude";
+      process.env.CLAUDE_CONFIG_DIR = "/before/override";
+      await withFakeDocker(fakeDocker, async ({ home }) => {
+        expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe(home);
+        expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBe(
+          path.join(home, ".claude"),
+        );
+        expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+      });
+      expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/before/host");
+      expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBe("/before/claude");
+      expect(process.env.CLAUDE_CONFIG_DIR).toBe("/before/override");
+
+      for (const name of names) delete process.env[name];
+      await withFakeDocker(fakeDocker, async ({ home }) => {
+        expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe(home);
+        expect(process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBe(
+          path.join(home, ".claude"),
+        );
+        expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+      });
+      for (const name of names) expect(process.env[name]).toBeUndefined();
+    } finally {
+      for (const name of names) {
+        const value = original[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("reports Claude credential availability through the credential status handler", async () => {
     const { context } = createContext([]);
     const commands = createCommandRegistry();
@@ -2166,57 +2208,61 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     });
   });
 
-  test("renames the live local git branch and advances stored branch on success", async () => {
-    const worktreePath = await createGitRepoOnBranch("old-branch");
-    await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
-    await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
-    const environment = createEnvironment({
-      environmentType: "local",
-      worktreePath,
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context, emitted } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+  test(
+    "renames the live local git branch and advances stored branch on success",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("old-branch");
+      await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
+      await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
+      const environment = createEnvironment({
+        environmentType: "local",
+        worktreePath,
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context, emitted } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(
-        commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        ),
-      ).resolves.toBeUndefined();
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await expect(
+          commands.get("rename_environment_from_prompt")?.(
+            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+            context,
+          ),
+        ).resolves.toBeUndefined();
 
-      expect(environment.name).toBe("review-oauth-flow");
-      expect(environment.branch).toBe("review-oauth-flow");
-      expect(environment.prUrl).toBeNull();
-      expect(environment.prState).toBeNull();
-      expect(environment.hasMergeConflicts).toBeNull();
-      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
-      await expect(configuredGitPushBehaviour(worktreePath)).resolves.toEqual({
-        pushDefault: "current",
-        autoSetupRemote: "true",
+        expect(environment.name).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.prUrl).toBeNull();
+        expect(environment.prState).toBeNull();
+        expect(environment.hasMergeConflicts).toBeNull();
+        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+        await expect(configuredGitPushBehaviour(worktreePath)).resolves.toEqual({
+          pushDefault: "current",
+          autoSetupRemote: "true",
+        });
+        // The upstream `git branch -m` carried over from the old name would make the
+        // renamed branch compare and pull against origin/old-branch, so it is dropped
+        // and the next push records the right one.
+        await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
+          remote: "",
+          merge: "",
+        });
+        expect(emitted).toContainEqual({
+          event: "environment-renamed",
+          payload: {
+            environment_id: environment.id,
+            new_name: "review-oauth-flow",
+            new_branch: "review-oauth-flow",
+          },
+        });
       });
-      // The upstream `git branch -m` carried over from the old name would make the
-      // renamed branch compare and pull against origin/old-branch, so it is dropped
-      // and the next push records the right one.
-      await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
-        remote: "",
-        merge: "",
-      });
-      expect(emitted).toContainEqual({
-        event: "environment-renamed",
-        payload: {
-          environment_id: environment.id,
-          new_name: "review-oauth-flow",
-          new_branch: "review-oauth-flow",
-        },
-      });
-    });
-  });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test(
     "rolls back a local rename when push configuration fails",

@@ -162,7 +162,7 @@ describe("scripts/test-all.ts", () => {
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
     expect(workspaceGroup.args).toContain("--concurrency=2");
-    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
+    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "1" });
     expect(rootGroup.args).toContain("--parallel=4");
     expect(rootGroup.args.slice(0, 2)).toEqual(["test", "./tests"]);
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
@@ -243,6 +243,7 @@ describe("scripts/test-all.ts", () => {
       // remainder, so the plan neither oversubscribes nor leaves workers idle.
       expect({ cores, aggregate }).toEqual({ cores, aggregate: budget });
       expect(plan.root).toBeGreaterThanOrEqual(1);
+      expect(plan.root).toBeLessThanOrEqual(4);
       expect(plan.bridges).toBeGreaterThanOrEqual(MIN_BRIDGE_WORKERS);
       expect(plan.workspace).toBeGreaterThanOrEqual(1);
       expect(plan.workspaceConcurrency).toBeGreaterThanOrEqual(1);
@@ -260,9 +261,9 @@ describe("scripts/test-all.ts", () => {
     }
   });
 
-  test("the root suite receives the additional large-host capacity", () => {
+  test("the root suite receives bounded additional large-host capacity", () => {
     const large = planWorkers(20);
-    expect(large.root).toBe(6);
+    expect(large.root).toBe(4);
     expect(large.workspaceConcurrency).toBe(2);
     expect(large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
       MAX_AGGREGATE_TEST_WORKERS,

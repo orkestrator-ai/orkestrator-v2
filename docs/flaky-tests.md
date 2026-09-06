@@ -10,9 +10,57 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## 2026-09-06 resolution sweep follow-up
+
+This sweep resolves only entries with a concrete owner or shared-harness fix.
+It does not close incidents merely because they passed once or because they
+may share aggregate contention. Three independent reviews of the same overlay
+still found failures in both the root and bridge groups, so those observations
+remain open below even when a focused rerun passed.
+
+The aggregate ceiling is now eight. That leaves four root workers on every
+host at or above eight logical cores while reserving two workers each for the
+bridge and active workspace groups. Individual owners retain narrower fixes
+where an ordering, isolation, or outer-budget cause was identified.
+
+| Entries | Root cause and fix |
+| --- | --- |
+| Project creation, Files panel, Electron server/rename fixtures, Codex delayed retry | Real Git/Docker/bridge work or a descheduled renderer could exhaust Bun's generic five-second outer budget. The affected owners/cases now use the repository's 30-second asynchronous budget. |
+| ACP process reaping and large transcript trimming | These two expensive state waits now use the harness's 15-second process/startup budget rather than its five-second ordinary-state default. Other unattributed ACP entries remain open. |
+| ActionBar run shortcuts | Both duplicate cases used a one-shot config read even though mount can legitimately re-read, then dispatched before the listener effect for the enabled Run state was guaranteed to commit. They now return the run config for every read, flush that effect, and await the resulting backend job. |
+| JSON file cache | Parse instrumentation was process-global. It now counts per file path so unrelated readers cannot change the cold-read assertion. |
+| Terminal setup-tab replacement and Multi Review activity | Tests observed one derived field and synchronously asserted a separately committed snapshot. Each wait now requires the complete authoritative state it subsequently asserts. |
+| Skills clipboard | Success, failure, selection reset, and exact timer expiry are covered independently; fake timers keep the 1.5-second expiry check deterministic. |
+| Standalone lifecycle | The backend printed its ready contract before installing lifecycle observers. It now installs signal handlers and parent-death detection first, with the original parent captured before asynchronous startup. |
+| Direct-container credentials | Changing `HOME` was insufficient because Bun can cache `os.homedir()` and inherited Claude config overrides bypass it. The fake-Docker fixture now pins and restores every explicit host credential path. |
+| Create Environment attachment encoding and Codex circular output | These owners perform CPU- and allocation-heavy exceptional-path work and now use explicit 30-second outer budgets. Unattributed worker crashes remain open. |
+
+Earlier verification on Bun 1.4.0 included focused passes and one complete
+four-group pass, but three later runs of that same overlay failed with 8, 11,
+and 12 failures. Those later observations superseded the one-pass closure
+claim. After the follow-up fixes, focused validation passed and a fresh
+`bun run test` passed all four groups in 70.4 seconds (root/agent-support in
+69.2 seconds and bridges in 70.4 seconds). Unattributed historical incidents
+remain open because a green run alone does not establish their cause or fix.
+
+New open observations from the later aggregate runs:
+
+- `tests/unit/pi-bridge-vendor.test.ts` and
+  `tests/unit/test-diagnostic-bounds.test.ts` exceeded their 30-second budgets.
+- `tests/unit/components/CreateEnvironmentDialog.test.tsx` exceeded five
+  seconds in large attachment cases and had one follow-on submission failure.
+- `bridges/codex-bridge/src/sessions/turn-accumulator.test.ts` and
+  `bridges/codex-bridge/src/subagent-transcript.test.ts` exceeded five seconds;
+  the three files passed 163/163 in a focused rerun, confirming aggregate-only
+  contention.
+- `bridges/acp-bridge/src/acp-http.test.ts` and
+  `bridges/acp-bridge/src/acp-transcript.test.ts` exceeded ordinary state waits.
+- One run also observed isolated `useVirtuosoScrollState` and Codex lifecycle
+  assertion failures. Neither has an established cause, so both remain open.
+
 ## `create_project_from_scratch > rolls back when GitHub CLI is definitely missing` (`apps/backend/src/core/commands-project-creation.test.ts:288`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-09-03
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -38,7 +86,7 @@ history rather than two partial ones.
 
 ## `Files panel components > ChangedFileItem exposes revert and delete context actions` (`tests/unit/components/FilesPanel.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -54,7 +102,7 @@ history rather than two partial ones.
 
 ## `Electron backend command registry > defaults a malformed in-container Codex thread limit before shell interpolation` (`tests/unit/electron/commands-registry-servers.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -71,7 +119,7 @@ history rather than two partial ones.
 
 ## `Electron backend command registry > replaces an in-container Codex bridge that has no usable persisted token` (`tests/unit/electron/commands-registry-servers.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -90,7 +138,7 @@ history rather than two partial ones.
 
 ## `Electron backend command registry > renames the live local git branch and advances stored branch on success` (`tests/unit/electron/commands-registry-environments.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -108,7 +156,8 @@ history rather than two partial ones.
 
 ## `Electron backend command registry > retains a failed pending rename so a later backend start can retry it` (`tests/unit/electron/commands-environment.test.ts`)
 
-- **Status:** open
+- **Status:** open — the 2026-09-06 changes do not touch this owner or the
+  standalone command that reproduced it
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -125,7 +174,7 @@ history rather than two partial ones.
 
 ## `ACP bridge > refuses to reattach when the agent cannot reload sessions` (`bridges/acp-bridge/src/acp-reconciliation.test.ts`)
 
-- **Status:** open
+- **Status:** open — the 2026-09-06 changes do not touch this owner
 - **Date observed:** 2026-09-02
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -143,7 +192,7 @@ history rather than two partial ones.
 
 ## `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:5467`)
 
-- **Status:** open — recurring failure of the same assertion, after
+- **Status:** resolved — see the 2026-09-06 resolution sweep above; recurring failure of the same assertion, after
   `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts`
   (`ActionBar.test.tsx:1704`, observed 2026-08-17, resolved in the 2026-08-27
   sweep and already reopened once as "recurred after the 2026-08-27 resolution
@@ -224,7 +273,7 @@ history rather than two partial ones.
 
 ## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -247,7 +296,7 @@ history rather than two partial ones.
 
 ## `CreateEnvironmentFlowDialog.test.tsx` Bun worker crash (`tests/unit/components/CreateEnvironmentFlowDialog.test.tsx`)
 
-- **Status:** open
+- **Status:** open — no causal fix or actionable crash stack has been identified
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -269,7 +318,7 @@ history rather than two partial ones.
 
 ## `TerminalContainer > keeps launch options while a pending native launch is still outstanding` (`apps/web/src/components/terminal/TerminalContainer.view.test.tsx:6643`)
 
-- **Status:** open
+- **Status:** open — the setup-tab fix in this owner does not exercise this case
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** the web workspace ran its parallel package suite
@@ -290,7 +339,7 @@ history rather than two partial ones.
 
 ## `TerminalContainer > replaces a completed setup tab that has neither a PTY nor replayable output` (`apps/web/src/components/terminal/TerminalContainer.view.test.tsx:1732`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-30
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
@@ -321,7 +370,7 @@ history rather than two partial ones.
 
 ## `at-most-once dispatch > a delayed retry succeeds and settles the phase after the wait` (`bridges/codex-bridge/src/app-server-runtime-prompt.test.ts:469`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** the bridge group ran two Bun workers while the
@@ -341,7 +390,8 @@ history rather than two partial ones.
 
 ## `ACP bridge > settles the turn before a delayed Cursor replay and enriches only its captured tools` (`bridges/acp-bridge/src/acp-transcript.test.ts:2447`)
 
-- **Status:** open
+- **Status:** open — the 2026-09-06 targeted wait change covers a different
+  large-transcript case
 - **Date observed:** 2026-08-29
 - **Original command:** `bun run test`
 - **Worker configuration:** the bridge group ran two Bun workers while the
@@ -361,7 +411,7 @@ history rather than two partial ones.
 
 ## `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-28
 - **Original command:** `bun run --cwd apps/web test`
 - **Worker configuration:** the web package ran `bun test src --parallel` with
@@ -410,7 +460,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService dispatches a durable address intent without a renderer` (`apps/backend/src/core/multi-review-service.test.ts:603`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-27
 - **Original command:** seven focused `bun test` file invocations launched
   concurrently, including `bun test ./src/core/multi-review-service.test.ts`
@@ -482,7 +532,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService fails recoverably when the consolidation session is missing` (`apps/backend/src/core/multi-review-service.test.ts:550`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-27
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite).
@@ -503,7 +553,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService dispatches a durable address intent without a renderer` (`apps/backend/src/core/multi-review-service.test.ts:603`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-27
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite), on branch `update-environment-modal`.
@@ -588,7 +638,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService fails recoverably when the consolidation session is missing` (`apps/backend/src/core/multi-review-service.test.ts:550`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-27
 - **Original command:** `bun run test` (complete four-group repository suite).
 - **Worker configuration:** `scripts/test-all.ts` ran workspace, root,
@@ -808,7 +858,7 @@ history rather than two partial ones.
 
 ## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
 
-- **Status:** open — recurred after the 2026-08-27 resolution sweep
+- **Status:** resolved — see the 2026-09-06 resolution sweep above
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test` (complete concurrent cross-platform suite)
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside `@orkestrator/web:test:workspace`, 5,095 tests across 222 files in 118.5 s.
@@ -946,7 +996,7 @@ history rather than two partial ones.
 
 ## `ACP bridge > drops malformed persisted tool parts on load` (`bridges/acp-bridge/src/acp-persistence.test.ts:419`)
 
-- **Status:** open
+- **Status:** open — the 2026-09-06 changes do not touch this owner
 - **Date observed:** 2026-08-28
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace,
@@ -1198,7 +1248,8 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `ACP bridge > bounds one oversized response without failing the session` (`bridges/acp-bridge/src/index.test.ts`)
 
-- **Status:** open — recurred after the 2026-08-16 resolution sweep
+- **Status:** open — recurred after the 2026-08-16 resolution sweep; the
+  2026-09-06 changes do not touch this owner
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name fixes-full-tests -- bun run test`
   at `88b56425006c8664d2c1d669af0203ef196df273`.
@@ -1595,7 +1646,8 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `MobileAppShellLayout` drawer focus-restoration timeouts (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** open — recurred after the 2026-08-16 resolution sweep
+- **Status:** open — recurred after the 2026-08-16 resolution sweep; standalone
+  package execution is not governed by the aggregate worker cap
 - **Date observed:** 2026-08-14
 - **Affected tests:** `closes the project drawer from its backdrop and restores trigger focus` (5,811.44 ms in the first run, 6,830.57 ms in the second) and `closes the initial project drawer from its close button and restores trigger focus` (16,456.55 ms, second run only).
 - **Original command:** `set -o pipefail; bun test --cwd apps/web --parallel 2>&1 | tee /tmp/ork-web-tests.log`, and again into `/tmp/ork-web-tests2.log`.

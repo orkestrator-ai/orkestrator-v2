@@ -3,6 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Circular-payload normalization and raw-log I/O can be paused behind the
+// process-heavy bridge suites. Preserve the assertions under aggregate load.
+jest.setTimeout(30_000);
+
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 // Importing index.ts otherwise spawns a real app-server child, whose environment
 // refresh mutates process.env underneath these tests.

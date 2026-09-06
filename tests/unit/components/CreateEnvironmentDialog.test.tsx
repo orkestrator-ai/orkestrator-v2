@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, test, expect, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -12,6 +12,10 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+
+// Attachment cases allocate and encode tens of megabytes. Under the aggregate
+// suite that work can legitimately outlive Bun's generic five-second budget.
+jest.setTimeout(30_000);
 
 const {
   CreateEnvironmentDialog,

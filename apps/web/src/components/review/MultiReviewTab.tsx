@@ -574,7 +574,7 @@ function MultiReviewOverviewTab({
                           </div>
                           {reviewer.report ? (
                             <div
-                              className="ml-auto flex shrink-0 items-center gap-2.5 pl-2"
+                              className="ml-auto flex shrink-0 flex-col items-end gap-1 pl-2"
                               aria-hidden="true"
                             >
                               <span

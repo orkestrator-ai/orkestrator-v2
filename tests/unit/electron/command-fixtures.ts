@@ -110,6 +110,7 @@ export async function createCommandFixtures() {
     closeLocalServerAdmission,
     CONTAINER_UNTRACKED_STATS_SCANNER,
     createCommandRegistry,
+    environmentBranchBase,
     ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
@@ -572,11 +573,12 @@ export async function createCommandFixtures() {
     return { context, updates, emitted };
   }
 
+  const localProjectForCreatePath = await createGitRepoOnBranch("main");
   const LOCAL_PROJECT_FOR_CREATE = {
     id: "project-1",
     name: "Project",
-    gitUrl: "https://github.com/acme/project.git",
-    localPath: process.cwd(),
+    gitUrl: localProjectForCreatePath,
+    localPath: localProjectForCreatePath,
     addedAt: new Date(0).toISOString(),
     order: 0,
   };
@@ -1382,6 +1384,7 @@ exit 0
     configuredGitPushBehaviour,
     configuredGitUpstream,
     createCommandRegistry,
+    environmentBranchBase,
     createContext,
     createDeferred,
     createEnvironment,

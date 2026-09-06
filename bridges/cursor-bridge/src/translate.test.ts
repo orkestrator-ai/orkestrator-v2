@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
 import { publicContextUsage } from "./public.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
@@ -415,6 +416,110 @@ describe("session-wide state", () => {
       reasoningTokens: 7,
     });
     expect(state.currentRunUsage).toEqual(state.currentTurnUsage);
+  });
+
+  test("publishes token-delta progress before the first exact usage frame", () => {
+    const state = running();
+    state.composer.selectedModelId = "grok-4.6";
+    state.currentRunModelId = "grok-4.6";
+
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 12 });
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 8.9 });
+
+    expect(state.currentRunUsage).toBeUndefined();
+    expect(state.currentTurnOutputTokenEstimate).toBe(20);
+    expect(publicContextUsage(state)).toMatchObject({
+      modelId: "grok-4.6",
+      usedTokens: 20,
+      lastTurnTokens: 20,
+      sessionTokens: 20,
+      estimated: true,
+    });
+  });
+
+  test("keeps persisted context occupancy while only output is estimated", () => {
+    const state = running();
+    state.composer.selectedModelId = "grok-4.6";
+    state.currentRunModelId = "grok-4.6";
+    state.usage = {
+      turn: { inputTokens: 150_000, outputTokens: 2_000 },
+      context: { inputTokens: 150_000, outputTokens: 2_000 },
+      sessionTokenFloor: 152_000,
+      modelId: "grok-4.6",
+      updatedAt: new Date(1).toISOString(),
+    };
+    // This is the prompt-start state before the first exact frame of the new
+    // turn. An output delta must advance the gauge from its prior occupancy,
+    // not replace that occupancy with a tiny output-only number.
+    state.currentTurnUsage = {};
+
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 17 });
+
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 152_017,
+      lastTurnTokens: 17,
+      sessionTokens: 152_017,
+      estimated: true,
+    });
+  });
+
+  test("accepts token deltas parsed by the pinned Cursor SDK contract", () => {
+    const state = running();
+    const updates = [
+      InteractionUpdateSchema.parse({ type: "token-delta", tokens: 3 }),
+      InteractionUpdateSchema.parse({ type: "token-delta", tokens: 4 }),
+    ];
+
+    for (const update of updates) applyInteractionUpdate(state, update);
+
+    expect(state.currentTurnOutputTokenEstimate).toBe(7);
+  });
+
+  test("ignores unusable token deltas without changing observable state", () => {
+    const state = running();
+    const revision = state.revision;
+    const values: unknown[] = ["5", Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 0.9];
+
+    for (const tokens of values) applyInteractionUpdate(state, { type: "token-delta", tokens });
+
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(state.currentRunUsageUpdatedAt).toBeUndefined();
+    expect(state.revision).toBe(revision);
+  });
+
+  test("reconciles token-delta progress to exact usage at each turn boundary", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 10 });
+    applyInteractionUpdate(state, {
+      type: "turn-ended",
+      usage: { inputTokens: 100, outputTokens: 8, cacheReadTokens: 20, cacheWriteTokens: 0 },
+    });
+
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      lastTurnTokens: 128,
+      sessionTokens: 128,
+    });
+    expect(publicContextUsage(state)).not.toHaveProperty("estimated");
+
+    applyInteractionUpdate(state, { type: "token-delta", tokens: 5 });
+    expect(publicContextUsage(state)).toMatchObject({
+      lastTurnTokens: 133,
+      sessionTokens: 133,
+      estimated: true,
+    });
+  });
+
+  test("does not charge a nested sub-agent token estimate to the parent run", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-delta",
+      callId: "child-launch",
+      taskUpdate: { type: "token-delta", tokens: 500 },
+    });
+
+    expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
+    expect(publicContextUsage(state)).toBeUndefined();
   });
 
   test("accumulates completed model-call usage while retaining the latest context", () => {

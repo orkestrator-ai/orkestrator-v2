@@ -350,6 +350,7 @@ function recordUsage(
   }
   state.currentTurnUsage = undefined;
   state.currentRunUsage = undefined;
+  state.currentTurnOutputTokenEstimate = undefined;
   state.currentRunDeltaUsage = undefined;
   state.currentRunStreamUsage = undefined;
   state.currentRunUsageUpdatedAt = undefined;

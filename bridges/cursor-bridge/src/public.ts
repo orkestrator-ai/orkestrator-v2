@@ -105,33 +105,46 @@ export function publicDispatch(state: SessionState, requestId: string): JsonObje
 export function publicContextUsage(state: SessionState): NativeAgentContextUsage | undefined {
   const usage = state.usage;
   const live = state.currentRunUsage;
-  if (!usage && !live) return undefined;
-  const turn = live ?? usage!.turn;
-  const spent = turnTokenTotal(turn);
+  const liveEstimate = state.currentTurnOutputTokenEstimate;
+  const hasLiveUsage = live !== undefined || liveEstimate !== undefined;
+  if (!usage && !hasLiveUsage) return undefined;
+  // Do not repeat a previous completed turn's categories while presenting the
+  // estimate for a new run that has not produced an exact usage frame yet.
+  const turn = live ?? (hasLiveUsage ? {} : usage!.turn);
+  const spent = turnTokenTotal(turn) + (liveEstimate ?? 0);
   const hasSessionTokens =
-    live !== undefined ||
-    usage?.sessionTokens !== undefined ||
-    usage?.sessionTokenFloor !== undefined;
+    hasLiveUsage || usage?.sessionTokens !== undefined || usage?.sessionTokenFloor !== undefined;
   // The run result is already an exact provider reading. Publish the durable
   // locally accumulated floor immediately so a completed workflow does not
   // lose its token count while Cursor's eventually consistent account endpoint
   // catches up. A later account total can only raise this value.
   const sessionTokens = hasSessionTokens
     ? Math.max(usage?.sessionTokens ?? 0, usage?.sessionTokenFloor ?? 0) +
-      (live ? turnTokenTotal(live) : 0)
+      (hasLiveUsage ? spent : 0)
     : undefined;
   // `usedTokens` is measured against the model's context window, so it has to
   // be an occupancy figure. `turn` is cumulative across every model call the
   // run made and can exceed the window several times over, which would peg the
   // gauge at 100%; `context` is the final call's own snapshot, which is what
   // the window actually held. They are the same number on a single-call run.
-  const liveContext = live ? state.currentTurnUsage : undefined;
-  const used = liveContext
+  const liveContext = hasLiveUsage ? state.currentTurnUsage : undefined;
+  const hasLiveContext = liveContext !== undefined && Object.keys(liveContext).length > 0;
+  // A prompt clears `currentTurnUsage` before its first model call. Until that
+  // call supplies an exact context snapshot, the previous completed call is
+  // still the best occupancy baseline; the delta estimates only the output
+  // appended since then. Treating the estimate itself as the whole context
+  // made a well-used window collapse to almost 0% on every later prompt.
+  const liveOccupancyBase = hasLiveContext
     ? turnTokenTotal(liveContext)
+    : usage
+      ? turnTokenTotal(usage.context ?? usage.turn)
+      : 0;
+  const used = hasLiveUsage
+    ? liveOccupancyBase + (liveEstimate ?? 0)
     : usage?.context
       ? turnTokenTotal(usage.context)
       : spent;
-  const modelId = live
+  const modelId = hasLiveUsage
     ? (state.currentRunModelId ?? state.composer.selectedModelId)
     : usage?.modelId;
   const model = state.composer.models.find((entry) => entry.id === modelId);
@@ -150,6 +163,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(sessionTokens !== undefined ? { sessionTokens } : {}),
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
+    ...(liveEstimate !== undefined ? { estimated: true } : {}),
     source: "provider",
     updatedAt: state.currentRunUsageUpdatedAt ?? usage!.updatedAt,
   };

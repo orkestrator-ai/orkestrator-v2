@@ -491,7 +491,7 @@ describe("at-most-once dispatch", () => {
     });
   });
 
-  test("a retry preserves optimistic messages when restart races the retryable journal write", async () => {
+  test("a retry preserves optimistic messages and model attribution across replacement", async () => {
     let attempts = 0;
     const h = await harness(
       {
@@ -507,7 +507,10 @@ describe("at-most-once dispatch", () => {
       },
       { initialPromptRetryDelayMs: 0 },
     );
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      model: "gpt-selected-retry",
+    });
     const requestId = "initial-prompt:env-1:tab-restarted-delay";
     const retryableWriteStarted = deferredSignal();
     const allowRetryableWrite = deferredSignal();
@@ -550,6 +553,10 @@ describe("at-most-once dispatch", () => {
       "user",
       "assistant",
     ]);
+    expect(
+      (await h.runtime.getMessages(sessionId))?.find((message) => message.role === "assistant")
+        ?.modelId,
+    ).toBe("gpt-selected-retry");
   });
 
   test("never exposes an idle replacement context while a retry is still dispatching", async () => {

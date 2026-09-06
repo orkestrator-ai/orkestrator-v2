@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const encoder = new TextEncoder();
@@ -33,6 +35,17 @@ const readyLine = (authFile = "/tmp/ork-standalone-auth.json"): string =>
   })}\n`;
 
 describe("waitForStandaloneBackendReady", () => {
+  test("publishes readiness only after every lifecycle observer is installed", async () => {
+    const source = await readFile(resolve(import.meta.dir, "../src/main.ts"), "utf8");
+    const sigterm = source.indexOf('process.on("SIGTERM"');
+    const watchdog = source.indexOf("startReparentWatchdog({");
+    const ready = source.indexOf('type: "orkestrator-backend-ready"');
+
+    expect(sigterm).toBeGreaterThan(-1);
+    expect(watchdog).toBeGreaterThan(sigterm);
+    expect(ready).toBeGreaterThan(watchdog);
+  });
+
   test("times out with a named diagnostic without waiting for stdout to close", async () => {
     const signals: Array<NodeJS.Signals | number | undefined> = [];
     const child = {

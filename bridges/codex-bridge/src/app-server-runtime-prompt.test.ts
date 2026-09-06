@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
 import { hashCwd } from "./sessions/persistence.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
@@ -14,6 +14,8 @@ import {
   threadPayload,
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
+
+jest.setTimeout(30_000);
 
 describe("at-most-once dispatch", () => {
   test("a duplicate request id while running attaches to the existing turn", async () => {

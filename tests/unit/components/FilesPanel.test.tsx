@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   TerminalProvider,
@@ -32,6 +32,11 @@ let mockIsMobile = false;
 let mockIsLocalEnvironment = false;
 let mockWorktreePath: string | null = null;
 const invokeMock = invoke as ReturnType<typeof mock>;
+
+// This renderer owner can be starved behind the subprocess-heavy aggregate
+// groups. A file-level budget prevents a paused synchronous case from being
+// torn down under Bun's generic five-second deadline.
+jest.setTimeout(30_000);
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,

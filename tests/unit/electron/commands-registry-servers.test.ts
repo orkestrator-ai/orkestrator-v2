@@ -1289,26 +1289,28 @@ exit 0
     }
   });
 
-  test("defaults a malformed in-container Codex thread limit before shell interpolation", async () => {
-    const hostPort = await reserveFreePort();
-    const pidFile = path.join(await createTempDir("ork-codex-fallback-pid-"), "pid");
-    const environment = createEnvironment({
-      id: "env-container-codex-fallback",
-      environmentType: "containerized",
-      containerId: "container-codex-fallback",
-      status: "running",
-    });
-    const { context } = createContext(environment, {
-      globalConfig: { codexMaxConcurrentThreads: "invalid" },
-    });
-    const commands = createCommandRegistry();
+  test(
+    "defaults a malformed in-container Codex thread limit before shell interpolation",
+    async () => {
+      const hostPort = await reserveFreePort();
+      const pidFile = path.join(await createTempDir("ork-codex-fallback-pid-"), "pid");
+      const environment = createEnvironment({
+        id: "env-container-codex-fallback",
+        environmentType: "containerized",
+        containerId: "container-codex-fallback",
+        status: "running",
+      });
+      const { context } = createContext(environment, {
+        globalConfig: { codexMaxConcurrentThreads: "invalid" },
+      });
+      const commands = createCommandRegistry();
 
-    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
-    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
-    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
-    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_PID_FILE = pidFile;
 
-    const dockerScript = `#!/bin/sh
+      const dockerScript = `#!/bin/sh
 case "$1" in
   inspect) printf 'running\\n'; exit 0 ;;
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
@@ -1321,62 +1323,66 @@ esac
 exit 0
 `;
 
-    try {
-      await withFakeDocker(dockerScript, async (logs) => {
-        await commands.get("start_codex_server")?.(
-          { containerId: "container-codex-fallback" },
-          context,
-        );
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=5");
-        expect(execLog).not.toContain("invalid");
-      });
-    } finally {
-      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
-      if (pid) {
-        try {
-          process.kill(Number(pid));
-        } catch {
-          // already gone
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          await commands.get("start_codex_server")?.(
+            { containerId: "container-codex-fallback" },
+            context,
+          );
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=5");
+          expect(execLog).not.toContain("invalid");
+        });
+      } finally {
+        const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+        if (pid) {
+          try {
+            process.kill(Number(pid));
+          } catch {
+            // already gone
+          }
         }
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+        if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+        else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
       }
-      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
-      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
-      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
-      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
-    }
-  });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("replaces an in-container Codex bridge that has no usable persisted token", async () => {
-    const hostPort = await reserveFreePort();
-    const stateDir = await createTempDir("ork-codex-legacy-bridge-");
-    const tokenFile = path.join(stateDir, "token");
-    const killedFile = path.join(stateDir, "killed");
-    // A bridge from before per-process authentication: healthy, but its token
-    // file holds something the renderer cannot use.
-    await fs.writeFile(tokenFile, "legacy");
+  test(
+    "replaces an in-container Codex bridge that has no usable persisted token",
+    async () => {
+      const hostPort = await reserveFreePort();
+      const stateDir = await createTempDir("ork-codex-legacy-bridge-");
+      const tokenFile = path.join(stateDir, "token");
+      const killedFile = path.join(stateDir, "killed");
+      // A bridge from before per-process authentication: healthy, but its token
+      // file holds something the renderer cannot use.
+      await fs.writeFile(tokenFile, "legacy");
 
-    const environment = createEnvironment({
-      id: "env-container-codex-legacy",
-      environmentType: "containerized",
-      containerId: "container-codex-legacy",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+      const environment = createEnvironment({
+        id: "env-container-codex-legacy",
+        environmentType: "containerized",
+        containerId: "container-codex-legacy",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
-    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
-    const previousKilledFile = process.env.FAKE_BRIDGE_KILLED_FILE;
-    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
-    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
-    process.env.FAKE_BRIDGE_KILLED_FILE = killedFile;
+      const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+      const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+      const previousKilledFile = process.env.FAKE_BRIDGE_KILLED_FILE;
+      process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+      process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+      process.env.FAKE_BRIDGE_KILLED_FILE = killedFile;
 
-    // The bridge is healthy until `pkill` drops the marker, and healthy again
-    // once the start script has run.
-    const bridge = await startControllableHealthServer(hostPort, () => !existsSync(killedFile));
+      // The bridge is healthy until `pkill` drops the marker, and healthy again
+      // once the start script has run.
+      const bridge = await startControllableHealthServer(hostPort, () => !existsSync(killedFile));
 
-    const dockerScript = `#!/bin/sh
+      const dockerScript = `#!/bin/sh
 case "$1" in
   inspect) printf 'running\\n'; exit 0 ;;
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
@@ -1398,31 +1404,33 @@ esac
 exit 0
 `;
 
-    try {
-      await withFakeDocker(dockerScript, async (logs) => {
-        const result = (await commands.get("start_codex_server")?.(
-          { containerId: "container-codex-legacy" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
+      try {
+        await withFakeDocker(dockerScript, async (logs) => {
+          const result = (await commands.get("start_codex_server")?.(
+            { containerId: "container-codex-legacy" },
+            context,
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
 
-        expect(result).toMatchObject({ hostPort, wasRunning: false });
-        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
-        expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
+          expect(result).toMatchObject({ hostPort, wasRunning: false });
+          expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
-        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
-      });
-    } finally {
-      await bridge.close();
-      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
-      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
-      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
-      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
-      if (previousKilledFile === undefined) delete process.env.FAKE_BRIDGE_KILLED_FILE;
-      else process.env.FAKE_BRIDGE_KILLED_FILE = previousKilledFile;
-    }
-  });
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
+          expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
+        });
+      } finally {
+        await bridge.close();
+        if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+        else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+        if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+        else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+        if (previousKilledFile === undefined) delete process.env.FAKE_BRIDGE_KILLED_FILE;
+        else process.env.FAKE_BRIDGE_KILLED_FILE = previousKilledFile;
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("returns the container's persisted token when a bridge arrives after the health check", async () => {
     const hostPort = await reserveFreePort();

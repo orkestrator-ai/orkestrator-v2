@@ -67,6 +67,12 @@ export function startParentWatchdog(options: ParentWatchdogOptions): () => void 
 export interface ReparentWatchdogOptions {
   /** Invoked exactly once, when this process is reparented. */
   onReparented: () => void;
+  /**
+   * Parent observed at process startup. Pass this when asynchronous startup
+   * work happens before the watchdog is installed, so an early reparent cannot
+   * be mistaken for a process that was launched by init.
+   */
+  initialParentPid?: number;
   pollIntervalMs?: number;
   /** Injected in tests. */
   readParentPid?: () => number;
@@ -84,7 +90,7 @@ export interface ReparentWatchdogOptions {
  */
 export function startReparentWatchdog(options: ReparentWatchdogOptions): (() => void) | null {
   const readParentPid = options.readParentPid ?? (() => process.ppid);
-  const initialParentPid = readParentPid();
+  const initialParentPid = options.initialParentPid ?? readParentPid();
   if (initialParentPid <= 1) return null;
 
   const timer = setInterval(() => {

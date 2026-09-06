@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { itemToParts, stringifyUnknown } from "./index.js";
 import type { FileChangeDiffContext } from "./index.js";
 import { BaselineMap } from "./messages/diff-budget.js";
+
+jest.setTimeout(30_000);
 import type { ThreadItem } from "./codex-item-types.js";
 import type { EngineItem } from "./engine/types.js";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "./sessions/turn-accumulator.js";

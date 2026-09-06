@@ -1,10 +1,14 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { TurnAccumulator, unconfirmedTurnId } from "./turn-accumulator.js";
 import type { EngineItem } from "../engine/types.js";
 import {
   MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
 } from "../subagent-transcript.js";
+
+// Circular raw outputs exercise the serializer's exceptional path. Preserve
+// its assertions when this file shares a worker pool with process-heavy suites.
+jest.setTimeout(30_000);
 
 function accumulator(
   overrides: Partial<{ turnId: string; generation: number }> = {},

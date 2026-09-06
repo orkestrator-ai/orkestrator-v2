@@ -543,6 +543,34 @@ history rather than two partial ones.
   callback, or `syncWorkflowActivity`, so the evidence remains consistent with
   the existing activity-source timing cluster rather than a deterministic
   reviewer-fan-out regression.
+- **Recurrence (remote-client data efficiency review fixes, 2026-09-05):** `bun
+  run test:logged -- --name backend-all-2 -- bun run --cwd apps/backend test`
+  reported 2,470 passed and this case failed after 183.00 ms across 106 files
+  in 15.08 s, under the package script's own parallel worker pool. The
+  assertion is the same one as the cluster above: the environment snapshot read
+  after the durable address intent cleared did not match
+  `agentActivitySources: { "multi-review": { state: "idle" } }`
+  (`multi-review-service.test.ts:800`). The isolated rerun, `bun --cwd=apps/backend
+  test src/core/multi-review-service.test.ts`, passed 106 cases with zero
+  failures. The change in flight fixed native-agent projection sync defects and
+  split a backend test file; it touches neither `address()`, its dispatch
+  callback, nor `syncWorkflowActivity`. A code review of the same working tree
+  observed this case failing in its own backend run on the same day and did not
+  rerun the owner alone; that reading is now closed out by the isolated pass
+  recorded here.
+- **Reproduction recipe (2026-09-05):** worker count, not the aggregate itself,
+  is what surfaces this. `apps/backend`'s `test` script uses bare `--parallel`
+  (one worker per core, 18 on this host) while its `test:workspace` script —
+  the one `bun run test` drives through turbo — pins `--parallel=2`. Against
+  the same working tree, `bun --cwd=apps/backend test --preload
+  ../../tests/setup-node.ts src tests --parallel` failed this case in four of
+  five consecutive runs (183.00 ms, 215.78 ms, 185.10 ms, and one earlier run),
+  while the same command at `--parallel=2` passed 2,471 tests with zero
+  failures and the complete `bun run test` passed every group. That gives the
+  cluster the reliable trigger it has been missing: the next attempt should run
+  the high-worker command and capture the `agentActivitySources` writes around
+  `address()` and its dispatch callback, rather than trying to provoke it from
+  an aggregate run.
 - **Recurrence (native steering bridge qualification, 2026-08-28):** a command
   intended to select one projection file appended that path to the backend
   package script instead, so Bun ran the complete backend suite with its
@@ -1170,7 +1198,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `ACP bridge > bounds one oversized response without failing the session` (`bridges/acp-bridge/src/index.test.ts`)
 
-- **Status:** resolved — see the 2026-08-16 resolution sweep above
+- **Status:** open — recurred after the 2026-08-16 resolution sweep
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name fixes-full-tests -- bun run test`
   at `88b56425006c8664d2c1d669af0203ef196df273`.
@@ -1748,6 +1776,33 @@ recorded against the file that actually ran, not against the historical name.
 - **Isolated rerun:** `bun run --cwd packages/cli test` (builds, then `bun test tests --parallel`) -> 8 passed, 0 failed, 27 assertions in 2.17 seconds. Both affected cases passed.
 - **Recurrence (attachment-only startup fix, 2026-08-15):** `set -o pipefail; bun run test 2>&1 | tee /tmp/orkestrator-image-only-full-tests.log` failed `starts and gracefully stops the packaged backend` after 5,001.45 ms while the workspace group competed with the root, bridge, and protocol groups. Readiness never arrived before the outer budget, cleanup killed one dangling process, and `startPackagedBackend` subsequently reported an empty-stderr readiness failure between tests. The CLI package reported 7 passed and 1 failed before Turbo aborted the backend task with exit 130; root passed 3,656 with 1 skipped, bridges passed 2,425 with 11 skipped, and the protocol lockfile passed. The immediate isolated rerun, `bun test --cwd packages/cli tests/cli.test.ts`, passed all 8 tests with 27 assertions in 6.79 seconds; the affected case completed in 3,560.81 ms. Evidence: `/tmp/orkestrator-image-only-full-tests.log` and `/tmp/orkestrator-cli-packaged-backend-isolated.log`.
 - **Hypothesis:** No root cause is established from one occurrence. Both cases spawn the real packaged backend and wait on a fixed wall-clock budget — readiness in one, graceful exit in the other — while three other test groups saturate the machine. Neither failure mode involves a missing artifact, which is what separates this from the resolved entry above. A recurrence should capture backend startup and shutdown timings before the budgets are changed, since raising them would also hide a genuine shutdown regression.
+- **Recurrence (remote-client data efficiency, 2026-09-05):** `bun run
+  test:logged -- --name full-suite-efficiency-final-2 -- bun run test` failed
+  `starts when the caller's environment already sets NODE_ENV` after 1,953.79
+  ms: the backend became ready, but its shutdown returned signal-derived status
+  `143` instead of `0`. The CLI package reported 7 passed, 1 failed, and 27
+  assertions; Turbo stopped the workspace group after 4.6 s while the root,
+  bridge, and protocol-lockfile groups passed. The immediately preceding full
+  suite had passed, and this change does not touch CLI lifecycle code. The
+  isolated rerun, `bun run test:logged -- --name cli-shutdown-isolated -- bun
+  --cwd=packages/cli test --preload ../../tests/setup-node.ts
+  ./tests/cli.test.ts --only-failures --parallel=2`, passed all 8 cases in 3.0
+  s. This is the same graceful-shutdown signature as the original occurrence,
+  so the entry is reopened. Evidence:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CZzDC6`.
+- **Second recurrence (projection-suite split, 2026-09-05):** the same case
+  failed the same way in `bun run test:logged -- --name split-suite -- bun run
+  test` after 1,402.27 ms, with `stopPackagedBackend` resolving `143` instead
+  of `0`. The CLI package reported 7 passed, 1 failed, 27 assertions across 8
+  tests in 4.13 s; the workspace-group failure then interrupted the backend
+  group with exit 130, leaving 94 backend files unstarted. The change in flight
+  only moved backend test blocks between files and touches no CLI or backend
+  lifecycle code, and the immediately preceding full suite passed. The isolated
+  rerun, `bun --cwd=packages/cli test --preload ../../tests/setup-node.ts
+  ./tests/cli.test.ts --parallel=2`, passed all 8 cases in 2.1 s. Two
+  occurrences one day apart with an identical signal-derived exit status make
+  the graceful-shutdown race, not the readiness budget, the thing to
+  instrument next.
 - **Collateral note:** Because a workspace-group failure aborts the remaining Turbo tasks, this flake silently drops web/desktop/web-public coverage from an aggregate run. Treat a workspace-group failure as "the rest of that group did not run", not as "the rest of that group passed".
 
 ## `AcpChatTab > keeps a rejected initial prompt available for a remount retry` (`apps/web/src/components/acp/AcpChatTab.test.tsx`)

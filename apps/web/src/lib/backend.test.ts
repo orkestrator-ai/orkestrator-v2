@@ -2039,7 +2039,12 @@ describe("backend command wrapper coverage", () => {
       "createTerminalSession",
       "getTerminalOutputSnapshot",
       "getResourceRevisionManifest",
+      "getScopedResourceRevisionManifest",
+      "getScopedResourceSnapshots",
       "getNativeAgentModelCatalog",
+      "getNativeAgentSyncCapabilities",
+      "getNativeAgentProjectionUpdate",
+      "getNativeAgentMessagePage",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -2076,6 +2081,70 @@ describe("backend command wrapper coverage", () => {
     await expect(backendWrappers.getResourceRevisionManifest()).rejects.toThrow(
       "Invalid resource revision manifest response",
     );
+  });
+
+  test("validates and forwards scoped resource synchronization commands", async () => {
+    const generation = "a".repeat(32);
+    const scopedManifest = {
+      generation,
+      cursor: 7,
+      highWater: 7,
+      reset: false,
+      resetResources: [],
+      changes: [],
+      revisions: {},
+      hasMore: false,
+    };
+    invokeMock.mockResolvedValueOnce(scopedManifest);
+    await expect(
+      backendWrappers.getScopedResourceRevisionManifest(generation, 3, {}, 7),
+    ).resolves.toEqual(scopedManifest);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_scoped_resource_revision_manifest", {
+      knownGeneration: generation,
+      cursor: 3,
+      knownRevisions: {},
+      highWater: 7,
+    });
+
+    const changes = [{ resource: "environment" as const, id: "env-1", revision: 7 }];
+    const batch = {
+      entries: [{ resource: "environment" as const, id: "env-1", status: "deferred" as const }],
+    };
+    invokeMock.mockResolvedValueOnce(batch);
+    await expect(backendWrappers.getScopedResourceSnapshots(changes)).resolves.toEqual(batch);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_scoped_resource_snapshots", { changes });
+  });
+
+  test("validates native-agent projection synchronization responses", async () => {
+    invokeMock.mockResolvedValueOnce({ projectionSyncVersions: [1], historyPagingVersions: [1] });
+    await expect(backendWrappers.getNativeAgentSyncCapabilities()).resolves.toEqual({
+      projectionSyncVersions: [1],
+      historyPagingVersions: [1],
+    });
+
+    const updateInput = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "tab-1",
+      syncVersion: 1 as const,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+    };
+    invokeMock.mockResolvedValueOnce({ syncVersion: 1, status: "missing" });
+    await expect(backendWrappers.getNativeAgentProjectionUpdate(updateInput)).resolves.toEqual({
+      syncVersion: 1,
+      status: "missing",
+    });
+
+    const pageInput = { ...updateInput, before: "cursor-1" };
+    const page = {
+      syncVersion: 1 as const,
+      messages: [],
+      historyEpoch: "epoch-1",
+      complete: true,
+      truncated: false,
+    };
+    invokeMock.mockResolvedValueOnce(page);
+    await expect(backendWrappers.getNativeAgentMessagePage(pageInput)).resolves.toEqual(page);
   });
 
   test("getEnvironmentExtensions defaults to the cached backend result", async () => {

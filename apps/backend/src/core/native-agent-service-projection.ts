@@ -9,6 +9,21 @@ import {
   NATIVE_PROJECTION_MAX_BYTES,
   NATIVE_PROJECTION_MAX_MESSAGES,
   NATIVE_PROJECTION_MAX_WINDOW_MESSAGES,
+  NATIVE_PROJECTION_REVISION_LIMIT,
+  NATIVE_HISTORY_CACHE_MAX_BYTES,
+  NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
+  NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES,
+  NATIVE_HISTORY_PAGE_MAX_MESSAGES,
+  NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
+  NATIVE_SYNC_LIVE_MESSAGES,
+  NATIVE_SYNC_LIVE_TARGET_BYTES,
+  NATIVE_SYNC_MAX_DELTA_BYTES,
+  NATIVE_SYNC_MAX_DELTA_OPERATIONS,
+  NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
+  NATIVE_SYNC_MAX_REVISIONS,
+  NATIVE_SYNC_MAX_REVISION_BYTES,
+  NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES,
+  NATIVE_SYNC_REVISION_TTL_MS,
   NATIVE_SLASH_COMMAND_CACHE_LIMIT,
   NATIVE_SLASH_COMMAND_TTL_MS,
   NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES,
@@ -17,6 +32,7 @@ import {
   ProviderUnavailableError,
   boundTranscriptResponse,
   createHash,
+  randomUUID,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
   nativeComposerControls,
@@ -67,6 +83,11 @@ type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
 type AdoptNativeAgentSessionInput = shared.AdoptNativeAgentSessionInput;
 type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
 type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
+type NativeAgentProjectionUpdateInput = shared.NativeAgentProjectionUpdateInput;
+type NativeAgentMessagePageInput = shared.NativeAgentMessagePageInput;
+type NativeAgentProjectionUpdate = shared.NativeAgentProjectionUpdate;
+type NativeAgentProjectionDelta = shared.NativeAgentProjectionDelta;
+type NativeAgentMessagePage = shared.NativeAgentMessagePage;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
 type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
@@ -261,6 +282,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     sessionKey: string,
     messages: unknown[],
     limit: number,
+    maximumBytes = NATIVE_PROJECTION_MAX_BYTES,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
     const requested = messages.slice(-limit).map((raw) => {
       const message =
@@ -293,7 +315,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     });
     let boundedTranscript;
     try {
-      boundedTranscript = boundTranscriptResponse(requested, NATIVE_PROJECTION_MAX_BYTES, {
+      boundedTranscript = boundTranscriptResponse(requested, maximumBytes, {
         // The bound applies to the bare message array; the surrounding
         // projection is not what this ceiling protects.
         envelopeReserveBytes: 0,
@@ -342,6 +364,414 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     };
   }
 
+  protected boundedProjectedMessages(
+    messages: unknown[],
+    limit: number,
+    maximumBytes: number,
+  ): { messages: unknown[]; window: NativeAgentMessageWindow } {
+    let boundedTranscript;
+    const requested = messages.slice(-limit) as Array<{
+      content: string;
+      parts: unknown[];
+    }>;
+    try {
+      boundedTranscript = boundTranscriptResponse(requested, maximumBytes, {
+        envelopeReserveBytes: 0,
+        contentFallbackBytes: null,
+      });
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      throw new ProviderUnavailableError("Provider returned a non-serializable native transcript");
+    }
+    // A single valid message may exceed the soft live/page target. The hard
+    // transcript limit was already enforced while normalizing history.
+    const messagesInWindow = boundedTranscript.overflowed
+      ? requested.slice(-1)
+      : boundedTranscript.messages;
+    const omitted = messages.length - messagesInWindow.length;
+    return {
+      messages: messagesInWindow,
+      window: {
+        limit,
+        truncated: omitted > 0,
+        ...(omitted > 0
+          ? {
+              truncationReason:
+                messages.length > limit && requested.length === messagesInWindow.length
+                  ? ("count" as const)
+                  : ("bytes" as const),
+              omittedMessages: omitted,
+            }
+          : {}),
+      },
+    };
+  }
+
+  private updateProjectionHistory(
+    sessionKey: string,
+    sessionId: string,
+    messages: unknown[],
+    mutableTailStart: number,
+    complete: boolean,
+  ): void {
+    const messageFingerprints = messages.map((message) =>
+      createHash("sha256").update(JSON.stringify(message)).digest("hex").slice(0, 24),
+    );
+    const previous = this.projectionHistory.get(sessionKey);
+    // Everything before the *current* live boundary is now historical. If a
+    // message changed while simultaneously aging out of the live tail, the
+    // old page cache must be invalidated rather than preserving stale text.
+    const stableHistoricalCount = mutableTailStart;
+    const appendCompatible = Boolean(
+      previous &&
+      previous.sessionId === sessionId &&
+      messages.length >= previous.messages.length &&
+      Array.from({ length: previous.messages.length }, (_, index) => index).every((index) =>
+        index < stableHistoricalCount
+          ? (previous.messages[index] as { id?: unknown })?.id ===
+              (messages[index] as { id?: unknown })?.id &&
+            previous.messageFingerprints[index] === messageFingerprints[index]
+          : (previous.messages[index] as { id?: unknown })?.id ===
+            (messages[index] as { id?: unknown })?.id,
+      ),
+    );
+    const epoch = appendCompatible ? previous!.epoch : randomUUID();
+    const bytes = Buffer.byteLength(JSON.stringify(messages));
+    if (previous) this.projectionHistoryBytes -= previous.bytes;
+    this.projectionHistory.delete(sessionKey);
+    this.projectionHistory.set(sessionKey, {
+      sessionId,
+      epoch,
+      messages,
+      messageFingerprints,
+      mutableTailStart,
+      complete,
+      bytes,
+      updatedAt: this.now(),
+    });
+    this.projectionHistoryBytes += bytes;
+    while (this.projectionHistoryBytes > NATIVE_HISTORY_CACHE_MAX_BYTES) {
+      const oldest = this.projectionHistory.keys().next().value as string | undefined;
+      if (!oldest || oldest === sessionKey) break;
+      const entry = this.projectionHistory.get(oldest);
+      if (entry) this.projectionHistoryBytes -= entry.bytes;
+      this.projectionHistory.delete(oldest);
+    }
+  }
+
+  private historyCursor(
+    sessionKey: string,
+    beforeId: string,
+    epoch: string,
+    sessionId: string,
+  ): string {
+    return Buffer.from(
+      JSON.stringify({
+        v: 1,
+        key: createHash("sha256").update(sessionKey).digest("hex").slice(0, 24),
+        session: createHash("sha256").update(sessionId).digest("hex").slice(0, 24),
+        epoch,
+        before: createHash("sha256").update(beforeId).digest("base64url").slice(0, 32),
+      }),
+    ).toString("base64url");
+  }
+
+  private firstHistoryCursor(
+    sessionKey: string,
+    projection: NativeAgentSessionProjection,
+  ): string | undefined {
+    const history = this.projectionHistory.get(sessionKey);
+    if (!history) return undefined;
+    const historyIds = new Set(
+      history.messages.map((message) => (message as { id?: unknown })?.id).filter(String),
+    );
+    const before = projection.messages.find((message) =>
+      historyIds.has((message as { id?: unknown })?.id),
+    ) as { id?: unknown } | undefined;
+    if (!before) return undefined;
+    const beforeIndex = history.messages.findIndex(
+      (message) => (message as { id?: unknown })?.id === before.id,
+    );
+    if (beforeIndex <= 0) return undefined;
+    return typeof before?.id === "string"
+      ? this.historyCursor(sessionKey, before.id, history.epoch, history.sessionId)
+      : undefined;
+  }
+
+  private syncCacheKey(input: NativeAgentProjectionUpdateInput): string {
+    return `${nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    )}\0sync-v1`;
+  }
+
+  private recordSyncProjection(
+    key: string,
+    projection: NativeAgentSessionProjection,
+    historyEpoch: string,
+    historyCursor: string | undefined,
+  ): { token: string; identityChanged: boolean } {
+    let state = this.projectionSync.get(key);
+    const identity = JSON.stringify([projection.sessionId ?? null, projection.generation]);
+    const identityChanged = Boolean(state && state.identity !== identity);
+    if (!state || identityChanged) {
+      if (state) this.projectionSyncBytes -= state.revisionBytes;
+      state = { incarnation: randomUUID(), identity, revisions: [], revisionBytes: 0 };
+      this.projectionSync.set(key, state);
+    } else {
+      this.projectionSync.delete(key);
+      this.projectionSync.set(key, state);
+    }
+    const serializedProjection = JSON.stringify(projection);
+    const token = createHash("sha256")
+      .update(
+        `${state.incarnation}\0${serializedProjection}\0${historyEpoch}\0${historyCursor ?? ""}`,
+      )
+      .digest("base64url")
+      .slice(0, 43);
+    if (state.currentToken === token) return { token, identityChanged: false };
+    state.currentToken = token;
+    const bytes = Buffer.byteLength(serializedProjection);
+    if (bytes <= NATIVE_SYNC_MAX_REVISION_BYTES) {
+      state.revisions.push({ token, projection, bytes, createdAt: this.now() });
+      state.revisionBytes += bytes;
+      this.projectionSyncBytes += bytes;
+    }
+    const expiredBefore = this.now() - NATIVE_SYNC_REVISION_TTL_MS;
+    while (
+      state.revisions.length > NATIVE_SYNC_MAX_REVISIONS ||
+      state.revisionBytes > NATIVE_SYNC_MAX_REVISION_BYTES ||
+      (state.revisions[0]?.createdAt ?? this.now()) < expiredBefore
+    ) {
+      const removed = state.revisions.shift();
+      if (!removed) break;
+      state.revisionBytes -= removed.bytes;
+      this.projectionSyncBytes -= removed.bytes;
+    }
+    while (this.projectionSyncBytes > NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES) {
+      const oldestKey = this.projectionSync.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      const oldest = this.projectionSync.get(oldestKey)!;
+      const removed = oldest.revisions.shift();
+      if (removed) {
+        oldest.revisionBytes -= removed.bytes;
+        this.projectionSyncBytes -= removed.bytes;
+      } else if (oldestKey !== key) {
+        this.projectionSync.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
+    return { token, identityChanged };
+  }
+
+  private projectionDelta(
+    previous: NativeAgentSessionProjection,
+    current: NativeAgentSessionProjection,
+    currentHistoryIds: ReadonlySet<string>,
+  ): NativeAgentProjectionDelta {
+    const previousById = new Map(
+      previous.messages.map((message) => [(message as { id: string }).id, message] as const),
+    );
+    const currentIds = current.messages.map((message) => (message as { id: string }).id);
+    const previousIds = previous.messages.map((message) => (message as { id: string }).id);
+    const messageUpserts = current.messages.filter((message) => {
+      const id = (message as { id: string }).id;
+      const existing = previousById.get(id);
+      return !existing || JSON.stringify(existing) !== JSON.stringify(message);
+    });
+    const setFields: Record<string, unknown> = {};
+    const unsetFields: string[] = [];
+    const previousFields = previous as unknown as Record<string, unknown>;
+    const currentFields = current as unknown as Record<string, unknown>;
+    const fields = new Set([...Object.keys(previousFields), ...Object.keys(currentFields)]);
+    for (const field of fields) {
+      if (field === "messages" || field === "revision" || field === "generation") {
+        continue;
+      }
+      if (!(field in currentFields)) {
+        unsetFields.push(field);
+      } else if (JSON.stringify(previousFields[field]) !== JSON.stringify(currentFields[field])) {
+        setFields[field] = currentFields[field];
+      }
+    }
+    return {
+      messageUpserts,
+      ...(JSON.stringify(previousIds) === JSON.stringify(currentIds)
+        ? {}
+        : { liveMessageIds: currentIds }),
+      deletedMessageIds: previousIds.filter(
+        (id) => !currentIds.includes(id) && !currentHistoryIds.has(id),
+      ),
+      setFields,
+      unsetFields: unsetFields as NativeAgentProjectionDelta["unsetFields"],
+      revision: current.revision,
+      generation: current.generation,
+      ...(current.cursor === undefined ? {} : { cursor: current.cursor }),
+    };
+  }
+
+  async getProjectionUpdate(
+    input: NativeAgentProjectionUpdateInput,
+  ): Promise<NativeAgentProjectionUpdate> {
+    this.assertProjectionInput(input);
+    const projection = await this.refreshProjection(
+      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+      true,
+    );
+    if (!projection) return { syncVersion: 1, status: "missing" };
+    if (Buffer.byteLength(JSON.stringify(projection)) > NATIVE_SYNC_MAX_SNAPSHOT_BYTES) {
+      throw new ProviderUnavailableError("Native agent sync projection exceeded 20 MiB");
+    }
+    const key = this.syncCacheKey(input);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const history = this.projectionHistory.get(sessionKey);
+    const historyEpoch = history?.epoch ?? "unavailable";
+    const historyComplete = history?.complete ?? false;
+    const historyCursor = this.firstHistoryCursor(sessionKey, projection);
+    const { token, identityChanged } = this.recordSyncProjection(
+      key,
+      projection,
+      historyEpoch,
+      historyCursor,
+    );
+    if (!input.forceSnapshot && input.knownToken === token) {
+      return { syncVersion: 1, status: "unchanged", token };
+    }
+    const state = this.projectionSync.get(key)!;
+    const base = input.knownToken
+      ? state.revisions.find((entry) => entry.token === input.knownToken)
+      : undefined;
+    if (!input.forceSnapshot && base) {
+      const delta = this.projectionDelta(
+        base.projection,
+        projection,
+        new Set(
+          (history?.messages ?? [])
+            .map((message) => (message as { id?: unknown })?.id)
+            .filter((id): id is string => typeof id === "string"),
+        ),
+      );
+      const operationCount =
+        delta.messageUpserts.length +
+        delta.deletedMessageIds.length +
+        (delta.liveMessageIds?.length ?? 0) +
+        Object.keys(delta.setFields).length +
+        delta.unsetFields.length;
+      const deltaBytes = Buffer.byteLength(JSON.stringify(delta));
+      const snapshotBytes = Buffer.byteLength(JSON.stringify(projection));
+      if (
+        operationCount <= NATIVE_SYNC_MAX_DELTA_OPERATIONS &&
+        deltaBytes <= NATIVE_SYNC_MAX_DELTA_BYTES &&
+        deltaBytes < snapshotBytes
+      ) {
+        return {
+          syncVersion: 1,
+          status: "delta",
+          baseToken: input.knownToken!,
+          token,
+          delta,
+          historyEpoch,
+          historyComplete,
+          ...(historyCursor ? { historyCursor } : {}),
+        };
+      }
+    }
+    return {
+      syncVersion: 1,
+      status: "snapshot",
+      token,
+      projection,
+      historyEpoch,
+      historyComplete,
+      ...(historyCursor ? { historyCursor } : {}),
+      resetReason: input.forceSnapshot
+        ? "forced"
+        : identityChanged
+          ? "identity-changed"
+          : input.knownToken
+            ? base
+              ? "expired"
+              : "unknown-token"
+            : "initial",
+    };
+  }
+
+  async getMessagePage(input: NativeAgentMessagePageInput): Promise<NativeAgentMessagePage> {
+    this.assertProjectionInput(input);
+    if (input.before.length > 1024) throw new Error("History cursor is too large");
+    const projection = await this.refreshProjection(
+      { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+      true,
+    );
+    if (!projection) throw new Error("Native agent history is unavailable");
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const history = this.projectionHistory.get(sessionKey);
+    if (!history) throw new Error("Native agent history is unavailable");
+    let cursor: unknown;
+    try {
+      cursor = JSON.parse(Buffer.from(input.before, "base64url").toString("utf8"));
+    } catch {
+      throw new Error("Native agent history cursor is invalid");
+    }
+    const record = cursor as Record<string, unknown>;
+    if (
+      !record ||
+      record.v !== 1 ||
+      record.key !== createHash("sha256").update(sessionKey).digest("hex").slice(0, 24) ||
+      record.session !==
+        createHash("sha256").update(history.sessionId).digest("hex").slice(0, 24) ||
+      record.epoch !== history.epoch ||
+      typeof record.before !== "string"
+    ) {
+      throw new Error("Native agent history cursor expired");
+    }
+    const beforeIndex = history.messages.findIndex(
+      (message) =>
+        typeof (message as { id?: unknown }).id === "string" &&
+        createHash("sha256")
+          .update((message as { id: string }).id)
+          .digest("base64url")
+          .slice(0, 32) === record.before,
+    );
+    if (beforeIndex < 0) throw new Error("Native agent history cursor expired");
+    const limit = Math.min(
+      input.limit ?? NATIVE_HISTORY_PAGE_DEFAULT_MESSAGES,
+      NATIVE_HISTORY_PAGE_MAX_MESSAGES,
+    );
+    const targetBytes = Math.min(
+      input.targetBytes ?? NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
+      NATIVE_HISTORY_PAGE_MAX_TARGET_BYTES,
+    );
+    const candidates = history.messages.slice(Math.max(0, beforeIndex - limit), beforeIndex);
+    const bounded = this.boundedProjectedMessages(candidates, limit, targetBytes);
+    const first = bounded.messages[0] as { id?: unknown } | undefined;
+    const firstIndex = first
+      ? history.messages.findIndex((message) => (message as { id?: unknown }).id === first.id)
+      : beforeIndex;
+    const nextCursor =
+      first && typeof first.id === "string" && firstIndex > 0
+        ? this.historyCursor(sessionKey, first.id, history.epoch, history.sessionId)
+        : undefined;
+    return {
+      syncVersion: 1,
+      messages: bounded.messages,
+      historyEpoch: history.epoch,
+      ...(nextCursor ? { nextCursor } : {}),
+      complete: history.complete,
+      truncated: Boolean(nextCursor) || !history.complete,
+    };
+  }
+
   async getProjectionToolDetails(
     input: NativeAgentProjectionInput & { detailRef: string },
   ): Promise<NativeAgentToolDetails> {
@@ -358,7 +788,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (!entry || entry.sessionKey !== sessionKey) {
       this.pinnedToolDetailRefs.add(input.detailRef);
       try {
-        await this.refreshProjection(input, true);
+        // Rebuild details from the bounded retained history as well as the
+        // live tail. Otherwise expanding an older paged row after detail-cache
+        // eviction could never make its reference resolvable again.
+        await this.refreshProjection(
+          { ...input, messageLimit: NATIVE_SYNC_LIVE_MESSAGES, representation: "sync-v1" },
+          true,
+        );
         entry = this.toolDetailCache.get(input.detailRef);
       } finally {
         this.pinnedToolDetailRefs.delete(input.detailRef);
@@ -656,12 +1092,21 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   }
 
   protected invalidateProjection(key: string): void {
-    this.projectionCache.delete(key);
+    const keys = [key, `${key}\0sync-v1`];
+    for (const candidate of keys) {
+      this.projectionCache.delete(candidate);
+      const sync = this.projectionSync.get(candidate);
+      if (sync) this.projectionSyncBytes -= sync.revisionBytes;
+      this.projectionSync.delete(candidate);
+      this.projectionEpochs.set(candidate, (this.projectionEpochs.get(candidate) ?? 0) + 1);
+    }
+    const history = this.projectionHistory.get(key);
+    if (history) this.projectionHistoryBytes -= history.bytes;
+    this.projectionHistory.delete(key);
     // The identity behind this key changed, so the grace the previous session
     // had spent says nothing about the new one. A tab that resumes into a
     // different provider session starts its reconnect from a full window.
     this.projectionMissingSince.delete(key);
-    this.projectionEpochs.set(key, (this.projectionEpochs.get(key) ?? 0) + 1);
   }
 
   /**
@@ -684,11 +1129,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     input: NativeAgentProjectionInput,
     force: boolean,
   ): Promise<NativeAgentSessionProjection | null> {
-    const key = nativeAgentSessionStorageKey(
+    const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
       input.logicalSessionKey,
     );
+    const key = input.representation === "sync-v1" ? `${sessionKey}\0sync-v1` : sessionKey;
     const previousRefresh = this.projectionRefreshes.get(key);
     const operation = (async () => {
       if (previousRefresh) await previousRefresh.catch(() => undefined);
@@ -722,6 +1168,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
           this.projectionCache.delete(key);
+          const sync = this.projectionSync.get(key);
+          if (sync) this.projectionSyncBytes -= sync.revisionBytes;
+          this.projectionSync.delete(key);
+          if (input.representation === "sync-v1") {
+            const historyKey = nativeAgentSessionStorageKey(
+              input.environmentId,
+              input.agent,
+              input.logicalSessionKey,
+            );
+            const history = this.projectionHistory.get(historyKey);
+            if (history) this.projectionHistoryBytes -= history.bytes;
+            this.projectionHistory.delete(historyKey);
+          }
           this.projectionMissingSince.delete(key);
         }
         return null;
@@ -866,7 +1325,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               : {}),
           }
         : undefined;
-      const transcript = this.projectionMessages(key, snapshot.messages, messageLimit);
+      const sessionKey = nativeAgentSessionStorageKey(
+        input.environmentId,
+        input.agent,
+        input.logicalSessionKey,
+      );
+      const normalized = this.projectionMessages(
+        sessionKey,
+        snapshot.messages,
+        input.representation === "sync-v1" ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : messageLimit,
+      );
+      const transcript =
+        input.representation === "sync-v1"
+          ? this.boundedProjectedMessages(
+              normalized.messages,
+              NATIVE_SYNC_LIVE_MESSAGES,
+              NATIVE_SYNC_LIVE_TARGET_BYTES,
+            )
+          : normalized;
       const terminalNotices = [
         ...(snapshot.notices ?? []).filter(
           (notice) => notice.kind === "error" || notice.kind === "stopped",
@@ -878,9 +1354,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? [{ kind: "error" as const, message: snapshot.error }]
           : []),
       ];
-      const messages = [
-        ...transcript.messages,
-        ...terminalNotices.map((notice) => ({
+      const messageIds = new Set(
+        transcript.messages.map((message) => (message as { id?: unknown })?.id),
+      );
+      const terminalMessages = terminalNotices
+        .map((notice) => ({
           id: `native-terminal:${notice.kind}:${createHash("sha256")
             .update(notice.message)
             .digest("hex")
@@ -891,8 +1369,39 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           // Provider terminal metadata does not consistently carry a time.
           // A fixed value keeps repeated authoritative reads byte-stable.
           createdAt: "1970-01-01T00:00:00.000Z",
-        })),
-      ];
+        }))
+        .filter((message) => {
+          if (messageIds.has(message.id)) return false;
+          messageIds.add(message.id);
+          return true;
+        });
+      const messagesWithNotices = [...transcript.messages, ...terminalMessages];
+      const renderedTranscript = { messages: messagesWithNotices, window: transcript.window };
+      if (input.representation === "sync-v1") {
+        const historyIds = new Set(
+          normalized.messages
+            .map((message) => (message as { id?: unknown })?.id)
+            .filter((id): id is string => typeof id === "string"),
+        );
+        const firstLiveId = (
+          renderedTranscript.messages.find((message) =>
+            historyIds.has((message as { id?: unknown })?.id as string),
+          ) as { id?: unknown } | undefined
+        )?.id;
+        const mutableTailStart =
+          typeof firstLiveId === "string"
+            ? normalized.messages.findIndex(
+                (message) => (message as { id?: unknown })?.id === firstLiveId,
+              )
+            : normalized.messages.length;
+        this.updateProjectionHistory(
+          sessionKey,
+          resolved.session.providerSessionId,
+          normalized.messages,
+          Math.max(0, mutableTailStart),
+          snapshot.messagesComplete !== false && !normalized.window.truncated,
+        );
+      }
       // Reading the projection is the only moment a parked dispatch is
       // reliably revisited, so it is where the provider gets asked whether the
       // prompt landed after all. A record that outlived the backend generation
@@ -917,7 +1426,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         platform: input.agent,
         environmentId: input.environmentId,
         sessionId: resolved.session.providerSessionId,
-        messageWindow: transcript.window,
+        messageWindow: renderedTranscript.window,
         ...(snapshot.title ? { title: snapshot.title } : {}),
         ...(snapshot.shareUrl === undefined ? {} : { shareUrl: snapshot.shareUrl }),
         connection: "connected",
@@ -938,7 +1447,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ...(snapshot.turnStartedAt === undefined ? {} : { startedAt: snapshot.turnStartedAt }),
           ...(snapshot.error ? { error: snapshot.error } : {}),
         },
-        messages,
+        messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,
         composerControls: nativeComposerControls(
           composer,
@@ -999,7 +1508,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             }),
         ...(capabilities.fork
           ? {
-              turnBoundaries: messages.flatMap((candidate) => {
+              turnBoundaries: renderedTranscript.messages.flatMap((candidate) => {
                 const message = candidate as Record<string, unknown>;
                 return typeof message.id === "string"
                   ? [
@@ -1092,6 +1601,38 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     };
   }
 
+  /**
+   * Allocate the next revision for one logical session, whatever representation
+   * asked for it.
+   *
+   * The renderer treats `revision` as a single ordering within a generation, so
+   * the legacy full projection and the sync-v1 live tail must draw from the
+   * same sequence. A counter that was never recorded — or was evicted — is
+   * re-seeded from whatever is still cached for this session, so a restart
+   * cannot hand back a revision a client already holds.
+   */
+  protected nextProjectionRevision(sessionKey: string, generation: string): number {
+    const record = this.projectionRevisions.get(sessionKey);
+    let previous = record?.generation === generation ? record.revision : 0;
+    if (record?.generation !== generation) {
+      for (const candidate of [sessionKey, `${sessionKey}\0sync-v1`]) {
+        const cached = this.projectionCache.get(candidate);
+        if (cached?.generation === generation) {
+          previous = Math.max(previous, cached.projection.revision);
+        }
+      }
+    }
+    const revision = previous + 1;
+    this.projectionRevisions.delete(sessionKey);
+    this.projectionRevisions.set(sessionKey, { generation, revision });
+    while (this.projectionRevisions.size > NATIVE_PROJECTION_REVISION_LIMIT) {
+      const oldest = this.projectionRevisions.keys().next().value as string | undefined;
+      if (oldest === undefined || oldest === sessionKey) break;
+      this.projectionRevisions.delete(oldest);
+    }
+    return revision;
+  }
+
   protected commitProjection(
     key: string,
     input: NativeAgentProjectionInput,
@@ -1127,7 +1668,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (previous && previous.generation === generation && previous.fingerprint === fingerprint) {
       return previous.projection;
     }
-    const revision = previous?.generation === generation ? previous.projection.revision + 1 : 1;
+    const revision = this.nextProjectionRevision(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      generation,
+    );
     const projection = {
       ...candidate,
       revision,
@@ -1144,6 +1688,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
        */
       if (oldest) {
         this.projectionCache.delete(oldest);
+        const sync = this.projectionSync.get(oldest);
+        if (sync) this.projectionSyncBytes -= sync.revisionBytes;
+        this.projectionSync.delete(oldest);
         this.projectionMissingSince.delete(oldest);
         this.pruneProjectionEpoch(oldest);
       }
@@ -1154,7 +1701,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       fingerprint,
       generation,
     });
-    this.storage.announceNativeAgentSessionProjection(input.environmentId);
+    this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+    });
     return projection;
   }
 }

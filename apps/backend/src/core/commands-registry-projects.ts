@@ -1,4 +1,10 @@
 import nodePath from "node:path";
+import {
+  isResourceChange,
+  type ResourceChange,
+  type ResourceManifestKind,
+  type ScopedResourceSnapshotBatchEntry,
+} from "@orkestrator/protocol/resource-events";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   parseStoredDesktopConnections,
@@ -96,6 +102,174 @@ export function registerProjectCommands(
       throw new Error("knownGeneration must be an opaque resource generation");
     }
     return storage.getResourceRevisionManifest(knownGeneration, parsed);
+  });
+
+  register(
+    "get_scoped_resource_revision_manifest",
+    ({ knownGeneration, cursor, highWater, knownRevisions }, { storage }) => {
+      const parsed: Partial<ResourceRevisionMap> = {};
+      if (knownRevisions !== undefined) {
+        const revisions = asRecord(knownRevisions, "knownRevisions");
+        for (const [resource, revision] of Object.entries(revisions)) {
+          if (!isResourceManifestKind(resource) || !isResourceSnapshotRevision(revision)) {
+            throw new Error(`Invalid scoped manifest revision for ${resource}`);
+          }
+          parsed[resource] = revision;
+        }
+      }
+      if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
+        throw new Error("knownGeneration must be an opaque resource generation");
+      }
+      const parsedCursor = cursor === undefined ? 0 : Number(cursor);
+      const parsedHighWater = highWater === undefined ? undefined : Number(highWater);
+      if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0) {
+        throw new Error("cursor must be a non-negative safe integer");
+      }
+      if (
+        parsedHighWater !== undefined &&
+        (!Number.isSafeInteger(parsedHighWater) || parsedHighWater < parsedCursor)
+      ) {
+        throw new Error("highWater must be a safe integer at or after cursor");
+      }
+      return storage.getScopedResourceRevisionManifest(
+        knownGeneration,
+        parsedCursor,
+        parsed,
+        parsedHighWater,
+      );
+    },
+  );
+
+  register("get_scoped_resource_snapshots", async ({ changes }, context) => {
+    if (
+      !Array.isArray(changes) ||
+      changes.length > 32 ||
+      Buffer.byteLength(JSON.stringify(changes)) > 64 * 1024 ||
+      !changes.every(isResourceChange)
+    ) {
+      throw new Error("Scoped snapshot changes must contain at most 32 valid scopes");
+    }
+    const commandFor = (
+      change: ResourceChange,
+    ): { command: string; args: Record<string, unknown> } | null => {
+      switch (change.resource) {
+        case "project":
+          return { command: "get_projects", args: {} };
+        case "environment":
+          return change.projectId
+            ? { command: "get_environment_snapshots", args: { projectId: change.projectId } }
+            : null;
+        case "session":
+          return { command: "get_sessions_by_environment", args: { environmentId: change.id } };
+        case "prompt-queue":
+          return { command: "list_prompt_queues", args: { environmentId: change.id } };
+        case "pane-layout":
+          return { command: "get_pane_layout", args: { environmentId: change.id } };
+        case "build-pipeline":
+          return { command: "get_build_pipeline", args: { pipelineId: change.id } };
+        case "looped-review":
+          return { command: "get_looped_review_workflow", args: { workflowId: change.id } };
+        case "multi-review":
+          return { command: "get_multi_review_workflow", args: { workflowId: change.id } };
+        case "kanban":
+          return { command: "get_kanban_tasks", args: { projectId: change.id } };
+        case "project-notes":
+          return { command: "get_project_notes", args: { projectId: change.id } };
+        case "feature-plan":
+          return { command: "get_feature_plans", args: { projectId: change.id } };
+        case "config":
+          return { command: "get_config", args: {} };
+        case "agent-mail-summary":
+          return { command: "get_agent_mail_summary", args: {} };
+        default:
+          return null;
+      }
+    };
+    const unique = new Map<string, ResourceChange>();
+    for (const change of changes as ResourceChange[]) {
+      // Agent and logical session are part of the scope for native-agent
+      // changes, exactly as they are in the client's own coalescing key.
+      // Collapsing on `resource\0id` alone would silently drop a second agent
+      // or tab in the same environment from the batch.
+      unique.set(
+        `${change.resource}\0${change.id}\0${change.agent ?? ""}\0${change.logicalSessionKey ?? ""}`,
+        change,
+      );
+    }
+    const scopes = Array.from(unique.values());
+    const loaded = Array.from(
+      { length: scopes.length },
+      () => null as ScopedResourceSnapshotBatchEntry | null,
+    );
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < scopes.length) {
+        const index = nextIndex++;
+        const change = scopes[index]!;
+        const mapped = commandFor(change);
+        if (!mapped) {
+          loaded[index] = { resource: change.resource, id: change.id, status: "deferred" };
+          continue;
+        }
+        const handler = commands.get(mapped.command);
+        if (!handler) {
+          loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+          continue;
+        }
+        try {
+          const before = await context.storage.readConditionalResourceSnapshot(
+            change.resource as ResourceManifestKind,
+            context.storage.getResourceGeneration(),
+            "0".repeat(32),
+            () => handler(mapped.args, context),
+          );
+          if (before.status !== "changed") {
+            loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+            continue;
+          }
+          const after = await context.storage.readConditionalResourceSnapshot(
+            change.resource as ResourceManifestKind,
+            before.generation,
+            before.revision,
+            () => null,
+          );
+          if (after.status !== "unchanged") {
+            loaded[index] = { resource: change.resource, id: change.id, status: "deferred" };
+            continue;
+          }
+          const candidate: ScopedResourceSnapshotBatchEntry = {
+            resource: change.resource,
+            id: change.id,
+            status: "ok",
+            command: mapped.command,
+            args: mapped.args,
+            generation: before.generation,
+            revision: before.revision,
+            snapshot: before.snapshot,
+          };
+          loaded[index] =
+            Buffer.byteLength(JSON.stringify(candidate)) <= 2 * 1024 * 1024
+              ? candidate
+              : { resource: change.resource, id: change.id, status: "deferred" };
+        } catch {
+          loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, scopes.length) }, () => worker()));
+    const entries: ScopedResourceSnapshotBatchEntry[] = [];
+    let responseBytes = 64;
+    for (const entry of loaded) {
+      if (!entry) continue;
+      const bytes = Buffer.byteLength(JSON.stringify(entry));
+      if (entry.status === "ok" && responseBytes + bytes > 2 * 1024 * 1024) {
+        entries.push({ resource: entry.resource, id: entry.id, status: "deferred" });
+        continue;
+      }
+      entries.push(entry);
+      responseBytes += bytes;
+    }
+    return { entries };
   });
 
   register("get_projects", (args, { storage }) =>

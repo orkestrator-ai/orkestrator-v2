@@ -784,7 +784,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       };
       pipelines[pipelineId] = saved;
       await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-      this.announce("build-pipeline", pipelineId);
+      this.announce("build-pipeline", pipelineId, projectId);
       return saved;
     });
   }
@@ -796,9 +796,10 @@ export abstract class StorageDrafts extends StoragePrompts {
     await this.enqueueBuildPipelineMutation(async () => {
       const pipelines = await this.loadBuildPipelines();
       if (pipelineId in pipelines) {
+        const removedProjectId = pipelines[pipelineId]?.projectId;
         delete pipelines[pipelineId];
         await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-        this.announce("build-pipeline", pipelineId);
+        this.announce("build-pipeline", pipelineId, removedProjectId, undefined, true);
       }
       await this.scrubSensitiveJsonBackups(
         this.buildPipelinesFile(),
@@ -825,13 +826,16 @@ export abstract class StorageDrafts extends StoragePrompts {
     return this.enqueueBuildPipelineMutation(async () => {
       const pipelines = await this.loadBuildPipelines();
       const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
-      const removedIds = Object.values(pipelines)
-        .filter((pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId)
-        .map((pipeline) => pipeline.id);
+      const removedPipelines = Object.values(pipelines).filter(
+        (pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId,
+      );
+      const removedIds = removedPipelines.map((pipeline) => pipeline.id);
       if (removedIds.length > 0) {
         for (const removedId of removedIds) delete pipelines[removedId];
         await this.saveSensitiveJson(this.buildPipelinesFile(), pipelines);
-        for (const removedId of removedIds) this.announce("build-pipeline", removedId);
+        for (const removed of removedPipelines) {
+          this.announce("build-pipeline", removed.id, removed.projectId, undefined, true);
+        }
       }
       const removedIdSet = new Set(removedIds);
       if (linkedId) removedIdSet.add(linkedId);

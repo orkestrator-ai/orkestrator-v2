@@ -3,6 +3,7 @@ import {
   isResourceChange,
   isResourceKind,
   isResourceRevisionManifest,
+  isScopedResourceSnapshotBatch,
   RESOURCE_MANIFEST_KINDS,
   RESOURCE_CHANGED_EVENT,
   RESOURCE_KINDS,
@@ -52,6 +53,22 @@ describe("isResourceChange", () => {
     expect(isResourceChange(change({ projectId: "project-1" }))).toBe(true);
   });
 
+  test("accepts scoped deletions and rejects incomplete native session scope", () => {
+    expect(
+      isResourceChange(
+        change({
+          resource: "native-agent-session",
+          agent: "codex",
+          logicalSessionKey: "environment:tab",
+          deleted: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(isResourceChange(change({ resource: "native-agent-session", agent: "codex" }))).toBe(
+      false,
+    );
+  });
+
   test("accepts a change carrying extra fields", () => {
     expect(isResourceChange({ ...(change() as object), extra: "ignored" })).toBe(true);
   });
@@ -97,6 +114,27 @@ describe("isResourceChange", () => {
   test("rejects a non-number revision", () => {
     expect(isResourceChange(change({ revision: "1" as never }))).toBe(false);
     expect(isResourceChange({ resource: "environment", id: "env-1" })).toBe(false);
+  });
+});
+
+describe("scoped snapshot batches", () => {
+  test("accepts allowlisted reads and rejects arbitrary command execution", () => {
+    const entry = {
+      resource: "pane-layout",
+      id: "environment-1",
+      status: "ok",
+      command: "get_pane_layout",
+      args: { environmentId: "environment-1" },
+      generation: "a".repeat(32),
+      revision: "b".repeat(32),
+      snapshot: null,
+    };
+    expect(isScopedResourceSnapshotBatch({ entries: [entry] })).toBe(true);
+    expect(
+      isScopedResourceSnapshotBatch({
+        entries: [{ ...entry, command: "delete_environment" }],
+      }),
+    ).toBe(false);
   });
 });
 

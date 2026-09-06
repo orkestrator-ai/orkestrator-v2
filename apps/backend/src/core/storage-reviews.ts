@@ -420,10 +420,10 @@ export abstract class StorageReviews extends StorageSessions {
           isPersistedLoopedReviewWorkflow(workflow, storedId),
         ),
       ) as Record<string, PersistedLoopedReviewWorkflow>;
-      if (!(workflowId in workflows)) return;
+      if (!workflows[workflowId]) return;
       delete workflows[workflowId];
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
-      this.announce("looped-review", workflowId);
+      this.announce("looped-review", workflowId, undefined, undefined, true);
     });
   }
 
@@ -453,7 +453,9 @@ export abstract class StorageReviews extends StorageSessions {
       if (removedIds.length === 0) return;
 
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
-      for (const removedId of removedIds) this.announce("looped-review", removedId);
+      for (const removedId of removedIds) {
+        this.announce("looped-review", removedId, undefined, undefined, true);
+      }
 
       // Rotating the primary file creates a backup containing the deleted
       // workflow. Scrub every retained backup before releasing the mutation
@@ -731,7 +733,7 @@ export abstract class StorageReviews extends StorageSessions {
       if (!(workflowId in workflows)) return;
       delete workflows[workflowId];
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
-      this.announce("multi-review", workflowId);
+      this.announce("multi-review", workflowId, undefined, undefined, true);
     });
   }
 
@@ -757,7 +759,7 @@ export abstract class StorageReviews extends StorageSessions {
         ),
       );
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
-      for (const id of removed) this.announce("multi-review", id);
+      for (const id of removed) this.announce("multi-review", id, undefined, undefined, true);
       await this.scrubSensitiveJsonBackups(
         this.multiReviewsFile(),
         (id, workflow) =>

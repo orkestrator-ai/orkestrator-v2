@@ -26,6 +26,7 @@ type ResourceChange = shared.ResourceChange;
 type ResourceKind = shared.ResourceKind;
 type ResourceManifestKind = shared.ResourceManifestKind;
 type ResourceRevisionManifest = shared.ResourceRevisionManifest;
+type ScopedResourceRevisionManifest = shared.ScopedResourceRevisionManifest;
 type ResourceRevisionMap = shared.ResourceRevisionMap;
 type ResourceSnapshotRevision = shared.ResourceSnapshotRevision;
 type AgentModel = shared.AgentModel;
@@ -168,6 +169,11 @@ export abstract class StorageBase {
   protected agentMailMutation: Promise<unknown> = Promise.resolve();
   protected changeListener: ResourceChangeListener | null = null;
   protected changeRevision = 0;
+  protected readonly scopedChanges: Array<{
+    change: ResourceChange;
+    snapshotRevision?: Promise<ResourceSnapshotRevision | undefined>;
+  }> = [];
+  protected scopedChangeBytes = 0;
   protected abstract recoverExpiredPromptQueueClaims(): Promise<void>;
   protected abstract promptQueueMessageFingerprint(message: unknown): string;
   protected abstract deleteComposeDraftsByProject(projectId: string): Promise<void>;
@@ -209,17 +215,43 @@ export abstract class StorageBase {
    * a client that refetches in response is guaranteed to observe the new value
    * rather than race the write it was told about.
    */
-  protected announce(resource: ResourceKind, id: string, projectId?: string): void {
+  protected announce(
+    resource: ResourceKind,
+    id: string,
+    projectId?: string,
+    scope?: { agent: string; logicalSessionKey: string },
+    deleted = false,
+  ): void {
+    this.changeRevision += 1;
+    const change: ResourceChange = {
+      resource,
+      id,
+      revision: this.changeRevision,
+      ...(projectId ? { projectId } : {}),
+      ...(scope ? scope : {}),
+      ...(deleted ? { deleted: true } : {}),
+    };
+    const journalEntry = {
+      change,
+      ...(RESOURCE_MANIFEST_KINDS.includes(resource as ResourceManifestKind)
+        ? {
+            snapshotRevision: this.getResourceSnapshotRevision(
+              resource as ResourceManifestKind,
+            ).catch(() => undefined),
+          }
+        : {}),
+    };
+    this.scopedChanges.push(journalEntry);
+    this.scopedChangeBytes += Buffer.byteLength(JSON.stringify(change));
+    while (this.scopedChanges.length > 4_096 || this.scopedChangeBytes > 2 * 1024 * 1024) {
+      const removed = this.scopedChanges.shift();
+      if (!removed) break;
+      this.scopedChangeBytes -= Buffer.byteLength(JSON.stringify(removed.change));
+    }
     const listener = this.changeListener;
     if (!listener) return;
-    this.changeRevision += 1;
     try {
-      listener({
-        resource,
-        id,
-        revision: this.changeRevision,
-        ...(projectId ? { projectId } : {}),
-      });
+      listener(change);
     } catch (error) {
       // A broken client transport must never fail the mutation that succeeded.
       console.error("[Storage] Resource change listener threw:", error);
@@ -234,8 +266,11 @@ export abstract class StorageBase {
    * its cache and only then calls this method, preserving the same
    * announce-after-commit ordering as file-backed resources.
    */
-  announceNativeAgentSessionProjection(environmentId: string): void {
-    this.announce("native-agent-session", environmentId);
+  announceNativeAgentSessionProjection(
+    environmentId: string,
+    scope?: { agent: string; logicalSessionKey: string },
+  ): void {
+    this.announce("native-agent-session", environmentId, undefined, scope);
   }
 
   getDataDir(): string {
@@ -410,6 +445,109 @@ export abstract class StorageBase {
       }
     }
     return { generation: this.resourceGeneration, reset, revisions };
+  }
+
+  async getScopedResourceRevisionManifest(
+    knownGeneration: string | undefined,
+    cursor: number,
+    knownRevisions: Partial<ResourceRevisionMap> = {},
+    requestedHighWater?: number,
+  ): Promise<ScopedResourceRevisionManifest> {
+    const highWater = Math.min(requestedHighWater ?? this.changeRevision, this.changeRevision);
+    if (knownGeneration !== this.resourceGeneration) {
+      const broad = await this.getResourceRevisionManifest(undefined, knownRevisions);
+      return {
+        generation: this.resourceGeneration,
+        cursor: highWater,
+        highWater,
+        reset: true,
+        resetResources: [...RESOURCE_MANIFEST_KINDS],
+        changes: [],
+        revisions: broad.revisions,
+        hasMore: false,
+      };
+    }
+    const oldest = this.scopedChanges[0]?.change.revision ?? highWater + 1;
+    if (cursor < oldest - 1 || cursor > highWater) {
+      const broad = await this.getResourceRevisionManifest(undefined, knownRevisions);
+      return {
+        generation: this.resourceGeneration,
+        cursor: highWater,
+        highWater,
+        reset: true,
+        resetResources: [...RESOURCE_MANIFEST_KINDS],
+        changes: [],
+        revisions: broad.revisions,
+        hasMore: false,
+      };
+    }
+    const pending: typeof this.scopedChanges = [];
+    let pageBytes = 0;
+    for (const entry of this.scopedChanges) {
+      if (entry.change.revision <= cursor || entry.change.revision > highWater) continue;
+      const entryBytes = Buffer.byteLength(JSON.stringify(entry.change));
+      if (pending.length >= 256 || (pending.length > 0 && pageBytes + entryBytes > 64 * 1024)) {
+        break;
+      }
+      pending.push(entry);
+      pageBytes += entryBytes;
+    }
+    const lastCursor = pending.at(-1)?.change.revision ?? cursor;
+    const hasMore = lastCursor < highWater;
+    if (hasMore) {
+      const latestByResource = new Map<ResourceManifestKind, (typeof pending)[number]>();
+      for (const entry of pending) {
+        if (RESOURCE_MANIFEST_KINDS.includes(entry.change.resource as ResourceManifestKind)) {
+          latestByResource.set(entry.change.resource as ResourceManifestKind, entry);
+        }
+      }
+      const revisions: Partial<ResourceRevisionMap> = {};
+      await Promise.all(
+        Array.from(latestByResource.entries()).map(async ([resource, entry]) => {
+          const revision = await entry.snapshotRevision?.catch(() => undefined);
+          if (revision) revisions[resource] = revision;
+        }),
+      );
+      return {
+        generation: this.resourceGeneration,
+        cursor: lastCursor,
+        highWater,
+        reset: false,
+        resetResources: [],
+        changes: pending.map((entry) => entry.change),
+        revisions,
+        hasMore: true,
+      };
+    }
+    const current = await this.getResourceRevisionManifest(this.resourceGeneration, knownRevisions);
+    const resetResources: ResourceManifestKind[] = [];
+    for (const resource of Object.keys(current.revisions) as ResourceManifestKind[]) {
+      // These two collections establish the owner hierarchy for every scoped
+      // read. Refresh them authoritatively before replaying dependent records.
+      if (resource === "project" || resource === "environment") {
+        resetResources.push(resource);
+        continue;
+      }
+      const latestAccounted = Array.from(pending)
+        .reverse()
+        .find((entry) => entry.change.resource === resource);
+      const accountedRevision = latestAccounted?.snapshotRevision
+        ? await latestAccounted.snapshotRevision.catch(() => undefined)
+        : undefined;
+      if (!accountedRevision || accountedRevision !== current.revisions[resource]) {
+        resetResources.push(resource);
+      }
+    }
+    return {
+      generation: this.resourceGeneration,
+      cursor: lastCursor,
+      highWater,
+      reset: false,
+      resetResources,
+      changes: pending.map((entry) => entry.change),
+      revisions: current.revisions,
+      hasMore: false,
+    };
   }
 
   /**

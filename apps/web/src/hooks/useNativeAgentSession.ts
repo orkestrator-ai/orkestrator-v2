@@ -13,12 +13,20 @@ import type {
   NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import {
+  applyNativeAgentProjectionDelta,
+  DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+  isNativeAgentSessionProjection,
+} from "@orkestrator/protocol/native-agent";
+import {
   adoptNativeAgentSession,
   dispatchNativeAgentIntent,
   dismissNativeAgentSuggestedPrompt,
   enqueuePromptQueueMessage,
   ensureNativeAgentSession,
   getNativeAgentProjection,
+  getNativeAgentProjectionUpdate,
+  getNativeAgentMessagePage,
+  getNativeAgentSyncCapabilities,
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
@@ -38,7 +46,11 @@ import {
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import {
+  evictNativeAgentHistoryCaches,
+  useNativeAgentProjectionStore,
+  type NativeAgentSyncCacheEntry,
+} from "@/stores/nativeAgentProjectionStore";
 
 /** Mirrors the backend's default window; only used to size the first expansion. */
 const DEFAULT_MESSAGE_WINDOW = 512;
@@ -46,6 +58,100 @@ const DEFAULT_MESSAGE_WINDOW = 512;
 const MAX_MESSAGE_WINDOW = 4_096;
 const ACTIVE_PROJECTION_REFRESH_MS = 500;
 const IDLE_PROJECTION_REFRESH_MS = 1_500;
+const CLIENT_HISTORY_MAX_MESSAGES = 4_096;
+const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
+const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
+/** Mirrors the backend page ceiling so a request is never silently clamped. */
+const HISTORY_PAGE_MAX_MESSAGES = 200;
+
+let syncCapability: { supported: boolean; checkedAt: number; generation: number } | null = null;
+let syncCapabilityGeneration = 0;
+let syncCapabilityInvalidationQueued = false;
+let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | null = null;
+
+function encodedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+async function nativeAgentSyncSupported(): Promise<boolean> {
+  const generation = syncCapabilityGeneration;
+  if (
+    syncCapability &&
+    syncCapability.generation === generation &&
+    (syncCapability.supported || Date.now() - syncCapability.checkedAt < 30_000)
+  ) {
+    return syncCapability.supported;
+  }
+  if (syncCapabilityRequest?.generation === generation) return syncCapabilityRequest.promise;
+  const promise = (async () => {
+    try {
+      const capabilities = await getNativeAgentSyncCapabilities();
+      const supported = capabilities.projectionSyncVersions?.includes(1) === true;
+      if (generation === syncCapabilityGeneration) {
+        syncCapability = { supported, checkedAt: Date.now(), generation };
+      }
+      return supported;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Unknown backend command: get_native_agent_sync_capabilities")) {
+        if (generation === syncCapabilityGeneration) {
+          syncCapability = { supported: false, checkedAt: Date.now(), generation };
+        }
+        return false;
+      }
+      throw error;
+    }
+  })();
+  const request = { generation, promise };
+  syncCapabilityRequest = request;
+  try {
+    return await promise;
+  } finally {
+    if (syncCapabilityRequest === request) syncCapabilityRequest = null;
+  }
+}
+
+function invalidateNativeAgentSyncCapability(): void {
+  // Every mounted session hears the same reconnect/resync announcement. Treat
+  // callbacks delivered in one turn as one backend-generation change so they
+  // can still share the replacement backend's capability request.
+  if (syncCapabilityInvalidationQueued) return;
+  syncCapabilityInvalidationQueued = true;
+  syncCapabilityGeneration += 1;
+  syncCapability = null;
+  queueMicrotask(() => {
+    syncCapabilityInvalidationQueued = false;
+  });
+}
+
+/** A merged sync transcript computed ahead of the fence that installs it. */
+interface SyncMaterializationPlan<TMessage> {
+  materialized: NativeAgentSessionProjection<TMessage>;
+  live: NativeAgentSessionProjection<TMessage>;
+  token: string;
+  historyEpoch: string;
+  historyCursor?: string;
+  /** Server-reported first message before the live tail, for recovery. */
+  boundaryCursor?: string;
+  historyComplete: boolean;
+  historyMessages: TMessage[];
+  historyBytes: number;
+  evictionGeneration: number;
+}
+
+/**
+ * Forget the negotiated backend capability.
+ *
+ * The answer is cached for the life of the process because it changes only
+ * when the backend itself is replaced, and `onResourceResync` already
+ * announces that. Tests are the one caller that swaps backends without an
+ * announcement: a suite that advertises a different capability set has to say
+ * so, or it inherits — and leaves behind — a protocol its own mocks do not
+ * serve.
+ */
+export function resetNativeAgentSyncCapabilityForTests(): void {
+  invalidateNativeAgentSyncCapability();
+}
 
 interface UseNativeAgentSessionOptions {
   platform: AgentPlatform;
@@ -133,6 +239,9 @@ export function useNativeAgentSession<TMessage = unknown>({
   const sharedProjection = useNativeAgentProjectionStore((state) =>
     state.projections.get(sessionKey),
   ) as NativeAgentSessionProjection<TMessage> | undefined;
+  const sharedSyncCache = useNativeAgentProjectionStore((state) =>
+    state.syncCaches.get(sessionKey),
+  );
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(enabled);
   /**
@@ -158,6 +267,36 @@ export function useNativeAgentSession<TMessage = unknown>({
   // waiting for a redundant provider-adoption probe first.
   const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
     sharedProjection ?? null,
+  );
+  const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
+  const syncLiveProjectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
+    (sharedSyncCache?.liveProjection as NativeAgentSessionProjection<TMessage> | undefined) ?? null,
+  );
+  const historyEpochRef = useRef<string | undefined>(sharedSyncCache?.historyEpoch);
+  const historyCursorRef = useRef<string | undefined>(sharedSyncCache?.historyCursor);
+  /**
+   * The newest server-reported boundary between retained history and the live
+   * tail. Every recovery path — a rotated epoch, a store eviction, a collapse
+   * back to the bounded live view — restarts paging from here, so it must
+   * survive a page load that reports only its own older cursor.
+   */
+  const historyBoundaryCursorRef = useRef<string | undefined>(
+    sharedSyncCache?.historyBoundaryCursor,
+  );
+  const historyCompleteRef = useRef(sharedSyncCache?.historyComplete ?? false);
+  const historyMessagesRef = useRef<TMessage[]>(
+    (sharedSyncCache?.historyMessages as TMessage[] | undefined) ?? [],
+  );
+  /**
+   * The store-side history eviction counter this hook has already honoured.
+   *
+   * The store can only evict its own copy of a retained page; the mounted hook
+   * holds the same messages in `historyMessagesRef` and would write them
+   * straight back on its next materialization. Observing the counter is what
+   * makes a global eviction actually reclaim the bytes.
+   */
+  const historyEvictionRef = useRef(
+    useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
   );
   const refreshSequenceRef = useRef(0);
   const projectionOperationEpochRef = useRef(0);
@@ -228,11 +367,14 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, []);
 
   const applyProjection = useCallback(
-    (next: NativeAgentSessionProjection<TMessage> | null) => {
+    (
+      next: NativeAgentSessionProjection<TMessage> | null,
+      syncCache?: NativeAgentSyncCacheEntry | null,
+    ) => {
       if (!next) {
         projectionRef.current = null;
         setRuntimeProjection(null);
-        useNativeAgentProjectionStore.getState().setProjection(sessionKey, null);
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, null, null);
         return;
       }
       const current = projectionRef.current;
@@ -246,12 +388,298 @@ export function useNativeAgentSession<TMessage = unknown>({
       setRuntimeProjection(next);
       useNativeAgentProjectionStore
         .getState()
-        .setProjection(sessionKey, next as NativeAgentSessionProjection);
+        .setProjection(sessionKey, next as NativeAgentSessionProjection, syncCache);
       if (next.sessionId) {
         updateTabNativeSessionId(tabId, next.sessionId, environmentId);
       }
     },
     [environmentId, sessionKey, tabId, updateTabNativeSessionId],
+  );
+
+  /**
+   * Room left for history this tab has not fetched yet.
+   *
+   * Used to size the page request itself, so the server trims rather than the
+   * client: a page the client has to trim on arrival leaves its older half
+   * behind a cursor only the server can mint.
+   */
+  const historyRequestBudget = useCallback((): { messages: number; bytes: number } => {
+    const store = useNativeAgentProjectionStore.getState();
+    const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
+      (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
+      0,
+    );
+    const byteCeiling = Math.min(
+      CLIENT_HISTORY_MAX_BYTES,
+      Math.max(0, CLIENT_HISTORY_TOTAL_MAX_BYTES - otherHistoryBytes),
+    );
+    const liveMessages = syncLiveProjectionRef.current?.messages.length ?? 0;
+    return {
+      messages: Math.max(
+        0,
+        CLIENT_HISTORY_MAX_MESSAGES - liveMessages - historyMessagesRef.current.length,
+      ),
+      bytes: Math.max(0, byteCeiling - encodedBytes(historyMessagesRef.current)),
+    };
+  }, [sessionKey]);
+
+  /**
+   * Compute — but do not install — the merged transcript one sync update
+   * implies.
+   *
+   * Every ref this reads is left untouched. A read that started before a
+   * mutation has to be discarded whole, and a materializer that mutated state
+   * on the way to producing its answer would already have clobbered the newer
+   * authoritative projection by the time the caller's fence noticed. The
+   * caller commits the plan only once it has confirmed the read is still the
+   * newest one for this identity.
+   */
+  const planSyncMaterialization = useCallback(
+    (params: {
+      live: NativeAgentSessionProjection<TMessage>;
+      token: string;
+      historyEpoch: string;
+      /** Server-reported completeness of the backend's own history. */
+      historyComplete: boolean;
+      /**
+       * The live tail's own boundary, as this update reported it. Present only
+       * when the update actually carried one; paging omits it so the last
+       * reported boundary survives, which is the cursor every recovery path
+       * below has to fall back to.
+       */
+      boundary?: { cursor?: string };
+      deletedMessageIds?: readonly string[];
+      /** Explicit retained state, used by paging instead of the current refs. */
+      retained?: { messages: TMessage[]; cursor?: string; complete: boolean };
+    }): SyncMaterializationPlan<TMessage> => {
+      const { live, token, historyEpoch, historyComplete } = params;
+      const boundaryCursor = params.boundary
+        ? params.boundary.cursor
+        : historyBoundaryCursorRef.current;
+      const store = useNativeAgentProjectionStore.getState();
+      const evictionGeneration = store.historyEvictions.get(sessionKey) ?? 0;
+      const evicted = evictionGeneration !== historyEvictionRef.current;
+      const previousLive = syncLiveProjectionRef.current;
+      const historyEpochChanged = historyEpochRef.current !== historyEpoch;
+      const messageId = (message: TMessage): unknown => (message as { id?: unknown })?.id;
+
+      let retainedMessages: TMessage[];
+      let retainedCursor: string | undefined;
+      let mergeAgedOut = false;
+      if (params.retained) {
+        retainedMessages = [...params.retained.messages];
+        retainedCursor = params.retained.cursor;
+      } else if (historyEpochChanged || evicted) {
+        // A rotated history or a global eviction invalidates every retained
+        // page. The server's own first cursor makes the same range fetchable
+        // again rather than stranding it.
+        retainedMessages = [];
+        retainedCursor = boundaryCursor;
+      } else {
+        retainedMessages = historyMessagesRef.current;
+        if (params.deletedMessageIds?.length) {
+          const deleted = new Set(params.deletedMessageIds);
+          retainedMessages = retainedMessages.filter(
+            (message) => !deleted.has(messageId(message) as string),
+          );
+        }
+        if (retainedMessages.length === 0) {
+          // With no retained pages, follow the moving live boundary. Once pages
+          // exist their cursor is older and remains valid across append-only
+          // updates, so it must not be replaced by this first-page cursor.
+          retainedCursor = boundaryCursor;
+        } else {
+          retainedCursor = historyCursorRef.current;
+          mergeAgedOut = true;
+        }
+      }
+      /*
+       * Completeness describes the backend's history for this session, not how
+       * far this client has paged, so the authoritative value always wins.
+       * Accumulating it with AND made `false` absorbing: one transient
+       * incomplete read left the transcript permanently marked truncated even
+       * after a later snapshot proved otherwise.
+       */
+      const retainedComplete =
+        params.retained && !historyEpochChanged ? params.retained.complete : historyComplete;
+
+      const liveIds = new Set(
+        live.messages
+          .map((message) => messageId(message))
+          .filter((id): id is string => typeof id === "string"),
+      );
+      if (mergeAgedOut && previousLive) {
+        const retainedIds = new Set(retainedMessages.map((message) => messageId(message)));
+        const agedOut = previousLive.messages.filter((message) => {
+          const id = messageId(message);
+          return typeof id === "string" && !liveIds.has(id) && !retainedIds.has(id);
+        });
+        if (agedOut.length > 0) retainedMessages = [...retainedMessages, ...agedOut];
+      }
+      retainedMessages = retainedMessages.filter(
+        (message) => !liveIds.has(messageId(message) as string),
+      );
+
+      const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
+        (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
+        0,
+      );
+      let retainedHistoryBytes = encodedBytes(retainedMessages);
+      let settledCursor = retainedCursor;
+      if (
+        retainedMessages.length + live.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
+        retainedHistoryBytes > CLIENT_HISTORY_MAX_BYTES ||
+        retainedHistoryBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
+      ) {
+        // Eviction is an explicit collapse back to the bounded live view. The
+        // server-supplied first cursor lets the same history be fetched again.
+        retainedMessages = [];
+        retainedHistoryBytes = encodedBytes(retainedMessages);
+        settledCursor = boundaryCursor;
+      }
+
+      const seen = new Set<string>();
+      const messages = [...retainedMessages, ...live.messages].filter((message) => {
+        const id = messageId(message);
+        if (typeof id !== "string" || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      /*
+       * The control is driven by the cursor this client actually holds, not by
+       * the server's live-tail boundary. They diverge as soon as paging reaches
+       * the start of the conversation: the boundary cursor keeps being reported
+       * because messages do exist before the live tail, while the client has
+       * nothing left to ask for, and rendering the button from the server value
+       * put an inert action back on screen after every poll.
+       */
+      const messageWindow = settledCursor
+        ? {
+            limit: messages.length,
+            truncated: true,
+            truncationReason: "count" as const,
+            canLoadEarlier: true,
+          }
+        : retainedComplete
+          ? undefined
+          : {
+              ...(live.messageWindow ?? { limit: messages.length }),
+              truncated: true,
+              canLoadEarlier: false,
+            };
+      return {
+        materialized: {
+          ...live,
+          messages,
+          ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
+        },
+        live,
+        token,
+        historyEpoch,
+        ...(settledCursor ? { historyCursor: settledCursor } : {}),
+        ...(boundaryCursor ? { boundaryCursor } : {}),
+        historyComplete: retainedComplete,
+        historyMessages: retainedMessages,
+        historyBytes: retainedHistoryBytes,
+        evictionGeneration,
+      };
+    },
+    [sessionKey],
+  );
+
+  /** Installs a plan. Callers must have fenced the read that produced it. */
+  const commitSyncMaterialization = useCallback(
+    (plan: SyncMaterializationPlan<TMessage>) => {
+      historyEpochRef.current = plan.historyEpoch;
+      historyCursorRef.current = plan.historyCursor;
+      historyBoundaryCursorRef.current = plan.boundaryCursor;
+      historyCompleteRef.current = plan.historyComplete;
+      historyMessagesRef.current = plan.historyMessages;
+      historyEvictionRef.current = plan.evictionGeneration;
+      syncTokenRef.current = plan.token;
+      syncLiveProjectionRef.current = plan.live;
+      applyProjection(plan.materialized, {
+        token: plan.token,
+        liveProjection: plan.live as NativeAgentSessionProjection,
+        historyEpoch: plan.historyEpoch,
+        ...(plan.historyCursor ? { historyCursor: plan.historyCursor } : {}),
+        ...(plan.boundaryCursor ? { historyBoundaryCursor: plan.boundaryCursor } : {}),
+        historyComplete: plan.historyComplete,
+        historyMessages: plan.historyMessages,
+        historyBytes: plan.historyBytes,
+      });
+      return plan.materialized;
+    },
+    [applyProjection],
+  );
+
+  /** Forgets every sync-v1 assumption, so the next read starts from a snapshot. */
+  const resetSyncState = useCallback(() => {
+    syncTokenRef.current = undefined;
+    syncLiveProjectionRef.current = null;
+    historyMessagesRef.current = [];
+    historyCursorRef.current = undefined;
+    historyBoundaryCursorRef.current = undefined;
+    historyEpochRef.current = undefined;
+    historyCompleteRef.current = false;
+  }, []);
+
+  /**
+   * Install an authoritative projection returned by a mutation.
+   *
+   * Mutations answer on the legacy full-projection surface, whose transcript
+   * window is unrelated to the sync live tail. Applying one verbatim would
+   * drop every page this tab had loaded until a later poll happened to rebuild
+   * them. Merge it over the retained history instead, and leave the sync token
+   * and live projection alone — they describe the base the backend will diff
+   * its next delta against, and a legacy window is not that base.
+   */
+  const applyMutationProjection = useCallback(
+    (next: NativeAgentSessionProjection<TMessage> | null) => {
+      const live = syncLiveProjectionRef.current;
+      const retained = historyMessagesRef.current;
+      if (
+        !next ||
+        !live ||
+        retained.length === 0 ||
+        next.platform !== platform ||
+        next.environmentId !== environmentId
+      ) {
+        applyProjection(next);
+        return next;
+      }
+      const nextIds = new Set(
+        next.messages
+          .map((message) => (message as { id?: unknown })?.id)
+          .filter((id): id is string => typeof id === "string"),
+      );
+      const messages = [
+        ...retained.filter((message) => !nextIds.has((message as { id?: unknown })?.id as string)),
+        ...next.messages,
+      ];
+      const messageWindow = historyCursorRef.current
+        ? {
+            limit: messages.length,
+            truncated: true,
+            truncationReason: "count" as const,
+            canLoadEarlier: true,
+          }
+        : historyCompleteRef.current
+          ? undefined
+          : {
+              ...(next.messageWindow ?? { limit: messages.length }),
+              truncated: true,
+              canLoadEarlier: false,
+            };
+      const merged = {
+        ...next,
+        messages,
+        ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
+      } as NativeAgentSessionProjection<TMessage>;
+      applyProjection(merged);
+      return merged;
+    },
+    [applyProjection, environmentId, platform],
   );
 
   /**
@@ -291,12 +719,86 @@ export function useNativeAgentSession<TMessage = unknown>({
       const operationEpoch = projectionOperationEpochRef.current;
       setIsRefreshing(true);
       try {
-        const next = await getNativeAgentProjection<TMessage>({
-          ...identity,
-          // Sent on every read so an expanded transcript survives a reconnect,
-          // a generation change, or a refresh triggered by another tab.
-          ...(messageLimit === undefined ? {} : { messageLimit }),
-        });
+        let next: NativeAgentSessionProjection<TMessage> | null;
+        /*
+         * Every sync side effect is deferred behind the fence below.
+         *
+         * A poll can outlive the stop, resume, control update or session
+         * replacement that started after it, and the guard further down
+         * recognises exactly that case. Materializing on the way to the answer
+         * defeated it: the refs, the renderer cache and the shared store had
+         * already been rewritten from the stale read by the time the sequence
+         * comparison rejected it.
+         */
+        let commit: (() => void) | null = null;
+        if (await nativeAgentSyncSupported()) {
+          let update = await getNativeAgentProjectionUpdate<TMessage>({
+            ...identity,
+            syncVersion: 1,
+            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+            ...(syncTokenRef.current ? { knownToken: syncTokenRef.current } : {}),
+            ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          });
+          if (update.status === "unchanged") {
+            next = projectionRef.current;
+          } else if (update.status === "missing") {
+            next = null;
+            commit = resetSyncState;
+          } else {
+            let live: NativeAgentSessionProjection<TMessage> | null = null;
+            if (update.status === "snapshot") {
+              live = update.projection;
+            } else if (syncTokenRef.current === update.baseToken && syncLiveProjectionRef.current) {
+              live = applyNativeAgentProjectionDelta(syncLiveProjectionRef.current, update.delta);
+            }
+            if (
+              live &&
+              (!isNativeAgentSessionProjection(live) ||
+                live.platform !== platform ||
+                live.environmentId !== environmentId)
+            ) {
+              live = null;
+            }
+            const deletedMessageIds =
+              update.status === "delta" ? update.delta.deletedMessageIds : [];
+            if (!live) {
+              update = await getNativeAgentProjectionUpdate<TMessage>({
+                ...identity,
+                syncVersion: 1,
+                liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+                forceSnapshot: true,
+              });
+              live = update.status === "snapshot" ? update.projection : null;
+              if (
+                live &&
+                (!isNativeAgentSessionProjection(live) ||
+                  live.platform !== platform ||
+                  live.environmentId !== environmentId)
+              ) {
+                live = null;
+              }
+            }
+            if (live && (update.status === "snapshot" || update.status === "delta")) {
+              const plan = planSyncMaterialization({
+                live,
+                token: update.token,
+                historyEpoch: update.historyEpoch,
+                historyComplete: update.historyComplete,
+                boundary: { cursor: update.historyCursor },
+                deletedMessageIds,
+              });
+              next = plan.materialized;
+              commit = () => commitSyncMaterialization(plan);
+            } else {
+              next = null;
+            }
+          }
+        } else {
+          next = await getNativeAgentProjection<TMessage>({
+            ...identity,
+            ...(messageLimit === undefined ? {} : { messageLimit }),
+          });
+        }
         if (
           sequence === refreshSequenceRef.current &&
           operationEpoch === projectionOperationEpochRef.current &&
@@ -305,7 +807,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           // projection in favour of a state the backend never asserted.
           !(next === null && establishingSessionRef.current > 0)
         ) {
-          applyProjection(next);
+          commit?.();
+          if (!syncLiveProjectionRef.current || !next) applyProjection(next);
           // A session that exists supersedes any earlier creation failure. One
           // that still does not exist is exactly what that failure described, so
           // its message survives instead of decaying into a generic failure.
@@ -339,7 +842,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         flushPendingReconcile();
       }
     },
-    [applyProjection, enabled, flushPendingReconcile, identity, messageLimit],
+    [
+      applyProjection,
+      commitSyncMaterialization,
+      enabled,
+      environmentId,
+      flushPendingReconcile,
+      identity,
+      messageLimit,
+      planSyncMaterialization,
+      platform,
+      resetSyncState,
+    ],
   );
 
   useEffect(() => {
@@ -496,7 +1010,25 @@ export function useNativeAgentSession<TMessage = unknown>({
     // For the same reason: one identity's creation failure must not keep
     // suppressing another identity's authoritative reads.
     establishmentFailureRef.current = false;
-  }, [enabled, identity]);
+    resetSyncState();
+    const store = useNativeAgentProjectionStore.getState();
+    historyEvictionRef.current = store.historyEvictions.get(sessionKey) ?? 0;
+    const cached = store.syncCaches.get(sessionKey);
+    if (
+      cached &&
+      cached.liveProjection.platform === platform &&
+      cached.liveProjection.environmentId === environmentId
+    ) {
+      syncTokenRef.current = cached.token;
+      syncLiveProjectionRef.current =
+        cached.liveProjection as NativeAgentSessionProjection<TMessage>;
+      historyEpochRef.current = cached.historyEpoch;
+      historyCursorRef.current = cached.historyCursor;
+      historyBoundaryCursorRef.current = cached.historyBoundaryCursor;
+      historyCompleteRef.current = cached.historyComplete;
+      historyMessagesRef.current = cached.historyMessages as TMessage[];
+    }
+  }, [enabled, environmentId, identity, platform, resetSyncState, sessionKey]);
 
   useEffect(() => {
     if (!enabled || !isActive) {
@@ -507,12 +1039,19 @@ export function useNativeAgentSession<TMessage = unknown>({
   }, [connect, enabled, isActive]);
 
   useEffect(() => {
-    const unsubscribeChange = onResourceChanged("native-agent-session", ({ id }) => {
-      if (enabled && isActive && id === environmentId) {
+    const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
+      if (
+        enabled &&
+        isActive &&
+        change.id === environmentId &&
+        (change.agent === undefined ||
+          (change.agent === platform && change.logicalSessionKey === sessionKey))
+      ) {
         void refresh({ manual: false, reconcileAfterInFlight: true });
       }
     });
     const unsubscribeResync = onResourceResync(() => {
+      invalidateNativeAgentSyncCapability();
       if (enabled && isActive) {
         void refresh({ manual: false, reconcileAfterInFlight: true });
       }
@@ -521,7 +1060,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       unsubscribeChange();
       unsubscribeResync();
     };
-  }, [enabled, environmentId, isActive, refresh]);
+  }, [enabled, environmentId, isActive, platform, refresh, sessionKey]);
 
   useEffect(() => {
     if (!enabled || !isActive) return;
@@ -601,12 +1140,12 @@ export function useNativeAgentSession<TMessage = unknown>({
     const operationEpoch = beginProjectionMutation();
     const stoppedSessionId = projectionRef.current?.sessionId;
     const next = await stopNativeAgentSession<TMessage>(identity);
-    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     if (stoppedSessionId) {
       useNativeAgentProjectionStore.getState().markTurnStopped(sessionKey, stoppedSessionId);
     }
     return next;
-  }, [applyProjection, beginProjectionMutation, identity, sessionKey]);
+  }, [applyMutationProjection, beginProjectionMutation, identity, sessionKey]);
 
   const stopBackgroundTask = useCallback(
     async (taskId: string) => {
@@ -615,27 +1154,27 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...identity,
         taskId,
       });
-      if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+      if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyProjection, beginProjectionMutation, identity],
+    [applyMutationProjection, beginProjectionMutation, identity],
   );
 
   const dismissSuggestedPrompt = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
     const next = await dismissNativeAgentSuggestedPrompt<TMessage>(identity);
-    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
-  }, [applyProjection, beginProjectionMutation, identity]);
+  }, [applyMutationProjection, beginProjectionMutation, identity]);
 
   const updateControls = useCallback(
     async (update: NativeAgentControlUpdate) => {
       const operationEpoch = beginProjectionMutation();
       const next = await updateNativeAgentControls<TMessage>({ ...identity, update });
-      if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+      if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyProjection, beginProjectionMutation, identity],
+    [applyMutationProjection, beginProjectionMutation, identity],
   );
 
   useEffect(() => {
@@ -756,10 +1295,10 @@ export function useNativeAgentSession<TMessage = unknown>({
         providerSessionId,
         controls,
       });
-      if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+      if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
       return next;
     },
-    [applyProjection, beginProjectionMutation, identity],
+    [applyMutationProjection, beginProjectionMutation, identity],
   );
   const fork = useCallback(
     (messageId?: string) => forkNativeAgentSession({ ...identity, messageId }),
@@ -776,9 +1315,9 @@ export function useNativeAgentSession<TMessage = unknown>({
   const refreshModels = useCallback(async () => {
     const operationEpoch = beginProjectionMutation();
     const next = await refreshNativeAgentModels<TMessage>(identity);
-    if (operationEpoch === projectionOperationEpochRef.current) applyProjection(next);
+    if (operationEpoch === projectionOperationEpochRef.current) applyMutationProjection(next);
     return next;
-  }, [applyProjection, beginProjectionMutation, identity]);
+  }, [applyMutationProjection, beginProjectionMutation, identity]);
   const loadToolDetails = useCallback(
     (detailRef: string): Promise<NativeAgentToolDetails> =>
       getNativeAgentToolDetails({ ...identity, detailRef }),
@@ -792,6 +1331,98 @@ export function useNativeAgentSession<TMessage = unknown>({
    * the session never had.
    */
   const loadEarlierMessages = useCallback(async () => {
+    if (await nativeAgentSyncSupported()) {
+      const before = historyCursorRef.current;
+      if (!before) return projectionRef.current;
+      /*
+       * Free room from inactive identities first, then ask for a page that
+       * fits what is left. Bounding the request is what keeps acceptance
+       * all-or-nothing: a page trimmed on arrival would strand its older half
+       * behind a cursor only the server can mint.
+       */
+      evictNativeAgentHistoryCaches(
+        sessionKey,
+        encodedBytes(historyMessagesRef.current),
+        CLIENT_HISTORY_TOTAL_MAX_BYTES,
+      );
+      const budget = historyRequestBudget();
+      if (budget.messages <= 0 || budget.bytes <= 0) return projectionRef.current;
+      const sequence = ++refreshSequenceRef.current;
+      const operationEpoch = projectionOperationEpochRef.current;
+      const page = await getNativeAgentMessagePage<TMessage>({
+        ...identity,
+        syncVersion: 1,
+        before,
+        limit: Math.min(budget.messages, HISTORY_PAGE_MAX_MESSAGES),
+        targetBytes: budget.bytes,
+      });
+      // A mutation that landed while the page was in flight owns the transcript
+      // now. Installing this page would merge history into a live tail it no
+      // longer describes.
+      if (
+        sequence !== refreshSequenceRef.current ||
+        operationEpoch !== projectionOperationEpochRef.current
+      ) {
+        return projectionRef.current;
+      }
+      const live = syncLiveProjectionRef.current;
+      const token = syncTokenRef.current;
+      if (page.historyEpoch !== historyEpochRef.current || !live || !token) {
+        resetSyncState();
+        await refresh({ manual: true });
+        return projectionRef.current;
+      }
+      const existing = new Set(
+        [...historyMessagesRef.current, ...live.messages].map(
+          (message) => (message as { id?: unknown }).id,
+        ),
+      );
+      const newMessages = page.messages.filter(
+        (message) => !existing.has((message as { id?: unknown }).id),
+      );
+      const retained = [...historyMessagesRef.current];
+      const accepted: TMessage[] = [];
+      const messageBudget = Math.max(0, CLIENT_HISTORY_MAX_MESSAGES - live.messages.length);
+      let acceptedBytes = 0;
+      for (let index = newMessages.length - 1; index >= 0; index -= 1) {
+        if (accepted.length + retained.length >= messageBudget) break;
+        const message = newMessages[index]!;
+        const bytes = encodedBytes(message) + 1;
+        if (acceptedBytes + bytes > budget.bytes) break;
+        accepted.unshift(message);
+        acceptedBytes += bytes;
+      }
+      // One message larger than the whole remaining byte budget would otherwise
+      // make the control permanently inert. Take it anyway: the plan below
+      // still enforces the retained-history ceiling, and a click must always
+      // either show more or stop offering to.
+      if (accepted.length === 0 && newMessages.length > 0 && retained.length < messageBudget) {
+        accepted.push(newMessages[newMessages.length - 1]!);
+      }
+      const acceptedWholePage = accepted.length === newMessages.length;
+      /*
+       * A partially accepted page keeps the cursor it was fetched with.
+       * Advancing to `nextCursor` would acknowledge messages that were never
+       * retained, and clearing the cursor entirely — the previous behaviour —
+       * made them unreachable until the history epoch rotated.
+       */
+      const plan = planSyncMaterialization({
+        live,
+        token,
+        historyEpoch: page.historyEpoch,
+        historyComplete: page.complete,
+        retained: {
+          messages: [...accepted, ...retained],
+          ...(acceptedWholePage
+            ? page.nextCursor
+              ? { cursor: page.nextCursor }
+              : {}
+            : { cursor: before }),
+          complete: page.complete,
+        },
+      });
+      return commitSyncMaterialization(plan);
+    }
     const current =
       projectionRef.current?.messageWindow?.limit ?? messageLimit ?? DEFAULT_MESSAGE_WINDOW;
     const next = Math.min(current * 2, MAX_MESSAGE_WINDOW);
@@ -809,7 +1440,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     )
       applyProjection(projection);
     return projection;
-  }, [applyProjection, identity, messageLimit]);
+  }, [
+    applyProjection,
+    commitSyncMaterialization,
+    historyRequestBudget,
+    identity,
+    messageLimit,
+    planSyncMaterialization,
+    refresh,
+    resetSyncState,
+    sessionKey,
+  ]);
 
   return {
     sessionKey,

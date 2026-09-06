@@ -460,8 +460,9 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
 
   unsubscribes.push(
     onResourceChanged("agent-mail-summary", () => {
-      void refreshAgentMailSummary().catch((error) => {
+      return refreshAgentMailSummary().catch((error) => {
         console.warn("[store-resource-sync] Failed to refresh agent mail summary:", error);
+        throw error;
       });
     }),
   );
@@ -470,11 +471,12 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     onResourceChanged("agent-mail", ({ id: mailboxId }) => {
       const existing = useAgentMailStore.getState().mailboxes.get(mailboxId);
       if (!existing) return;
-      void useAgentMailStore
+      return useAgentMailStore
         .getState()
         .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
         .catch((error) => {
           console.warn("[store-resource-sync] Failed to refresh agent mailbox:", error);
+          throw error;
         });
     }),
   );
@@ -485,18 +487,19 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       // refetches every queue the environment owns. That is deliberate: a client
       // that has never opened a tab still needs its queue if it opens one next.
       if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      void hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
+      return hydratePromptQueuesForEnvironment(environmentId, promptQueueSources).catch((error) => {
         console.warn(
           `[store-resource-sync] Failed to refresh prompt queues for ${environmentId}:`,
           error,
         );
+        throw error;
       });
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("config", () => {
-      void refreshConfig().catch(() => undefined);
+      return refreshConfig();
     }),
   );
 
@@ -505,21 +508,21 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       // Reloading a project the user has since navigated away from would race the
       // store's own currentProjectId guard and show the wrong board.
       if (useKanbanStore.getState().currentProjectId !== projectId) return;
-      void useKanbanStore.getState().loadTasks(projectId);
+      return useKanbanStore.getState().loadTasks(projectId);
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("project-notes", ({ id: projectId }) => {
       if (useKanbanStore.getState().currentNotesProjectId !== projectId) return;
-      void useKanbanStore.getState().loadNotes(projectId);
+      return useKanbanStore.getState().loadNotes(projectId);
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("feature-plan", ({ id: projectId }) => {
       if (useFeaturePlanStore.getState().currentProjectId !== projectId) return;
-      void useFeaturePlanStore.getState().loadFeatures(projectId);
+      return useFeaturePlanStore.getState().loadFeatures(projectId);
     }),
   );
 
@@ -527,18 +530,19 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     onResourceChanged("session", ({ id: environmentId }) => {
       // Sessions are only meaningful for environments this client has loaded.
       if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      void useSessionStore.getState().loadSessionsForEnvironment(environmentId);
+      return useSessionStore.getState().loadSessionsForEnvironment(environmentId);
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("pane-layout", ({ id: environmentId }) => {
       if (!useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
-      void refreshPaneLayout(environmentId).catch((error) => {
+      return refreshPaneLayout(environmentId).catch((error) => {
         console.warn(
           `[store-resource-sync] Failed to refresh pane layout ${environmentId}:`,
           error,
         );
+        throw error;
       });
     }),
   );
@@ -548,7 +552,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       // A missing record means another client finished or deleted this build.
       // Dropping it locally is what stops a stale tab from resuming a dead
       // pipeline, so treat "not found" as authoritative rather than as an error.
-      void hydrateBuildPipeline(pipelineId)
+      return hydrateBuildPipeline(pipelineId)
         .then((pipeline) => {
           if (pipeline) return;
           const local = useBuildPipelineStore.getState().pipelines.get(pipelineId);
@@ -561,6 +565,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
             `[store-resource-sync] Failed to refresh build pipeline ${pipelineId}:`,
             error,
           );
+          throw error;
         });
     }),
   );
@@ -569,7 +574,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     onResourceChanged("looped-review", ({ id: workflowId }) => {
       // hydrate compares backend revisions against the local snapshot, so a
       // workflow this client is actively driving is not clobbered by its own echo.
-      void resolveLoopedReviewWorkflow(workflowId)
+      return resolveLoopedReviewWorkflow(workflowId)
         .then((result) => {
           // Only an authoritative "no such record" removes the projection. A
           // snapshot this bundle cannot read still exists and is very likely
@@ -590,14 +595,16 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
             `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
             error,
           );
+          throw error;
         });
     }),
   );
 
   unsubscribes.push(
     onResourceChanged("multi-review", ({ id: workflowId }) => {
-      void hydrateMultiReviewWorkflow(workflowId).catch((error) => {
+      return hydrateMultiReviewWorkflow(workflowId).catch((error) => {
         console.warn(`[store-resource-sync] Failed to refresh multi review ${workflowId}:`, error);
+        throw error;
       });
     }),
   );

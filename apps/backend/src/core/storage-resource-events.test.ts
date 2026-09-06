@@ -684,12 +684,15 @@ describe("StorageService resource change announcements", () => {
       expect(changes.at(-1)).toMatchObject({
         resource: "build-pipeline",
         id: "pipeline-1",
+        projectId: "p1",
       });
 
       await storage.deleteBuildPipeline("pipeline-1");
       expect(changes.at(-1)).toMatchObject({
         resource: "build-pipeline",
         id: "pipeline-1",
+        projectId: "p1",
+        deleted: true,
       });
 
       await storage.deletePromptQueuesByEnvironment("e1");
@@ -729,11 +732,172 @@ describe("StorageService resource change announcements", () => {
     }
   });
 
+  test("replays scoped mutations and resets categories changed outside its journal", async () => {
+    await withStorage(async (storage) => {
+      await storage.addProject(project("p1"));
+      const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
+      expect(initial.reset).toBe(true);
+
+      await storage.saveProjectNotes("p1", "one");
+      const scoped = await storage.getScopedResourceRevisionManifest(
+        initial.generation,
+        initial.cursor,
+        initial.revisions,
+      );
+      expect(scoped.reset).toBe(false);
+      expect(scoped.resetResources).not.toContain("project-notes");
+      expect(scoped.changes).toContainEqual(
+        expect.objectContaining({ resource: "project-notes", id: "p1" }),
+      );
+
+      await fs.writeFile(
+        path.join(storage.getDataDir(), "project-notes.json"),
+        JSON.stringify({ p1: "written elsewhere" }),
+      );
+      const external = await storage.getScopedResourceRevisionManifest(
+        scoped.generation,
+        scoped.cursor,
+        { ...initial.revisions, ...scoped.revisions },
+      );
+      expect(external.resetResources).toContain("project-notes");
+    });
+  });
+
   test("stops announcing once the listener is detached", async () => {
     await withStorage(async (storage, changes) => {
       storage.setResourceChangeListener(null);
       await storage.addProject(project("p1"));
       expect(changes).toEqual([]);
+    });
+  });
+
+  test("journals a mutation that no listener was attached for", async () => {
+    await withStorage(async (storage, changes) => {
+      await storage.addProject(project("p1"));
+      const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
+
+      // A client that is not connected still has to be able to catch up: the
+      // journal is what a reconnecting cursor replays from, so it must record
+      // the change whether or not anything was listening when it landed.
+      storage.setResourceChangeListener(null);
+      await storage.saveProjectNotes("p1", "written while disconnected");
+      expect(changes.some(({ resource }) => resource === "project-notes")).toBe(false);
+
+      const scoped = await storage.getScopedResourceRevisionManifest(
+        initial.generation,
+        initial.cursor,
+        initial.revisions,
+      );
+      expect(scoped.reset).toBe(false);
+      expect(scoped.changes).toContainEqual(
+        expect.objectContaining({ resource: "project-notes", id: "p1" }),
+      );
+    });
+  });
+
+  test("resets a cursor that fell out of the retained journal", async () => {
+    await withStorage(async (storage) => {
+      await storage.addProject(project("p1"));
+      const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
+
+      /*
+       * Past the journal's 4,096-entry bound the oldest entries are gone, so a
+       * cursor pointing before them names a gap this manifest cannot replay.
+       * Native-agent projection announcements are the cheap way to fill it:
+       * they are ordinary journal entries but write no file, so this stays an
+       * in-memory bound check rather than four thousand round trips to disk.
+       */
+      for (let index = 0; index < 4_200; index += 1) {
+        storage.announceNativeAgentSessionProjection("env-1", {
+          agent: "codex",
+          logicalSessionKey: `env-env-1:tab-${index}`,
+        });
+      }
+
+      const scoped = await storage.getScopedResourceRevisionManifest(
+        initial.generation,
+        initial.cursor,
+        initial.revisions,
+      );
+      expect(scoped.reset).toBe(true);
+      expect(scoped.changes).toEqual([]);
+      expect(scoped.resetResources).toEqual([...RESOURCE_MANIFEST_KINDS]);
+      expect(scoped.cursor).toBe(scoped.highWater);
+    });
+  });
+
+  test("resets a cursor ahead of the current high-water mark", async () => {
+    await withStorage(async (storage) => {
+      await storage.addProject(project("p1"));
+      const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
+
+      const ahead = await storage.getScopedResourceRevisionManifest(
+        initial.generation,
+        initial.cursor + 1_000,
+        initial.revisions,
+      );
+      expect(ahead.reset).toBe(true);
+      expect(ahead.resetResources).toEqual([...RESOURCE_MANIFEST_KINDS]);
+    });
+  });
+
+  test("scopes a native-agent announcement to its agent and logical session", async () => {
+    await withStorage(async (storage, changes) => {
+      storage.announceNativeAgentSessionProjection("env-1", {
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-a",
+      });
+      storage.announceNativeAgentSessionProjection("env-1", {
+        agent: "claude",
+        logicalSessionKey: "env-env-1:tab-b",
+      });
+      storage.announceNativeAgentSessionProjection("env-1");
+
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "native-agent-session",
+          id: "env-1",
+          agent: "codex",
+          logicalSessionKey: "env-env-1:tab-a",
+        }),
+        expect.objectContaining({
+          resource: "native-agent-session",
+          id: "env-1",
+          agent: "claude",
+          logicalSessionKey: "env-env-1:tab-b",
+        }),
+        expect.objectContaining({ resource: "native-agent-session", id: "env-1" }),
+      ]);
+      expect(changes[2]).not.toHaveProperty("agent");
+    });
+  });
+
+  test("pages a frozen scoped range without losing category accountability", async () => {
+    await withStorage(async (storage) => {
+      await storage.addProject(project("p1"));
+      const initial = await storage.getScopedResourceRevisionManifest(undefined, 0);
+      for (let index = 0; index < 300; index += 1) {
+        await storage.saveProjectNotes("p1", `notes-${index}`);
+      }
+
+      const first = await storage.getScopedResourceRevisionManifest(
+        initial.generation,
+        initial.cursor,
+        initial.revisions,
+      );
+      expect(first.hasMore).toBe(true);
+      expect(first.changes.length).toBeLessThanOrEqual(256);
+      expect(Buffer.byteLength(JSON.stringify(first.changes))).toBeLessThan(65 * 1024);
+
+      const second = await storage.getScopedResourceRevisionManifest(
+        first.generation,
+        first.cursor,
+        { ...initial.revisions, ...first.revisions },
+        first.highWater,
+      );
+      expect(second.hasMore).toBe(false);
+      expect(first.changes.length + second.changes.length).toBe(300);
+      expect(second.resetResources).not.toContain("project-notes");
     });
   });
 });

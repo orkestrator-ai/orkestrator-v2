@@ -40,6 +40,8 @@ import {
   getConfig,
   getEnvironment,
   getResourceRevisionManifest,
+  getScopedResourceRevisionManifest,
+  getScopedResourceSnapshots,
   prepareEnvironmentAgentLaunch,
   syncAllEnvironmentsWithDocker,
 } from "@/lib/backend";
@@ -193,7 +195,15 @@ function App() {
   useUnreadEnvironmentSync();
   // The backend change feed must be attached before the store bindings that
   // consume it, and both before anything that reads a backend snapshot.
-  useEffect(() => startResourceSync({ loadManifest: getResourceRevisionManifest }), []);
+  useEffect(
+    () =>
+      startResourceSync({
+        loadManifest: getResourceRevisionManifest,
+        loadScopedManifest: getScopedResourceRevisionManifest,
+        loadScopedSnapshots: getScopedResourceSnapshots,
+      }),
+    [],
+  );
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => {

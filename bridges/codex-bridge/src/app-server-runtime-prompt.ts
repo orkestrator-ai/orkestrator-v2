@@ -334,8 +334,6 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const parsed = parseSlashCommandPrompt(executionPrompt);
     const bypassModeWrapper = !!parsed && isCodexCliNativeSlashCommand(parsed.name);
     const isPlanReview = session.config.mode === "plan" && !bypassModeWrapper;
-    let confirmedModelForTurn: string | undefined;
-
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
       const thread = await this.options.engine.startThread({ config: session.config });
@@ -349,16 +347,19 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         cwd: thread.cwd,
         modelId: thread.model,
       });
-      // The top-level response value is the engine-observed setting for this
-      // accepted thread. Later settings/reroute notifications supersede it.
-      confirmedModelForTurn = thread.model;
       await this.persistSession(session);
-    } else if (context.modelId) {
-      confirmedModelForTurn = context.modelId;
     }
 
     context.dispatchInFlight = true;
     this.registry.setPhase(context, "starting");
+
+    // `turn/start` applies the session's configured model but does not echo it
+    // in its response and does not reliably emit `thread/settings/updated`.
+    // Resolve the fallback only after `starting` closes the updateConfig window:
+    // thread creation above is awaited, and an update accepted during that wait
+    // must label the row with the same configuration `startTurn` will dispatch.
+    // An engine-observed thread model or a later reroute still supersedes it.
+    const modelForTurn = context.modelId ?? session.config.model;
 
     const userMessage = this.appendUserMessage(context, input.prompt, input.attachments);
     const assistantMessage: NormalizedMessage = {
@@ -368,7 +369,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
       revision: 1,
-      ...(confirmedModelForTurn ? { modelId: confirmedModelForTurn } : {}),
+      ...(modelForTurn ? { modelId: modelForTurn } : {}),
       ...(isPlanReview ? { planReview: true } : {}),
     };
     const streamingState = this.stateFor(context.threadId);
@@ -566,7 +567,6 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
             modelId: thread.model,
           });
           if (thread.model) {
-            confirmedModelForTurn = thread.model;
             assistantMessage.modelId = thread.model;
           }
         }

@@ -66,6 +66,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const isGrid = presentation === "grid";
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectEnvironment = useUIStore((state) => state.selectEnvironment);
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
   const setProjectBoardNotesOpen = useUIStore((state) => state.setProjectBoardNotesOpen);
@@ -198,6 +199,28 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     }
   }, [envSettingsEnvironment, envSettingsEnvironmentId]);
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
+
+  const openProjectBoardTab = useCallback(
+    (tab: typeof projectBoardTab) => {
+      if (!selectedProjectId) return;
+      setProjectBoardTab(tab);
+      selectEnvironment(null);
+    },
+    [selectEnvironment, selectedProjectId, setProjectBoardTab],
+  );
+
+  const openProjectNotes = useCallback(() => {
+    if (!selectedProjectId) return;
+    if (projectBoardTab !== "kanban") setProjectBoardTab("kanban");
+    selectEnvironment(null);
+    setProjectBoardNotesOpen(true);
+  }, [
+    projectBoardTab,
+    selectEnvironment,
+    selectedProjectId,
+    setProjectBoardNotesOpen,
+    setProjectBoardTab,
+  ]);
   const isCleanupTargetDeleting = Boolean(
     cleanupTarget &&
     (deletingEnvironmentId === cleanupTarget.environmentId ||
@@ -1831,8 +1854,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedEnvironmentId,
     selectedProjectId,
     projectBoardTab,
-    setProjectBoardTab,
-    setProjectBoardNotesOpen,
+    openProjectBoardTab,
+    openProjectNotes,
     updateEnvironment,
     selectedEnvironment,
     workspaceReady,

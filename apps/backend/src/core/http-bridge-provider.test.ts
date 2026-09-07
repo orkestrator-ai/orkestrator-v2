@@ -1542,3 +1542,43 @@ describe("HTTP bridge provider", () => {
     await expect(provider.status("session-1")).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 });
+
+test("forwards an explicit read-only tool policy to Pi on creation and every review turn", async () => {
+  const { provider, requests } = httpProvider(
+    () => Response.json({ sessionId: "review-session" }),
+    piConnection,
+  );
+  await provider.createSession("review", "Review", { mode: "plan", readOnly: true });
+  await provider.send("review-session", "Read the package", {
+    requestId: "review-1",
+    mode: "plan",
+    readOnly: true,
+  });
+  expect(requests.map((request) => JSON.parse(String(request.init.body)).readOnly)).toEqual([
+    true,
+    true,
+  ]);
+  await provider.send("review-session", "Implement the fixes", {
+    requestId: "fix-1",
+    mode: "build",
+  });
+  expect(JSON.parse(String(requests.at(-1)!.init.body)).readOnly).toBe(false);
+});
+
+test("never sends the Pi-only readOnly field to other bridges", async () => {
+  for (const connection of [claudeConnection, codexConnection, cursorConnection, grokConnection]) {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "review-session" }),
+      connection,
+    );
+    await provider.createSession("review", "Review", { mode: "plan", readOnly: true });
+    await provider.send("review-session", "Read the package", {
+      requestId: "review-1",
+      mode: "plan",
+      readOnly: true,
+    });
+    for (const request of requests) {
+      expect(JSON.parse(String(request.init.body))).not.toHaveProperty("readOnly");
+    }
+  }
+});

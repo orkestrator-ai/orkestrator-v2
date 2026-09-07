@@ -320,7 +320,7 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     // opts in. The gate is on every project-local resource family rather than
     // extensions alone, because a skill and a prompt template are also
     // repository-controlled text the model is told to act on.
-    ...projectResourceDiscoveryOptions(),
+    ...projectResourceDiscoveryOptions(projectResourcesEnabled, state.readOnly === true),
     // The approval gate. Always loaded, discovery setting or not.
     extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
   });
@@ -465,16 +465,49 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
 }
 
 /** Project-local resource switches passed to Pi's default loader. */
-export function projectResourceDiscoveryOptions(enabled: boolean = projectResourcesEnabled): {
+export function projectResourceDiscoveryOptions(
+  enabled: boolean = projectResourcesEnabled,
+  readOnly = false,
+): {
   noExtensions: boolean;
   noSkills: boolean;
   noPromptTemplates: boolean;
+  noContextFiles: boolean;
 } {
+  // A project extension can replace a built-in tool under the same name. The
+  // tool_call hook sees only that name, not the registration that owns it, so
+  // a name allowlist is safe only when untrusted registrations were excluded
+  // while the SDK built the session. Skills and prompt templates are disabled
+  // with extensions because they are repository-controlled instructions too.
+  const discoverProjectResources = enabled && !readOnly;
   return {
-    noExtensions: !enabled,
-    noSkills: !enabled,
-    noPromptTemplates: !enabled,
+    noExtensions: !discoverProjectResources,
+    noSkills: !discoverProjectResources,
+    noPromptTemplates: !discoverProjectResources,
+    // Context files are part of ordinary host sessions even when executable
+    // project resources are disabled. Package-only reviews are different: a
+    // repository AGENTS.md is untrusted input outside the verified package.
+    noContextFiles: readOnly,
   };
+}
+
+/**
+ * Change the tool-policy boundary and rebuild any SDK session created under
+ * the previous policy.
+ *
+ * Pi fixes tool registrations when `createAgentSession` runs. Updating only
+ * `state.readOnly` would leave repository extensions loaded when a writable
+ * preparation session becomes a read-only consolidation session, or leave
+ * them unavailable when that same conversation returns to build mode.
+ */
+export async function setSessionReadOnly(state: SessionState, readOnly: boolean): Promise<void> {
+  if ((state.readOnly === true) === readOnly) return;
+  state.readOnly = readOnly;
+  state.revision += 1;
+  // An explicit attach may be constructing a registry concurrently. Let it
+  // publish, then dispose it before the next prompt obtains a session.
+  await state.attaching?.catch(() => undefined);
+  await detachSession(state);
 }
 
 /**

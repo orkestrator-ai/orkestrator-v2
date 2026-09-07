@@ -254,6 +254,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   model: options.model ?? this.connection.model,
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
+                  ...(this.agent === "pi"
+                    ? {
+                        readOnly:
+                          options.readOnly ?? (options.mode === "build" ? false : undefined),
+                      }
+                    : {}),
                   ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
                     : {}),
@@ -411,6 +417,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                       model: options.model ?? this.connection.model,
                       reasoningEffort: options.effort ?? this.connection.effort,
                       mode: options.mode,
+                      ...(this.agent === "pi"
+                        ? {
+                            readOnly:
+                              options.readOnly ?? (options.mode === "build" ? false : undefined),
+                          }
+                        : {}),
                     }
                   : { fastMode: options.fastMode ?? this.connection.fastMode }),
           }),

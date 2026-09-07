@@ -322,7 +322,9 @@ export function MultiReviewReviewerTab({
       ? transcriptError
       : (actionError ?? transcriptError);
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
-  const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
+  const stoppable =
+    snapshot?.workflowPhase === "reviewing" &&
+    (snapshot.status === "running" || snapshot.status === "pending");
   const restartable =
     snapshot?.workflowPhase === "reviewing" ||
     snapshot?.workflowPhase === "consolidating" ||

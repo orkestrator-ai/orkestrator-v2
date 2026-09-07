@@ -4,6 +4,7 @@ import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewerPrompt,
 } from "./multi-review-prompts.js";
+import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
 
 const report = {
   reviewScope: {
@@ -166,5 +167,23 @@ describe("multi review consolidation prompt", () => {
       expect(prompt).not.toContain("examined an incomplete snapshot");
       expect(prompt).toContain("Semantically deduplicate equivalent issues");
     }
+  });
+
+  test("identifies the verified package as authoritative consolidation scope", () => {
+    const reviewPackage = testGeneratedReviewPackage({
+      packageId: "review-package-test-r1",
+      round: 1,
+      targetBranch: "main",
+    });
+    const prompt = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+      reviewPackage: reviewPackage as never,
+    });
+
+    expect(prompt).toContain("same backend-verified immutable review package");
+    expect(prompt).toContain(String(reviewPackage.filePath));
+    expect(prompt).toContain("Treat that package as the authoritative change scope");
+    expect(prompt).not.toContain("examined an incomplete snapshot");
   });
 });

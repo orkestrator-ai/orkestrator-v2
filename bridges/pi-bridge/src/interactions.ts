@@ -49,6 +49,13 @@ export async function requestToolApproval(
   toolName: string,
   input: unknown,
 ): Promise<ToolCallDecision> {
+  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName)) {
+    return {
+      block: true,
+      reason:
+        "This review session is read-only. Read the supplied package; commands, edits, and extension tools are disabled.",
+    };
+  }
   if (!approvalsEnabled()) return { block: false };
   if (READ_ONLY_TOOLS.has(toolName)) return { block: false };
   if (state.approvals.size >= MAX_PENDING_APPROVALS) {

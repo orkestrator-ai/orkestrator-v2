@@ -629,6 +629,35 @@ describe("MultiReviewReviewerTab stop control", () => {
     messages: [],
   };
 
+  test("does not offer Stop for a pending reviewer while the package is preparing", async () => {
+    const stopReviewer = mock(async () => ({}) as never);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={mock(
+          async () =>
+            ({
+              ...runningSnapshot,
+              workflowPhase: "preparing",
+              status: "pending",
+              startedAt: undefined,
+            }) satisfies MultiReviewReviewerTranscript,
+        )}
+        stopReviewer={stopReviewer}
+      />,
+    );
+
+    expect(await screen.findByText(/Read only/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop this reviewer" }) === null).toBe(true);
+    expect(stopReviewer).not.toHaveBeenCalled();
+  });
+
   test("stops the reviewer and re-reads the authoritative snapshot", async () => {
     let current: MultiReviewReviewerTranscript = runningSnapshot;
     const loadTranscript = mock(async () => current);

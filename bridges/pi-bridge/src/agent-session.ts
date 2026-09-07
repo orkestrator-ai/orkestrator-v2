@@ -16,8 +16,9 @@ import { randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
   getAgentDir,
   SessionManager,
   SettingsManager,
@@ -309,55 +310,63 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
 
   const runtime = await modelRuntime();
   const agentDir = agentDirectory() ?? getAgentDir();
-  const settingsManager = SettingsManager.create(workingDirectory, agentDir);
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: workingDirectory,
-    agentDir,
-    settingsManager,
-    // `.pi/` in the workspace holds extensions, which are arbitrary TypeScript
-    // this process would execute. Cloning a repository must not be enough to
-    // run its code, so discovery is opt-in and only the container launcher
-    // opts in. The gate is on every project-local resource family rather than
-    // extensions alone, because a skill and a prompt template are also
-    // repository-controlled text the model is told to act on.
-    ...projectResourceDiscoveryOptions(),
-    // The approval gate. Always loaded, discovery setting or not.
-    extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
-  });
-  await resourceLoader.reload();
-
-  const model = await resolveModelForSession(state.composer.selectedModelId);
-  // Rebuilt with this workspace's settings now that there are some. A session
-  // created before any catalogue read still gets the user's `/thinking` choice.
-  state.composer = await hydrateComposerForSession(
-    state.composer,
-    thinkingDefaults(settingsManager),
-  );
-  const created = await createAgentSession({
-    cwd: workingDirectory,
-    agentDir,
-    modelRuntime: runtime,
-    resourceLoader,
-    settingsManager,
-    sessionManager: sessionManagerFor(state),
-    ...(model ? { model } : {}),
-    thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
-  });
-
-  // Pi restored a session against a model the saved one is not. The turn will
-  // still run, on a different model than the transcript above it was produced
-  // by, so the user has to be told rather than left to infer it.
-  if (nonBlank(created.modelFallbackMessage)) {
-    state.health.recordNotice({
-      message: created.modelFallbackMessage,
-      method: "session/modelFallback",
-      severity: "warning",
-      source: "provider",
+  const createRuntime = async ({
+    cwd,
+    agentDir: runtimeAgentDir,
+    sessionManager,
+    sessionStartEvent,
+  }: {
+    cwd: string;
+    agentDir: string;
+    sessionManager: SessionManager;
+    sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
+  }) => {
+    const settingsManager = SettingsManager.create(cwd, runtimeAgentDir);
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir: runtimeAgentDir,
+      settingsManager,
+      modelRuntime: runtime,
+      resourceLoaderOptions: {
+        // `.pi/` may contain arbitrary TypeScript extensions. The container
+        // launcher opts in; host worktrees stay fail-closed.
+        ...projectResourceDiscoveryOptions(),
+        extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
+      },
     });
-  }
-  recordExtensionLoadDiagnostics(state, created.extensionsResult);
-
-  return created.session;
+    await services.resourceLoader.reload();
+    const model = await resolveModelForSession(state.composer.selectedModelId);
+    state.composer = await hydrateComposerForSession(
+      state.composer,
+      thinkingDefaults(settingsManager),
+    );
+    const created = await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      sessionStartEvent,
+      ...(model ? { model } : {}),
+      thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
+    });
+    created.session.setSteeringMode(settingsManager.getSteeringMode());
+    created.session.setFollowUpMode(settingsManager.getFollowUpMode());
+    if (nonBlank(created.modelFallbackMessage)) {
+      state.health.recordNotice({
+        message: created.modelFallbackMessage,
+        method: "session/modelFallback",
+        severity: "warning",
+        source: "provider",
+      });
+    }
+    recordExtensionLoadDiagnostics(state, created.extensionsResult);
+    return { ...created, services, diagnostics: services.diagnostics };
+  };
+  const sessionRuntime = await createAgentSessionRuntime(createRuntime, {
+    cwd: workingDirectory,
+    agentDir,
+    sessionManager: sessionManagerFor(state),
+  });
+  state.runtime = sessionRuntime;
+  return sessionRuntime.session;
 }
 
 /**
@@ -543,10 +552,16 @@ function approvalExtension(state: SessionState): (pi: ExtensionAPI) => void {
  */
 export async function detachSession(state: SessionState): Promise<void> {
   const session = state.session;
+  const runtime = state.runtime;
   const unsubscribe = state.unsubscribe;
   state.session = null;
+  state.runtime = undefined;
   state.unsubscribe = undefined;
   unsubscribe?.();
+  if (runtime) {
+    await runtime.dispose().catch(() => undefined);
+    return;
+  }
   if (!session) return;
   try {
     session.dispose();
@@ -574,6 +589,7 @@ export async function closeSession(state: SessionState): Promise<void> {
 export interface ComposerPatch {
   modelId?: string;
   reasoningId?: string;
+  persistDefaults?: boolean;
 }
 
 export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
@@ -591,6 +607,7 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
   // same reason.
   if (nonBlank(body.reasoningEffort)) patch.reasoningId ??= body.reasoningEffort.trim();
   if (nonBlank(body.effort)) patch.reasoningId ??= body.effort.trim();
+  if (typeof body.persistDefaults === "boolean") patch.persistDefaults = body.persistDefaults;
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
@@ -605,6 +622,7 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
 export function applyComposerPatch(state: SessionState, patch: ComposerPatch | undefined): boolean {
   if (!patch) return false;
   let changed = false;
+  if (patch.persistDefaults === true) state.persistComposerDefaults = true;
   if (patch.modelId && patch.modelId !== state.composer.selectedModelId) {
     state.composer = {
       ...state.composer,
@@ -634,8 +652,13 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   const session = state.session;
   if (!session) return;
   const model = await resolveModelForSession(state.composer.selectedModelId);
-  if (model && (session.model?.id !== model.id || session.model?.provider !== model.provider)) {
-    await session.setModel(model as never).catch(() => undefined);
+  const persist = state.persistComposerDefaults === true;
+  state.persistComposerDefaults = false;
+  if (
+    model &&
+    (persist || session.model?.id !== model.id || session.model?.provider !== model.provider)
+  ) {
+    await session.setModel(model as never, { persist }).catch(() => undefined);
   }
   // `off` is a level like any other here — Pi's own `ThinkingLevel` includes it,
   // and skipping it made "Off" the one selection in the picker that could never
@@ -646,7 +669,8 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   // thinking against a model the turn is not actually going to run.
   const actualModel = session.model ?? model;
   const level = thinkingLevel(state.composer.selectedReasoningId, actualModel);
-  if (session.thinkingLevel !== level) session.setThinkingLevel(level as never);
+  if (persist || session.thinkingLevel !== level)
+    session.setThinkingLevel(level as never, { persist });
 
   // Echo what Pi will really run. Without this, an unknown selection silently
   // executes the first available model while the picker, transcript and usage
@@ -683,6 +707,10 @@ export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]>
     ...(info.modified ? { updatedAt: new Date(info.modified).toISOString() } : {}),
     status: "idle" as const,
     ...(info.firstMessage?.trim() ? { detail: info.firstMessage.trim().slice(0, 200) } : {}),
+    ...(info.parentSessionPath ? { parentId: info.parentSessionPath } : {}),
+    ...(info.parentSessionPath
+      ? { branchLabel: info.name?.trim() || info.firstMessage.trim().slice(0, 80) || "Fork" }
+      : {}),
   }));
 }
 
@@ -787,11 +815,9 @@ export async function resumeSession(
 /**
  * Fork a session at one of its user messages.
  *
- * `createBranchedSession` writes a *new* JSONL file holding the path from the
- * root to that entry, so the fork is a genuinely independent conversation
- * rather than a copy of the rendered transcript — and the original keeps every
- * entry after the branch point. The new bridge session replays the forked
- * file, which is why the result is the same shape as a resume.
+ * Production forks go through `AgentSessionRuntime.fork`, preserving Pi's
+ * extension hooks and returning the selected message as an editable draft.
+ * Dependency-injected legacy test sessions retain the low-level fallback.
  *
  * `messageId` is a Pi entry id. The renderer passes back the id it was given,
  * and a fork with no id branches at the newest user message, which is what
@@ -800,18 +826,96 @@ export async function resumeSession(
 export async function forkSession(
   state: SessionState,
   messageId: string | undefined,
-): Promise<SessionState> {
+): Promise<SessionState & { forkDraft?: string }> {
   const session = await ensureSession(state);
-  const entryId = messageId?.trim() || lastUserEntryId(session);
+  const entryId = resolveUserEntryId(state, session, messageId) ?? lastUserEntryId(session);
   if (!entryId) throw new Error("This session has no user message to fork from");
-  const forkedFile = session.sessionManager.createBranchedSession(entryId);
-  if (!forkedFile) throw new Error("Pi did not persist the forked session");
-  return resumeSession(forkedFile, {
-    ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
-    ...(state.composer.selectedReasoningId
-      ? { reasoningId: state.composer.selectedReasoningId }
-      : {}),
-  });
+  if (!state.runtime) {
+    // Dependency-injected test/legacy sessions do not own the replacement
+    // runtime. Production attachments always do and take `runtime.fork` below.
+    const forkedFile = session.sessionManager.createBranchedSession(entryId);
+    if (!forkedFile) throw new Error("Pi session runtime is unavailable for forking");
+    return resumeSession(forkedFile, {
+      ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+      ...(state.composer.selectedReasoningId
+        ? { reasoningId: state.composer.selectedReasoningId }
+        : {}),
+    });
+  }
+  const forked = newSessionState();
+  forked.sessionFile = state.sessionFile;
+  forked.composer = structuredClone(state.composer);
+  try {
+    await ensureSession(forked);
+    const runtime = forked.runtime;
+    if (!runtime) throw new Error("Pi session runtime is unavailable for forking");
+    forked.unsubscribe?.();
+    forked.unsubscribe = undefined;
+    forked.session = null;
+    const outcome = await runtime.fork(entryId, { position: "before" });
+    if (outcome.cancelled) throw new Error("Pi cancelled the session fork");
+    await bindSessionExtensions(forked, runtime.session);
+    publishAttachedSession(forked, runtime.session);
+    resetRenderedHistory(forked);
+    hydrateHistory(forked);
+    sessions.set(forked.id, forked);
+    return outcome.selectedText
+      ? Object.assign(forked, { forkDraft: outcome.selectedText })
+      : forked;
+  } catch (error) {
+    await detachSession(forked);
+    throw error;
+  }
+}
+
+/** Move the active leaf to a prior entry and rehydrate the authoritative branch. */
+export async function navigateSessionHistory(
+  state: SessionState,
+  messageOrEntryId: string,
+): Promise<void> {
+  if (state.status === "running" || state.dispatching) {
+    throw new Error("The Pi session is already running");
+  }
+  const session = await ensureSession(state);
+  const target = resolveUserEntryId(state, session, messageOrEntryId) ?? messageOrEntryId;
+  const result = await session.navigateTree(target, { summarize: false });
+  if (result.cancelled || result.aborted) throw new Error("Pi did not change the active branch");
+  resetRenderedHistory(state);
+  hydrateHistory(state);
+}
+
+export async function setSessionTitle(state: SessionState, title: string): Promise<void> {
+  const session = await ensureSession(state);
+  session.setSessionName(title);
+  state.title = title;
+  state.revision += 1;
+}
+
+function resolveUserEntryId(
+  state: SessionState,
+  session: AgentSession,
+  messageId: string | undefined,
+): string | undefined {
+  const requested = messageId?.trim();
+  if (!requested) return undefined;
+  if (typeof session.getUserMessagesForForking !== "function") return requested;
+  const entries = session.getUserMessagesForForking();
+  if (entries.some((entry) => entry.entryId === requested)) return requested;
+  const messageIndex = state.messages
+    .filter((message) => message.role === "user")
+    .findIndex((message) => message.id === requested);
+  return messageIndex >= 0 ? entries[messageIndex]?.entryId : undefined;
+}
+
+function resetRenderedHistory(state: SessionState): void {
+  state.messages = [];
+  state.droppedMessages = 0;
+  state.droppedParts = 0;
+  state.transcriptTruncated = false;
+  state.openTextParts.clear();
+  state.toolInputs.clear();
+  state.currentAssistantMessageId = undefined;
+  state.uncheckedTranscriptBytes = 0;
 }
 
 function lastUserEntryId(session: AgentSession): string | undefined {
@@ -929,7 +1033,7 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
 
   if (message.role === "user") {
     const text = readContentText(message.content);
-    if (text) pushMessage(state, "user", text, []);
+    if (text) pushMessage(state, "user", text, [], nonBlank(entry.id) ? entry.id : undefined);
     return;
   }
   if (message.role === "toolResult") {
@@ -938,7 +1042,7 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
   }
   if (message.role !== "assistant") return;
 
-  const messageId = randomBytes(12).toString("hex");
+  const messageId = nonBlank(entry.id) ? entry.id : randomBytes(12).toString("hex");
   const parts: BridgeMessagePart[] = [];
   let content = "";
   const blocks = Array.isArray(message.content) ? message.content : [];
@@ -1065,8 +1169,27 @@ function readSlashCommands(session: AgentSession): NativeAgentSlashCommand[] {
     if (commands.length >= MAX_SLASH_COMMANDS) break;
     commands.push({
       name: `/${template.name}`,
+      source: "template",
       ...(template.description?.trim() ? { description: template.description.trim() } : {}),
       ...(template.argumentHint?.trim() ? { argumentHint: template.argumentHint.trim() } : {}),
+    });
+  }
+  for (const skill of session.resourceLoader?.getSkills?.().skills ?? []) {
+    if (commands.length >= MAX_SLASH_COMMANDS) break;
+    commands.push({
+      name: `/skill:${skill.name}`,
+      description: skill.description,
+      source: "skill",
+      scope: skill.sourceInfo.scope === "project" ? "session" : "global",
+    });
+  }
+  for (const command of session.extensionRunner?.getRegisteredCommands?.() ?? []) {
+    if (commands.length >= MAX_SLASH_COMMANDS) break;
+    commands.push({
+      name: `/${command.invocationName || command.name}`,
+      ...(command.description ? { description: command.description } : {}),
+      source: "extension",
+      scope: command.sourceInfo.scope === "project" ? "session" : "global",
     });
   }
   return commands;

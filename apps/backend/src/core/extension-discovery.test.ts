@@ -615,11 +615,11 @@ describe("discoverAgentExtensions", () => {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
       expect(catalog.pluginError).toBeTruthy();
-      // Pi ships no MCP client of its own — MCP is something one of its
-      // packages adds — so there is no command to fail. Reporting an error
-      // there would say something is broken when the feature does not exist.
-      if (catalog.agent === "pi") expect(catalog.mcpError).toBeUndefined();
-      else expect(catalog.mcpError).toBeTruthy();
+      // Pi has no MCP client, while Cursor's live session bridge owns its MCP
+      // inventory. Neither pre-session fallback has a CLI probe to fail.
+      if (catalog.agent === "pi" || catalog.agent === "cursor") {
+        expect(catalog.mcpError).toBeUndefined();
+      } else expect(catalog.mcpError).toBeTruthy();
     }
   });
 
@@ -652,7 +652,6 @@ describe("discoverAgentExtensions", () => {
       agent: "cursor",
       mcpServers: [],
       plugins: [],
-      mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
       pluginError: "Cursor's SDK bridge does not expose a plugin list.",
     });
     expect(catalogFor(result, "grok")).toEqual({
@@ -828,9 +827,9 @@ describe("discoverAgentExtensions", () => {
     for (const catalog of result) {
       if (catalog.agent === "cursor") {
         expect(catalog).toMatchObject({
-          mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
           pluginError: "Cursor's SDK bridge does not expose a plugin list.",
         });
+        expect(catalog).not.toHaveProperty("mcpError");
         continue;
       }
       expect(catalog).not.toHaveProperty("mcpError");

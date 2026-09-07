@@ -16,6 +16,10 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentForkOutcome,
   NativeAgentNotice,
+  NativeAgentQueueSnapshot,
+  NativeAgentAuthStatus,
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
   NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
@@ -203,6 +207,8 @@ export interface ProviderSendOptions {
   promptSuggestions?: boolean;
   model?: string;
   effort?: string;
+  parameterValues?: Record<string, string | boolean>;
+  persistDefaults?: boolean;
   allowProviderCommands?: boolean;
   /** Per-session Orkestrator MCP credential; consumed by Claude and Codex. */
   agentMcp?: { url: string; token: string };
@@ -225,6 +231,7 @@ export interface ProviderInteractiveSnapshot {
   contextUsage?: NativeAgentContextUsage;
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
+  providerQueue?: NativeAgentQueueSnapshot;
   /**
    * The interaction kinds this *session* can raise, when the provider reports.
    *
@@ -311,7 +318,10 @@ export interface AgentSessionProvider {
   readonly interactions?: AgentInteractionProviderCapability;
   messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]>;
   structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null>;
+  /** Request a graceful interrupt of the active turn. */
   abort(sessionId: string): Promise<void>;
+  /** Escalate a turn which did not settle after the bounded grace period. */
+  hardAbort?(sessionId: string): Promise<void>;
   /** Close the provider-side session and release any process attached to it. */
   closeSession?(sessionId: string): Promise<void>;
   dispose?(): Promise<void> | void;
@@ -343,7 +353,17 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
   resumeSession?(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string>;
   forkSession?(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome>;
-  slashCommands?(): Promise<NativeAgentSlashCommand[]>;
+  slashCommands?(sessionId?: string): Promise<NativeAgentSlashCommand[]>;
+  mcpServers?(sessionId: string): Promise<NativeAgentMcpServer[]>;
+  mcpServerAction?(
+    sessionId: string,
+    serverId: string,
+    action: NativeAgentMcpServerAction,
+  ): Promise<{ url?: string }>;
+  authStatus?(): Promise<NativeAgentAuthStatus>;
+  beginSignIn?(): Promise<{ url?: string; code?: string }>;
+  signOut?(): Promise<void>;
+  setSessionTitle?(sessionId: string, title: string): Promise<void>;
   /** Drop provider-side model/command caches so the next read re-discovers. */
   refreshCatalog?(): Promise<void> | void;
   stopBackgroundTask?(sessionId: string, taskId: string): Promise<void>;

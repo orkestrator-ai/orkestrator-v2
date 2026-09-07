@@ -29,6 +29,13 @@ import {
   stopBackgroundTask,
   setSessionPreferences,
   clearPromptSuggestion,
+  readSessionCommands,
+  readSessionMcpServers,
+  performSessionMcpAction,
+  steerClaudeSession,
+  readClaudeSteerDispatch,
+  configureClaudeSession,
+  gracefulInterruptClaudeSession,
 } from "../services/session-manager.js";
 import {
   AGENT_INTERACTION_LIMITS,
@@ -271,6 +278,10 @@ session.get("/:id", async (c) => {
     rateLimits: sessionData.rateLimits,
     promptSuggestion: sessionData.promptSuggestion,
     planMode: sessionData.planMode,
+    turnId:
+      sessionData.status === "running" && sessionData.latestTurnGeneration !== undefined
+        ? String(sessionData.latestTurnGeneration)
+        : undefined,
     backgroundTasks: sessionData.backgroundTasks ?? {},
     completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
@@ -316,6 +327,85 @@ session.put("/:id/preferences", async (c) => {
       sessionErrorStatus(error),
     );
   }
+});
+
+session.post("/:id/config", async (c) => {
+  const sessionData = getSession(c.req.param("id"));
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+  if (sessionData.status === "running") return c.json({ error: "Session is running" }, 409);
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const parameterValues =
+    body.parameterValues &&
+    typeof body.parameterValues === "object" &&
+    !Array.isArray(body.parameterValues)
+      ? (body.parameterValues as Record<string, string | boolean>)
+      : undefined;
+  const rawPermissionMode = parameterValues?.permissionMode;
+  const permissionMode =
+    typeof rawPermissionMode === "string" &&
+    ["acceptEdits", "bypassPermissions", "plan"].includes(rawPermissionMode)
+      ? (rawPermissionMode as "acceptEdits" | "bypassPermissions" | "plan")
+      : body.mode === "plan"
+        ? "plan"
+        : body.mode === "build"
+          ? "bypassPermissions"
+          : undefined;
+  await configureClaudeSession(sessionData, {
+    ...(typeof body.model === "string" ? { model: body.model } : {}),
+    ...(typeof body.reasoningId === "string" ? { effort: body.reasoningId } : {}),
+    ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+    ...(parameterValues ? { parameterValues } : {}),
+  });
+  if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
+    await setSessionPreferences(sessionData.id, { planMode: permissionMode === "plan" });
+  }
+  return c.json({ ok: true });
+});
+
+session.get("/:id/commands", async (c) => {
+  return c.json({ commands: await readSessionCommands(c.req.param("id")) });
+});
+
+session.get("/:id/mcp", async (c) => {
+  return c.json({ servers: await readSessionMcpServers(c.req.param("id")) });
+});
+
+session.post("/:id/mcp/:serverId/:action", async (c) => {
+  const action = c.req.param("action");
+  if (!(["reconnect", "enable", "disable", "sign-in"] as string[]).includes(action)) {
+    return c.json({ error: "Unsupported MCP action" }, 400);
+  }
+  try {
+    return c.json(
+      await performSessionMcpAction(
+        c.req.param("id"),
+        c.req.param("serverId"),
+        action as "reconnect" | "enable" | "disable" | "sign-in",
+      ),
+    );
+  } catch (error) {
+    return c.json({ error: errorMessage(error, "MCP action failed") }, 409);
+  }
+});
+
+session.get("/:id/steer/dispatch", (c) => {
+  const requestId = c.req.query("requestId")?.trim();
+  return c.json({
+    dispatch: requestId ? readClaudeSteerDispatch(c.req.param("id"), requestId) : "unknown",
+  });
+});
+
+session.post("/:id/steer", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const text = typeof body.input === "string" ? body.input.trim() : "";
+  const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
+  const expectedRunId = typeof body.expectedRunId === "string" ? body.expectedRunId.trim() : "";
+  if (!text || !requestId || !expectedRunId) {
+    return c.json({ error: "input, requestId, and expectedRunId are required" }, 400);
+  }
+  const outcome = steerClaudeSession(c.req.param("id"), text, requestId, expectedRunId);
+  return c.json({ outcome }, outcome === "unknown" ? 503 : 200);
 });
 
 session.delete("/:id/prompt-suggestion", (c) => {
@@ -435,6 +525,12 @@ session.post("/:id/prompt", async (c) => {
       typeof body.includeLocalSettings === "boolean" ? body.includeLocalSettings : undefined;
     const promptSuggestions =
       typeof body.promptSuggestions === "boolean" ? body.promptSuggestions : undefined;
+    const parameterValues =
+      body.parameterValues &&
+      typeof body.parameterValues === "object" &&
+      !Array.isArray(body.parameterValues)
+        ? (body.parameterValues as Record<string, string | boolean>)
+        : undefined;
     const outputSchema = body.outputSchema;
     const agentMcpRecord =
       body.agentMcp && typeof body.agentMcp === "object" && !Array.isArray(body.agentMcp)
@@ -534,6 +630,7 @@ session.post("/:id/prompt", async (c) => {
             agent,
             includeLocalSettings,
             promptSuggestions,
+            parameterValues,
             ...(agentMcp ? { agentMcp } : {}),
             requestId,
           },
@@ -596,6 +693,7 @@ session.post("/:id/prompt", async (c) => {
       agent,
       includeLocalSettings,
       promptSuggestions,
+      parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
       outputSchema,
       requestId,
@@ -641,7 +739,7 @@ session.delete("/:id/questions/:questionId", (c) => {
 });
 
 // Abort a running session
-session.post("/:id/abort", (c) => {
+session.post("/:id/abort", async (c) => {
   const id = c.req.param("id");
   const sessionData = getSession(id);
 
@@ -649,13 +747,19 @@ session.post("/:id/abort", (c) => {
     return c.json({ error: "Session not found" }, 404);
   }
 
-  const aborted = abortSession(id);
+  const interrupted = await gracefulInterruptClaudeSession(id);
 
-  if (aborted) {
-    return c.json({ status: "aborted" });
+  if (interrupted.interrupted) {
+    return c.json({ status: "interrupt-requested", stillQueued: interrupted.stillQueued });
   } else {
     return c.json({ status: "not_running" });
   }
+});
+
+session.post("/:id/hard-abort", (c) => {
+  const id = c.req.param("id");
+  if (!getSession(id)) return c.json({ error: "Session not found" }, 404);
+  return c.json({ status: abortSession(id) ? "aborted" : "not_running" });
 });
 
 // Delete a session
@@ -688,6 +792,24 @@ session.post("/:id/rename", async (c) => {
       : c.json({ error: "Session not found" }, 404);
   } catch (error) {
     console.error("[session] Failed to rename session:", error);
+    return c.json(
+      { error: errorMessage(error, "Failed to rename session") },
+      sessionErrorStatus(error),
+    );
+  }
+});
+
+// Neutral provider surface; `/rename` remains as the compatibility alias.
+session.post("/:id/title", async (c) => {
+  const title = String(
+    ((await c.req.json().catch(() => ({}))) as { title?: unknown }).title ?? "",
+  ).trim();
+  if (!title) return c.json({ error: "Title is required" }, 400);
+  try {
+    return (await renameSessionDurably(c.req.param("id"), title))
+      ? c.json({ status: "renamed", title })
+      : c.json({ error: "Session not found" }, 404);
+  } catch (error) {
     return c.json(
       { error: errorMessage(error, "Failed to rename session") },
       sessionErrorStatus(error),

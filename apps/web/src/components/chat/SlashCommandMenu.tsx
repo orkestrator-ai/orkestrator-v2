@@ -10,7 +10,30 @@ import { cn } from "@/lib/utils";
 export interface SlashCommandOption {
   name: string;
   description?: string;
+  argumentHint?: string;
+  source?:
+    | "builtin"
+    | "project"
+    | "user"
+    | "plugin"
+    | "skill"
+    | "template"
+    | "extension"
+    | "orkestrator"
+    | "unknown";
 }
+
+const SOURCE_LABELS: Record<NonNullable<SlashCommandOption["source"]>, string> = {
+  orkestrator: "Orkestrator",
+  builtin: "Built in",
+  project: "Project",
+  user: "User",
+  plugin: "Plugins",
+  skill: "Skills",
+  template: "Templates",
+  extension: "Extensions",
+  unknown: "Other",
+};
 
 interface SlashCommandMenuProps<TCommand extends SlashCommandOption> {
   /** Already-filtered commands to display. */
@@ -62,6 +85,16 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
     return null;
   }
 
+  const groupedCommands = Array.from(
+    commands.reduce((groups, command, index) => {
+      const source = command.source ?? "unknown";
+      const group = groups.get(source) ?? [];
+      group.push({ command, index });
+      groups.set(source, group);
+      return groups;
+    }, new Map<NonNullable<SlashCommandOption["source"]>, Array<{ command: TCommand; index: number }>>()),
+  );
+
   return (
     <div
       ref={menuRef}
@@ -74,31 +107,41 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
     >
       <div className="p-1">
         <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Slash Commands</div>
-        {commands.map((command, index) => {
-          const isSelected = index === selectedIndex;
-          return (
-            <button
-              key={command.name}
-              ref={isSelected ? selectedRef : undefined}
-              onClick={() => onSelect(command)}
-              title={command.description || command.name}
-              className={cn(
-                "flex w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors",
-                isSelected
-                  ? "bg-zinc-800/80 text-foreground"
-                  : "hover:bg-zinc-800/70 hover:text-foreground",
-              )}
-            >
-              <Command className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="shrink-0 font-medium whitespace-nowrap">{command.name}</span>
-              {command.description && (
-                <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
-                  {command.description}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {groupedCommands.map(([source, entries]) => (
+          <div key={source}>
+            <div className="px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+              {SOURCE_LABELS[source]}
+            </div>
+            {entries.map(({ command, index }) => {
+              const isSelected = index === selectedIndex;
+              return (
+                <button
+                  key={`${source}:${command.name}`}
+                  ref={isSelected ? selectedRef : undefined}
+                  onClick={() => onSelect(command)}
+                  title={command.description || command.name}
+                  className={cn(
+                    "flex w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors",
+                    isSelected
+                      ? "bg-zinc-800/80 text-foreground"
+                      : "hover:bg-zinc-800/70 hover:text-foreground",
+                  )}
+                >
+                  <Command className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="shrink-0 font-medium whitespace-nowrap">{command.name}</span>
+                  {command.argumentHint && (
+                    <span className="shrink-0 text-xs text-zinc-500">{command.argumentHint}</span>
+                  )}
+                  {command.description && (
+                    <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
+                      {command.description}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </div>
   );

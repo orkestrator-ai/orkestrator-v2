@@ -6,7 +6,7 @@
  * this bridge be swapped in for the ACP one without a line changing in the
  * backend, the store or the renderer.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
@@ -18,7 +18,8 @@ import {
   logout,
 } from "./credentials.js";
 import { listModels, refreshModels } from "./models.js";
-import { schedulePersist } from "./persistence.js";
+import { publicCursorMcpServers } from "./mcp.js";
+import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
   parsePromptAttachments,
@@ -45,6 +46,7 @@ import {
   ensureAgent,
   listResumableSessions,
   parseComposerPatch,
+  rewindSessionHistory,
   resumeSession,
 } from "./agent-session.js";
 import {
@@ -201,11 +203,11 @@ async function startLogin(response: ServerResponse): Promise<void> {
     activeLogin = null;
     throw new HttpError(502, errorText(error));
   });
-  json(response, 200, { loginUrl });
+  json(response, 200, { url: loginUrl, loginUrl });
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals|runtime-health))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -217,6 +219,7 @@ async function routeSession(
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   const action = match[2];
+  const subject = match[3];
   if (!state) {
     // Answered in band so the backend can tell "this session is gone" from
     // "this bridge predates the route" — a 404 here would have it delete a
@@ -232,7 +235,12 @@ async function routeSession(
   // Liveness only. `/activity` and `/dispatch` deliberately do not touch it:
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
-  if (action !== "activity" && action !== "dispatch" && action !== "runtime-health") {
+  if (
+    action !== "activity" &&
+    action !== "dispatch" &&
+    action !== "runtime-health" &&
+    !(action === "steer" && subject === "dispatch")
+  ) {
     state.lastAccessed = Date.now();
   }
 
@@ -251,7 +259,7 @@ async function routeSession(
   if (action === "status" && request.method === "GET") {
     const readiness = state.agent
       ? { state: "ready" as const }
-      : (await authStatus()).authenticated
+      : (await authStatus()).state === "signed-in"
         ? { state: "ready" as const }
         : {
             state: "authentication-required" as const,
@@ -268,6 +276,23 @@ async function routeSession(
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
+  }
+  if (action === "steer" && subject === "dispatch" && request.method === "GET") {
+    const entry = state.steerJournal.get(url.searchParams.get("requestId") || "");
+    return json(response, 200, {
+      dispatch:
+        entry?.state === "delivered"
+          ? "dispatched"
+          : entry?.state === "absent"
+            ? "absent"
+            : "unknown",
+    });
+  }
+  if (action === "commands" && request.method === "GET") {
+    return json(response, 200, { commands: [] });
+  }
+  if (action === "mcp" && request.method === "GET" && !subject) {
+    return json(response, 200, { servers: publicCursorMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
     return json(response, 200, state.composer);
@@ -288,6 +313,20 @@ async function routeSession(
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
     return await handleCancel(response, state);
+  }
+  if (action === "hard-abort" && request.method === "POST") {
+    return await handleCancel(response, state);
+  }
+  if (action === "steer" && !subject && request.method === "POST") {
+    return await handleSteer(request, response, state);
+  }
+  if (action === "rewind-messages" && request.method === "POST") {
+    const body = await readJson(request);
+    const messageId = readBoundedString(body.messageId, 512, "messageId");
+    if (!messageId) throw new HttpError(400, "messageId is required");
+    await rewindSessionHistory(state, messageId);
+    await persistBarrier();
+    return json(response, 200, { rewound: true });
   }
   if (action === "structured-output" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
@@ -314,6 +353,85 @@ async function routeSession(
   // here would read as "session gone" and let a real gap — a route the backend
   // speaks and this bridge does not — be mistaken for an absent session.
   return json(response, 405, { error: "Method not allowed" });
+}
+
+async function handleSteer(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: SessionState,
+): Promise<void> {
+  const body = await readJson(request);
+  const text = readBoundedString(body.input, 64 * 1024, "input");
+  const requestId = readBoundedString(body.requestId, 512, "requestId");
+  const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
+  const run = state.activeRun;
+  if (!text) throw new HttpError(400, "input is required");
+  if (!run || state.status !== "running" || !run.supports("stream") || !run.steer) {
+    return json(response, 200, { outcome: "idle" });
+  }
+  if (!requestId || !expectedRunId) {
+    throw new HttpError(400, "requestId and expectedRunId are required");
+  }
+  const inputDigest = createHash("sha256").update(text).digest("hex");
+  const previous = state.steerJournal.get(requestId);
+  if (previous) {
+    if (previous.inputDigest !== inputDigest || previous.expectedRunId !== expectedRunId) {
+      return json(response, 409, { outcome: "unknown", requestId });
+    }
+    return json(response, previous.state === "delivered" ? 202 : 503, {
+      outcome: previous.state === "delivered" ? "applied" : "unknown",
+      requestId,
+      duplicate: true,
+    });
+  }
+  if (run.id !== expectedRunId) return json(response, 409, { outcome: "mismatch" });
+  state.steerJournal.set(requestId, {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state: "prepared",
+    createdAt: Date.now(),
+  });
+  await persistBarrier();
+  if (state.activeRun !== run || state.status !== "running") {
+    state.steerJournal.set(requestId, {
+      requestId,
+      inputDigest,
+      expectedRunId,
+      state: "absent",
+      createdAt: Date.now(),
+    });
+    await persistBarrier();
+    return json(response, 200, { outcome: "idle" });
+  }
+  try {
+    const outcome = await run.steer(text);
+    state.steerJournal.set(requestId, {
+      requestId,
+      inputDigest,
+      expectedRunId,
+      state: outcome === "complete_delivered" ? "delivered" : "absent",
+      createdAt: Date.now(),
+    });
+    await persistBarrier();
+    return json(
+      response,
+      outcome === "complete_delivered" ? 202 : 409,
+      outcome === "complete_delivered"
+        ? { outcome: "applied", requestId }
+        : { outcome: "idle", requestId },
+    );
+  } catch {
+    state.steerJournal.set(requestId, {
+      requestId,
+      inputDigest,
+      expectedRunId,
+      state: "ambiguous",
+      createdAt: Date.now(),
+    });
+    await persistBarrier();
+    return json(response, 503, { outcome: "unknown", requestId });
+  }
 }
 
 /**
@@ -458,7 +576,7 @@ async function handlePrompt(
     throw error;
   }
 
-  appendUserMessage(state, prompt, images);
+  const userMessageId = appendUserMessage(state, prompt, images);
   state.status = "running";
   state.error = undefined;
   state.promptSequence += 1;
@@ -483,6 +601,7 @@ async function handlePrompt(
       images: images.map((image) => ({ mimeType: image.mimeType, data: image.data })),
       ...(schema ? { schema } : {}),
       ...(requestId ? { requestId } : {}),
+      userMessageId,
     });
   } catch (error) {
     // `send` rejected before the run started, so nothing ran. Roll the turn
@@ -518,7 +637,7 @@ function appendUserMessage(
   state: SessionState,
   prompt: string,
   images: readonly CursorPromptImage[],
-): void {
+): string {
   const messageId = randomBytes(12).toString("hex");
   state.messages.push({
     id: messageId,
@@ -546,6 +665,7 @@ function appendUserMessage(
     createdAt: new Date().toISOString(),
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (images.length + 1));
+  return messageId;
 }
 
 function readBoundedString(value: unknown, limit: number, field: string): string | undefined {

@@ -246,6 +246,8 @@ export interface EngineTurnConfig {
   mode: EngineConversationMode;
   model?: string;
   reasoningEffort?: string;
+  reasoningSummary?: "auto" | "concise" | "detailed" | "none";
+  personality?: "none" | "friendly" | "pragmatic";
   /** `fast` service tier, or null to explicitly clear a previously set tier. */
   serviceTier?: string | null;
   cwd?: string;

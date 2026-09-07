@@ -372,6 +372,76 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("drops model-specific parameters when the selected model changes", async () => {
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            {
+              platform: "cursor",
+              id: "model-a",
+              label: "Model A",
+              parameters: [
+                {
+                  id: "variant",
+                  label: "Variant",
+                  kind: "select",
+                  options: [{ id: "special", label: "Special" }],
+                  scope: "session",
+                },
+              ],
+            },
+            { platform: "cursor", id: "model-b", label: "Model B" },
+          ],
+          selectedModelId: "model-a",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-model-parameters-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-model-parameters",
+        };
+        await service.ensureSession(identity);
+        await service.updateProjectionControls({
+          ...identity,
+          update: { parameterValues: { variant: "special" } },
+        });
+        await service.updateProjectionControls({ ...identity, update: { modelId: "model-b" } });
+
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect(
+          (await storage.getNativeAgentSession(key))?.controls?.parameterValues,
+        ).toBeUndefined();
+        await service.dispatchIntent({
+          ...identity,
+          prompt: "Use model B",
+          requestId: "model-b-1",
+        });
+        expect(stub.send).toHaveBeenCalledWith(
+          "provider-session",
+          "Use model B",
+          expect.objectContaining({ parameterValues: undefined }),
+        );
+      },
+    );
+  });
+
   test("keeps persisted session options ahead of provider composer defaults", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({

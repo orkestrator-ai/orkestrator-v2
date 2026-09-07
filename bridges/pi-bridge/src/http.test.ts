@@ -170,17 +170,17 @@ describe("authorized global routes", () => {
       const response = await call("/global/auth");
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
-        authenticated: true,
+        state: "signed-in",
         providers: [
           {
             id: "test-provider",
             label: "Test Provider",
-            authenticated: true,
-            source: "environment",
-            type: "api_key",
-            modelCount: 1,
+            state: "signed-in",
+            method: "api-key",
           },
         ],
+        signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+        signOut: false,
       });
     } finally {
       resetTestDependencies();
@@ -623,7 +623,7 @@ describe("successful lifecycle routes", () => {
         body: JSON.stringify({ upToMessageId: "entry-1" }),
       });
 
-      expect(response.status).toBe(200);
+      expect(response.status, await response.clone().text()).toBe(200);
       const body = await response.json();
       expect(body.sessionId).not.toBe(state.id);
       expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(forkedFile));
@@ -1167,6 +1167,51 @@ describe("steering", () => {
     });
     expect(secondPrompt.status).toBe(202);
     expect(steerCalls).toBe(0);
+  });
+});
+
+describe("provider-owned follow-ups", () => {
+  test("journals and exposes a second prompt while a turn is running", async () => {
+    const state = seedSession();
+    const followUps: string[] = [];
+    state.session = fakeAgentSession({
+      followUp: async (text: string) => {
+        followUps.push(text);
+        state.queue.followUp.push(text);
+      },
+    });
+    state.status = "running";
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-1" }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true, queued: true });
+    expect(followUps).toEqual(["Do this next"]);
+    expect(state.promptJournal.get("follow-up-1")?.state).toBe("accepted");
+    expect(await (await call(`/session/${state.id}/queue`)).json()).toEqual({
+      items: [{ id: "queued:0", text: "Do this next", mode: "follow-up" }],
+    });
+  });
+
+  test("rolls the prepared journal entry back when followUp fails", async () => {
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      followUp: async () => {
+        throw new Error("queue unavailable");
+      },
+    });
+    state.status = "running";
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "Do this next", requestId: "follow-up-failed" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(state.promptJournal.has("follow-up-failed")).toBe(false);
   });
 });
 

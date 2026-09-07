@@ -7,6 +7,8 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
+  NATIVE_AUTH_STATUS_CACHE_LIMIT,
+  NATIVE_AUTH_STATUS_TTL_MS,
   NATIVE_MISSING_SESSION_GRACE_MS,
   NATIVE_MODEL_CATALOG_CACHE_LIMIT,
   NATIVE_MODEL_CATALOG_TTL_MS,
@@ -69,6 +71,7 @@ type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
 type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
 type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
+type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
@@ -1074,6 +1077,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               false,
           }
         : {}),
+      ...(providerComposer?.parameterValues ||
+      session.controls?.parameterValues ||
+      providerControls?.parameterValues
+        ? {
+            parameterValues: {
+              ...providerComposer?.parameterValues,
+              ...session.controls?.parameterValues,
+              ...providerControls?.parameterValues,
+            },
+          }
+        : {}),
+      ...(providerComposer?.persistedDefaults === undefined
+        ? {}
+        : { persistedDefaults: providerComposer.persistedDefaults }),
     };
   }
 
@@ -1114,12 +1131,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   protected refreshProjectionSlashCommands(
     key: string,
     provider: NativeAgentRuntimeProvider,
+    sessionId?: string,
   ): Promise<NativeAgentSlashCommand[]> {
     const pending = this.slashCommandRefreshes.get(key);
     if (pending) return pending.operation;
     const validity = { current: true };
     const operation = (async () => {
-      const commands = (await provider.slashCommands!()).slice(0, 512);
+      const commands = (await provider.slashCommands!(sessionId)).slice(0, 512);
       if (!validity.current) {
         throw new ProviderUnavailableError("Slash command refresh was invalidated");
       }
@@ -1148,6 +1166,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   protected async projectionSlashCommands(
     input: NativeAgentProjectionInput,
     provider: NativeAgentRuntimeProvider,
+    sessionId?: string,
   ): Promise<NativeAgentSlashCommand[]> {
     const capabilities = nativeCapabilities(input.agent);
     // Runtime-performed commands exist even for a provider that advertises no
@@ -1157,14 +1176,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (!capabilities.slashCommands || !provider.slashCommands) {
       return withActions([]);
     }
-    const key = `${input.environmentId}\0${input.agent}`;
+    const key = `${input.environmentId}\0${input.agent}\0${sessionId ?? "global"}`;
     const cached = this.slashCommandCache.get(key);
     if (cached) {
       if (cached.expiresAt <= this.now()) {
         // Command discovery is optional UI metadata. Keep the expired list
         // visible and update it asynchronously so a transcript refresh never
         // waits on /global/slash-commands or a provider SDK request.
-        void this.refreshProjectionSlashCommands(key, provider)
+        void this.refreshProjectionSlashCommands(key, provider, sessionId)
           .then(() => {
             if (!this.stopped) {
               this.storage.announceNativeAgentSessionProjection(input.environmentId);
@@ -1180,7 +1199,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return withActions(cached.commands);
     }
     try {
-      const commands = await this.refreshProjectionSlashCommands(key, provider);
+      const commands = await this.refreshProjectionSlashCommands(key, provider, sessionId);
       return withActions(commands);
     } catch {
       // Discovery metadata is optional. Keep the transcript usable when a
@@ -1189,7 +1208,47 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
+  protected async projectionAuthStatus(
+    input: NativeAgentProjectionInput,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<NativeAgentAuthStatus | undefined> {
+    if (!provider.authStatus) return undefined;
+    const key = `${input.environmentId}\0${input.agent}`;
+    const cached = this.authStatusCache.get(key);
+    if (cached) {
+      if (cached.expiresAt <= this.now()) {
+        cached.expiresAt = this.now() + NATIVE_AUTH_STATUS_TTL_MS;
+        void Promise.resolve()
+          .then(() => provider.authStatus!())
+          .then((status) => {
+            this.authStatusCache.set(key, {
+              status,
+              expiresAt: this.now() + NATIVE_AUTH_STATUS_TTL_MS,
+            });
+            if (!this.stopped) {
+              this.storage.announceNativeAgentSessionProjection(input.environmentId);
+            }
+          })
+          .catch(() => {
+            cached.expiresAt = this.now() + NATIVE_DISCOVERY_RETRY_MS;
+          });
+      }
+      return cached.status;
+    }
+    const status = await provider.authStatus().catch(() => undefined);
+    if (this.authStatusCache.size >= NATIVE_AUTH_STATUS_CACHE_LIMIT) {
+      const oldest = this.authStatusCache.keys().next().value as string | undefined;
+      if (oldest) this.authStatusCache.delete(oldest);
+    }
+    this.authStatusCache.set(key, {
+      status,
+      expiresAt: this.now() + NATIVE_AUTH_STATUS_TTL_MS,
+    });
+    return status;
+  }
+
   protected invalidateProjection(key: string): void {
+    this.stopNotices.delete(key);
     const keys = [key, `${key}\0sync-v1`];
     for (const candidate of keys) {
       this.projectionCache.delete(candidate);
@@ -1305,20 +1364,37 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionSlashCommands(input, resolved.provider);
+      const slashCommandsPromise = this.projectionSlashCommands(
+        input,
+        resolved.provider,
+        resolved.session.providerSessionId,
+      );
       const steerSupportedPromise = advertisedCapabilities.actions?.steer
         ? (resolved.provider
             .steerSupported?.(resolved.session.providerSessionId)
             .catch(() => false) ?? Promise.resolve(false))
         : Promise.resolve(false);
-      const [snapshot, interactionSnapshot, queue, discoveredSlashCommands, steerSupported] =
-        await Promise.all([
-          snapshotPromise,
-          interactionSnapshotPromise,
-          queuePromise,
-          slashCommandsPromise,
-          steerSupportedPromise,
-        ]);
+      const mcpPromise =
+        resolved.provider.mcpServers?.(resolved.session.providerSessionId).catch(() => []) ??
+        Promise.resolve([]);
+      const authPromise = this.projectionAuthStatus(input, resolved.provider);
+      const [
+        snapshot,
+        interactionSnapshot,
+        queue,
+        discoveredSlashCommands,
+        steerSupported,
+        mcpServers,
+        auth,
+      ] = await Promise.all([
+        snapshotPromise,
+        interactionSnapshotPromise,
+        queuePromise,
+        slashCommandsPromise,
+        steerSupportedPromise,
+        mcpPromise,
+        authPromise,
+      ]);
       const steerQualified =
         !advertisedCapabilities.actions?.steer || steerSupported
           ? advertisedCapabilities
@@ -1450,6 +1526,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               NATIVE_SYNC_LIVE_TARGET_BYTES,
             )
           : normalized;
+      const stopNotice = this.stopNotices.get(sessionKey);
       const terminalNotices = [
         ...(snapshot.notices ?? []).filter(
           (notice) => notice.kind === "error" || notice.kind === "stopped",
@@ -1460,7 +1537,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         )
           ? [{ kind: "error" as const, message: snapshot.error }]
           : []),
+        ...(stopNotice ? [{ kind: "stopped" as const, message: stopNotice }] : []),
       ];
+      if (stopNotice) this.stopNotices.delete(sessionKey);
       const messageIds = new Set(
         transcript.messages.map((message) => (message as { id?: unknown })?.id),
       );
@@ -1484,6 +1563,29 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         });
       const messagesWithNotices = [...transcript.messages, ...terminalMessages];
       const renderedTranscript = { messages: messagesWithNotices, window: transcript.window };
+      const fallbackTitle = transcript.messages.flatMap((candidate) => {
+        const message = candidate as { role?: unknown; content?: unknown };
+        if (message.role !== "user" || typeof message.content !== "string") return [];
+        const normalized = message.content.replace(/\s+/g, " ").trim();
+        return normalized ? [normalized.slice(0, 80)] : [];
+      })[0];
+      const snapshotTitle = snapshot.title?.trim();
+      const placeholderTitle =
+        input.agent === "claude" &&
+        (snapshotTitle === "Agent Session" || /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
+      const projectionTitle =
+        (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
+      if (
+        projectionTitle &&
+        (!snapshotTitle || placeholderTitle) &&
+        resolved.provider.setSessionTitle &&
+        this.pushedSessionTitles.get(sessionKey) !== projectionTitle
+      ) {
+        this.pushedSessionTitles.set(sessionKey, projectionTitle);
+        void resolved.provider
+          .setSessionTitle(resolved.session.providerSessionId, projectionTitle)
+          .catch(() => undefined);
+      }
       if (input.representation === "sync-v1") {
         const historyIds = new Set(
           normalized.messages
@@ -1603,7 +1705,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         environmentId: input.environmentId,
         sessionId: resolved.session.providerSessionId,
         messageWindow: renderedTranscript.window,
-        ...(snapshot.title ? { title: snapshot.title } : {}),
+        ...(projectionTitle ? { title: projectionTitle } : {}),
         ...(snapshot.shareUrl === undefined ? {} : { shareUrl: snapshot.shareUrl }),
         connection: "connected",
         turn: {
@@ -1632,12 +1734,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ),
         composer,
         ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),
+        ...(auth ? { auth } : {}),
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
         ...(queue
           ? {
               queue: {
-                items: queue.messages,
+                items: [...(snapshot.providerQueue?.items ?? []), ...queue.messages],
                 ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
                 ...(queue.dispatchError
                   ? {
@@ -1649,13 +1752,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                   : {}),
               },
             }
-          : {}),
+          : snapshot.providerQueue
+            ? { queue: snapshot.providerQueue }
+            : {}),
         ...(asyncQuestionResponses.size > 0
           ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
-        ...(snapshot.runtime ? { runtime: snapshot.runtime } : {}),
+        ...(snapshot.runtime || mcpServers.length > 0
+          ? {
+              runtime: {
+                ...snapshot.runtime,
+                ...(mcpServers.length > 0
+                  ? { mcpServers: mcpServers.length, mcp: mcpServers }
+                  : {}),
+              },
+            }
+          : {}),
         ...((snapshot.notices ?? []).some(
           (notice) => notice.kind !== "error" && notice.kind !== "stopped",
         )

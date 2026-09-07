@@ -342,6 +342,40 @@ export function registerNativeAgentCommands(
     });
   });
 
+  register("perform_native_agent_mcp_action", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    const action = asNonBlankString(args.action, "action");
+    if (!["reconnect", "enable", "disable", "sign-in"].includes(action)) {
+      throw new Error("Unsupported MCP server action");
+    }
+    return context.nativeAgents.performProjectionMcpAction({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      serverId: asNonBlankString(args.serverId, "serverId"),
+      action: action as import("@orkestrator/protocol/native-agent").NativeAgentMcpServerAction,
+    });
+  });
+
+  register("begin_native_agent_sign_in", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    return context.nativeAgents.beginProjectionSignIn({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+  });
+
+  register("sign_out_native_agent", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    await context.nativeAgents.signOutProjectionProvider({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    });
+    return { ok: true };
+  });
+
   register("resolve_native_agent_interaction", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

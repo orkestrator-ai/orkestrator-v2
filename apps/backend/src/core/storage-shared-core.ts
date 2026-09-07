@@ -873,7 +873,9 @@ export function isPersistedNativeAgentSession(
             key === "mode" ||
             key === "executionProfileId" ||
             key === "includeLocalSettings" ||
-            key === "promptSuggestions",
+            key === "promptSuggestions" ||
+            key === "parameterValues" ||
+            key === "persistDefaults",
         ) &&
         (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId)) &&
         (value.controls.reasoningId === undefined ||
@@ -886,6 +888,18 @@ export function isPersistedNativeAgentSession(
           typeof value.controls.includeLocalSettings === "boolean") &&
         (value.controls.promptSuggestions === undefined ||
           typeof value.controls.promptSuggestions === "boolean") &&
+        (value.controls.persistDefaults === undefined ||
+          typeof value.controls.persistDefaults === "boolean") &&
+        (value.controls.parameterValues === undefined ||
+          (isRecord(value.controls.parameterValues) &&
+            Object.keys(value.controls.parameterValues).length <= 64 &&
+            Object.entries(value.controls.parameterValues).every(
+              ([key, candidate]) =>
+                key.length > 0 &&
+                key.length <= 128 &&
+                (typeof candidate === "boolean" ||
+                  (typeof candidate === "string" && candidate.length <= 1_024)),
+            ))) &&
         (value.controls.mode === undefined ||
           value.controls.mode === "build" ||
           value.controls.mode === "plan"))) &&

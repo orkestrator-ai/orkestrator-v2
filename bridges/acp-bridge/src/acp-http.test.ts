@@ -13,6 +13,35 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  test("reports Grok auth and the configured control MCP without exposing its token", async () => {
+    const missingCredential = resolve(await temporaryDirectory(), "missing-auth.json");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        GROK_AUTH_FILE: missingCredential,
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4321/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "private-test-token",
+      },
+    });
+    const auth = await nativeFetch(`${base}/global/auth`, { headers });
+    expect(auth.status).toBe(200);
+    expect(await auth.json()).toMatchObject({
+      state: "needs-auth",
+      signIn: { kind: "terminal" },
+      signOut: false,
+    });
+
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const payload = await nativeFetch(`${base}/session/${created.id}/mcp`, { headers }).then(
+      (response) => response.text(),
+    );
+    expect(payload).toContain("orkestrator");
+    expect(payload).not.toContain("private-test-token");
+  });
+
   test("runtime health uses the shared envelope and answers unknown sessions in band", async () => {
     const { base, headers } = await spawnBridge();
     const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });

@@ -21,6 +21,7 @@ import {
   expireComposerHydrationRetryForTests,
   forkSession,
   hydrateSessionComposer,
+  navigateSessionHistory,
   newSessionState,
   projectResourceDiscoveryOptions,
   recordExtensionLoadDiagnostics,
@@ -354,6 +355,41 @@ describe("Pi SDK lifecycle", () => {
     expect(explicit).toBe(forked);
   });
 
+  test("switches the active branch using the selected transcript message", async () => {
+    let navigatedTo = "";
+    const fake = fakeSession({
+      getUserMessagesForForking: () => [{ entryId: "older-entry" }, { entryId: "newer-entry" }],
+      navigateTree: async (entryId: string, options: { summarize: boolean }) => {
+        navigatedTo = entryId;
+        expect(options).toEqual({ summarize: false });
+        return { cancelled: false, aborted: false };
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    state.messages = [
+      {
+        id: "older-message",
+        role: "user",
+        content: "first",
+        parts: [],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: "newer-message",
+        role: "user",
+        content: "second",
+        parts: [],
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    await navigateSessionHistory(state, "newer-message");
+
+    expect(navigatedTo).toBe("newer-entry");
+    expect(state.messages).toEqual([]);
+  });
+
   test("updates live model and thinking selections to what the session accepts", async () => {
     const fake = fakeSession();
     const nextModel = model("next", "selected");
@@ -387,7 +423,9 @@ describe("Pi SDK lifecycle", () => {
     const state = newSessionState();
 
     await ensureSession(state);
-    expect(state.slashCommands).toEqual([{ name: "/review", description: "Review files" }]);
+    expect(state.slashCommands).toEqual([
+      { name: "/review", description: "Review files", source: "template" },
+    ]);
     state.status = "running";
     fake.emit({
       type: "message_update",
@@ -456,7 +494,9 @@ describe("extension binding", () => {
 
     await ensureSession(state);
 
-    expect(state.slashCommands).toEqual([{ name: "/deploy", description: "Ship it" }]);
+    expect(state.slashCommands).toEqual([
+      { name: "/deploy", description: "Ship it", source: "template" },
+    ]);
   });
 
   test("binds in a non-terminal mode with an error listener and no UI context", async () => {

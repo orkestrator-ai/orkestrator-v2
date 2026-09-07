@@ -101,6 +101,21 @@ function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): Agent
       defaultReasoningId:
         fallbackReasoningId(reasoning, model.defaultReasoningEffort) ??
         model.defaultReasoningEffort,
+      parameters: [
+        {
+          id: "summary",
+          label: "Reasoning summary",
+          kind: "select",
+          options: [
+            { id: "auto", label: "Automatic" },
+            { id: "concise", label: "Concise" },
+            { id: "detailed", label: "Detailed" },
+            { id: "none", label: "Hidden" },
+          ],
+          defaultValue: "auto",
+          scope: "turn",
+        },
+      ],
       supportsSpeed: true,
       supportsMode: true,
     };
@@ -686,6 +701,32 @@ export function registerProjectCommands(
           providerLabel: "Claude",
           reasoning: reasoningOptions(efforts),
           defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
+          parameters: [
+            {
+              id: "thinking",
+              label: "Thinking",
+              kind: "select",
+              options: [
+                { id: "adaptive", label: "Adaptive" },
+                { id: "budget-8192", label: "8K budget" },
+                { id: "budget-16384", label: "16K budget" },
+                { id: "disabled", label: "Disabled" },
+              ],
+              defaultValue: "adaptive",
+              scope: "session",
+            },
+            ...(/opus|sonnet/i.test(`${model.id} ${model.resolvedModel ?? ""}`)
+              ? [
+                  {
+                    id: "context1m",
+                    label: "1M context beta",
+                    kind: "toggle" as const,
+                    defaultValue: false,
+                    scope: "session" as const,
+                  },
+                ]
+              : []),
+          ],
           supportsSpeed: model.supportsFastMode !== false,
           supportsMode: true,
         };

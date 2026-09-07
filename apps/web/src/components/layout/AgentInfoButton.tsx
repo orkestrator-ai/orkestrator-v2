@@ -61,11 +61,14 @@ import {
 } from "@/lib/agent-handoff";
 import {
   deleteAgentHandoff,
+  beginNativeAgentSignIn,
   forkNativeAgentSession,
   getCursorAccountUsage,
   getNativeAgentProjection,
   getSystemUsage,
   performNativeAgentSessionAction,
+  performNativeAgentMcpAction,
+  signOutNativeAgent,
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
@@ -1705,6 +1708,124 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                   Runtime
                 </div>
+                {neutralProjection?.auth ? (
+                  <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium text-foreground">
+                          {neutralProjection.auth.account?.label ?? activeSession.providerLabel}
+                        </div>
+                        <div className="mt-0.5 text-muted-foreground">
+                          {neutralProjection.auth.state.replaceAll("-", " ")}
+                          {neutralProjection.auth.account?.plan
+                            ? ` · ${neutralProjection.auth.account.plan}`
+                            : ""}
+                        </div>
+                      </div>
+                      {neutralProjection.auth.state === "signed-in" &&
+                      neutralProjection.auth.signOut ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7"
+                          disabled={busyAction !== null}
+                          onClick={() =>
+                            void runAction("auth-sign-out", async () => {
+                              await signOutNativeAgent({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                              });
+                              toast.success(`Signed out of ${activeSession.providerLabel}`);
+                            })
+                          }
+                        >
+                          Sign out
+                        </Button>
+                      ) : neutralProjection.auth.signIn?.kind !== "none" &&
+                        neutralProjection.auth.signIn?.kind !== "terminal" ? (
+                        <Button
+                          size="sm"
+                          className="h-7"
+                          disabled={busyAction !== null}
+                          onClick={() =>
+                            void runAction("auth-sign-in", async () => {
+                              const result = await beginNativeAgentSignIn({
+                                environmentId: activeSession.environmentId,
+                                agent: activeSession.provider,
+                                logicalSessionKey: activeSession.sessionKey,
+                              });
+                              if (result.url) {
+                                window.open(result.url, "_blank", "noopener,noreferrer");
+                              }
+                              if (result.code) toast.info(`Device code: ${result.code}`);
+                            })
+                          }
+                        >
+                          Sign in
+                        </Button>
+                      ) : null}
+                    </div>
+                    {neutralProjection.auth.signIn?.hint &&
+                    neutralProjection.auth.state !== "signed-in" ? (
+                      <p className="mt-2 leading-relaxed text-muted-foreground">
+                        {neutralProjection.auth.signIn.hint}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {(neutralProjection?.runtime?.mcp?.length ?? 0) > 0 ? (
+                  <div className="space-y-1.5" aria-label="MCP servers">
+                    {neutralProjection!.runtime!.mcp!.map((server) => (
+                      <div
+                        key={server.id}
+                        className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-foreground">
+                              {server.name}
+                            </div>
+                            <div className="mt-0.5 text-muted-foreground">
+                              {server.status.replaceAll("-", " ")}
+                              {server.toolCount === undefined ? "" : ` · ${server.toolCount} tools`}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                            {server.actions.map((action) => (
+                              <Button
+                                key={action}
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2"
+                                disabled={busyAction !== null}
+                                onClick={() =>
+                                  void runAction(`mcp-${server.id}-${action}`, async () => {
+                                    const result = await performNativeAgentMcpAction({
+                                      environmentId: activeSession.environmentId,
+                                      agent: activeSession.provider,
+                                      logicalSessionKey: activeSession.sessionKey,
+                                      serverId: server.id,
+                                      action,
+                                    });
+                                    if (result.url) {
+                                      window.open(result.url, "_blank", "noopener,noreferrer");
+                                    }
+                                  })
+                                }
+                              >
+                                {action.replaceAll("-", " ")}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                        {server.error ? (
+                          <p className="mt-2 break-words text-destructive">{server.error}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {activeSession.provider === "claude" ? (
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">
                     <Metric

@@ -38,6 +38,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
   const contextUsage = publicContextUsage(state);
   return {
     status: state.status,
+    ...(state.activeRun ? { turnId: state.activeRun.id } : {}),
     error: state.error,
     revision: state.revision,
     composer: state.composer,

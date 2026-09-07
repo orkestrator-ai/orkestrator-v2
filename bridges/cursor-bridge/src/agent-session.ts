@@ -8,7 +8,13 @@
  * seeing anything other than a session that was briefly connecting.
  */
 import { randomBytes } from "node:crypto";
-import { Agent, type SDKAgent } from "@cursor/sdk";
+import {
+  Agent,
+  type LocalAgentRunDocument,
+  type Run,
+  type SDKAgent,
+  type SDKAgentInfo,
+} from "@cursor/sdk";
 import {
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
@@ -20,6 +26,7 @@ import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
+import { cursorMcpServers } from "./mcp.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import {
   clientSessionKeys,
@@ -52,6 +59,7 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     revision: 0,
     structured: new Map(),
     promptJournal: new Map(),
+    steerJournal: new Map(),
     activeSubagentDescriptors: new Map(),
     subagentLimitExceeded: false,
     todos: [],
@@ -127,6 +135,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
+  const mcpServers = await cursorMcpServers();
+  state.mcpServerNames = Object.keys(mcpServers);
   const options = {
     apiKey,
     model: modelSelection(state.composer),
@@ -136,6 +146,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       settingSources,
       sandboxOptions: { enabled: sandboxEnabled },
     },
+    ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
 
   // A session that already ran holds an agent id, and resuming it is what
@@ -200,11 +211,72 @@ export async function detachAgent(state: SessionState): Promise<void> {
   await agent[Symbol.asyncDispose]().catch(() => undefined);
 }
 
+/** Restore the checkpoint captured immediately before the selected user turn. */
+export async function rewindSessionHistory(state: SessionState, messageId: string): Promise<void> {
+  if (!state.agentId) throw new Error("This Cursor session has no persisted conversation");
+  if (state.status === "running" || state.dispatching) {
+    throw new Error("The Cursor session is already running");
+  }
+  const selectedMessage = state.messages.find(
+    (message) => message.role === "user" && message.id === messageId,
+  );
+  if (!selectedMessage) throw new Error("The selected Cursor message is no longer available");
+  if (!selectedMessage.runId) {
+    throw new Error("Cursor cannot safely map that message to its stored run");
+  }
+
+  await detachAgent(state);
+  const { SqliteLocalAgentStore } = await import("@cursor/sdk/sqlite");
+  const store = await SqliteLocalAgentStore.open({ workspaceRef: workingDirectory });
+  try {
+    const runs: LocalAgentRunDocument[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await store.runs.list({
+        filter: { agentIds: [state.agentId], limit: 200, ...(cursor ? { cursor } : {}) },
+      });
+      runs.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor && runs.length < 2_000);
+    runs.sort((left, right) => left.turnNumber - right.turnNumber);
+    const userIndex = runs.findIndex((run) => run.runId === selectedMessage.runId);
+    const targetRun = userIndex < 0 ? undefined : runs[userIndex];
+    const checkpoint = targetRun?.startCheckpointRef;
+    if (!targetRun || !checkpoint) throw new Error("Cursor has no checkpoint for that message");
+    const agent = await store.agents.get({ agentId: state.agentId });
+    if (!agent) throw new Error("Cursor no longer has this agent");
+    await store.agents.update({
+      agent: {
+        ...agent,
+        status: "idle",
+        activeRunId: null,
+        latestCheckpoint: checkpoint,
+        updatedAt: Date.now(),
+      },
+    });
+    const discardedRunIds = runs.slice(userIndex).map((run) => run.runId);
+    if (discardedRunIds.length > 0) {
+      await store.runEvents.delete({ filter: { runIds: discardedRunIds } });
+      await store.runs.delete({ filter: { agentIds: [state.agentId], runIds: discardedRunIds } });
+    }
+    const transcriptIndex = state.messages.findIndex((message) => message.id === messageId);
+    state.messages.splice(transcriptIndex);
+    state.openTextParts.clear();
+    state.currentAssistantMessageId = undefined;
+    state.error = undefined;
+    state.revision += 1;
+    boundTranscript(state);
+  } finally {
+    await store.dispose();
+  }
+}
+
 export interface ComposerPatch {
   modelId?: string;
   reasoningId?: string;
   modeId?: "build" | "plan";
   fastMode?: boolean;
+  parameterValues?: Record<string, string | boolean>;
 }
 
 export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
@@ -217,6 +289,13 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
   if (body.mode === "plan" || body.mode === "build") patch.modeId = body.mode;
   if (body.modeId === "plan" || body.modeId === "build") patch.modeId ??= body.modeId;
   if (typeof body.fastMode === "boolean") patch.fastMode = body.fastMode;
+  if (isObject(body.parameterValues)) {
+    patch.parameterValues = Object.fromEntries(
+      Object.entries(body.parameterValues)
+        .filter(([, value]) => typeof value === "string" || typeof value === "boolean")
+        .slice(0, 64),
+    ) as Record<string, string | boolean>;
+  }
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
@@ -232,7 +311,8 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
 export function applyComposerPatch(state: SessionState, patch: ComposerPatch | undefined): boolean {
   if (!patch) return false;
   let changed = false;
-  if (patch.modelId && patch.modelId !== state.composer.selectedModelId) {
+  const modelChanged = Boolean(patch.modelId && patch.modelId !== state.composer.selectedModelId);
+  if (modelChanged) {
     state.composer = {
       ...state.composer,
       selectedModelId: patch.modelId,
@@ -240,6 +320,7 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
       // sent one alongside: the axis is per-model, so carrying the old id over
       // would send parameters the new model does not define.
       selectedReasoningId: patch.reasoningId,
+      parameterValues: patch.parameterValues ?? {},
     };
     changed = true;
   } else if (patch.reasoningId && patch.reasoningId !== state.composer.selectedReasoningId) {
@@ -252,6 +333,13 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
   }
   if (patch.fastMode !== undefined && patch.fastMode !== state.composer.fastModeEnabled) {
     state.composer = { ...state.composer, fastModeEnabled: patch.fastMode };
+    changed = true;
+  }
+  if (patch.parameterValues && !modelChanged) {
+    state.composer = {
+      ...state.composer,
+      parameterValues: { ...state.composer.parameterValues, ...patch.parameterValues },
+    };
     changed = true;
   }
   if (changed) state.revision += 1;
@@ -267,13 +355,20 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
 export async function listResumableSessions(): Promise<JsonObject[]> {
   const { apiKey } = await resolveCredential();
   if (!apiKey) return [];
-  const listed = await Agent.list({
-    runtime: "local",
-    cwd: workingDirectory,
-    limit: MAX_RESUME_ENTRIES,
-  }).catch(() => ({ items: [] }));
+  const items: SDKAgentInfo[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await Agent.list({
+      runtime: "local",
+      cwd: workingDirectory,
+      limit: MAX_RESUME_ENTRIES,
+      ...(cursor ? { cursor } : {}),
+    }).catch(() => ({ items: [], nextCursor: undefined }));
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor && items.length < 2_000);
 
-  return listed.items.slice(0, MAX_RESUME_ENTRIES).map((item) => ({
+  return items.slice(0, 2_000).map((item) => ({
     // This is the bridge wire shape, not the normalized service shape. The
     // shared backend provider reads `id` here and turns it into `sessionId` for
     // the renderer; returning `sessionId` directly makes it discard every row.
@@ -304,6 +399,7 @@ export async function resumeSession(
   state.composer = await hydrateComposer(state.composer);
   await hydrateHistory(state).catch(() => undefined);
   sessions.set(state.id, state);
+  void recoverActiveRun(state);
   return state;
 }
 
@@ -317,20 +413,74 @@ export async function resumeSession(
  */
 async function hydrateHistory(state: SessionState): Promise<void> {
   if (!state.agentId) return;
-  const runs = await withTimeout(
-    Agent.listRuns(state.agentId, { runtime: "local", cwd: workingDirectory }),
-    CATALOG_TIMEOUT_MS,
-  );
-  for (const run of runs.items) {
+  const runs = await listAllRuns(state.agentId);
+  for (const run of runs) {
     if (!run.supports("conversation")) continue;
     const turns = await run.conversation().catch(() => []);
-    for (const turn of turns) appendHistoricTurn(state, turn);
+    for (const turn of turns) appendHistoricTurn(state, turn, run.id);
   }
   boundTranscript(state);
   state.revision += 1;
 }
 
-function appendHistoricTurn(state: SessionState, turn: unknown): void {
+async function listAllRuns(agentId: string): Promise<Run[]> {
+  const runs: Run[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await withTimeout(
+      Agent.listRuns(agentId, {
+        runtime: "local",
+        cwd: workingDirectory,
+        limit: MAX_RESUME_ENTRIES,
+        ...(cursor ? { cursor } : {}),
+      }),
+      CATALOG_TIMEOUT_MS,
+    );
+    runs.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor && runs.length < 2_000);
+  return runs;
+}
+
+/** Re-adopt a local run that survived a bridge restart. */
+async function recoverActiveRun(state: SessionState): Promise<void> {
+  if (!state.agentId || state.activeRun || state.status === "running") return;
+  const runs = await listAllRuns(state.agentId).catch(() => []);
+  const active = [...runs].reverse().find((run) => run.status === "running");
+  if (!active) return;
+  state.activeRun = active;
+  state.status = "running";
+  state.turnStartedAt = active.createdAt;
+  state.cancelTurn = () => active.cancel();
+  state.revision += 1;
+  const unsubscribe = active.onDidChangeStatus(() => {
+    state.revision += 1;
+  });
+  void (async () => {
+    try {
+      for await (const _event of active.stream()) {
+        // The recovered run had no live onDelta callback. Its authoritative
+        // conversation is replayed below once the stream settles.
+      }
+      await active.wait();
+      state.messages = [];
+      state.uncheckedTranscriptBytes = 0;
+      await hydrateHistory(state);
+      state.status = active.status === "error" ? "error" : "idle";
+      state.error = active.error?.message;
+    } catch (error) {
+      state.status = "error";
+      state.error = error instanceof Error ? error.message : "Cursor run recovery failed";
+    } finally {
+      unsubscribe();
+      if (state.activeRun === active) state.activeRun = undefined;
+      state.cancelTurn = undefined;
+      state.revision += 1;
+    }
+  })();
+}
+
+function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): void {
   if (!isObject(turn) || !isObject(turn.turn)) return;
   if (turn.type === "shellConversationTurn") {
     appendHistoricShellTurn(state, turn.turn);
@@ -341,7 +491,7 @@ function appendHistoricTurn(state: SessionState, turn: unknown): void {
     isObject(body.userMessage) && nonBlank(body.userMessage.text)
       ? body.userMessage.text
       : undefined;
-  if (userText) pushMessage(state, "user", userText, []);
+  if (userText) pushMessage(state, "user", userText, [], undefined, runId);
   if (!Array.isArray(body.steps) || body.steps.length === 0) return;
 
   const parts: BridgeMessagePart[] = [];
@@ -432,6 +582,7 @@ function pushMessage(
   content: string,
   parts: BridgeMessagePart[],
   messageId = randomBytes(12).toString("hex"),
+  runId?: string,
 ): void {
   const message: BridgeMessage = {
     id: messageId,
@@ -449,6 +600,7 @@ function pushMessage(
             },
           ],
     createdAt: new Date().toISOString(),
+    ...(runId ? { runId } : {}),
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

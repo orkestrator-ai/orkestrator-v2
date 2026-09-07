@@ -60,8 +60,10 @@ import {
   forkSession,
   hydrateSessionComposer,
   listResumableSessions,
+  navigateSessionHistory,
   parseComposerPatch,
   resumeSession,
+  setSessionTitle,
 } from "./agent-session.js";
 import {
   clientSessionKeys,
@@ -160,6 +162,15 @@ async function routeGlobal(
     // layer's generation guard stops that probe publishing, and this ordering
     // ensures even a result that landed just before settlement is discarded.
     refreshModels();
+    await Promise.all(
+      Array.from(sessions.values()).map(async (state) => {
+        const session = state.session;
+        if (!session) return;
+        await session.reload();
+        state.slashCommands = readSessionCommands(session);
+        state.revision += 1;
+      }),
+    );
     // Restored sessions intentionally hold no persisted model rows. A manual
     // refresh must repair those session snapshots too, otherwise the global
     // catalogue changes while the open tab keeps saying no models are
@@ -180,6 +191,13 @@ async function routeGlobal(
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
     json(response, 200, await authStatus());
+    return true;
+  }
+  if (
+    (url.pathname === "/global/auth/login" || url.pathname === "/global/auth/logout") &&
+    request.method === "POST"
+  ) {
+    json(response, 405, { error: "Pi authentication is available in a terminal with /login" });
     return true;
   }
   if (url.pathname === "/session/list" && request.method === "GET") {
@@ -230,6 +248,28 @@ async function routeGlobal(
   return false;
 }
 
+function readSessionCommands(session: NonNullable<SessionState["session"]>) {
+  const commands = [
+    ...session.promptTemplates.map((template) => ({
+      name: `/${template.name}`,
+      description: template.description,
+      source: "template" as const,
+      ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
+    })),
+    ...session.resourceLoader.getSkills().skills.map((skill) => ({
+      name: `/skill:${skill.name}`,
+      description: skill.description,
+      source: "skill" as const,
+    })),
+    ...session.extensionRunner.getRegisteredCommands().map((command) => ({
+      name: `/${command.invocationName || command.name}`,
+      description: command.description,
+      source: "extension" as const,
+    })),
+  ];
+  return commands.slice(0, 512);
+}
+
 /**
  * Slash commands available before a session exists.
  *
@@ -242,7 +282,7 @@ function globalSlashCommands(): Array<{ name: string; description: string }> {
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -340,6 +380,13 @@ async function routeSession(
   if (action === "queue" && request.method === "GET") {
     return json(response, 200, publicQueue(state));
   }
+  if (action === "commands" && request.method === "GET") {
+    return json(response, 200, { commands: state.slashCommands });
+  }
+  // Pi extensions are native tools, not MCP servers.
+  if (action === "mcp" && request.method === "GET") {
+    return json(response, 200, { servers: [] });
+  }
   if (action === "config" && request.method === "GET") {
     return json(response, 200, { ...state.composer, commands: state.slashCommands });
   }
@@ -366,6 +413,9 @@ async function routeSession(
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
     return await handleCancel(response, state);
   }
+  if (action === "hard-abort" && request.method === "POST") {
+    return await handleCancel(response, state);
+  }
   if (action === "compact" && request.method === "POST") {
     return await handleCompact(response, state);
   }
@@ -374,6 +424,27 @@ async function routeSession(
   }
   if (action === "fork" && request.method === "POST") {
     return await handleFork(request, response, state);
+  }
+  if (action === "rewind-messages" && request.method === "POST") {
+    const body = await readJson(request);
+    const messageId = readBoundedString(body.messageId, 512, "messageId");
+    if (!messageId) throw new HttpError(400, "messageId is required");
+    await navigateSessionHistory(state, messageId);
+    await persistBarrier();
+    return json(response, 200, { rewound: true });
+  }
+  if (action === "branches" && subject && request.method === "POST") {
+    await navigateSessionHistory(state, decodeURIComponent(subject));
+    await persistBarrier();
+    return json(response, 200, { switched: true });
+  }
+  if (action === "title" && request.method === "POST") {
+    const body = await readJson(request);
+    const title = readBoundedString(body.title, 512, "title");
+    if (!title) throw new HttpError(400, "title is required");
+    await setSessionTitle(state, title);
+    await persistBarrier();
+    return json(response, 200, { title });
   }
   if (action === "structured-output" && request.method === "GET") {
     const requestId = url.searchParams.get("requestId") || "";
@@ -523,6 +594,8 @@ async function handleSteer(
 ): Promise<void> {
   const body = await readJson(request);
   const text = readBoundedString(body.input, 64 * 1024, "input");
+  const attachments = parsePromptAttachments(body.attachments);
+  const images = await readPromptImages(attachments, workingDirectory);
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
@@ -582,7 +655,10 @@ async function handleSteer(
   // with this continuation.
   state.pendingSteerDeliveries.push({ requestId, text });
   try {
-    await session.steer(text);
+    await session.steer(
+      text,
+      images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
+    );
   } catch {
     const pendingIndex = state.pendingSteerDeliveries.findIndex(
       (candidate) => candidate.requestId === requestId,
@@ -621,6 +697,7 @@ async function handleFork(
   return json(response, 200, {
     sessionId: forked.id,
     ...(forked.title ? { title: forked.title } : {}),
+    ...(forked.forkDraft ? { draft: forked.forkDraft } : {}),
   });
 }
 
@@ -684,6 +761,31 @@ async function handlePrompt(
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
+  }
+  // A second ordinary prompt is a provider-owned follow-up. Pi keeps this
+  // queue with the live run, and its state events rehydrate `/queue` even when
+  // the renderer that submitted it is no longer mounted.
+  if (state.status === "running" && !state.dispatching && !state.compacting && state.session) {
+    const images = await readPromptImages(attachments, workingDirectory);
+    const files = await resolvePromptFiles(attachments, workingDirectory);
+    const text = prompt + promptFileReferences(files);
+    if (requestId) {
+      setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
+      await persistBarrier();
+    }
+    try {
+      await state.session.followUp(
+        text,
+        images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })),
+      );
+    } catch (error) {
+      if (requestId) state.promptJournal.delete(requestId);
+      schedulePersist();
+      throw error;
+    }
+    journal(state, requestId, "accepted");
+    schedulePersist();
+    return json(response, 202, { accepted: true, queued: true });
   }
   // `compacting` counts as busy: Pi's compaction aborts whatever is running,
   // so a prompt admitted alongside one is a turn that gets cancelled out from

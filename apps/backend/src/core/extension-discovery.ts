@@ -484,14 +484,13 @@ async function discoverCodex(run: ExtensionCommandRunner): Promise<AgentExtensio
 }
 
 async function discoverCursor(): Promise<AgentExtensionCatalog> {
-  // The SDK bridge loads Cursor settings for sessions but exposes no stable
-  // extension-discovery surface. Say that the catalogue is unavailable rather
-  // than claiming the user's effective settings contain no extensions.
+  // Live MCP inventory now comes from the session bridge. This pre-session
+  // fallback has no SDK process to ask, so an empty list is intentionally
+  // neutral rather than the obsolete "unsupported" error.
   return {
     agent: "cursor",
     mcpServers: [],
     plugins: [],
-    mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
     pluginError: "Cursor's SDK bridge does not expose a plugin list.",
   };
 }

@@ -83,6 +83,8 @@ describe("HTTP bridge provider", () => {
               title: "Previous work",
               updatedAt: "2026-08-14T20:00:00.000Z",
               messageCount: 7,
+              parentId: "parent-session",
+              branchLabel: "Alternative",
             },
           ],
         });
@@ -99,6 +101,8 @@ describe("HTTP bridge provider", () => {
         title: "Previous work",
         updatedAt: "2026-08-14T20:00:00.000Z",
         detail: "7 messages",
+        parentId: "parent-session",
+        branchLabel: "Alternative",
       },
     ]);
     await expect(
@@ -121,6 +125,74 @@ describe("HTTP bridge provider", () => {
       mode: "plan",
       fastMode: true,
     });
+  });
+
+  test("normalizes hostile authentication payloads", async () => {
+    const { provider } = httpProvider(() =>
+      Response.json({
+        state: 42,
+        account: { label: "a".repeat(400), plan: "p".repeat(400) },
+        signIn: { kind: "future-flow", hint: "h".repeat(4_000) },
+        providers: Array.from({ length: 140 }, (_, index) => ({
+          id: `provider-${index}`,
+          label: "l".repeat(400),
+          state: index === 0 ? "signed-in" : "future-state",
+          method: "future-method",
+        })),
+        signOut: "yes",
+      }),
+    );
+
+    const status = await provider.authStatus?.();
+    expect(status).toMatchObject({ state: "unknown" });
+    expect(status?.account?.label).toHaveLength(256);
+    expect(status?.account?.plan).toHaveLength(256);
+    expect(status?.signIn).toBeUndefined();
+    expect(status?.signOut).toBeUndefined();
+    expect(status?.providers).toHaveLength(128);
+    expect(status?.providers?.[0]).toEqual({
+      id: "provider-0",
+      label: "l".repeat(256),
+      state: "signed-in",
+    });
+    expect(status?.providers?.[1]?.state).toBe("unknown");
+  });
+
+  test("uses a neutral source for sourceless and future slash commands", async () => {
+    const { provider } = httpProvider((url) =>
+      url.endsWith("/commands")
+        ? Response.json({
+            commands: [{ name: "/legacy" }, { name: "/future", source: "workspace-pack" }],
+          })
+        : new Response(null, { status: 404 }),
+    );
+
+    await expect(provider.slashCommands?.("session-1")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "/legacy", source: "unknown" }),
+        expect.objectContaining({ name: "/future", source: "unknown" }),
+      ]),
+    );
+  });
+
+  test("falls back to the global slash-command route for older bridges", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/session/session-1/commands")) {
+        return new Response(null, { status: 404 });
+      }
+      if (url.endsWith("/global/slash-commands")) {
+        return Response.json({ commands: [{ name: "/legacy", source: "builtin" }] });
+      }
+      return new Response(null, { status: 404 });
+    }, cursorConnection);
+
+    await expect(provider.slashCommands?.("session-1")).resolves.toEqual([
+      expect.objectContaining({ name: "/legacy", source: "builtin" }),
+    ]);
+    expect(requests.map((request) => request.url)).toEqual([
+      `${cursorConnection.baseUrl}/session/session-1/commands`,
+      `${cursorConnection.baseUrl}/global/slash-commands`,
+    ]);
   });
 
   for (const [agent, connection] of [
@@ -1104,17 +1176,16 @@ describe("HTTP bridge provider", () => {
     ["codex" as const, codexConnection],
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],
-  ])("does not reach the bridge to refresh a %s catalogue", async (_agent, connection) => {
-    // Only Pi keeps a process-wide credential snapshot this side cannot
-    // invalidate. For everyone else dropping the local caches is the whole
-    // refresh, and a bridge round-trip would be latency for nothing.
+  ])("refreshes a %s bridge catalogue", async (_agent, connection) => {
     const { provider, requests } = httpProvider(
-      () => new Response(null, { status: 500 }),
+      () => new Response(null, { status: 204 }),
       connection,
     );
 
     await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
-    expect(requests).toEqual([]);
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toEqual([
+      [`${connection.baseUrl}/global/refresh-catalog`, "POST"],
+    ]);
   });
 
   test("routes Claude background-task stop and prompt-suggestion dismissal", async () => {
@@ -1311,6 +1382,7 @@ describe("HTTP bridge provider", () => {
     await provider.send("session-1", "Inspect only", {
       requestId: "request-plan",
       mode: "plan",
+      parameterValues: { permissionMode: "bypassPermissions" },
     });
 
     expect(JSON.parse(String(requests[0]!.init.body)).permissionMode).toBe("plan");

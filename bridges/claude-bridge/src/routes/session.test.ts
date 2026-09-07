@@ -88,6 +88,16 @@ const successfulPromptStart = async (...args: SendPromptParams) => {
 };
 const mockSendPrompt = mock(successfulPromptStart);
 const mockAbortSession = mock(() => true);
+const mockGracefulInterruptClaudeSession = mock(async () => ({
+  interrupted: true,
+  stillQueued: [] as string[],
+}));
+const mockReadSessionCommands = mock(async () => []);
+const mockReadSessionMcpServers = mock(async () => []);
+const mockPerformSessionMcpAction = mock(async () => ({ ok: true }));
+const mockSteerClaudeSession = mock(() => "applied" as const);
+const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
+const mockConfigureClaudeSession = mock(async () => undefined);
 const mockDeleteSession = mock((id: string) => id === "s-1");
 const mockGetPendingQuestions = mock<
   () => ReturnType<typeof realSessionManager.getPendingQuestions>
@@ -179,6 +189,13 @@ mock.module("../services/session-manager.js", () => ({
   clearPromptSuggestion: mockClearPromptSuggestion,
   claimPromptDispatch: mockClaimPromptDispatch,
   getPromptDispatchState: mockGetPromptDispatchState,
+  gracefulInterruptClaudeSession: mockGracefulInterruptClaudeSession,
+  readSessionCommands: mockReadSessionCommands,
+  readSessionMcpServers: mockReadSessionMcpServers,
+  performSessionMcpAction: mockPerformSessionMcpAction,
+  steerClaudeSession: mockSteerClaudeSession,
+  readClaudeSteerDispatch: mockReadClaudeSteerDispatch,
+  configureClaudeSession: mockConfigureClaudeSession,
 }));
 
 /**
@@ -270,6 +287,13 @@ describe("session routes", () => {
     mockSendPrompt.mockReset();
     mockSendPrompt.mockImplementation(successfulPromptStart);
     mockAbortSession.mockClear();
+    mockGracefulInterruptClaudeSession.mockReset();
+    mockGracefulInterruptClaudeSession.mockImplementation(async () => ({
+      interrupted: true,
+      stillQueued: [],
+    }));
+    mockSteerClaudeSession.mockReset();
+    mockSteerClaudeSession.mockReturnValue("applied");
     mockDeleteSession.mockClear();
     mockReconcilePersistedSessions.mockClear();
     mockEnsurePersistedSession.mockClear();
@@ -1273,6 +1297,7 @@ describe("session routes", () => {
         "includeLocalSettings",
         "model",
         "outputSchema",
+        "parameterValues",
         "permissionMode",
         "promptSuggestions",
         "requestId",
@@ -1287,6 +1312,7 @@ describe("session routes", () => {
         includeLocalSettings: undefined,
         promptSuggestions: undefined,
         outputSchema: undefined,
+        parameterValues: undefined,
         requestId: undefined,
       });
     });
@@ -1393,13 +1419,43 @@ describe("session routes", () => {
     });
   });
 
+  describe("POST /session/:id/steer", () => {
+    test("steers the active SDK input stream and records the dispatch identity", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/steer", {
+        input: "Focus on the failing test",
+        requestId: "steer-1",
+        expectedRunId: "run-1",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ outcome: "applied" });
+      expect(mockSteerClaudeSession).toHaveBeenCalledWith(
+        "s-1",
+        "Focus on the failing test",
+        "steer-1",
+        "run-1",
+      );
+    });
+
+    test("reports an idle session as absent", async () => {
+      mockSteerClaudeSession.mockReturnValueOnce("absent");
+      const res = await jsonRequest("POST", "/session/s-1/steer", {
+        input: "Follow up",
+        requestId: "steer-idle",
+        expectedRunId: "run-idle",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ outcome: "absent" });
+    });
+  });
+
   // --- POST /session/:id/abort ---
   describe("POST /session/:id/abort", () => {
-    test("returns aborted status", async () => {
+    test("returns the graceful interrupt receipt", async () => {
       const res = await jsonRequest("POST", "/session/s-1/abort");
       expect(res.status).toBe(200);
-      const data = await jsonBody(res);
-      expect(data.status).toBe("aborted");
+      expect(await jsonBody(res)).toEqual({ status: "interrupt-requested", stillQueued: [] });
     });
 
     test("returns 404 for unknown session", async () => {
@@ -1408,7 +1464,10 @@ describe("session routes", () => {
     });
 
     test("returns not_running when the session has no active query", async () => {
-      mockAbortSession.mockReturnValueOnce(false);
+      mockGracefulInterruptClaudeSession.mockResolvedValueOnce({
+        interrupted: false,
+        stillQueued: [],
+      });
       const res = await jsonRequest("POST", "/session/s-1/abort");
       expect(res.status).toBe(200);
       expect(await jsonBody(res)).toEqual({ status: "not_running" });
@@ -2284,6 +2343,14 @@ describe("persisted session routes", () => {
 
   // --- POST /session/:id/rename ---
   describe("POST /session/:id/rename", () => {
+    test("persists backend-owned titles through the neutral title route", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/title", {
+        title: "First prompt title",
+      });
+      expect(res.status).toBe(200);
+      expect(mockRenameSessionDurably).toHaveBeenCalledWith("s-1", "First prompt title");
+    });
+
     test("renames a session and echoes the trimmed title", async () => {
       const res = await jsonRequest("POST", "/session/s-1/rename", { title: "  Renamed  " });
       expect(res.status).toBe(200);

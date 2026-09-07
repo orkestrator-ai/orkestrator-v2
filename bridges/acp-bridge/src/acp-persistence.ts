@@ -42,6 +42,7 @@ import {
   catalogProbe,
   bumpCursorDiscoveryRevision,
   clientSessionKeys,
+  configuredAcpMcpServers,
   isObject,
   parseProvider,
   persistenceScheduled,
@@ -112,7 +113,11 @@ export async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentCom
       await child.initialize(signal);
       const created = await child.request(
         "session/new",
-        { cwd: workingDirectory, additionalDirectories: [], mcpServers: [] },
+        {
+          cwd: workingDirectory,
+          additionalDirectories: [],
+          mcpServers: configuredAcpMcpServers(),
+        },
         RPC_TIMEOUT_MS,
         signal,
       );
@@ -336,8 +341,26 @@ export async function loadPersistedState(): Promise<void> {
       // starts clean and re-observes whatever the agent still sends.
       health: new RuntimeHealthRecorder(),
       ...(usage ? { usage } : {}),
-      ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
-        ? { commandCount: Number(candidate.commandCount) }
+      ...(Array.isArray(candidate.availableCommands)
+        ? {
+            availableCommands: candidate.availableCommands.slice(0, 256).flatMap((entry) => {
+              if (!isObject(entry) || typeof entry.name !== "string") return [];
+              return [
+                {
+                  name: entry.name.slice(0, 256),
+                  description:
+                    typeof entry.description === "string"
+                      ? entry.description.slice(0, 2_048)
+                      : entry.name.slice(0, 256),
+                  source: "builtin" as const,
+                  scope: "session" as const,
+                  ...(typeof entry.argumentHint === "string"
+                    ? { argumentHint: entry.argumentHint.slice(0, 512) }
+                    : {}),
+                },
+              ];
+            }),
+          }
         : {}),
     };
     if (Array.isArray(candidate.promptJournal)) {

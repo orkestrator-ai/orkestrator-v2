@@ -1084,6 +1084,45 @@ app.get("/global/auth-check", (c) => {
   return c.json({ status: terminal ? "error" : "ok" }, terminal ? 503 : 200);
 });
 
+app.get("/global/auth", async (c) => {
+  const raw = (await appServerRuntime.readAuthStatus()) as {
+    account?: { type?: string; email?: string | null; planType?: string } | null;
+    requiresOpenaiAuth?: boolean;
+  };
+  const account = raw.account;
+  if (!account) {
+    return c.json({
+      state: raw.requiresOpenaiAuth ? "needs-auth" : "signed-out",
+      signIn: { kind: "browser-url" },
+      signOut: false,
+    });
+  }
+  const label = account.type === "chatgpt" ? account.email || "ChatGPT" : account.type || "Codex";
+  return c.json({
+    state: "signed-in",
+    account: { label, ...(account.planType ? { plan: account.planType } : {}) },
+    signIn: { kind: "browser-url" },
+    signOut: true,
+  });
+});
+
+app.post("/global/auth/login", async (c) => {
+  const raw = (await appServerRuntime.beginAuthLogin()) as {
+    authUrl?: string;
+    verificationUrl?: string;
+    userCode?: string;
+  };
+  return c.json({
+    ...(raw.authUrl || raw.verificationUrl ? { url: raw.authUrl ?? raw.verificationUrl } : {}),
+    ...(raw.userCode ? { code: raw.userCode } : {}),
+  });
+});
+
+app.post("/global/auth/logout", async (c) => {
+  await appServerRuntime.logoutAuth();
+  return c.json({ ok: true });
+});
+
 app.get("/global/models", async (c) => {
   const { models, source } = await appServerRuntime.listModels();
   return c.json({ models, source });
@@ -1093,6 +1132,39 @@ app.get("/global/slash-commands", async (c) => {
   const cwd = getWorkingDirectory();
   const commands = await getAvailableSlashCommandDefinitions(cwd);
   return c.json({ commands: commands.map(serializeSlashCommand), cwd });
+});
+
+app.get("/session/:id/commands", async (c) => {
+  const health = (await appServerRuntime.getRuntimeHealth(c.req.param("id"))) as {
+    skills?: { data?: unknown[] };
+  } | null;
+  if (!health) return c.json({ error: "Session not found" }, 404);
+  const commands: Array<{
+    name: string;
+    description?: string;
+    argumentHint?: string;
+    source: "builtin" | "project" | "user" | "plugin" | "skill" | "template";
+    scope?: "global" | "session";
+  }> = (await getAvailableSlashCommandDefinitions(getWorkingDirectory())).map(
+    serializeSlashCommand,
+  );
+  for (const group of health.skills?.data ?? []) {
+    if (!group || typeof group !== "object") continue;
+    const skills = (group as { skills?: unknown }).skills;
+    if (!Array.isArray(skills)) continue;
+    for (const candidate of skills) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const skill = candidate as { name?: unknown; description?: unknown; scope?: unknown };
+      if (typeof skill.name !== "string" || !skill.name.trim()) continue;
+      commands.push({
+        name: `/skill:${skill.name.trim()}`,
+        ...(typeof skill.description === "string" ? { description: skill.description } : {}),
+        source: "skill",
+        scope: skill.scope === "project" ? "session" : "global",
+      });
+    }
+  }
+  return c.json({ commands: commands.slice(0, 512) });
 });
 
 app.get("/session/list", async (c) => {
@@ -1511,6 +1583,86 @@ app.post("/session/:id/review", async (c) => {
 app.get("/session/:id/runtime-health", async (c) => {
   const health = await appServerRuntime.getRuntimeHealth(c.req.param("id"));
   return health ? c.json(health) : c.json({ error: "Session not found" }, 404);
+});
+
+app.get("/session/:id/mcp", async (c) => {
+  const raw = (await appServerRuntime.listMcpServers(c.req.param("id"))) as {
+    data?: unknown[];
+  } | null;
+  if (!raw) return c.json({ error: "Session not found" }, 404);
+  const servers = (raw.data ?? []).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const server = candidate as {
+      name?: unknown;
+      runtimeStatus?: unknown;
+      authStatus?: unknown;
+      pluginId?: unknown;
+      tools?: unknown;
+    };
+    if (typeof server.name !== "string") return [];
+    const status =
+      server.authStatus === "notLoggedIn" || server.runtimeStatus === "authenticationRequired"
+        ? "needs-auth"
+        : server.runtimeStatus === "connected"
+          ? "connected"
+          : server.runtimeStatus === "starting"
+            ? "connecting"
+            : server.runtimeStatus === "disabled"
+              ? "disabled"
+              : server.runtimeStatus === "failed" || server.runtimeStatus === "cancelled"
+                ? "failed"
+                : "unknown";
+    const tools =
+      server.tools && typeof server.tools === "object"
+        ? Object.keys(server.tools).slice(0, 256)
+        : [];
+    return [
+      {
+        id: server.name,
+        name: server.name,
+        status,
+        ...(typeof server.pluginId === "string" ? { scope: "plugin" as const } : {}),
+        toolCount: tools.length,
+        tools,
+        actions: status === "needs-auth" ? ["sign-in" as const] : ["reconnect" as const],
+      },
+    ];
+  });
+  return c.json({ servers });
+});
+
+app.post("/session/:id/mcp/:name/:action", async (c) => {
+  const action = c.req.param("action");
+  if (action !== "reconnect" && action !== "sign-in") {
+    return c.json({ error: "Unsupported MCP action" }, 400);
+  }
+  const outcome = await appServerRuntime.performMcpAction(
+    c.req.param("id"),
+    c.req.param("name"),
+    action,
+  );
+  if (!outcome) return c.json({ error: "Session not found" }, 404);
+  return c.json(outcome.authorizationUrl ? { url: outcome.authorizationUrl } : {});
+});
+
+app.post("/session/:id/rewind-messages", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const messageId = typeof body.messageId === "string" ? body.messageId.trim() : "";
+  if (!messageId) return c.json({ error: "messageId is required" }, 400);
+  const outcome = await appServerRuntime.rewindMessages(c.req.param("id"), messageId);
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (outcome === "unavailable") return c.json({ error: "Message cannot be rewound" }, 409);
+  return c.json({ rewound: true });
+});
+
+app.post("/session/:id/title", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const title = typeof body.title === "string" ? body.title.trim().slice(0, 512) : "";
+  if (!title) return c.json({ error: "title is required" }, 400);
+  return (await appServerRuntime.setSessionTitle(c.req.param("id"), title))
+    ? c.json({ title })
+    : c.json({ error: "Session not found" }, 404);
 });
 
 app.post("/session/:id/abort", async (c) => {

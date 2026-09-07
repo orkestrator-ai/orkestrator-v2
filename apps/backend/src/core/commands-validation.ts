@@ -378,6 +378,8 @@ export function asNativeAgentControlUpdate(
     "executionProfileId",
     "includeLocalSettings",
     "promptSuggestions",
+    "parameterValues",
+    "persistDefaults",
   ]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) {
     throw new Error("Native agent control update has unknown fields");
@@ -418,11 +420,36 @@ export function asNativeAgentControlUpdate(
     ...(raw.promptSuggestions === undefined
       ? {}
       : { promptSuggestions: asRequiredBoolean(raw.promptSuggestions, "promptSuggestions") }),
+    ...(raw.parameterValues === undefined
+      ? {}
+      : { parameterValues: asNativeAgentParameterValues(raw.parameterValues) }),
+    ...(raw.persistDefaults === undefined
+      ? {}
+      : { persistDefaults: asRequiredBoolean(raw.persistDefaults, "persistDefaults") }),
   };
   if (Object.keys(update).length === 0) {
     throw new Error("Native agent control update must not be empty");
   }
   return update;
+}
+
+function asNativeAgentParameterValues(value: unknown): Record<string, string | boolean> {
+  const raw = asRecord(value, "parameterValues");
+  const entries = Object.entries(raw);
+  if (entries.length > 64) throw new Error("parameterValues has too many entries");
+  const values: Record<string, string | boolean> = {};
+  for (const [id, candidate] of entries) {
+    if (!id.trim() || id.length > 128) throw new Error("parameterValues has an invalid id");
+    if (typeof candidate === "boolean") {
+      values[id] = candidate;
+      continue;
+    }
+    if (typeof candidate !== "string" || candidate.length > 512) {
+      throw new Error("parameterValues values must be bounded strings or booleans");
+    }
+    values[id] = candidate;
+  }
+  return values;
 }
 
 export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAction {
@@ -443,6 +470,16 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
         ...(raw.dryRun === undefined
           ? {}
           : { dryRun: asRequiredBoolean(raw.dryRun, "action.dryRun") }),
+      };
+    case "rewind-messages":
+      return {
+        kind,
+        messageId: asNonBlankString(raw.messageId, "action.messageId"),
+      };
+    case "switch-branch":
+      return {
+        kind,
+        entryId: asNonBlankString(raw.entryId, "action.entryId"),
       };
     case "undo":
       return {

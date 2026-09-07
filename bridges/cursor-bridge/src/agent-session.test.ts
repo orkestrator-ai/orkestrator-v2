@@ -25,6 +25,9 @@ let listRunsFails = false;
 let resumeFails = false;
 const created: Array<Record<string, unknown>> = [];
 const resumed: string[] = [];
+let sqliteRuns: Array<Record<string, unknown>> = [];
+const deletedRunBatches: string[][] = [];
+let updatedAgent: Record<string, unknown> | undefined;
 
 function fakeSdkAgent(agentId: string) {
   return {
@@ -74,8 +77,35 @@ mock.module("@cursor/sdk", () => ({
   },
 }));
 
-const { ensureAgent, listResumableSessions, newSessionState, resumeSession } =
-  await import("./agent-session.js");
+mock.module("@cursor/sdk/sqlite", () => ({
+  SqliteLocalAgentStore: {
+    open: async () => ({
+      runs: {
+        list: async () => ({ items: sqliteRuns, nextCursor: undefined }),
+        delete: async ({ filter }: { filter: { runIds: string[] } }) => {
+          deletedRunBatches.push(filter.runIds);
+        },
+      },
+      runEvents: { delete: async () => undefined },
+      agents: {
+        get: async () => ({ agentId: "agent-1", latestCheckpoint: "latest" }),
+        update: async ({ agent }: { agent: Record<string, unknown> }) => {
+          updatedAgent = agent;
+        },
+      },
+      dispose: async () => undefined,
+    }),
+  },
+}));
+
+const {
+  applyComposerPatch,
+  ensureAgent,
+  listResumableSessions,
+  newSessionState,
+  resumeSession,
+  rewindSessionHistory,
+} = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
 const { sessions } = await import("./state.js");
 
@@ -90,7 +120,60 @@ beforeEach(() => {
   resumeFails = false;
   created.length = 0;
   resumed.length = 0;
+  sqliteRuns = [];
+  deletedRunBatches.length = 0;
+  updatedAgent = undefined;
   delete process.env.CURSOR_API_KEY;
+});
+
+describe("rewindSessionHistory", () => {
+  test("uses the selected message run id instead of its bounded transcript position", async () => {
+    const state = newSessionState();
+    state.agentId = "agent-1";
+    state.droppedMessages = 20;
+    state.transcriptTruncated = true;
+    state.messages = [
+      {
+        id: "selected",
+        role: "user",
+        content: "later",
+        parts: [],
+        createdAt: "now",
+        runId: "run-2",
+      },
+      { id: "answer", role: "assistant", content: "ok", parts: [], createdAt: "now" },
+    ];
+    sqliteRuns = [
+      { runId: "unsupported", turnNumber: 0, startCheckpointRef: "cp-0" },
+      { runId: "run-1", turnNumber: 1, startCheckpointRef: "cp-1" },
+      { runId: "run-2", turnNumber: 2, startCheckpointRef: "cp-2" },
+      { runId: "run-3", turnNumber: 3, startCheckpointRef: "cp-3" },
+    ];
+
+    await rewindSessionHistory(state, "selected");
+
+    expect(updatedAgent?.latestCheckpoint).toBe("cp-2");
+    expect(deletedRunBatches).toEqual([["run-2", "run-3"]]);
+  });
+
+  test("fails closed when a message has no originating run id", async () => {
+    const state = newSessionState();
+    state.agentId = "agent-1";
+    state.messages = [{ id: "legacy", role: "user", content: "old", parts: [], createdAt: "now" }];
+
+    await expect(rewindSessionHistory(state, "legacy")).rejects.toThrow("cannot safely map");
+    expect(deletedRunBatches).toEqual([]);
+  });
+});
+
+test("a Cursor model change clears parameters from the previous model", () => {
+  const state = newSessionState();
+  state.composer.selectedModelId = "model-a";
+  state.composer.parameterValues = { variant: "special", thinking: "high" };
+
+  applyComposerPatch(state, { modelId: "model-b" });
+
+  expect(state.composer.parameterValues).toEqual({});
 });
 
 afterAll(() => {

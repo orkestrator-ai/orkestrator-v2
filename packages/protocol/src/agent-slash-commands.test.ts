@@ -67,7 +67,7 @@ describe("resolveSessionActionCommand", () => {
 });
 
 describe("isProviderSlashCommand", () => {
-  const commands = [{ name: "/help", description: "Provider help" }];
+  const commands = [{ name: "/help", description: "Provider help", source: "builtin" as const }];
 
   test("matches only discovered provider commands", () => {
     expect(isProviderSlashCommand("/help topic", commands)).toBe(true);
@@ -79,7 +79,7 @@ describe("isProviderSlashCommand", () => {
     expect(
       isProviderSlashCommand(
         "/steer keep going",
-        [{ name: "/steer", description: "runtime action" }],
+        [{ name: "/steer", description: "runtime action", source: "builtin" }],
         capabilities({ steer: true }),
       ),
     ).toBe(false);
@@ -89,7 +89,7 @@ describe("isProviderSlashCommand", () => {
 describe("withSessionActionSlashCommands", () => {
   test("advertises runtime actions the provider supports", () => {
     const merged = withSessionActionSlashCommands(
-      [{ name: "/review", description: "Review changes" }],
+      [{ name: "/review", description: "Review changes", source: "builtin" }],
       capabilities({ steer: true }),
     );
     expect(merged.map((command) => command.name)).toEqual(["/review", "/steer"]);
@@ -97,7 +97,7 @@ describe("withSessionActionSlashCommands", () => {
 
   test("removes an action command a provider cannot perform", () => {
     const merged = withSessionActionSlashCommands(
-      [{ name: "/steer", description: "stale discovery entry" }],
+      [{ name: "/steer", description: "stale discovery entry", source: "builtin" }],
       capabilities({ compact: true }),
     );
     expect(merged).toEqual([]);

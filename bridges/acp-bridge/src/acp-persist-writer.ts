@@ -193,7 +193,9 @@ export function persistedSnapshot(): PersistedState {
         ? { sessionConfig: sessionConfigBySession.get(state.id)! }
         : {}),
       ...(state.usage ? { usage: state.usage } : {}),
-      ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
+      ...(state.availableCommands === undefined
+        ? {}
+        : { availableCommands: state.availableCommands }),
       ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
       ...(state.settledCursorAgentIds.size > 0
         ? {

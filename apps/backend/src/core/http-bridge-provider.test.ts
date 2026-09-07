@@ -1145,6 +1145,30 @@ describe("HTTP bridge provider", () => {
     await expect(provider.activeSteerRun!("codex-session")).resolves.toEqual(expected);
   });
 
+  test.each([
+    ["claude" as const, claudeConnection, "http://claude.test/session/session%2F1"],
+    ["codex" as const, codexConnection, "http://codex.test/session/session%2F1/status"],
+    ["cursor" as const, cursorConnection, "http://cursor.test/session/session%2F1/status"],
+    ["pi" as const, piConnection, "http://pi.test/session/session%2F1/status"],
+  ])(
+    "reads the %s steer run from the snapshot route that bridge actually serves",
+    async (_agent, connection, expectedUrl) => {
+      // Claude has no `/status` child route. Asking for one 404s, and the 404
+      // contract here is "session vanished", so a wrong path turns every steer
+      // of a live Claude turn into a lost-session rejection.
+      const { provider, requests } = httpProvider(
+        () => Response.json({ status: "running", turnId: "turn-3" }),
+        connection,
+      );
+
+      await expect(provider.activeSteerRun!("session/1")).resolves.toEqual({
+        state: "running",
+        runId: "turn-3",
+      });
+      expect(requests.map((request) => request.url)).toEqual([expectedUrl]);
+    },
+  );
+
   test("refreshes Pi's bridge-owned model runtime before re-listing", async () => {
     const timeouts: number[] = [];
     const originalTimeout = AbortSignal.timeout.bind(AbortSignal);

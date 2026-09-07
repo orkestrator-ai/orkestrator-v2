@@ -244,17 +244,35 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
   }
 
+  /**
+   * Claude serves its session snapshot from the session resource itself; every
+   * other bridge carves out a `/status` child. Both carry the same `status` and
+   * `turnId` pair, so callers only need the right path.
+   */
+  private sessionStatusPath(sessionId: string): string {
+    const base = `/session/${encodeURIComponent(sessionId)}`;
+    return this.agent === "claude" ? base : `${base}/status`;
+  }
+
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
     const response = await bridgeFetch(
       this.connection,
-      `/session/${encodeURIComponent(sessionId)}/status`,
+      this.sessionStatusPath(sessionId),
       {},
       this.fetchImpl,
     );
     if (response.status === 404)
       throw new PromptRejectedError(`${this.agent} session was not found`);
     await assertOkWithErrorDetail(response, `${this.agent} steer status read`);
-    const status = asRecord(await boundedJson(response, `${this.agent} steer status read`));
+    const status = asRecord(
+      // Claude's snapshot is the whole session resource, so it carries
+      // transcript-sized fields that the dedicated `/status` responses omit.
+      await boundedJson(
+        response,
+        `${this.agent} steer status read`,
+        this.agent === "claude" ? { remaining: 16 * 1024 * 1024 } : undefined,
+      ),
+    );
     if (status?.status !== "running") return { state: "idle" };
     const candidateRunId = nonEmptyString(status.turnId);
     const runId =
@@ -509,11 +527,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
-    const path =
-      this.agent === "claude"
-        ? `/session/${encodeURIComponent(sessionId)}`
-        : `/session/${encodeURIComponent(sessionId)}/status`;
-    const response = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
+    const response = await bridgeFetch(
+      this.connection,
+      this.sessionStatusPath(sessionId),
+      {},
+      this.fetchImpl,
+    );
     if (response.status === 404) return { status: "missing" };
     assertOk(response, `${this.agent} status read`);
     const body =

@@ -23,6 +23,31 @@ export interface AgentNativeTabProps {
   executionPolicy?: "coordinator-read-only";
   coordinatorProjectId?: string;
   coordinatorWorkspacePath?: string;
+  /**
+   * Binds an unassigned tab to a platform through backend authority.
+   *
+   * Present only for coordinator conversations, where the durable workspace —
+   * not the pane layout — decides which provider a conversation belongs to.
+   * Supplying it also removes Resume, which has no meaning for a session the
+   * workspace owns.
+   */
+  onAssignPlatform?: (
+    platform: AgentPlatform,
+    prompt: string,
+    options: {
+      modelId?: string;
+      reasoningId?: string;
+      fastMode: boolean;
+      mode?: "build" | "plan";
+      executionProfileId?: string;
+    },
+  ) => Promise<void>;
+  /** Narrows the unassigned composer to the platforms this surface qualifies. */
+  availablePlatforms?: readonly AgentPlatform[];
+  /** Per-platform caveats shown beside the unassigned composer's picker. */
+  platformNotes?: Partial<Record<AgentPlatform, string>>;
+  unassignedPlaceholder?: string;
+  emptyPlatformsMessage?: string;
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
 }

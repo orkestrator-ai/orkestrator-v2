@@ -16,8 +16,10 @@ describe("Coordinator Codex server", () => {
   let checkout: string;
   let storage: StorageService;
   let previousCodexHome: string | undefined;
+  let previousClaudeConfigDir: string | undefined;
   let cleanupContext: CommandContext | null = null;
   let cleanupRuntimeId: string | null = null;
+  let cleanupKind: "codex" | "claude" = "codex";
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
@@ -45,18 +47,119 @@ describe("Coordinator Codex server", () => {
     await fs.writeFile(path.join(sourceHome, "auth.json"), '{"token":"login"}\n');
     await fs.writeFile(path.join(sourceHome, "config.toml"), "developer_instructions='unsafe'\n");
     process.env.CODEX_HOME = sourceHome;
+    previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const sourceClaudeHome = path.join(root, "source-claude-home");
+    await fs.mkdir(path.join(sourceClaudeHome, "plugins"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceClaudeHome, ".credentials.json"),
+      '{"claudeAiOauth":{"accessToken":"login"}}\n',
+    );
+    await fs.writeFile(
+      path.join(sourceClaudeHome, "settings.json"),
+      '{"hooks":{"PreToolUse":[{"hooks":[{"command":"unsafe"}]}]}}\n',
+    );
+    await fs.writeFile(path.join(sourceClaudeHome, "plugins", "evil.js"), "// unsafe\n");
+    process.env.CLAUDE_CONFIG_DIR = sourceClaudeHome;
+    cleanupKind = "codex";
   });
 
   afterEach(async () => {
     if (cleanupContext && cleanupRuntimeId) {
-      await stopLocalServerUnlocked(cleanupRuntimeId, cleanupContext, "codex").catch(
+      await stopLocalServerUnlocked(cleanupRuntimeId, cleanupContext, cleanupKind).catch(
         () => undefined,
       );
     }
     commandTesting.resetLocalServerLifecycle();
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
+    if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("a Claude coordinator gets its credential, its policy, and none of the user's config", async () => {
+    const bridge = path.join(root, "bridges", "claude-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    const project = await storage.addProject(createProject("remote", checkout));
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
+    const issue = mock(() => ({ url: "http://127.0.0.1:1234/mcp", token: "scoped-token" }));
+    const revoke = mock(() => undefined);
+    const context = {
+      storage,
+      coordinators: coordinator,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      controlMcp: {
+        getSettings: () => ({
+          enabled: true,
+          running: true,
+          url: "http://127.0.0.1:1234/mcp",
+          token: "",
+          error: null,
+        }),
+        rotateToken: async () => ({
+          enabled: true,
+          running: true,
+          url: "http://127.0.0.1:1234/mcp",
+          token: "",
+          error: null,
+        }),
+        issueCoordinatorCredential: issue,
+        revokeCoordinatorCredentials: revoke,
+      },
+    } as CommandContext;
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    cleanupContext = context;
+    cleanupRuntimeId = runtimeId;
+    cleanupKind = "claude";
+
+    const started = await startLocalServerUnlocked(runtimeId, context, "claude");
+    expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
+
+    const isolatedHome = path.join(
+      storage.getDataDir(),
+      "coordinator-runtime",
+      snapshot.workspace.id,
+      "conversations",
+      conversation.id,
+      "claude-home",
+    );
+    expect(await fs.readFile(path.join(isolatedHome, ".credentials.json"), "utf8")).toContain(
+      "login",
+    );
+    // `settings.json` can declare hooks and `plugins/` is arbitrary code. Both
+    // would run inside a session pointed at the user's real checkout.
+    await expect(fs.access(path.join(isolatedHome, "settings.json"))).rejects.toThrow();
+    await expect(fs.access(path.join(isolatedHome, "plugins"))).rejects.toThrow();
+    expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
+      {
+        policy: "coordinator-read-only",
+        mcpUrl: "http://127.0.0.1:1234/mcp",
+        mcpToken: "scoped-token",
+      },
+    );
+    // The conversation's bridge identity is stored in the neutral fields, not
+    // Codex's, so the reaper can find a Claude coordinator child too.
+    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+      conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
+    });
   });
 
   test("starts with isolated auth and policy, persists lifecycle, and revokes on bridge exit", async () => {
@@ -78,6 +181,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     }));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
     const issue = mock(() => ({ url: "http://127.0.0.1:1234/mcp", token: "scoped-token" }));
     const revoke = mock(() => undefined);
     const context = {
@@ -134,7 +238,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     );
     expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
       lifecycleState: "ready",
-      conversations: [{ codexBridgePort: started.port, codexBridgePid: started.pid }],
+      conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
     });
 
     revoke.mockClear();
@@ -147,12 +251,12 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const current = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
-      if (current.codexBridgePort === undefined && current.codexBridgePid === undefined) break;
+      if (current.bridgePort === undefined && current.bridgePid === undefined) break;
       await Bun.sleep(10);
     }
     const stopped = (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!;
-    expect(stopped.codexBridgePort).toBeUndefined();
-    expect(stopped.codexBridgePid).toBeUndefined();
+    expect(stopped.bridgePort).toBeUndefined();
+    expect(stopped.bridgePid).toBeUndefined();
   });
 
   test("records a sanitized startup failure and revokes the unused credential", async () => {
@@ -167,6 +271,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     }));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
     const revoke = mock(() => undefined);
     const context = {
       storage,
@@ -220,6 +325,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     }));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
     const revoke = mock(() => undefined);
     const context = {
       storage,
@@ -264,7 +370,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
   });
 
-  test("rejects non-Codex coordination and starts Codex without optional control MCP", async () => {
+  test("rejects a mismatched platform and starts the conversation agent without optional control MCP", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const coordinator = new CoordinatorService(storage, () => ({
       enabled: true,
@@ -272,6 +378,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       error: null,
     }));
     const snapshot = await coordinator.ensure(project.id);
+    await coordinator.assignConversationAgent(
+      project.id,
+      snapshot.workspace.conversations[0]!.id,
+      "codex",
+    );
     const runtimeId = coordinatorRuntimeId(
       snapshot.workspace.id,
       snapshot.workspace.conversations[0]!.id,
@@ -284,8 +395,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
     } as CommandContext;
+    // The conversation belongs to Codex, so starting a Claude bridge against
+    // its runtime id must be refused: it would inherit that conversation's
+    // scoped credential and private runtime directory.
     await expect(startLocalServerUnlocked(runtimeId, context, "claude")).rejects.toThrow(
-      "Only Codex",
+      "belongs to a different agent platform",
     );
     const bridge = path.join(root, "bridges", "codex-bridge", "dist");
     await fs.mkdir(bridge, { recursive: true });

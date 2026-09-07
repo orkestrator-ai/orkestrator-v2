@@ -1,4 +1,5 @@
 import type { CoordinatorSnapshot, ProjectGitStatus } from "@orkestrator/protocol/coordinator";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { invoke } from "@/lib/native/backend";
 
 export const ensureProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
@@ -11,6 +12,13 @@ export const createCoordinatorConversation = (
   projectId: string,
   title?: string,
 ): Promise<CoordinatorSnapshot> => invoke("create_coordinator_conversation", { projectId, title });
+
+export const assignCoordinatorConversationAgent = (
+  projectId: string,
+  conversationId: string,
+  agent: AgentPlatform,
+): Promise<CoordinatorSnapshot> =>
+  invoke("assign_coordinator_conversation_agent", { projectId, conversationId, agent });
 
 export const selectCoordinatorConversation = (
   projectId: string,

@@ -134,11 +134,47 @@ export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
   return state.attaching;
 }
 
+/**
+ * Cursor's names for the capabilities a read-only policy denies.
+ *
+ * The policy's `toolPolicy` carries Codex's vocabulary, so passing it to
+ * `disallowedTools` here would match nothing at all.
+ */
+const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "file.write": ["Write", "Create", "Delete"],
+  "file.patch": ["Edit", "MultiEdit", "ApplyPatch"],
+  shell: ["Shell", "Bash"],
+  "shell.mutate": ["Shell", "Bash"],
+  network: ["WebFetch", "WebSearch"],
+});
+
+export function cursorDeniedTools(
+  policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): string[] {
+  const tools = new Set<string>();
+  for (const capability of policy.capabilityPolicy?.deny ?? []) {
+    for (const tool of CURSOR_CAPABILITY_TOOLS[capability] ?? []) tools.add(tool);
+  }
+  for (const tool of policy.toolPolicy?.deny ?? []) tools.add(tool);
+  return [...tools];
+}
+
 async function attach(state: SessionState): Promise<SDKAgent> {
   const policy = resolveCursorExecutionPolicy(state.policy);
-  if (policy.approvals === "deny") {
+  const readOnly = policy.id === "coordinator-read-only";
+  if (policy.approvals === "deny" && !readOnly) {
     throw new Error(
       "Cursor SDK cannot enforce an approvals-deny policy, so this session was refused before attach.",
+    );
+  }
+  // A read-only coordinator is the one deny case Cursor can express: the
+  // sandbox plus a tool ban, with no approval callback behind them. Orkestrator
+  // reports that as `provider-configured` rather than enforced, and refuses
+  // outright if the sandbox itself is unavailable — a tool ban alone would be
+  // a claim with nothing holding it up.
+  if (readOnly && policy.sandbox !== "provider") {
+    throw new Error(
+      "Cursor cannot run a read-only coordinator without its sandbox, so this session was refused before attach.",
     );
   }
   const { apiKey } = await resolveCredential();
@@ -158,7 +194,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
     },
     ...(policy.toolPolicy?.allow ? { tools: policy.toolPolicy.allow } : {}),
-    ...(policy.toolPolicy?.deny ? { disallowedTools: policy.toolPolicy.deny } : {}),
+    ...(() => {
+      const denied = cursorDeniedTools(policy);
+      return denied.length > 0 ? { disallowedTools: denied } : {};
+    })(),
     ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options);
@@ -212,6 +251,19 @@ export function resolveCursorExecutionPolicy(
       projectResources: false,
       networkAccess: "full",
     } as const);
+  // Process authority first, so neither a request body nor the deprecated env
+  // overrides below can widen what a coordinator bridge runs under.
+  if (process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
+    return {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+      networkAccess: "restricted",
+      note: "Cursor applies these restrictions, but its SDK exposes no approval callback to verify them.",
+    };
+  }
   const sandboxOverride = process.env.CURSOR_BRIDGE_SANDBOX;
   const resourcesOverride = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
   if ((sandboxOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {

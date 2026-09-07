@@ -688,6 +688,15 @@ export interface AppConfig {
   global: {
     /** Agent systems installed and exposed in launch/review surfaces. */
     enabledAgentPlatforms?: AgentPlatform[];
+    /**
+     * Weakest read-only guarantee a coordinator conversation may run under.
+     *
+     * Absent means `enforced`: only platforms whose boundary the provider or
+     * the OS actually holds. Loosening this admits platforms where the
+     * restriction is configuration the agent could in principle step around,
+     * which is a decision worth making explicitly rather than by default.
+     */
+    coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
     favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];

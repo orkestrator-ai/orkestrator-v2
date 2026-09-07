@@ -17,6 +17,11 @@ import {
   type CoordinatorSnapshot,
   type ProjectGitStatus,
 } from "@orkestrator/protocol/coordinator";
+import {
+  AGENT_PLATFORM_LABELS,
+  AGENT_PLATFORMS,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import { AgentNativeTab } from "@/components/native-agent";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +61,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [pendingLaunch, setPendingLaunch] = useState<{
+    conversationId: string;
+    prompt: string;
+    modelId?: string;
+    reasoningId?: string;
+    fastMode: boolean;
+    mode?: "build" | "plan";
+    executionProfileId?: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -134,9 +148,63 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     () => snapshot?.workspace.conversations.filter((item) => !item.closedAt) ?? [],
     [snapshot],
   );
+  const availablePlatforms = useMemo(
+    () =>
+      AGENT_PLATFORMS.filter(
+        (platform) => snapshot?.providerAvailability[platform]?.available === true,
+      ),
+    [snapshot],
+  );
+  // Only the caveats that come with an *available* platform. A reason attached
+  // to one the user cannot pick is an explanation of an absence, and belongs
+  // nowhere near the picker.
+  const platformNotes = useMemo(() => {
+    const notes: Partial<Record<AgentPlatform, string>> = {};
+    for (const platform of availablePlatforms) {
+      const qualification = snapshot?.providerAvailability[platform];
+      if (!qualification?.reason) continue;
+      notes[platform] =
+        qualification.tier === "enforced"
+          ? qualification.reason
+          : `${qualification.reason} Orkestrator cannot verify this boundary independently.`;
+    }
+    return notes;
+  }, [availablePlatforms, snapshot]);
+  const assignAgent = useCallback(
+    async (
+      conversationId: string,
+      platform: AgentPlatform,
+      launch: {
+        modelId?: string;
+        reasoningId?: string;
+        fastMode: boolean;
+        mode?: "build" | "plan";
+        executionProfileId?: string;
+      },
+      prompt: string,
+    ) => {
+      const next = await backend.assignCoordinatorConversationAgent(
+        projectId,
+        conversationId,
+        platform,
+      );
+      // Held only until the assigned tab mounts and consumes them. They are not
+      // durable state: the backend owns the conversation, and a reload before
+      // the first dispatch legitimately returns the user to the composer with
+      // their draft rather than replaying a prompt that was never sent.
+      setPendingLaunch({ conversationId, prompt, ...launch });
+      setSnapshot(next);
+    },
+    [projectId],
+  );
   const selected = conversations.find(
     (item) => item.id === snapshot?.workspace.selectedConversationId,
   );
+  // Scoped to the conversation that produced it, so switching tabs during
+  // assignment cannot replay one conversation's first prompt into another.
+  const launchForSelected =
+    selected && pendingLaunch?.conversationId === selected.id ? pendingLaunch : null;
+
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -144,6 +212,27 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selectedTurnPhase = useNativeAgentProjectionStore((state) =>
     selectedSessionKey ? state.projections.get(selectedSessionKey)?.turn.phase : undefined,
   );
+  // The conversation's own tab id, never a reconstructed one: the workspace
+  // assigns it, and a key that does not match leaves the prompt held for good.
+  const launchConversation = pendingLaunch
+    ? snapshot?.workspace.conversations.find((item) => item.id === pendingLaunch.conversationId)
+    : undefined;
+  const launchSessionKey =
+    snapshot && launchConversation
+      ? createSessionKey(
+          coordinatorRuntimeId(snapshot.workspace.id, launchConversation.id),
+          launchConversation.tabId,
+        )
+      : null;
+  // Either half is enough: a turn that has started, or a message already in the
+  // transcript. A slow first read shows neither, which is precisely when the
+  // prompt still has to be held.
+  const launchObserved = useNativeAgentProjectionStore((state) => {
+    if (!launchSessionKey) return false;
+    const projection = state.projections.get(launchSessionKey);
+    if (!projection) return false;
+    return projection.turn.phase !== "idle" || projection.messages.length > 0;
+  });
   const coordinatorTurnActive =
     selectedTurnPhase === "running" ||
     selectedTurnPhase === "blocked" ||
@@ -157,6 +246,21 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision
       ? newestContextEvent
       : undefined;
+
+  /*
+   * Held until the turn is observed, not until the tab has rendered once.
+   *
+   * The agent tab dispatches an opening prompt only after its first
+   * authoritative read, so dropping the prompt on the next render — which the
+   * snapshot poll triggers within a second or two — raced that read and left
+   * the text sitting in the composer unsent. Evidence of the turn is the
+   * authoritative signal, and re-dispatch is safe in the meantime because the
+   * opening submit carries a deterministic idempotency key.
+   */
+  useEffect(() => {
+    if (!pendingLaunch || !launchObserved) return;
+    setPendingLaunch(null);
+  }, [launchObserved, pendingLaunch]);
 
   useEffect(() => {
     if (!selectedSessionKey || coordinatorTurnActive) return;
@@ -219,7 +323,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     );
   }
 
-  const providerState = selected ? snapshot.providerAvailability[selected.agent] : undefined;
+  const providerState = selected?.agent ? snapshot.providerAvailability[selected.agent] : undefined;
   const gitMutationDisabled = operation !== null || Boolean(blocked) || coordinatorTurnActive;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
 
@@ -340,7 +444,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           >
             <button
               type="button"
-              className="max-w-44 truncate px-3 py-1.5 text-xs"
+              className="flex max-w-44 items-center gap-1.5 px-3 py-1.5 text-xs"
+              // The badge is part of what identifies the tab, so it belongs in
+              // the accessible name rather than being read as loose text after it.
+              aria-label={
+                item.agent
+                  ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
+                  : `${item.title}, no agent chosen yet`
+              }
               onClick={() => {
                 setError(null);
                 void backend
@@ -353,7 +464,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   );
               }}
             >
-              {item.title}
+              <span className="truncate">{item.title}</span>
+              {/* Which agent a conversation belongs to is fixed at its first
+                  prompt and cannot be changed afterwards, so the tab strip is
+                  where that has to be legible. */}
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {item.agent ? AGENT_PLATFORM_LABELS[item.agent] : "Choose agent"}
+              </span>
             </button>
             <button
               type="button"
@@ -460,11 +577,13 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               </Button>
             </div>
           </div>
-        ) : !providerState?.available ? (
+        ) : selected.agent && !providerState?.available ? (
           <div className="grid h-full place-items-center p-8 text-center">
             <div className="max-w-lg">
               <AlertCircle className="mx-auto mb-3 size-7 text-amber-300" />
-              <h2 className="font-semibold">{selected.agent} is unavailable for Coordinator</h2>
+              <h2 className="font-semibold">
+                {AGENT_PLATFORM_LABELS[selected.agent]} is unavailable for Coordinator
+              </h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {providerState?.reason ?? snapshot.workspace.lastStartupError}
               </p>
@@ -506,6 +625,25 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             executionPolicy="coordinator-read-only"
             coordinatorProjectId={projectId}
             coordinatorWorkspacePath={snapshot.projectPath}
+            availablePlatforms={availablePlatforms}
+            platformNotes={platformNotes}
+            unassignedPlaceholder="Ask the coordinator to inspect or plan…"
+            emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+            onAssignPlatform={
+              selected.agent
+                ? undefined
+                : (platform, prompt, options) => assignAgent(selected.id, platform, options, prompt)
+            }
+            {...(launchForSelected
+              ? {
+                  initialPrompt: launchForSelected.prompt,
+                  initialAgentModel: launchForSelected.modelId,
+                  initialReasoningEffort: launchForSelected.reasoningId,
+                  initialConversationMode: launchForSelected.mode,
+                  initialFastMode: launchForSelected.fastMode,
+                  initialExecutionProfileId: launchForSelected.executionProfileId,
+                }
+              : {})}
           />
         )}
       </div>

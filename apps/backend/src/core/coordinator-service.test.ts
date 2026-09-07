@@ -13,6 +13,7 @@ import { ProjectGitService } from "./project-git-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 
 describe("project coordinator", () => {
   let root: string;
@@ -101,6 +102,7 @@ describe("project coordinator", () => {
     }));
     const initial = await service.ensure(project.id);
     const conversation = initial.workspace.conversations[0]!;
+    await service.assignConversationAgent(project.id, conversation.id, "codex");
     await storage.adoptNativeAgentSession({
       key: `coordinator:${initial.workspace.id}:${conversation.id}:codex`,
       environmentId: `coordinator:${initial.workspace.id}:${conversation.id}`,
@@ -125,6 +127,197 @@ describe("project coordinator", () => {
       conversations: [{ id: conversation.id, agent: "codex" }],
     });
     expect(retried.workspace.lastStartupError).toBeUndefined();
+  });
+
+  test("a new conversation has no agent until its first prompt assigns one", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const first = initial.workspace.conversations[0]!;
+    expect(first.agent).toBeUndefined();
+    // The repository default is a preselection for the composer, not a binding.
+    expect(await service.preferredAgent(project.id)).toBe("codex");
+
+    const created = await service.createConversation(project.id, "Second");
+    const second = created.workspace.conversations.find((item) => item.id !== first.id)!;
+    expect(second.agent).toBeUndefined();
+
+    const assigned = await service.assignConversationAgent(project.id, second.id, "codex");
+    expect(assigned.workspace.conversations.find((item) => item.id === second.id)!.agent).toBe(
+      "codex",
+    );
+    // Assignment binds one conversation, never its siblings.
+    expect(
+      assigned.workspace.conversations.find((item) => item.id === first.id)!.agent,
+    ).toBeUndefined();
+  });
+
+  test("assignment is refused for a platform this host does not qualify", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const conversation = initial.workspace.conversations[0]!;
+    await expect(
+      service.assignConversationAgent(project.id, conversation.id, "grok"),
+    ).rejects.toThrow(/request permission|turned off in settings/);
+    expect(
+      (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]!.agent,
+    ).toBeUndefined();
+  });
+
+  test("re-assignment is allowed before a session exists and refused after", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const conversation = initial.workspace.conversations[0]!;
+    await service.assignConversationAgent(project.id, conversation.id, "codex");
+    // A first send that never reached a bridge leaves nothing materialized, so
+    // the user must not be stranded on the platform that just failed.
+    const reassigned = await service.assignConversationAgent(project.id, conversation.id, "claude");
+    expect(reassigned.workspace.conversations[0]!.agent).toBe("claude");
+
+    await storage.adoptNativeAgentSession({
+      key: `coordinator:${initial.workspace.id}:${conversation.id}:claude`,
+      environmentId: coordinatorRuntimeId(initial.workspace.id, conversation.id),
+      agent: "claude",
+      logicalSessionKey: conversation.logicalSessionKey,
+      providerSessionId: "session-1",
+      origin: "coordinator",
+      executionPolicy: "coordinator-read-only",
+      owner: {
+        kind: "coordinator",
+        projectId: project.id,
+        coordinatorId: initial.workspace.id,
+      },
+    });
+    await expect(
+      service.assignConversationAgent(project.id, conversation.id, "codex"),
+    ).rejects.toThrow("already has a provider session");
+    // Re-asserting the same platform stays a no-op rather than an error, so a
+    // retried first send cannot fail on its own success.
+    await expect(
+      service.assignConversationAgent(project.id, conversation.id, "claude"),
+    ).resolves.toBeDefined();
+  });
+
+  test("a closed conversation cannot be assigned", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const conversation = initial.workspace.conversations[0]!;
+    await service.closeConversation(project.id, conversation.id);
+    await expect(
+      service.assignConversationAgent(project.id, conversation.id, "codex"),
+    ).rejects.toThrow("conversation was not found");
+  });
+
+  test("an unqualified repository default no longer errors the whole workspace", async () => {
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      agentSettings: { ...config.global.agentSettings, defaultAgent: "grok" },
+    });
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    expect(initial.workspace.lifecycleState).toBe("ready");
+    expect(initial.workspace.lastStartupError).toBeUndefined();
+    // Grok is not qualified at the default safety level, so the composer
+    // preselects something that is rather than offering a dead end.
+    expect(await service.preferredAgent(project.id)).not.toBe("grok");
+    expect(initial.providerAvailability.grok).toMatchObject({
+      tier: "advisory",
+      available: false,
+    });
+    expect(initial.providerAvailability.codex).toMatchObject({
+      tier: "enforced",
+      available: true,
+    });
+  });
+
+  test("a workspace persisted with the Codex-named bridge fields keeps its bridge", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const now = new Date().toISOString();
+    // Written exactly as a pre-rename installation left it. Dropping these on
+    // load would hide a running child from the reaper, and the next launch
+    // would start a second bridge against the same rollout.
+    await fs.writeFile(
+      path.join(root, "data", "coordinators.json"),
+      JSON.stringify({
+        version: 1,
+        revision: 3,
+        workflows: [],
+        workspaces: {
+          [project.id]: {
+            version: 1,
+            id: "workspace-legacy",
+            projectId: project.id,
+            executionPolicy: "coordinator-read-only",
+            lifecycleState: "ready",
+            selectedConversationId: "conversation-legacy",
+            repositoryContextRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+            codexBridgePort: 4123,
+            codexBridgePid: 9911,
+            conversations: [
+              {
+                id: "conversation-legacy",
+                tabId: "coordinator-conversation-legacy",
+                logicalSessionKey: "coordinator-workspace-legacy:conversation-legacy",
+                agent: "codex",
+                title: "Coordinator",
+                createdAt: now,
+                mailboxIncarnationId: "incarnation-legacy",
+                codexBridgePort: 4123,
+                codexBridgePid: 9911,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const workspace = (await storage.getCoordinatorWorkspace(project.id))!;
+    expect(workspace).toMatchObject({ id: "workspace-legacy", bridgePort: 4123, bridgePid: 9911 });
+    expect(workspace.conversations[0]).toMatchObject({
+      id: "conversation-legacy",
+      agent: "codex",
+      bridgePort: 4123,
+      bridgePid: 9911,
+    });
+    expect(workspace.conversations[0]).not.toHaveProperty("codexBridgePort");
   });
 
   test("Git status blocks dirty mutations and detects external context changes", async () => {
@@ -620,6 +813,7 @@ describe("project coordinator", () => {
     }));
     const initial = await coordinator.ensure(project.id);
     const first = initial.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, first.id, "codex");
     await storage.synchronizeAgentMailboxes();
     const worker = createEnvironment(project.id, { name: "worker", environmentType: "local" });
     worker.status = "running";
@@ -660,6 +854,24 @@ describe("project coordinator", () => {
     );
     await coordinator.reconcileWorkflowNotifications();
 
+    // The adopting conversation has no provider yet, so the notice is durable
+    // but not yet injectable. Losing it here would mean a workflow that
+    // finished while the user was still choosing an agent is never reported.
+    expect(
+      (await storage.listPendingAgentMailInjects()).some(
+        ({ mailbox }) => mailbox.tabId === adopter.tabId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await storage.getAgentMailMailbox(
+          coordinatorRuntimeId(initial.workspace.id, adopter.id),
+          adopter.tabId,
+        )
+      ).messages.some((message) => message.placement === "stored"),
+    ).toBe(true);
+
+    await coordinator.assignConversationAgent(project.id, adopter.id, "codex");
     expect(
       (await storage.listPendingAgentMailInjects()).some(
         ({ mailbox }) => mailbox.tabId === adopter.tabId,

@@ -1,3 +1,4 @@
+import { isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
   RuntimeSseEvent,
   AppServerRuntimeOptions,
@@ -164,25 +165,24 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       this.registry.restoreSession({
         id: persisted.bridgeSessionId,
         threadId: persisted.threadId,
-        config:
-          process.env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only"
-            ? {
-                ...persisted.config,
-                cwd: this.options.cwd,
-                approvalPolicy: "never",
-                sandbox: "read-only",
-                networkAccessEnabled: false,
-                permissionProfile: requiredCoordinatorPermissionProfile(),
-                policy: {
-                  id: "coordinator-read-only",
-                  sandbox: "provider",
-                  approvals: "deny",
-                  projectResources: false,
-                  toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
-                  networkAccess: "restricted",
-                },
-              }
-            : persisted.config,
+        config: isCoordinatorReadOnlyEnvironment(process.env)
+          ? {
+              ...persisted.config,
+              cwd: this.options.cwd,
+              approvalPolicy: "never",
+              sandbox: "read-only",
+              networkAccessEnabled: false,
+              permissionProfile: requiredCoordinatorPermissionProfile(),
+              policy: {
+                id: "coordinator-read-only",
+                sandbox: "provider",
+                approvals: "deny",
+                projectResources: false,
+                toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+                networkAccess: "restricted",
+              },
+            }
+          : persisted.config,
         title: persisted.title,
         titleSource: persisted.titleSource,
         titleGenerationAttempted: Boolean(persisted.title),
@@ -1697,8 +1697,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   protected toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
-    const coordinatorReadOnly =
-      process.env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only";
+    const coordinatorReadOnly = isCoordinatorReadOnlyEnvironment(process.env);
     const requestedPolicy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
     const policy: NativeAgentExecutionPolicy | undefined = coordinatorReadOnly
       ? {

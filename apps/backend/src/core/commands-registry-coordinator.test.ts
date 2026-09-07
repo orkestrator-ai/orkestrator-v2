@@ -175,9 +175,9 @@ describe("coordinator command registry", () => {
     const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     const catalogue = commands.get("get_native_agent_model_catalog")!;
 
-    await expect(catalogue({ environmentId, ensureAgent: "cursor" }, context)).rejects.toThrow(
-      "supports Codex only",
-    );
+    // An unassigned conversation is exactly when the composer asks for this
+    // catalogue, so it must answer rather than refuse.
+    await expect(catalogue({ environmentId }, context)).resolves.toBeDefined();
     await expect(
       catalogue({ environmentId: coordinatorRuntimeId(snapshot.workspace.id) }, context),
     ).rejects.toThrow("coordinator conversation is unavailable");
@@ -196,7 +196,14 @@ describe("coordinator command registry", () => {
         agent: "claude",
       })),
     }));
-    await expect(catalogue({ environmentId }, context)).rejects.toThrow("Only Codex is qualified");
+    await storage.saveConfig({
+      ...(await storage.loadConfig()),
+      global: {
+        ...(await storage.loadConfig()).global,
+        enabledAgentPlatforms: ["codex"],
+      },
+    });
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow("not qualified");
 
     await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
       ...workspace!,
@@ -460,6 +467,7 @@ describe("coordinator command registry", () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
     const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     const sessionKey = nativeAgentSessionStorageKey(
       runtimeId,

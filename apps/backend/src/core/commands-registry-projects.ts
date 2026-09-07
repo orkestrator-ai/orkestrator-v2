@@ -28,7 +28,9 @@ import type {
   AppConfig,
   AgentModel,
   AgentReasoningOption,
+  ClaudeModelCatalogEntry,
   CodexModelCatalogEntry,
+  OpenCodeModelCatalogEntry,
 } from "./commands-dependencies.js";
 import {
   configureTerminalHistoryRetention,
@@ -36,10 +38,14 @@ import {
 } from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { localServerStopCommandName } from "./commands-runtime-state.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
+import { coordinatorProviderAllowed } from "./coordinator-providers.js";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import {
   syncDiffStatsTracking,
   asString,
@@ -83,6 +89,72 @@ function effortLabel(effort: string): string {
 
 function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
   return ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+}
+
+function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const efforts = model.supportedEffortLevels ?? ["low", "medium", "high"];
+    return {
+      platform: "claude",
+      id: model.id,
+      label: model.name,
+      providerLabel: "Claude",
+      reasoning: reasoningOptions(efforts),
+      defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
+      parameters: [
+        {
+          id: "thinking",
+          label: "Thinking",
+          kind: "select",
+          options: [
+            { id: "adaptive", label: "Adaptive" },
+            { id: "budget-8192", label: "8K budget" },
+            { id: "budget-16384", label: "16K budget" },
+            { id: "disabled", label: "Disabled" },
+          ],
+          defaultValue: "adaptive",
+          scope: "session",
+        },
+        ...(/opus|sonnet/i.test(`${model.id} ${model.resolvedModel ?? ""}`)
+          ? [
+              {
+                id: "context1m",
+                label: "1M context beta",
+                kind: "toggle" as const,
+                defaultValue: false,
+                scope: "session" as const,
+              },
+            ]
+          : []),
+      ],
+      supportsSpeed: model.supportsFastMode !== false,
+      supportsMode: true,
+    };
+  });
+}
+
+function normalizedOpenCodeModels(models: readonly OpenCodeModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const modelReasoningOptions = [
+      { id: "default", label: "Default" },
+      ...reasoningOptions(model.variants ?? []),
+    ];
+    return {
+      platform: "opencode",
+      id: model.id,
+      label: openCodeModelDisplayLabel(model.id, model.name),
+      providerLabel: model.provider,
+      reasoning: modelReasoningOptions,
+      defaultReasoningId: fallbackReasoningId(modelReasoningOptions) ?? "default",
+      supportsSpeed: false,
+      // OpenCode has primary agents, not a Build/Plan permission mode.
+      supportsMode: false,
+      ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.supportsImageInput === "boolean"
+        ? { supportsImageInput: model.supportsImageInput }
+        : {}),
+    };
+  });
 }
 
 function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): AgentModel[] {
@@ -360,9 +432,13 @@ export function registerProjectCommands(
     if (coordinator) {
       context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);
       for (const conversation of coordinator.conversations) {
+        if (!conversation.agent) continue;
         const runtimeId = coordinatorRuntimeId(coordinator.id, conversation.id);
         await Promise.resolve(
-          commands.get("stop_local_codex_server_cmd")?.({ environmentId: runtimeId }, context),
+          commands.get(localServerStopCommandName(conversation.agent))?.(
+            { environmentId: runtimeId },
+            context,
+          ),
         ).catch(() => undefined);
         const key = nativeAgentSessionStorageKey(
           runtimeId,
@@ -515,13 +591,58 @@ export function registerProjectCommands(
       if (coordinator.status === "not-coordinator") {
         throw new Error(`Environment not found: ${id}`);
       }
-      if (coordinator.status === "unavailable") {
+      // An unassigned conversation is exactly when this catalogue matters
+      // most: the composer is asking what the user may choose from. Resolve
+      // the workspace directly rather than through the runtime, which
+      // deliberately refuses a conversation with no provider yet.
+      const coordinatorId = coordinatorIdFromRuntimeId(id);
+      const workspace = coordinatorId
+        ? await storage.getCoordinatorWorkspaceById(coordinatorId)
+        : null;
+      if (
+        coordinator.status === "unavailable" &&
+        (!workspace || coordinator.reason !== "unassigned")
+      ) {
         throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
       }
-      if (ensureAgent) {
-        throw new Error("Coordinator model discovery supports Codex only");
-      }
-      return normalizedCodexModels(cache.codex?.models ?? []);
+      const projectId =
+        coordinator.status === "ready" ? coordinator.workspace.projectId : workspace!.projectId;
+      const config = await storage.loadConfig();
+      const qualified = new Set(
+        normalizeAgentPlatforms(config.global.enabledAgentPlatforms).filter((platform) =>
+          coordinatorProviderAllowed(platform, {
+            tierSetting: config.global.coordinatorProviderTiers,
+            enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
+          }),
+        ),
+      );
+      const openCodeModelProviders = normalizeOpenCodeModelProviders(
+        config.global.openCodeModelProviders,
+      );
+      const openCodeModels = qualified.has("opencode")
+        ? ((await storage.getOpenCodeModelCatalog(projectId))?.models ?? []).filter((model) =>
+            isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
+          )
+        : [];
+      // Durable caches only. A coordinator has no bridge until a provider is
+      // assigned, so there is nothing live to ask, and starting one to answer a
+      // picker would materialize the very session the choice is meant to
+      // precede.
+      const coordinatorModels = [
+        ...normalizedClaudeModels(cache.claude?.models ?? []),
+        ...normalizedCodexModels(cache.codex?.models ?? []),
+        ...normalizedOpenCodeModels(openCodeModels),
+        ...(cache.cursor?.models ?? []),
+        ...(cache.grok?.models ?? []),
+        ...(cache.pi?.models ?? []),
+      ].filter((model) => qualified.has(model.platform));
+      if (!ensureAgent) return coordinatorModels;
+      return {
+        models: coordinatorModels,
+        status: coordinatorModels.some((model) => model.platform === ensureAgent)
+          ? ("ready" as const)
+          : ("empty" as const),
+      };
     }
     // Bounds the extra work a first-use read may add, so the model picker
     // cannot be left waiting on a cold bridge for an open-ended time. Only the
@@ -657,27 +778,7 @@ export function registerProjectCommands(
     const cataloguedOpenCodeModels =
       selectableLiveOpenCodeModels.length > 0
         ? selectableLiveOpenCodeModels
-        : openCodeModels.map((model): AgentModel => {
-            const modelReasoningOptions = [
-              { id: "default", label: "Default" },
-              ...reasoningOptions(model.variants ?? []),
-            ];
-            return {
-              platform: "opencode",
-              id: model.id,
-              label: openCodeModelDisplayLabel(model.id, model.name),
-              providerLabel: model.provider,
-              reasoning: modelReasoningOptions,
-              defaultReasoningId: fallbackReasoningId(modelReasoningOptions) ?? "default",
-              supportsSpeed: false,
-              // OpenCode has primary agents, not a Build/Plan permission mode.
-              supportsMode: false,
-              ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-              ...(typeof model.supportsImageInput === "boolean"
-                ? { supportsImageInput: model.supportsImageInput }
-                : {}),
-            };
-          });
+        : normalizedOpenCodeModels(openCodeModels);
     const cataloguedOpenCodeIds = new Set(cataloguedOpenCodeModels.map((model) => model.id));
     // Favourites (and TUI-chosen ids stored as favourites) have to appear in
     // the empty-tab picker before an OpenCode server has listed models.
@@ -692,45 +793,7 @@ export function registerProjectCommands(
       return [synthesized];
     });
     const result: AgentModel[] = [
-      ...claudeModels.map((model): AgentModel => {
-        const efforts = model.supportedEffortLevels ?? ["low", "medium", "high"];
-        return {
-          platform: "claude",
-          id: model.id,
-          label: model.name,
-          providerLabel: "Claude",
-          reasoning: reasoningOptions(efforts),
-          defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
-          parameters: [
-            {
-              id: "thinking",
-              label: "Thinking",
-              kind: "select",
-              options: [
-                { id: "adaptive", label: "Adaptive" },
-                { id: "budget-8192", label: "8K budget" },
-                { id: "budget-16384", label: "16K budget" },
-                { id: "disabled", label: "Disabled" },
-              ],
-              defaultValue: "adaptive",
-              scope: "session",
-            },
-            ...(/opus|sonnet/i.test(`${model.id} ${model.resolvedModel ?? ""}`)
-              ? [
-                  {
-                    id: "context1m",
-                    label: "1M context beta",
-                    kind: "toggle" as const,
-                    defaultValue: false,
-                    scope: "session" as const,
-                  },
-                ]
-              : []),
-          ],
-          supportsSpeed: model.supportsFastMode !== false,
-          supportsMode: true,
-        };
-      }),
+      ...normalizedClaudeModels(claudeModels),
       ...normalizedCodexModels(codexModels),
       ...cataloguedOpenCodeModels,
       ...favoriteOpenCodeModels,

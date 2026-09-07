@@ -581,6 +581,34 @@ child registry is deliberately not persisted, so a card restored at `active`
 would spin forever with nothing left that could settle it, and `loadPersistedState`
 closes those out on the way in.
 
+### Coordinator qualification
+
+`apps/backend/src/core/coordinator-providers.ts` is the single table deciding
+which platforms may run a coordinator, and at which tier. Every gate consults
+it: the workspace service, the runtime resolver, the bridge launcher and the
+trusted session input. Do not reintroduce a platform literal at any of those
+call sites — that is what previously let a platform be half-qualified, allowed
+to hold a conversation but refused a bridge.
+
+Moving a platform to `enforced` is a claim that the provider or the OS blocks
+the mutation whatever the agent attempts. It requires both:
+
+- a translation of `capabilityPolicy` into that provider's own vocabulary, in
+  the bridge, applied on create, resume, config and every turn; and
+- `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only` honoured as
+  process authority, so a request body or a persisted record cannot widen a
+  live conversation across a restart.
+
+`toolPolicy` cannot carry that translation. Its strings are Codex's tool names
+and it is also the user-editable override surface, so the same list means
+"Write, Edit" on one bridge and nothing at all on another. Use
+`capabilityPolicy`, which names the operation rather than the tool.
+
+Where a platform cannot honour an axis, report it in the policy's `note` and
+leave the tier at `provider-configured`. Do not silently drop the axis, and do
+not claim a boundary the bridge is not holding — the tier is shown to the user
+next to the platform they are choosing.
+
 ### Backend
 
 | File                                   | Purpose                                                  |

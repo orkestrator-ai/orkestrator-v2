@@ -64,7 +64,15 @@ import {
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
+import { AGENT_MCP_SERVER_NAME, getMcpRuntimeConfig } from "./mcp-config.js";
+import {
+  claudeDeniedTools,
+  effectiveExecutionPolicy,
+  claudeReadOnlyAllowedTools,
+  claudeReadOnlySandbox,
+  createCoordinatorReadOnlyHook,
+  isCoordinatorReadOnlyPolicy,
+} from "./read-only-policy.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 import { execFile, spawn } from "node:child_process";
@@ -558,7 +566,10 @@ export async function sendPrompt(
     // This allows the Claude SDK to operate on the actual project directory
     const cwd = process.env.CWD || process.cwd();
 
-    const policy = session.executionPolicy;
+    // Re-derived at every turn, not read once at create. A session restored
+    // from disk, or configured before this process took over, must not carry a
+    // policy weaker than the one this process was launched to enforce.
+    const policy = effectiveExecutionPolicy(session.executionPolicy);
     const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
@@ -594,7 +605,19 @@ export async function sendPrompt(
       "Task",
       "Agent",
     ];
-    const allowedTools = policy?.toolPolicy?.allow ?? defaultAllowedTools;
+    const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
+    const allowedTools = coordinatorReadOnly
+      ? claudeReadOnlyAllowedTools({
+          agentMcpServerNames: mcpServerNames.has(AGENT_MCP_SERVER_NAME)
+            ? [AGENT_MCP_SERVER_NAME]
+            : [],
+        })
+      : (policy?.toolPolicy?.allow ?? defaultAllowedTools);
+    // Provider tool names, not the policy's own: `toolPolicy.deny` carries
+    // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
+    const disallowedTools = coordinatorReadOnly
+      ? claudeDeniedTools(policy)
+      : policy?.toolPolicy?.deny;
 
     const fastMode = options?.fastMode === true;
 
@@ -924,16 +947,18 @@ export async function sendPrompt(
         // carries parent_tool_use_id and is rendered inside its Agent card.
         forwardSubagentText: true,
         allowedTools,
-        ...(policy?.toolPolicy?.deny ? { disallowedTools: policy.toolPolicy.deny } : {}),
-        ...(policy?.sandbox === "provider"
-          ? {
-              sandbox: {
-                enabled: true,
-                autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
-                network: { allowLocalBinding: policy.networkAccess === "full" },
-              },
-            }
-          : {}),
+        ...(disallowedTools?.length ? { disallowedTools } : {}),
+        ...(coordinatorReadOnly && policy
+          ? { sandbox: claudeReadOnlySandbox(policy) }
+          : policy?.sandbox === "provider"
+            ? {
+                sandbox: {
+                  enabled: true,
+                  autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
+                  network: { allowLocalBinding: policy.networkAccess === "full" },
+                },
+              }
+            : {}),
         abortController,
         // A deterministic UUID makes the bridge id recoverable from the SDK's
         // persisted session store after a bridge restart.
@@ -955,8 +980,12 @@ export async function sendPrompt(
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
-        settingSources:
-          policy?.projectResources !== false
+        // A coordinator loads nothing: user settings can declare their own
+        // hooks and MCP servers, both of which run programs this boundary is
+        // supposed to exclude.
+        settingSources: coordinatorReadOnly
+          ? []
+          : policy?.projectResources !== false
             ? options?.includeLocalSettings
               ? ["user", "project", "local"]
               : ["user", "project"]
@@ -969,6 +998,11 @@ export async function sendPrompt(
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
         hooks: {
+          // Registered here rather than through settings so a workspace cannot
+          // remove the one control that actually holds the boundary.
+          ...(coordinatorReadOnly && policy
+            ? { PreToolUse: [{ hooks: [createCoordinatorReadOnlyHook(policy)] }] }
+            : {}),
           TaskCreated: [{ hooks: [recordBackgroundTaskHook] }],
           TaskCompleted: [{ hooks: [recordBackgroundTaskHook] }],
           SubagentStart: [{ hooks: [recordBackgroundTaskHook] }],

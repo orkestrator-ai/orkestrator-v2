@@ -20,11 +20,65 @@ mailbox without deleting provider history. If all conversations are closed, use
 Removing the project stops its Coordinator and deletes the isolated Coordinator
 runtime, including retained Codex rollouts and attachments.
 
-Coordinator currently supports Codex. If another configured default is selected,
-the page explains that its read-only boundary has not been qualified and does
-not silently switch providers. A valid project local path is required. Control
-MCP may be disabled globally; chat remains read-only and usable, while the page
-shows that delegation controls are unavailable.
+## Choosing an agent
+
+A conversation has no agent until its first prompt. The composer offers every
+platform this machine qualifies, with the repository default preselected, and
+the first send binds the conversation to whichever was chosen. That binding is
+one-way: the transcript and rollout belong to that platform, so a different one
+means a new conversation. Re-assignment is allowed only while the first send has
+not yet reached a provider, so a failed start does not strand the conversation.
+
+A valid project local path is required. Control MCP may be disabled globally;
+chat remains read-only and usable, while the page shows that delegation
+controls are unavailable.
+
+## Provider qualification
+
+Coordinator runs against the project's real checkout, so how strongly a
+platform holds the read-only boundary is a property worth naming rather than
+flattening to available/unavailable. Each platform is offered at one of three
+tiers, shown beside the picker when it carries a caveat:
+
+| Tier | Meaning | Platforms |
+| --- | --- | --- |
+| `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox is available; Pi |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor |
+| `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
+
+**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+tier this installation will offer. It defaults to `enforced`, so the lower two
+are opt-in.
+
+What each enforced platform actually does:
+
+- **Codex** runs under a permission profile that denies the filesystem and the
+  network inside the child process, with `sandbox: read-only`,
+  `approvalPolicy: never`, and a private `CODEX_HOME` holding only `auth.json`.
+  The bridge refuses to run a turn unless app-server echoes the profile back.
+- **Claude** runs with the SDK command sandbox on and `allowUnsandboxedCommands`
+  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool,
+  `settingSources: []`, a private `CLAUDE_CONFIG_DIR` holding only the
+  credential, and a bridge-owned `PreToolUse` hook. The hook is the real
+  boundary for shell: it allows a fixed list of reading commands and refuses
+  pipes, redirection, substitution and chaining, because a composed command is
+  not the one that was checked. Where the host has no command sandbox — Windows
+  — Claude drops to `provider-configured` automatically.
+- **Pi** blocks every tool outside its read-only set in its own `tool_call`
+  gate, which runs in the bridge process and cannot be switched off by the
+  workspace. Pi ships no MCP client, so **worker delegation is unavailable on
+  Pi**; inspection and planning work normally.
+
+OpenCode denies through its own permission rules and runs its `plan` agent, but
+always loads the checkout's project configuration, including any MCP servers it
+declares. Cursor applies the sandbox and a tool ban but exposes no approval
+callback, and is refused outright if its sandbox cannot be enabled.
+
+Every coordinator bridge is launched with
+`ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`. That is process
+authority: the bridge replaces whatever policy a request body or a persisted
+record carries, so a permissive record cannot survive a restart and widen a live
+conversation.
 
 Worker delegation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker. A container worker

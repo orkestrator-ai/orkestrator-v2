@@ -96,6 +96,43 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     },
     [persistLockedPane, props.data.environmentId, props.tabId],
   );
+  /**
+   * Bind a coordinator conversation to the platform its first prompt chose.
+   *
+   * The pane store owns a normal tab's provider lock, but a coordinator
+   * conversation is durable backend state that outlives any pane. The backend
+   * is therefore the authority here, and nothing is dispatched until it has
+   * accepted the assignment — a failure leaves the composer exactly as the user
+   * left it, with the draft intact, rather than a half-bound conversation.
+   */
+  const assignAndSend = useCallback(
+    async (
+      platform: AgentPlatform,
+      prompt: string,
+      options: {
+        modelId?: string;
+        reasoningId?: string;
+        fastMode: boolean;
+        mode?: "build" | "plan";
+        executionProfileId?: string;
+      },
+    ) => {
+      setAwaitingDurability(true);
+      setDurabilityError(null);
+      setPendingDurabilityOperation("send");
+      try {
+        await props.onAssignPlatform?.(platform, prompt, options);
+        setPendingDurabilityOperation(null);
+      } catch (error) {
+        setDurabilityError(
+          error instanceof Error ? error.message : "This conversation could not be started.",
+        );
+      } finally {
+        setAwaitingDurability(false);
+      }
+    },
+    [props],
+  );
   const lockAndResume = useCallback(
     async (platform: AgentPlatform) => {
       const selectedAdapter = findNativeAgentAdapter(platform);
@@ -126,18 +163,48 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
   // down with it.
   if (!props.data.platform) {
     return (
-      <UnassignedNativeAgentComposer
-        tabId={props.tabId}
-        environmentId={props.data.environmentId}
-        containerId={props.data.containerId}
-        disabled={awaitingDurability}
-        onSend={(platform, prompt, options) => {
-          void lockAndSend(platform, prompt, options);
-        }}
-        onResume={(platform) => {
-          void lockAndResume(platform);
-        }}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {durabilityError ? (
+          // Inline rather than replacing the composer: a failed assignment
+          // leaves the conversation unbound, and the draft the user typed is
+          // still the thing they want to send.
+          <div
+            role="alert"
+            className="shrink-0 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-center text-sm text-destructive"
+          >
+            {durabilityError}
+          </div>
+        ) : null}
+        <div className="min-h-0 flex-1">
+          <UnassignedNativeAgentComposer
+            tabId={props.tabId}
+            environmentId={props.data.environmentId}
+            containerId={props.data.containerId}
+            disabled={awaitingDurability}
+            onSend={(platform, prompt, options) => {
+              void (props.onAssignPlatform
+                ? assignAndSend(platform, prompt, options)
+                : lockAndSend(platform, prompt, options));
+            }}
+            // A coordinator conversation owns its provider session, so there is no
+            // rollout for it to adopt.
+            {...(props.onAssignPlatform
+              ? {}
+              : {
+                  onResume: (platform: AgentPlatform) => {
+                    void lockAndResume(platform);
+                  },
+                })}
+            {...(props.coordinatorProjectId ? { projectId: props.coordinatorProjectId } : {})}
+            {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}
+            {...(props.platformNotes ? { platformNotes: props.platformNotes } : {})}
+            {...(props.unassignedPlaceholder ? { placeholder: props.unassignedPlaceholder } : {})}
+            {...(props.emptyPlatformsMessage
+              ? { emptyPlatformsMessage: props.emptyPlatformsMessage }
+              : {})}
+          />
+        </div>
+      </div>
     );
   }
   if (awaitingDurability) {

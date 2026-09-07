@@ -60,6 +60,7 @@ import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slas
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -343,7 +344,14 @@ export interface NativeAgentServiceOptions {
     target: "host" | "container",
   ) => { url: string; token: string };
   /** Authoritative availability of the scoped worker-delegation MCP. */
-  coordinatorDelegationAvailable?: () => boolean;
+  /**
+   * Whether this conversation can actually reach the delegation tools.
+   *
+   * Platform-aware because it is not only a Control MCP question: Pi ships no
+   * MCP client at all, so a prompt telling it to call `launch_environment`
+   * would be instructing it to use a tool it does not have.
+   */
+  coordinatorDelegationAvailable?: (platform: AgentPlatform) => boolean;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

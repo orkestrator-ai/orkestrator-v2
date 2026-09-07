@@ -258,7 +258,7 @@ describe("thread lifecycle", () => {
     });
   });
 
-  test("passes a tab-scoped Orkestrator MCP authorization header per thread and turn", async () => {
+  test("passes a tab-scoped MCP header without overriding ordinary approvals", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
       "turn/start": () => ({ turn: { id: "turn-1" } }),
@@ -284,6 +284,106 @@ describe("thread lifecycle", () => {
         "mcp_servers.orkestrator.required": false,
         "mcp_servers.orkestrator.startup_timeout_sec": 3,
       });
+    }
+  });
+
+  test.each([
+    ["ask", "on-request"],
+    ["deny", "never"],
+  ] as const)(
+    "preserves an ordinary session's %s MCP approval policy",
+    async (approvals, approvalPolicy) => {
+      const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+      const config: EngineTurnConfig = {
+        ...BUILD,
+        approvalPolicy,
+        policy: {
+          id: "interactive-host",
+          sandbox: "none",
+          approvals,
+          projectResources: true,
+          networkAccess: "full",
+        },
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+      };
+      await h.engine.start();
+      await h.engine.startThread({ config });
+
+      const params = h
+        .child()
+        .requests.find((request) => request.method === "thread/start")!.params;
+      expect(params.approvalPolicy).toBe(approvalPolicy);
+      expect(
+        (params.config as Record<string, unknown>)[
+          "mcp_servers.orkestrator.default_tools_approval_mode"
+        ],
+      ).toBeUndefined();
+    },
+  );
+
+  test("auto-approves MCP tools only for an explicitly auto-approved ordinary policy", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      approvalPolicy: "never",
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      },
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(
+      (params.config as Record<string, unknown>)[
+        "mcp_servers.orkestrator.default_tools_approval_mode"
+      ],
+    ).toBe("approve");
+  });
+
+  test("keeps coordinator MCP approval on thread start, resume, and turn", async () => {
+    const activePermissionProfile = { id: "coordinator-conversation-1" };
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1"), activePermissionProfile }),
+      "thread/resume": () => ({ thread: thread("t1"), activePermissionProfile }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      permissionProfile: "coordinator-conversation-1",
+      policy: {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+      },
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+    };
+    await h.engine.start();
+    const started = await h.engine.startThread({ config });
+    await h.engine.resumeThread("t1", { config, includeTurns: true });
+    await h.engine.startTurn({
+      handle: started.handle,
+      input: [{ type: "text", text: "inspect it" }],
+      config,
+    });
+
+    for (const method of ["thread/start", "thread/resume", "turn/start"]) {
+      const params = h.child().requests.find((request) => request.method === method)!.params;
+      expect(params.sandbox).toBeUndefined();
+      expect(
+        (params.config as Record<string, unknown>)[
+          "mcp_servers.orkestrator.default_tools_approval_mode"
+        ],
+      ).toBe("approve");
     }
   });
 

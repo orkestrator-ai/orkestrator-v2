@@ -1721,6 +1721,15 @@ describe("backend native agent and looped review wrappers", () => {
     await expect(backendWrappers.startMultiReviewCustomFix(customFix)).resolves.toBe(workflow);
     expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review_custom_fix", customFix);
 
+    const replacement = {
+      environmentId: "env-1",
+      tabId: "multi-review-fix:multi-1:launch-1",
+      expectedProviderSessionId: "provider-fix",
+      replacementProviderSessionId: "provider-replacement",
+    };
+    await expect(backendWrappers.recoverMultiReviewFixSession(replacement)).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("recover_multi_review_fix_session", replacement);
+
     for (const [method, command] of [
       [backendWrappers.addressMultiReview, "address_multi_review"],
       [backendWrappers.retryMultiReview, "retry_multi_review"],

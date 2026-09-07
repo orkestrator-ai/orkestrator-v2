@@ -4559,6 +4559,10 @@ describe("multi review commands", () => {
       id: input.workflowId,
     }));
     const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
+    const recoverFixSession = mock(async (_environmentId: string, input: { tabId: string }) => ({
+      ...workflow("recoverFixSession"),
+      id: input.tabId.includes("multi-1") ? "multi-1" : "unexpected",
+    }));
     const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
     const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
       ...workflow("stopReviewer"),
@@ -4577,6 +4581,7 @@ describe("multi review commands", () => {
       address,
       customFix,
       retry,
+      recoverFixSession,
       cancel,
       stopReviewer,
       restartReviewer,
@@ -4597,6 +4602,15 @@ describe("multi review commands", () => {
             },
           ],
           ["retry_multi_review", { workflowId: "multi-1" }],
+          [
+            "recover_multi_review_fix_session",
+            {
+              environmentId: "e1",
+              tabId: "multi-review-fix:multi-1:launch-1",
+              expectedProviderSessionId: "provider-fix",
+              replacementProviderSessionId: "provider-replacement",
+            },
+          ],
           ["cancel_multi_review", { workflowId: "multi-1" }],
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
           ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
@@ -4615,6 +4629,11 @@ describe("multi review commands", () => {
           instruction: "Fix the inactive-tab regression",
         });
         expect(retry).toHaveBeenCalledWith("multi-1");
+        expect(recoverFixSession).toHaveBeenCalledWith("e1", {
+          tabId: "multi-review-fix:multi-1:launch-1",
+          expectedProviderSessionId: "provider-fix",
+          replacementProviderSessionId: "provider-replacement",
+        });
         expect(cancel).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
         expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");

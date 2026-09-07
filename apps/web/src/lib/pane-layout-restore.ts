@@ -205,6 +205,12 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       legacySpec?.field,
     );
     if (!nativeAgentData) return null;
+    // Multi Review fix tabs used to fail closed when their recorded provider
+    // session had been deleted. They now recover by creating a fresh session,
+    // so remove the legacy strict-resume policy from saved layouts too.
+    if (id.startsWith("multi-review-fix:")) {
+      nativeAgentData.requireExistingResumeSession = undefined;
+    }
     return { ...common, type: "agent-native", nativeAgentData };
   }
 

@@ -115,6 +115,13 @@ const defaultEnsureNativeAgentSession = async (input: {
   agent: input.agent,
 });
 const ensureNativeAgentSessionMock = mock(defaultEnsureNativeAgentSession);
+const recoverMultiReviewFixSessionMock = mock(
+  async () =>
+    ({
+      id: "multi-1",
+      backendRevision: 2,
+    }) as never,
+);
 const listNativeAgentResumableSessionsMock = mock(async () => []);
 const getAgentHandoffMock = mock(async (_handoffId: string): Promise<unknown> => null);
 const performNativeAgentSessionActionMock = mock(
@@ -213,6 +220,7 @@ mock.module("@/lib/backend", () => ({
   awaitBridgeReady: awaitBridgeReadyMock,
   adoptNativeAgentSession: adoptNativeAgentSessionMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
+  recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   getAgentHandoff: getAgentHandoffMock,
   dispatchNativeAgentIntent: dispatchNativeAgentIntentMock,
@@ -286,6 +294,10 @@ afterEach(() => {
   // Restored for the same reason as the adoption above: a test that parks or
   // fails session creation must not leave later tests unable to connect.
   ensureNativeAgentSessionMock.mockImplementation(defaultEnsureNativeAgentSession);
+  recoverMultiReviewFixSessionMock.mockClear();
+  recoverMultiReviewFixSessionMock.mockImplementation(
+    async () => ({ id: "multi-1", backendRevision: 2 }) as never,
+  );
   listNativeAgentResumableSessionsMock.mockClear();
   getAgentHandoffMock.mockClear();
   dispatchNativeAgentIntentMock.mockClear();
@@ -3308,6 +3320,68 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+  });
+
+  test("reconciles and explains a replacement Multi Review Fix session", async () => {
+    const tabId = "multi-review-fix:multi-1:launch-1";
+    adoptNativeAgentSessionMock.mockImplementation(async (input) => {
+      if (input.providerSessionId === "provider-fix") {
+        throw new Error("provider session was not found");
+      }
+      return defaultAdoptNativeAgentSession(input);
+    });
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => ({
+      ...(await defaultEnsureNativeAgentSession(input)),
+      providerSessionId: "provider-replacement",
+    }));
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      sessionId: "provider-replacement",
+    }));
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                {
+                  id: tabId,
+                  type: "agent-native",
+                  nativeAgentData: { ...identity("codex"), sessionId: "provider-fix" },
+                },
+              ],
+              activeTabId: tabId,
+            },
+            activePaneId: "default",
+            containerId: "container-1",
+          },
+        ],
+      ]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    await waitFor(() => expect(recoverMultiReviewFixSessionMock).toHaveBeenCalledTimes(1));
+    expect(recoverMultiReviewFixSessionMock).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      tabId,
+      expectedProviderSessionId: "provider-fix",
+      replacementProviderSessionId: "provider-replacement",
+    });
+    expect(
+      await screen.findByText(
+        /fresh Fix session was created and seeded with the consolidated findings/i,
+      ),
+    ).toBeTruthy();
+    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    expect(root?.kind === "leaf" ? getNativeAgentData(root.tabs[0]!)?.sessionId : undefined).toBe(
+      "provider-replacement",
+    );
   });
 
   test("returns to connecting after Retry on an empty session read", async () => {

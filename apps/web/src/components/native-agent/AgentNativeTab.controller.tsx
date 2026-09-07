@@ -5,6 +5,7 @@ import {
   nativeAsyncQuestionRequestId,
   resolveReasoningId,
 } from "@orkestrator/protocol/native-agent";
+import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -46,7 +47,11 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import { adoptNativeAgentSession, writeCoordinatorAttachment } from "@/lib/backend";
+import {
+  adoptNativeAgentSession,
+  recoverMultiReviewFixSession,
+  writeCoordinatorAttachment,
+} from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -89,6 +94,7 @@ import {
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { FileCandidate } from "@/types";
 import {
   buildPromptWithTranscriptAnnotations,
@@ -222,10 +228,34 @@ export function SharedNativeAgentController({
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const transcriptConfirmedRequestIdRef = useRef<string | null>(null);
+  const reconcileReplacedFixSession = useCallback(
+    async (replacement: {
+      requestedProviderSessionId: string;
+      replacementProviderSessionId: string;
+    }) => {
+      if (!tabId.startsWith("multi-review-fix:")) return;
+      const workflow = await recoverMultiReviewFixSession({
+        environmentId: data.environmentId,
+        tabId,
+        expectedProviderSessionId: replacement.requestedProviderSessionId,
+        replacementProviderSessionId: replacement.replacementProviderSessionId,
+      });
+      usePaneLayoutStore
+        .getState()
+        .updateTabNativeSessionId(
+          tabId,
+          replacement.replacementProviderSessionId,
+          data.environmentId,
+        );
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+    },
+    [data.environmentId, tabId],
+  );
   const {
     sessionKey,
     runtimeProjection: projection,
     runtimeError,
+    resumeSessionReplacement,
     isRefreshing,
     hasCompletedRead,
     isDispatching,
@@ -260,6 +290,9 @@ export function SharedNativeAgentController({
     defaultReasoningEffort: configuredReasoning,
     initialProviderSessionId: data.sessionId,
     requireExistingResumeSession: data.requireExistingResumeSession,
+    onResumeSessionReplaced: tabId.startsWith("multi-review-fix:")
+      ? reconcileReplacedFixSession
+      : undefined,
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
     // excluded deliberately: that thread already has a mode, and forcing build
@@ -1408,6 +1441,15 @@ export function SharedNativeAgentController({
    * that has nothing pinned.
    */
   const pinnedCards: ReactNode[] = [
+    resumeSessionReplacement && tabId.startsWith("multi-review-fix:") ? (
+      <div
+        key="replaced-multi-review-fix-session"
+        role="status"
+        className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+      >
+        {MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE}
+      </div>
+    ) : null,
     showPlanReview ? (
       <CodexPlanModeCard
         key="plan-review"

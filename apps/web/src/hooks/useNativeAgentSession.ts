@@ -163,6 +163,11 @@ interface UseNativeAgentSessionOptions {
   defaultReasoningEffort?: string;
   initialProviderSessionId?: string;
   requireExistingResumeSession?: boolean;
+  onResumeSessionReplaced?: (replacement: {
+    requestedProviderSessionId: string;
+    replacementProviderSessionId: string;
+    logicalSessionKey: string;
+  }) => Promise<void>;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
   initialExecutionProfileId?: string;
@@ -207,6 +212,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   defaultReasoningEffort,
   initialProviderSessionId,
   requireExistingResumeSession = false,
+  onResumeSessionReplaced,
   initialConversationMode,
   initialFastMode,
   initialExecutionProfileId,
@@ -243,6 +249,10 @@ export function useNativeAgentSession<TMessage = unknown>({
     state.syncCaches.get(sessionKey),
   );
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [resumeSessionReplacement, setResumeSessionReplacement] = useState<{
+    requestedProviderSessionId: string;
+    replacementProviderSessionId: string;
+  } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(enabled);
   /**
    * Whether an authoritative read has finished for the current identity.
@@ -915,7 +925,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           // Orkestrator. Only an authoritative provider "missing" result may
           // replace it; transport failures remain retryable and never create a
           // surprise second session.
-          await ensureNativeAgentSession({
+          const replacement = await ensureNativeAgentSession({
             ...identity,
             title:
               platform === "cursor"
@@ -928,6 +938,15 @@ export function useNativeAgentSession<TMessage = unknown>({
             sessionMode: initialConversationMode,
             fastMode: initialFastMode ?? defaultFastMode,
             executionProfileId: initialExecutionProfileId,
+          });
+          await onResumeSessionReplaced?.({
+            requestedProviderSessionId: initialProviderSessionId,
+            replacementProviderSessionId: replacement.providerSessionId,
+            logicalSessionKey: replacement.logicalSessionKey,
+          });
+          setResumeSessionReplacement({
+            requestedProviderSessionId: initialProviderSessionId,
+            replacementProviderSessionId: replacement.providerSessionId,
           });
         }
       } else {
@@ -995,6 +1014,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialProviderSessionId,
     initialReasoningEffort,
     requireExistingResumeSession,
+    onResumeSessionReplaced,
     enabled,
     flushPendingReconcile,
     platform,
@@ -1007,6 +1027,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   // tab resolves its platform after mount, which is exactly that case.
   useEffect(() => {
     setHasCompletedRead(false);
+    setResumeSessionReplacement(null);
     // For the same reason: one identity's creation failure must not keep
     // suppressing another identity's authoritative reads.
     establishmentFailureRef.current = false;
@@ -1457,6 +1478,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     projection: effectiveProjection,
     runtimeProjection: effectiveProjection,
     runtimeError,
+    resumeSessionReplacement,
     isRefreshing,
     hasCompletedRead,
     isDispatching,

@@ -216,6 +216,15 @@ export async function retryMultiReview(workflowId: string): Promise<BackendMulti
   return invoke<BackendMultiReviewWorkflow>("retry_multi_review", { workflowId });
 }
 
+export async function recoverMultiReviewFixSession(input: {
+  environmentId: string;
+  tabId: string;
+  expectedProviderSessionId: string;
+  replacementProviderSessionId: string;
+}): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("recover_multi_review_fix_session", input);
+}
+
 export async function cancelMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("cancel_multi_review", { workflowId });
 }

@@ -25,7 +25,10 @@ import {
   NativeAgentService,
 } from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
-import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatch.js";
+import {
+  dispatchMultiReviewAddressPrompt,
+  recoverMissingMultiReviewFixSession,
+} from "./multi-review-address-dispatch.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -284,6 +287,8 @@ export class OrkestratorBackend {
       {
         dispatchAddressPrompt: (workflow) =>
           dispatchMultiReviewAddressPrompt(this.nativeAgents, workflow, storage),
+        recoverAddressSession: (workflow, replacement) =>
+          recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
         invalidateAddressSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(
             nativeAgentSessionStorageKey(workflow.environmentId, session.agent, session.sessionKey),

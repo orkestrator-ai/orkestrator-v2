@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
   MULTI_REVIEW_WORKFLOW_VERSION,
   MULTI_REVIEW_UNSTICK_PROMPT,
   isMultiReviewTerminalPhase,
@@ -40,6 +41,7 @@ import {
   MissingMultiReviewAddressSessionError,
   MultiReviewAddressDispatchError,
   type MultiReviewAddressDispatchResult,
+  type MultiReviewFixSessionReplacement,
 } from "./multi-review-address-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
@@ -161,6 +163,11 @@ export interface MultiReviewServiceOptions {
   dispatchAddressPrompt?: (
     workflow: MultiReviewWorkflow,
   ) => Promise<MultiReviewAddressDispatchResult | MultiReviewFixSession | void>;
+  /** Rebinds and seeds a renderer-created replacement for a missing Fix session. */
+  recoverAddressSession?: (
+    workflow: MultiReviewWorkflow,
+    replacement: MultiReviewFixSessionReplacement,
+  ) => Promise<MultiReviewAddressDispatchResult>;
   /** Removes a failed custom launch from the native-agent identity store. */
   invalidateAddressSession?: (
     workflow: MultiReviewWorkflow,
@@ -444,6 +451,51 @@ export class MultiReviewService {
         this.addressDispatchRetryAt.delete(workflow.id);
         void this.advanceNow(workflow.id);
         return saved;
+      } finally {
+        await this.release(workflow, token);
+      }
+    });
+  }
+
+  async recoverFixSession(
+    environmentId: string,
+    replacement: MultiReviewFixSessionReplacement,
+  ): Promise<MultiReviewWorkflow> {
+    if (!this.options.recoverAddressSession) {
+      throw new Error("Multi Review Fix session recovery is unavailable");
+    }
+    const records = await this.storage.listMultiReviewWorkflows(environmentId);
+    const candidate = records
+      .map((record) => record.snapshot)
+      .find(
+        (workflow) =>
+          isMultiReviewWorkflow(workflow) &&
+          workflow.phase === "interactive" &&
+          (workflow.fixSession?.providerSessionId === replacement.expectedProviderSessionId ||
+            workflow.fixSession?.providerSessionId === replacement.replacementProviderSessionId) &&
+          (workflow.fixTabId ?? workflow.addressTabId ?? `multi-review-fix:${workflow.id}`) ===
+            replacement.tabId,
+      );
+    if (!candidate || !isMultiReviewWorkflow(candidate)) {
+      throw new Error("The Multi Review workflow for this Fix tab is no longer available");
+    }
+    return this.withLock(candidate.id, async () => {
+      const controlled = await this.loadControlled(candidate.id);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${candidate.id}`);
+      const { workflow, token } = controlled;
+      try {
+        if (workflow.fixSession?.providerSessionId === replacement.replacementProviderSessionId) {
+          return workflow;
+        }
+        const recovered = await this.options.recoverAddressSession!(workflow, replacement);
+        await this.assertFence(workflow.id, token);
+        workflow.fixSession = recovered.fixSession;
+        workflow.fixSessionKey = recovered.fixSession.sessionKey;
+        workflow.fixTabId = recovered.tabId;
+        workflow.presentationError = MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE;
+        delete workflow.error;
+        this.progress.forget(replacement.expectedProviderSessionId);
+        return await this.save(workflow, token);
       } finally {
         await this.release(workflow, token);
       }

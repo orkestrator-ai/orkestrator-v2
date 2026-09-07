@@ -70,6 +70,9 @@ export function codexAppServerConfigOverrides(
       "browser_use",
       "browser_use_external",
       "browser_use_full_cdp_access",
+      // Code Mode runs model-authored TypeScript in a separate helper process.
+      // Keep that path disabled until an integration test proves the coordinator
+      // permission profile and environment exclusions are enforced inside it.
       "code_mode_host",
       "computer_use",
       "hooks",

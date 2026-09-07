@@ -199,6 +199,12 @@ export class OrkestratorBackend {
             this.probeForAgentCreatedPullRequest(event.environmentId, context);
           }
         },
+        onAsyncQuestionAttention: (event) => {
+          options.emit("native-agent-async-question", {
+            environment_id: event.environmentId,
+            session_key: event.sessionKey,
+          });
+        },
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");
@@ -206,6 +212,7 @@ export class OrkestratorBackend {
         },
         resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
+        coordinatorDelegationAvailable: () => this.controlMcp.getSettings().running,
       },
     );
     context.nativeAgents = this.nativeAgents;

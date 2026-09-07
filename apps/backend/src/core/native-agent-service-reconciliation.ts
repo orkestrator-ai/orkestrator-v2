@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import {
   ABSENT_BRIDGE_RECHECK_MS,
   ACTIVITY_RETRY_BASE_MS,
@@ -249,20 +250,26 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             ? await provider.activityBatch(group.map((session) => session.providerSessionId))
             : undefined;
           for (const session of group) {
+            const observation =
+              !batchedActivity && provider.observeActivity
+                ? await provider.observeActivity(session.providerSessionId)
+                : undefined;
             const activity = batchedActivity
               ? batchedActivity.get(session.providerSessionId)
-              : provider.activity
-                ? await provider.activity(session.providerSessionId)
-                : await readProviderStatus(provider, session.providerSessionId).then(
-                    ({ status }) =>
-                      status === "missing"
-                        ? "missing"
-                        : status === "running"
-                          ? "working"
-                          : status === "blocked"
-                            ? "waiting"
-                            : "idle",
-                  );
+              : observation
+                ? observation.state
+                : provider.activity
+                  ? await provider.activity(session.providerSessionId)
+                  : await readProviderStatus(provider, session.providerSessionId).then(
+                      ({ status }) =>
+                        status === "missing"
+                          ? "missing"
+                          : status === "running"
+                            ? "working"
+                            : status === "blocked"
+                              ? "waiting"
+                              : "idle",
+                    );
             if (!activity) {
               throw new ProviderUnavailableError(
                 `Provider activity snapshot omitted ${session.providerSessionId}`,
@@ -277,6 +284,22 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 session.providerSessionId,
               );
               continue;
+            }
+            if (session.agent === "codex" && observation?.asyncQuestionItemIds?.length) {
+              try {
+                await this.recordAsyncQuestionAttention(
+                  session.environmentId,
+                  session.key,
+                  observation.asyncQuestionItemIds,
+                );
+              } catch (error) {
+                // A badge persistence failure is not evidence that the bridge
+                // or any session in this activity group is unhealthy.
+                console.warn(
+                  `[native-agent] Could not record async-question attention for ${session.environmentId}:`,
+                  error instanceof Error ? error.name : "unknown error",
+                );
+              }
             }
             if (
               await this.recordActivity(
@@ -923,7 +946,61 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       session.providerSessionId,
     );
     await this.assertEnvironmentLive(queue.environmentId);
-    if (status === "running" || status === "blocked") return;
+    if (status === "running") {
+      const requestId =
+        head && typeof head === "object"
+          ? (this.queueString(head as Record<string, unknown>, "requestId") ??
+            this.queueString(head as Record<string, unknown>, "id"))
+          : undefined;
+      if (agent !== "codex" || !requestId || !nativeAsyncQuestionItemId(requestId)) return;
+
+      const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
+      if (!reservation || typeof reservation.message !== "object") return;
+      const message = reservation.message as Record<string, unknown>;
+      const latestSession = await this.storage.getNativeAgentSession(session.key);
+      if (latestSession?.dispatchedRequestIds?.includes(reservation.requestId)) {
+        await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+        this.clearQueueBackoff(queueKey);
+        return;
+      }
+      if (!nonBlank(message.text)) {
+        await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+        return;
+      }
+      // Async-question answers are text-only and keep their queue reservation
+      // until reliable steering has either been confirmed or the live turn has
+      // ended. The latter case falls through to ordinary next-turn dispatch on
+      // a later drain pass without changing the request identity.
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        await this.storage.failPromptQueueDispatch(
+          queueKey,
+          reservation.requestId,
+          "Asynchronous-question answers cannot include attachments",
+        );
+        return;
+      }
+      try {
+        const outcome = await this.dispatchQueuedAsyncQuestionAnswer(
+          { environmentId: queue.environmentId, agent, logicalSessionKey },
+          { key: session.key, session, provider },
+          message.text,
+          reservation.requestId,
+        );
+        if (outcome.outcome === "applied") {
+          await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+          this.clearQueueBackoff(queueKey);
+        }
+        // idle/mismatch means the turn ended during qualification. Keep the
+        // reservation for the next idle pass, which sends it as a normal turn.
+        // unknown is protected by pendingSteer and the recoverable-dispatch UI.
+      } catch {
+        // A bridge without reliable steering can still deliver this response as
+        // an ordinary prompt after the active turn ends. Keep it reserved and
+        // avoid treating capability skew as a failed user answer.
+      }
+      return;
+    }
+    if (status === "blocked") return;
     if (status !== "idle") {
       await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
         /*

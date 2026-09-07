@@ -2,13 +2,193 @@
  * What a projection puts in front of a reader: the windowed transcript, its
  * byte bounds, expandable tool details, and background-task cards.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
-import { NATIVE_PROJECTION_MAX_BYTES } from "./native-agent-service.js";
+import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
+
+import {
+  NATIVE_PROJECTION_MAX_BYTES,
+  nativeAgentSessionStorageKey,
+} from "./native-agent-service.js";
 
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService transcript projection", () => {
+  test("persists async-question attention once and projects a queued response", async () => {
+    const itemId = "question/item-1";
+    const requestId = nativeAsyncQuestionRequestId(itemId);
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        content: "Which target?",
+        parts: [
+          {
+            type: "async-question",
+            content: "Which target?",
+            asyncQuestion: {
+              itemId,
+              questions: [{ id: `${itemId}:0`, title: "Which target?", options: ["Staging"] }],
+            },
+          },
+        ],
+        createdAt: "2026-08-15T10:00:00.000Z",
+      },
+    ];
+    const attention = mock(() => undefined);
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "running", messages }),
+    });
+
+    await withService(
+      {
+        prefix: "orkestrator-native-async-question-",
+        provider: async () => stub.provider,
+        onAsyncQuestionAttention: attention,
+      },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-question",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue("codex\0env-env-1:tab-question", "env-1", [
+          { id: requestId, text: "Answers to your questions:\n\n- Which target?: Staging" },
+        ]);
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.asyncQuestionResponses).toEqual([
+          { itemId, requestId, state: "queued" },
+        ]);
+        expect(attention).toHaveBeenCalledTimes(1);
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(true);
+
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.getProjection(identity);
+        expect(attention).toHaveBeenCalledTimes(1);
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
+      },
+    );
+  });
+
+  test("rehydrates a sent async-question response from the dispatch journal", async () => {
+    const itemId = "question-2";
+    const requestId = nativeAsyncQuestionRequestId(itemId);
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-async-answer-",
+        provider: async () => stub.provider,
+      },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-answer",
+        };
+        await service.ensureSession(identity);
+        await storage.dispatchNativeAgentPromptOnce(
+          nativeAgentSessionStorageKey("env-1", "codex", identity.logicalSessionKey),
+          requestId,
+          async () => undefined,
+        );
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.asyncQuestionResponses).toEqual([{ itemId, requestId, state: "sent" }]);
+      },
+    );
+  });
+
+  test("prefers durable sent state over simultaneous failed and queued state", async () => {
+    const itemId = "question-priority";
+    const requestId = nativeAsyncQuestionRequestId(itemId);
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-async-answer-priority-",
+        provider: async () => stub.provider,
+      },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-answer-priority",
+        };
+        await service.ensureSession(identity);
+        await storage.dispatchNativeAgentPromptOnce(
+          nativeAgentSessionStorageKey("env-1", "codex", identity.logicalSessionKey),
+          requestId,
+          async () => undefined,
+        );
+        const queueKey = `codex\0${identity.logicalSessionKey}`;
+        await storage.savePromptQueue(queueKey, "env-1", [{ id: requestId, text: "Answer once" }]);
+        const reservation = await storage.reservePromptQueueHeadForDispatch(queueKey);
+        expect(reservation?.requestId).toBe(requestId);
+        await storage.failPromptQueueDispatch(queueKey, requestId, "temporary failure");
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.asyncQuestionResponses).toEqual([{ itemId, requestId, state: "sent" }]);
+      },
+    );
+  });
+
+  test("returns the transcript when attention persistence fails", async () => {
+    const messages = [
+      {
+        id: "assistant-attention-failure",
+        role: "assistant" as const,
+        content: "Question",
+        parts: [
+          {
+            type: "async-question",
+            content: "Question",
+            asyncQuestion: {
+              itemId: "question-attention-failure",
+              questions: [{ id: "question-attention-failure:0", title: "Proceed?", options: [] }],
+            },
+          },
+        ],
+        createdAt: "2026-09-06T10:00:00.000Z",
+      },
+    ];
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-attention-read-failure-",
+        provider: async () => stub.provider,
+      },
+      async ({ storage, service }) => {
+        const original = storage.recordEnvironmentAgentAttention.bind(storage);
+        const warn = console.warn;
+        storage.recordEnvironmentAgentAttention = async () => {
+          throw new Error("disk unavailable");
+        };
+        console.warn = mock(() => undefined) as typeof console.warn;
+        try {
+          const identity = {
+            environmentId: "env-1",
+            agent: "codex" as const,
+            logicalSessionKey: "env-env-1:tab-attention-failure",
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(projection?.messages).toHaveLength(1);
+          expect(projection?.messages[0]).toMatchObject({ id: "assistant-attention-failure" });
+        } finally {
+          storage.recordEnvironmentAgentAttention = original;
+          console.warn = warn;
+        }
+      },
+    );
+  });
+
   test("orders resumable sessions by most recent activity", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),

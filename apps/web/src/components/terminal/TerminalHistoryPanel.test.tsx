@@ -125,7 +125,7 @@ describe("TerminalHistoryPanel", () => {
       .querySelectorAll(".whitespace-pre-wrap");
     expect(visiblePages.length).toBeLessThanOrEqual(16);
     expect(screen.getByText("page-20")).toBeDefined();
-    expect(screen.queryByText("page-1")).toBeNull();
+    expect(screen.queryByText("page-1") === null).toBe(true);
     expect(scroller.scrollTop).toBe(25);
   });
 });

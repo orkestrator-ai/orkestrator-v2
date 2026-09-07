@@ -2873,6 +2873,29 @@ describe("hot store read caching", () => {
 });
 
 describe("environment completion and unread state", () => {
+  test("records async-question attention once and does not relight a cleared badge on replay", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const first = await storage.recordEnvironmentAgentAttention(
+        environment.id,
+        ["codex:session-1:item-1", "codex:session-1:item-1"],
+        new Date().toISOString(),
+      );
+      expect(first.recorded).toBe(true);
+      expect(first.environment.hasUnreadWork).toBe(true);
+      expect(first.environment.agentAttentionKeys).toEqual(["codex:session-1:item-1"]);
+
+      await storage.setEnvironmentUnread(environment.id, false);
+      const replay = await storage.recordEnvironmentAgentAttention(
+        environment.id,
+        ["codex:session-1:item-1"],
+        new Date().toISOString(),
+      );
+      expect(replay.recorded).toBe(false);
+      expect(replay.environment.hasUnreadWork).toBe(false);
+    });
+  });
+
   test("records a per-session completion even when its timestamp collides with aggregate activity", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

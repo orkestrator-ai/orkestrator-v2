@@ -7,7 +7,10 @@ import {
   type NativeMessagePart,
 } from "@/lib/chat/native-message-types";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentAsyncQuestionResponse,
+  NativeAgentToolDetails,
+} from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
 /** Markdown components config shared by every native transcript part. */
@@ -39,6 +42,8 @@ export interface NativeMessageProps {
    * `memo(NativeMessage)` stops holding for the whole transcript.
    */
   stopBackgroundTask?: (taskId: string) => Promise<boolean>;
+  asyncQuestionResponses?: readonly NativeAgentAsyncQuestionResponse[];
+  respondToAsyncQuestion?: (itemId: string, response: string) => Promise<void>;
 }
 
 export const MessageExpansionScopeContext = createContext("native-message");
@@ -55,6 +60,11 @@ export const AgentPlatformContext = createContext<AgentPlatform | undefined>(und
 export const BackgroundTaskStopContext = createContext<
   ((taskId: string) => Promise<boolean>) | undefined
 >(undefined);
+export const AsyncQuestionResponseContext = createContext<{
+  responses: readonly NativeAgentAsyncQuestionResponse[];
+  respond?: (itemId: string, response: string) => Promise<void>;
+  draftScope?: string;
+}>({ responses: [] });
 export const ToolDetailLoaderContext = createContext<
   ((detailRef: string) => Promise<NativeAgentToolDetails>) | undefined
 >(undefined);

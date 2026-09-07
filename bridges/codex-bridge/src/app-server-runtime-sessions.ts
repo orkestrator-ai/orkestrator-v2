@@ -229,6 +229,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId);
       context.messages = hydrated.messages;
+      this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
       session.title = thread.name ?? hydrated.title;
@@ -328,6 +329,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       context.materialized = true;
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
       context.messages = hydrated.messages;
+      this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
       await this.persistSession(child);
@@ -1089,6 +1091,23 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     return this.hasParkedInput(session) ? "waiting" : "working";
   }
 
+  /** No-touch activity read with bounded, content-free background attention. */
+  getActivitySnapshot(sessionId: string): {
+    activity: "idle" | "working" | "waiting" | "missing";
+    asyncQuestionItemIds?: string[];
+  } {
+    const activity = this.getActivity(sessionId);
+    if (activity === "missing") return { activity };
+    const session = this.registry.getSession(sessionId);
+    if (!session) return { activity: "missing" };
+    return {
+      activity,
+      ...(session.asyncQuestionItemIds.length > 0
+        ? { asyncQuestionItemIds: [...session.asyncQuestionItemIds] }
+        : {}),
+    };
+  }
+
   /**
    * Whether a card is parked on this session's thread awaiting a human.
    *
@@ -1167,6 +1186,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
           structuredOutputRequestId: session.structuredOutputRequestId,
           structuredOutput: session.structuredOutput,
           confirmedModelsByTurn: session.confirmedModelsByTurn,
+          asyncQuestionItemIds: session.asyncQuestionItemIds,
         }),
       )
       .catch(() => undefined);

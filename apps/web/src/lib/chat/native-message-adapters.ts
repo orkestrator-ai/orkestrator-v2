@@ -120,6 +120,7 @@ function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPa
 export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart | null {
   switch (part.type) {
     case "text":
+    case "async-question":
     case "thinking":
     case "file":
     case "tool-invocation":
@@ -170,7 +171,7 @@ function groupTaskParts(
       continue;
     }
 
-    if (part.type === "text" || part.type === "file") {
+    if (part.type === "text" || part.type === "async-question" || part.type === "file") {
       currentTask = null;
       result.push(part);
       continue;
@@ -384,6 +385,8 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
       case "text":
       case "thinking":
         return part.content.trim().length > 0;
+      case "async-question":
+        return part.asyncQuestion.questions.length > 0;
       // Tool results are rendered inline with their invocation, never on their
       // own, so a message holding only results is still an empty block.
       case "tool-result":
@@ -1248,7 +1251,7 @@ function latestPartCreatedAt(parts: readonly NativeMessagePart[]): string | unde
 }
 
 function isTextSectionPart(part: NativeMessagePart): boolean {
-  return part.type === "text" || part.type === "file";
+  return part.type === "text" || part.type === "async-question" || part.type === "file";
 }
 
 /**
@@ -1312,7 +1315,7 @@ function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeM
     ...message,
     id: index === 0 ? message.id : `${message.id}:text-block:${segment.firstPartIndex}`,
     content: segment.parts
-      .filter((part) => part.type === "text")
+      .filter((part) => part.type === "text" || part.type === "async-question")
       .map((part) => part.content)
       .join(""),
     parts: segment.parts,

@@ -33,7 +33,9 @@ export interface InteractionRequest {
   itemId: string | null;
   generation: EngineGeneration;
   requestedAt: number;
-  expiresAt: number;
+  /** True means Codex expects an explicit answer with no client deadline. */
+  isBlocking: boolean;
+  expiresAt?: number;
   autoResolutionMs?: number;
   questions?: InteractionQuestion[];
   serverName?: string;
@@ -128,6 +130,12 @@ export function describeInteraction(options: {
   const turnId = text(params.turnId) ?? null;
 
   if (options.method === "item/tool/requestUserInput") {
+    // Current app-server versions always send this boolean. Legacy recordings
+    // omitted it: keep those questions turn-blocking as they were before this
+    // field existed, while retaining the old bounded deadline.
+    if (params.isBlocking !== undefined && typeof params.isBlocking !== "boolean") return null;
+    const isBlocking = params.isBlocking !== false;
+    const waitsIndefinitely = params.isBlocking === true;
     const autoResolutionMs =
       typeof params.autoResolutionMs === "number" && params.autoResolutionMs > 0
         ? params.autoResolutionMs
@@ -173,9 +181,14 @@ export function describeInteraction(options: {
       itemId: text(params.itemId) ?? null,
       generation: options.generation,
       requestedAt: options.requestedAt,
-      expiresAt: autoResolutionMs
-        ? Math.min(options.defaultExpiresAt, options.requestedAt + autoResolutionMs)
-        : options.defaultExpiresAt,
+      isBlocking,
+      ...(waitsIndefinitely
+        ? {}
+        : {
+            expiresAt: autoResolutionMs
+              ? Math.min(options.defaultExpiresAt, options.requestedAt + autoResolutionMs)
+              : options.defaultExpiresAt,
+          }),
       ...(autoResolutionMs ? { autoResolutionMs } : {}),
       questions,
     };
@@ -192,6 +205,7 @@ export function describeInteraction(options: {
     itemId: null,
     generation: options.generation,
     requestedAt: options.requestedAt,
+    isBlocking: false,
     expiresAt: options.defaultExpiresAt,
     serverName: text(params.serverName),
     message: text(params.message),

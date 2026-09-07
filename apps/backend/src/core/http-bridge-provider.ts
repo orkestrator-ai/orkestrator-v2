@@ -3,6 +3,7 @@ import type {
   AgentInteractionProviderCapability,
   BridgeConnection,
   NativeAgentRuntimeProvider,
+  ProviderActivityObservation,
   ProviderActivityState,
   ProviderActiveSteerRun,
   ProviderCreateSessionOptions,
@@ -40,7 +41,6 @@ import {
   asRecord,
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-  isProviderActivityState,
   isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
   nonEmptyString,
@@ -57,6 +57,7 @@ import {
   boundedJson,
   bridgeFetch,
   normalizeProviderReadiness,
+  readProviderActivityObservation,
   resolvePromptAttachments,
   type HttpBridgeProviderDependencies,
 } from "./http-bridge-transport.js";
@@ -604,19 +605,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * and must surface as a failure rather than as "this session is gone", which
    * the caller would act on by deleting the user's session mapping.
    */
+  async observeActivity(sessionId: string): Promise<ProviderActivityObservation> {
+    return readProviderActivityObservation(this.connection, sessionId, this.fetchImpl);
+  }
+
   async activity(sessionId: string): Promise<ProviderActivityState> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/activity`,
-      {},
-      this.fetchImpl,
-    );
-    assertOk(response, `${this.agent} activity read`);
-    const body = (await response.json()) as { activity?: unknown };
-    if (!isProviderActivityState(body.activity)) {
-      throw new ProviderUnavailableError(`${this.agent} returned a malformed activity snapshot`);
-    }
-    return body.activity;
+    return (await this.observeActivity(sessionId)).state;
   }
 
   private async readTranscript(sessionId: string): Promise<{

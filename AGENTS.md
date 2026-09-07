@@ -609,6 +609,31 @@ leave the tier at `provider-configured`. Do not silently drop the axis, and do
 not claim a boundary the bridge is not holding — the tier is shown to the user
 next to the platform they are choosing.
 
+`delegation` is derived, not declared per platform. It is an MCP client *and* an
+injectable native mailbox, because `launch_environment` goes out over MCP while
+the worker's reply comes back as agent mail. Deriving it from the outbound half
+alone is what would let the coordinator prompt promise workers on Cursor or
+Grok, whose `NATIVE_AGENT_MAIL_CAPABILITIES` entry cannot receive the answer.
+
+### Coordinator shell allowlist
+
+`bridges/claude-bridge/src/services/read-only-policy.ts` holds the read-only
+boundary for shell, because no tool-name rule can separate `git log` from
+`git commit` — which is why `capabilityPolicy`'s `shell.mutate` maps to no tool
+names at all. Two invariants keep it honest:
+
+- **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
+  refuses anything that can become several commands, and a newline counts: the
+  shell treats it exactly as `;` does, while a whitespace split would reduce
+  `ls\nrm -rf .` to a harmless-looking `ls`.
+- **The program name is not the whole command.** A program that launches another
+  program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
+  is absent for that reason. Where a reading tool has a writing flag, name it in
+  `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`, `yq -i`) rather than dropping
+  the tool. Git subcommands whose effect depends on their arguments belong in
+  `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
+  `remote` and `config` all read in one form and write in another.
+
 ### Backend
 
 | File                                   | Purpose                                                  |

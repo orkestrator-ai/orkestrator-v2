@@ -66,8 +66,7 @@ What each enforced platform actually does:
   — Claude drops to `provider-configured` automatically.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
-  workspace. Pi ships no MCP client, so **worker delegation is unavailable on
-  Pi**; inspection and planning work normally.
+  workspace.
 
 OpenCode denies through its own permission rules and runs its `plan` agent, but
 always loads the checkout's project configuration, including any MCP servers it
@@ -79,6 +78,21 @@ Every coordinator bridge is launched with
 authority: the bridge replaces whatever policy a request body or a persisted
 record carries, so a permissive record cannot survive a restart and widen a live
 conversation.
+
+## Worker delegation
+
+Delegation is a round trip, not one outbound call. `launch_environment` goes out
+over MCP, and the worker's result comes back as agent mail — so a platform needs
+both an MCP client and a native mailbox that can be injected into. **Delegation
+is unavailable on Pi, Cursor and Grok**: Pi ships no MCP client, and Cursor and
+Grok have no injectable mailbox, so a reply could be dispatched but never
+delivered. On those platforms the coordinator prompt says worker controls are
+unavailable rather than offering a tool whose answer never arrives; inspection
+and planning work normally.
+
+A platform's caveat is carried on its qualification `reason` and shown beside
+the picker, so the limitation is readable when the platform is chosen rather
+than discovered when a worker never reports back.
 
 Worker delegation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker. A container worker

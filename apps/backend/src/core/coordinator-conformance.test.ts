@@ -90,9 +90,26 @@ describe("coordinator read-only conformance", () => {
   });
 
   test("a platform without delegation says so, so the prompt can stop promising it", () => {
-    const pi = coordinatorProviderQualification("pi", { host, enabledPlatforms: everyPlatform });
-    expect(pi.delegation).toBe(false);
-    for (const platform of everyPlatform.filter((candidate) => candidate !== "pi")) {
+    // Delegation needs both halves of the round trip: an MCP client to call
+    // `launch_environment`, and a mailbox the worker's reply can be injected
+    // into. Pi lacks the first; Cursor and Grok lack the second.
+    const withoutDelegation = everyPlatform.filter(
+      (platform) =>
+        !coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
+          .delegation,
+    );
+    expect(withoutDelegation.toSorted()).toEqual(["cursor", "grok", "pi"]);
+    for (const platform of withoutDelegation) {
+      // Silent absence is the failure mode this guards: the caveat has to be
+      // readable next to the platform being chosen.
+      expect(
+        coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
+          .reason,
+      ).toBeTruthy();
+    }
+    for (const platform of everyPlatform.filter(
+      (candidate) => !withoutDelegation.includes(candidate),
+    )) {
       expect(
         coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
           .delegation,

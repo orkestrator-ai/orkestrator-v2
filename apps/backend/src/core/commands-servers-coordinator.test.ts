@@ -468,4 +468,42 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       secondCheckout,
     );
   });
+
+  test("a coordinator runtime refuses a bridge that is not its own platform", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const context = {
+      storage,
+      coordinators: coordinator,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+    } as CommandContext;
+
+    // Unassigned: nothing has been chosen yet, so there is no bridge to start.
+    // This has to say so rather than surface as a retryable missing worktree,
+    // which would be retried for good.
+    await expect(startLocalServerUnlocked(runtimeId, context, "codex")).rejects.toThrow(
+      "no agent yet",
+    );
+
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
+    // The conversation's own provider is the authority. Starting some other
+    // bridge here would hand that platform this conversation's scoped
+    // credential and its private runtime directory.
+    await expect(startLocalServerUnlocked(runtimeId, context, "claude")).rejects.toThrow(
+      "belongs to a different agent platform",
+    );
+    await expect(startLocalServerUnlocked(runtimeId, context, "opencode")).rejects.toThrow(
+      "belongs to a different agent platform",
+    );
+  });
 });

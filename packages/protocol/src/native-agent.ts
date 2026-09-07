@@ -787,6 +787,14 @@ export type NativeAgentExecutionPolicyOverride = Partial<
 export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAgentExecutionPolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const policy = value as Record<string, unknown>;
+  // `null` is neither absent nor an object. Reading `.deny` off it throws a
+  // TypeError out of a type guard that runs on request bodies at every bridge's
+  // trust boundary, turning a rejection into an unhandled error.
+  const isPlainObject = (candidate: unknown): candidate is Record<string, unknown> =>
+    typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
+  if (policy.toolPolicy !== undefined && !isPlainObject(policy.toolPolicy)) return false;
+  if (policy.capabilityPolicy !== undefined && !isPlainObject(policy.capabilityPolicy))
+    return false;
   const toolPolicy = policy.toolPolicy as Record<string, unknown> | undefined;
   const capabilityPolicy = policy.capabilityPolicy as Record<string, unknown> | undefined;
   return (

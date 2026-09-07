@@ -1,4 +1,5 @@
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { NATIVE_AGENT_MAIL_CAPABILITIES } from "@orkestrator/protocol/agent-mail";
 import type {
   CoordinatorProviderQualification,
   CoordinatorProviderTier,
@@ -64,21 +65,45 @@ interface Qualification {
   delegation: boolean;
 }
 
-function qualify(platform: AgentPlatform, host: CoordinatorHostCapabilities): Qualification {
+/** What the platform itself decides, before the delivery half is applied. */
+interface TierJudgement {
+  tier: CoordinatorProviderTier;
+  reason?: string;
+  /** Whether it ships an MCP client that can reach the delegation tools. */
+  mcpClient: boolean;
+}
+
+/**
+ * Delegation is a round trip, so an MCP client alone is not enough.
+ *
+ * `launch_environment` goes out over MCP, but the worker's result comes back as
+ * agent mail — and a native mailbox that cannot be injected into never delivers
+ * it. Telling the coordinator to create workers on such a platform produces a
+ * conversation that dispatches work and then waits for a reply that the mail
+ * store is structurally unable to hand over.
+ */
+function delegationDeliverable(platform: AgentPlatform): boolean {
+  return NATIVE_AGENT_MAIL_CAPABILITIES[platform].canInject;
+}
+
+const NO_DELIVERY_CAVEAT =
+  "Worker delegation is unavailable because this platform's mailbox cannot receive replies. Inspection and planning work normally.";
+
+function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): TierJudgement {
   switch (platform) {
     case "codex":
       // A Codex permission profile denies the filesystem and the network in the
       // child process itself, and the bridge refuses to run a turn unless
       // app-server echoes the profile back.
-      return { tier: "enforced", delegation: true };
+      return { tier: "enforced", mcpClient: true };
     case "claude":
       return host.claudeSandbox
-        ? { tier: "enforced", delegation: true }
+        ? { tier: "enforced", mcpClient: true }
         : {
             tier: "provider-configured",
             reason:
               "Claude's command sandbox is unavailable on this host. File tools are removed and commands are filtered, but nothing outside the agent enforces it.",
-            delegation: true,
+            mcpClient: true,
           };
     case "pi":
       // Pi's gate runs inside the bridge on every tool call and cannot be
@@ -88,30 +113,40 @@ function qualify(platform: AgentPlatform, host: CoordinatorHostCapabilities): Qu
         tier: "enforced",
         reason:
           "Pi has no MCP client, so worker delegation is unavailable. Inspection and planning work normally.",
-        delegation: false,
+        mcpClient: false,
       };
     case "opencode":
       return {
         tier: "provider-configured",
         reason:
           "OpenCode denies mutating tools through its own permission rules, but always loads the checkout's project configuration.",
-        delegation: true,
+        mcpClient: true,
       };
     case "cursor":
       return {
         tier: "provider-configured",
         reason:
           "Cursor applies the sandbox and tool restrictions, but its SDK exposes no approval callback to verify them.",
-        delegation: true,
+        mcpClient: true,
       };
     case "grok":
       return {
         tier: "advisory",
         reason:
           "Grok is asked to request permission before acting and every request is denied. A tool that does not ask is not stopped.",
-        delegation: true,
+        mcpClient: true,
       };
   }
+}
+
+function qualify(platform: AgentPlatform, host: CoordinatorHostCapabilities): Qualification {
+  const { tier, reason, mcpClient } = judge(platform, host);
+  const delegation = mcpClient && delegationDeliverable(platform);
+  // The caveat travels with the platform rather than being discovered when a
+  // worker never reports back, so it has to reach the reason the picker shows.
+  const caveat = delegation ? undefined : NO_DELIVERY_CAVEAT;
+  const combined = [reason, mcpClient ? caveat : undefined].filter(Boolean).join(" ") || reason;
+  return { tier, delegation, ...(combined ? { reason: combined } : {}) };
 }
 
 export function coordinatorProviderQualification(

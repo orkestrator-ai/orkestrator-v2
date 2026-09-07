@@ -133,11 +133,138 @@ describe("Claude coordinator read-only policy", () => {
       "cat a | tee b",
       "sudo ls",
       "echo `whoami`",
+      // A newline separates commands exactly as `;` does, while a whitespace
+      // split reduces the pair to its harmless-looking first half.
+      "ls\nrm -rf .",
+      "printf x\nrm y",
+      "cat a\r\ntouch b",
+      "git status\n\ngit push",
     ]) {
       const verdict = isReadOnlyShellCommand(command);
       expect(verdict.allowed).toBe(false);
       expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
     }
+  });
+
+  test("a program that launches another program is not a read", async () => {
+    // `env` was allowlisted, which made the check inspect the launcher rather
+    // than the command that actually runs. `git difftool` is the same shape:
+    // it reads, but it reads by running whatever `diff.tool` names — and that
+    // comes from the checkout's own configuration.
+    for (const command of [
+      "env rm -rf src",
+      "env touch pwned",
+      "env",
+      "git difftool HEAD~1",
+      "git difftool --tool=evil",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    // The reading form it replaces stays available.
+    expect(isReadOnlyShellCommand("git diff HEAD~1").allowed).toBe(true);
+  });
+
+  test("an allowlisted program is still refused when its arguments write", async () => {
+    for (const command of [
+      "find . -delete",
+      "find . -execdir rm {} +",
+      "find . -fprintf out.txt %p",
+      "sort -o out.txt in.txt",
+      "sort --output=out.txt in.txt",
+      "yq -i '.a=1' f.yaml",
+      "yq --inplace '.a=1' f.yaml",
+      "fd -x rm",
+      "rg --pre ./evil.sh TODO",
+      "date -s 2020-01-01",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    // `-execdir rm {} +` is caught earlier as composition; the argument rule is
+    // what refuses the forms that carry no shell metacharacter at all.
+    expect(isReadOnlyShellCommand("find . -delete").reason).toContain(
+      "argument that writes or runs another program",
+    );
+    // The reading forms of the same tools stay available.
+    for (const command of [
+      "find . -name *.ts",
+      "sort in.txt",
+      "yq '.a' f.yaml",
+      "fd -e ts",
+      "rg TODO src",
+      "date",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(true);
+    }
+  });
+
+  test("a git subcommand that reads or writes by argument is judged on the argument", async () => {
+    for (const command of [
+      "git branch -D feature",
+      "git branch --delete feature",
+      "git branch new-feature",
+      "git tag -d v1.0",
+      "git tag v1.0",
+      "git remote remove origin",
+      "git remote set-url origin https://example.invalid/x.git",
+      "git config user.email someone@example.invalid",
+      "git config --global user.email someone@example.invalid",
+      "git config --unset user.email",
+      "git config set user.email someone@example.invalid",
+    ]) {
+      const verdict = isReadOnlyShellCommand(command);
+      expect(verdict.allowed).toBe(false);
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+    for (const command of [
+      "git branch",
+      "git branch -a",
+      "git branch --list feature-*",
+      "git branch --show-current",
+      "git tag",
+      "git tag --list v1.*",
+      "git remote",
+      "git remote -v",
+      "git remote show origin",
+      "git remote get-url origin",
+      "git config user.email",
+      "git config --global user.email",
+      "git config --get user.email",
+      "git config -l",
+      "git config list",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(true);
+      expect(await decide("Bash", { command })).toBeUndefined();
+    }
+  });
+
+  test("an inherited object property is not a rule", async () => {
+    // The subcommand comes from the model. A plain-object lookup for these
+    // returns a function off `Object.prototype`, and calling it yields a truthy
+    // value — an allow decision reached without any rule matching.
+    for (const command of [
+      "git constructor",
+      "git toString",
+      "git valueOf --oneline",
+      "git hasOwnProperty branch",
+    ]) {
+      expect(isReadOnlyShellCommand(command).allowed).toBe(false);
+      expect((await decide("Bash", { command }))?.permissionDecision).toBe("deny");
+    }
+  });
+
+  test("a refusal names the command it refused rather than a template fragment", () => {
+    const verdict = isReadOnlyShellCommand("git commit -m x");
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe(
+      "Coordinator is read-only, so `git commit` is not available here. Delegate it to a worker environment.",
+    );
+    expect(verdict.reason).not.toContain(".trim()");
+    // A bare `git` with no subcommand still reads back cleanly.
+    expect(isReadOnlyShellCommand("git").reason).toBe(
+      "Coordinator is read-only, so `git` is not available here. Delegate it to a worker environment.",
+    );
   });
 
   test("an empty command is not a mutation", () => {

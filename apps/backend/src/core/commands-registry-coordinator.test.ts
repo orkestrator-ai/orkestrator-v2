@@ -513,4 +513,85 @@ describe("coordinator command registry", () => {
     expect(closed).toMatchObject({ workspace: { selectedConversationId: null } });
     expect(await storage.getNativeAgentSession(sessionKey)).toBeNull();
   });
+
+  test("retires whichever platform's bridge the conversation actually belongs to", async () => {
+    // Teardown named the Codex stop command literally, so a conversation on any
+    // other platform left its bridge, its transcript and its scoped MCP
+    // credential running after the tab closed.
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const sessionKey = nativeAgentSessionStorageKey(
+      runtimeId,
+      "claude",
+      conversation.logicalSessionKey,
+    );
+    await storage.adoptNativeAgentSession({
+      key: sessionKey,
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: conversation.logicalSessionKey,
+      providerSessionId: "sdk-session-1",
+      origin: "coordinator",
+      executionPolicy: "coordinator-read-only",
+      owner: {
+        kind: "coordinator",
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+      },
+    });
+    const stopProjection = mock(async () => undefined);
+    const stopClaude = mock(async () => undefined);
+    const stopCodex = mock(async () => undefined);
+    context.nativeAgents = {
+      stopProjectionSession: stopProjection,
+    } as unknown as CommandContext["nativeAgents"];
+    context.controlMcp = {
+      revokeCoordinatorCredentials: mock(() => undefined),
+    } as unknown as CommandContext["controlMcp"];
+    commands.set("stop_local_claude_server_cmd", stopClaude);
+    commands.set("stop_local_codex_server_cmd", stopCodex);
+
+    await commands.get("close_coordinator_conversation")!(
+      { projectId: project.id, conversationId: conversation.id },
+      context,
+    );
+    expect(stopClaude).toHaveBeenCalledWith({ environmentId: runtimeId }, context);
+    expect(stopCodex).not.toHaveBeenCalled();
+    expect(stopProjection).toHaveBeenCalledWith({
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: conversation.logicalSessionKey,
+    });
+    expect(await storage.getNativeAgentSession(sessionKey)).toBeNull();
+  });
+
+  test("closing an unassigned conversation revokes its credential and stops no bridge", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    expect(conversation.agent).toBeUndefined();
+    const revoke = mock(() => undefined);
+    const stopProjection = mock(async () => undefined);
+    const stopCodex = mock(async () => undefined);
+    context.nativeAgents = {
+      stopProjectionSession: stopProjection,
+    } as unknown as CommandContext["nativeAgents"];
+    context.controlMcp = {
+      revokeCoordinatorCredentials: revoke,
+    } as unknown as CommandContext["controlMcp"];
+    commands.set("stop_local_codex_server_cmd", stopCodex);
+
+    await commands.get("close_coordinator_conversation")!(
+      { projectId: project.id, conversationId: conversation.id },
+      context,
+    );
+    // Nothing reached a provider, so there is no session, bridge or rollout —
+    // but the credential is issued up front and must still be revoked.
+    expect(stopProjection).not.toHaveBeenCalled();
+    expect(stopCodex).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
+  });
 });

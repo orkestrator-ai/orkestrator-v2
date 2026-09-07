@@ -1168,4 +1168,165 @@ describe("StorageService agent mail", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  test("promoting an unassigned coordinator mailbox wakes exactly the mail retry would", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const now = new Date(0).toISOString();
+      // No `agent`: a coordinator conversation has none until its first prompt,
+      // and a mailbox with no agent cannot be injected into, so mail that
+      // arrives meanwhile is filed as `stored`.
+      await storage.mutateCoordinatorWorkspace("p1", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-1",
+        projectId: "p1",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-1",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const environmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+
+      const deliverable = await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "unassigned-deliverable",
+          toEnvironmentId: environmentId,
+          toTabId: "coordinator-tab",
+          body: "A worker finished while nothing was chosen.",
+        },
+      );
+      const acked = await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "unassigned-acked",
+          toEnvironmentId: environmentId,
+          toTabId: "coordinator-tab",
+          body: "Already handled.",
+        },
+      );
+      const discarded = await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "unassigned-discarded",
+          toEnvironmentId: environmentId,
+          toTabId: "coordinator-tab",
+          body: "Not wanted.",
+        },
+      );
+      for (const message of [deliverable, acked, discarded]) {
+        expect(message.placement).toBe("stored");
+      }
+      await storage.ackAgentMail(environmentId, "coordinator-tab", acked.id);
+      await storage.discardAgentMail(environmentId, "coordinator-tab", discarded.id);
+
+      // Still unassigned: nothing may be woken, because nothing can receive it.
+      expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
+        0,
+      );
+
+      await storage.mutateCoordinatorWorkspace("p1", (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((conversation) => ({
+          ...conversation,
+          agent: "codex" as const,
+        })),
+      }));
+      await storage.synchronizeAgentMailboxes();
+
+      const changes: string[] = [];
+      storage.addResourceChangeListener((change) => changes.push(change.resource));
+      expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
+        1,
+      );
+      // Acknowledged and discarded mail is not resurrected by assignment; this
+      // is the same eligibility rule `retryAgentMailInject` applies.
+      const mailbox = await storage.getAgentMailMailbox(environmentId, "coordinator-tab");
+      const placements = new Map(
+        mailbox.messages.map((message) => [message.id, message.placement]),
+      );
+      expect(placements.get(deliverable.id)).toBe("pending-inject");
+      expect(placements.get(acked.id)).toBe("stored");
+      expect(placements.get(discarded.id)).not.toBe("pending-inject");
+      expect(
+        (await storage.listPendingAgentMailInjects()).map(({ message }) => message.id),
+      ).toEqual([deliverable.id]);
+      expect(changes).toContain("agent-mail-summary");
+
+      // Idempotent: assignment can be retried, and a second pass must not
+      // enqueue the same message twice.
+      expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
+        0,
+      );
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("promotion refuses a mailbox that cannot receive, and an unknown one", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const now = new Date(0).toISOString();
+      // Cursor's native mailbox cannot be injected into, so a coordinator
+      // assigned to it must not have mail moved into a queue that will never
+      // drain.
+      await storage.mutateCoordinatorWorkspace("p1", () => ({
+        version: COORDINATOR_WORKSPACE_VERSION,
+        id: "coordinator-2",
+        projectId: "p1",
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: [
+          {
+            id: "conversation-1",
+            tabId: "coordinator-tab",
+            logicalSessionKey: "coordinator-coordinator-2:conversation-1",
+            agent: "cursor",
+            title: "Coordinator",
+            createdAt: now,
+            mailboxIncarnationId: "coordinator-incarnation-2",
+          },
+        ],
+        selectedConversationId: "conversation-1",
+        repositoryContextRevision: 0,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await storage.synchronizeAgentMailboxes();
+      const environmentId = coordinatorRuntimeId("coordinator-2", "conversation-1");
+      const stored = await storage.sendAgentMail(
+        { kind: "user" },
+        {
+          requestId: "cursor-stored",
+          toEnvironmentId: environmentId,
+          toTabId: "coordinator-tab",
+          body: "Nothing here can deliver this.",
+        },
+      );
+      expect(stored.placement).toBe("stored");
+      expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
+        0,
+      );
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+      // A mailbox that does not exist is a no-op, not a throw: assignment is
+      // best-effort and must not strand the conversation.
+      expect(await storage.promoteStoredAgentMailForMailbox("missing", "coordinator-tab")).toBe(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -3563,10 +3563,14 @@ describe("NativeAgentService", () => {
     const release = mock(() => undefined);
     const admit = mock(() => release);
     let delegationAvailable = true;
+    // Records the argument: delegation is not only a Control MCP question, and
+    // answering it without the platform is what would let the prompt promise
+    // `launch_environment` on a provider that cannot receive the worker's reply.
+    const delegationFor = mock((_platform: string) => delegationAvailable);
     const service = new NativeAgentService(storage, refusingInvoke, {
       provider: async () => provider.provider,
       beginCoordinatorTurn: admit,
-      coordinatorDelegationAvailable: () => delegationAvailable,
+      coordinatorDelegationAvailable: delegationFor,
     });
     try {
       const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
@@ -3590,6 +3594,8 @@ describe("NativeAgentService", () => {
       expect(sent).toContain("Inspect this");
       expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
       expect(sent).toContain("Provider sub-agents remain inside this coordinator session");
+      // The conversation's own platform, not a bare availability question.
+      expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(
         (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,

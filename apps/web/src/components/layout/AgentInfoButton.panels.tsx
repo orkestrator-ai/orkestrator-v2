@@ -898,16 +898,127 @@ const MCP_STATUS_DOT: Record<NativeAgentMcpServer["status"], string> = {
 };
 
 /**
- * The action a click on a server row performs. Servers usually only offer
- * `reconnect`, but a signed-out or disabled server is better served by the
- * action that actually unblocks it, so those win over a reconnect that would
- * fail the same way again.
+ * Adapters list actions in their own order, so rank them here: a signed-out or
+ * disabled server is better served by the action that actually unblocks it than
+ * by a reconnect that would fail the same way again, and `disable` is last
+ * because it takes a working server away.
+ */
+const MCP_ACTION_ORDER = ["sign-in", "enable", "reconnect", "disable"] as const;
+
+function orderedMcpActions(server: NativeAgentMcpServer): NativeAgentMcpServerAction[] {
+  // The list arrives over the bridge wire; a provider that omits it entirely
+  // means "no actions", not a crash on every row.
+  const advertised = Array.isArray(server.actions) ? server.actions : [];
+  return MCP_ACTION_ORDER.filter((action) => advertised.includes(action));
+}
+
+/**
+ * The action a click on the server row itself performs.
+ *
+ * `disable` is deliberately excluded: OpenCode offers it as the *only* action
+ * on a connected server, and a row whose visible text is just a name and a tool
+ * count must not tear down a working connection on a stray click. It stays
+ * reachable as an explicitly labelled button instead.
  */
 function primaryMcpAction(server: NativeAgentMcpServer): NativeAgentMcpServerAction | null {
-  for (const preferred of ["sign-in", "enable", "reconnect"] as const) {
-    if (server.actions.includes(preferred)) return preferred;
-  }
-  return server.actions[0] ?? null;
+  return orderedMcpActions(server).find((action) => action !== "disable") ?? null;
+}
+
+function mcpActionLabel(action: NativeAgentMcpServerAction): string {
+  return action.replaceAll("-", " ");
+}
+
+/**
+ * One MCP server: an informational region that doubles as the primary control,
+ * plus a labelled button for every remaining action.
+ *
+ * The region is only a button when there is a primary action to run; Cursor
+ * publishes no actions at all, and rendering those rows as disabled buttons
+ * greyed out healthy servers.
+ */
+function McpServerRow({
+  server,
+  busyAction,
+  onAction,
+}: {
+  server: NativeAgentMcpServer;
+  busyAction: string | null;
+  onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+}) {
+  const actions = orderedMcpActions(server);
+  const primary = primaryMcpAction(server);
+  const secondary = actions.filter((action) => action !== primary);
+  const busy = busyAction !== null;
+  // Exact keys rather than a prefix test, so `github` does not read `github-2`'s
+  // pending action as its own.
+  const pending = actions.some((action) => busyAction === `mcp-${server.id}-${action}`);
+  const status = server.status.replaceAll("-", " ");
+  // A connected server that reports no inventory is unknown, not empty: OpenCode
+  // never sends `toolCount`, and rendering `0` there would be a claim, not a gap.
+  const detail = pending
+    ? "…"
+    : server.status === "connected"
+      ? (server.toolCount?.toString() ?? "—")
+      : status;
+  const title = [
+    `${server.name} · ${status}`,
+    server.error,
+    primary ? `click to ${mcpActionLabel(primary)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  const summary = (
+    <>
+      <span
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", MCP_STATUS_DOT[server.status])}
+        aria-hidden="true"
+      />
+      <span className="truncate text-foreground">{server.name}</span>
+      <span className="ml-auto shrink-0 font-mono tabular-nums text-muted-foreground">
+        {detail}
+      </span>
+    </>
+  );
+  const summaryClassName = "flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1 text-left";
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center gap-1 pr-2.5">
+        {primary ? (
+          <button
+            type="button"
+            disabled={busy}
+            title={title}
+            className={cn(
+              summaryClassName,
+              "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent",
+            )}
+            onClick={() => onAction(server, primary)}
+          >
+            {summary}
+          </button>
+        ) : (
+          <div className={summaryClassName} title={title}>
+            {summary}
+          </div>
+        )}
+        {secondary.map((action) => (
+          <button
+            key={action}
+            type="button"
+            disabled={busy}
+            aria-label={`${mcpActionLabel(action)} ${server.name}`}
+            className="shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent"
+            onClick={() => onAction(server, action)}
+          >
+            {mcpActionLabel(action)}
+          </button>
+        ))}
+      </div>
+      {server.error ? (
+        <p className="break-words px-2.5 pb-1 pl-6 text-destructive">{server.error}</p>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -916,8 +1027,7 @@ function primaryMcpAction(server: NativeAgentMcpServer): NativeAgentMcpServerAct
  * A session can carry hundreds of tools across a dozen servers; rendering one
  * card per server pushed everything else in the popover below the fold. The
  * collapsed line keeps the total visible, and still surfaces how many servers
- * are not connected so a failed server is not hidden by the collapse. Each row
- * is the button: clicking it runs that server's primary action directly.
+ * are not connected so a failed server is not hidden by the collapse.
  */
 export function McpServersPanel({
   servers,
@@ -930,7 +1040,10 @@ export function McpServersPanel({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (servers.length === 0) return null;
-  const toolTotal = servers.reduce((total, server) => total + (server.toolCount ?? 0), 0);
+  // Only servers that actually report an inventory contribute. When none does,
+  // the total is unknown and saying `Tools 0` would be wrong rather than empty.
+  const counted = servers.filter((server) => server.toolCount !== undefined);
+  const toolTotal = counted.reduce((total, server) => total + (server.toolCount ?? 0), 0);
   const unhealthy = servers.filter(
     (server) => server.status === "failed" || server.status === "needs-auth",
   ).length;
@@ -952,7 +1065,9 @@ export function McpServersPanel({
           )}
           aria-hidden="true"
         />
-        <span className="font-medium text-foreground">Tools {toolTotal}</span>
+        <span className="font-medium text-foreground">
+          Tools {counted.length === 0 ? "—" : toolTotal}
+        </span>
         <span className="ml-auto text-muted-foreground">
           {formatCount(servers.length, "server")}
           {unhealthy > 0 ? <span className="text-destructive"> · {unhealthy} down</span> : null}
@@ -960,38 +1075,14 @@ export function McpServersPanel({
       </button>
       {expanded ? (
         <div className="border-t border-border/60 py-1">
-          {servers.map((server) => {
-            const action = primaryMcpAction(server);
-            const pending = busyAction === `mcp-${server.id}-${action}`;
-            const status = server.status.replaceAll("-", " ");
-            return (
-              <button
-                key={server.id}
-                type="button"
-                disabled={action === null || busyAction !== null}
-                title={[
-                  `${server.name} · ${status}`,
-                  server.error,
-                  action ? `click to ${action.replaceAll("-", " ")}` : undefined,
-                ]
-                  .filter(Boolean)
-                  .join(" — ")}
-                className="flex w-full items-center gap-2 px-2.5 py-1 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent"
-                onClick={() => {
-                  if (action) onAction(server, action);
-                }}
-              >
-                <span
-                  className={cn("h-1.5 w-1.5 shrink-0 rounded-full", MCP_STATUS_DOT[server.status])}
-                  aria-hidden="true"
-                />
-                <span className="truncate text-foreground">{server.name}</span>
-                <span className="ml-auto shrink-0 font-mono tabular-nums text-muted-foreground">
-                  {pending ? "…" : server.status === "connected" ? (server.toolCount ?? 0) : status}
-                </span>
-              </button>
-            );
-          })}
+          {servers.map((server) => (
+            <McpServerRow
+              key={server.id}
+              server={server}
+              busyAction={busyAction}
+              onAction={onAction}
+            />
+          ))}
         </div>
       ) : null}
     </div>

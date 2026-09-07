@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -4898,38 +4898,46 @@ describe("AgentInfoButton ACP agents", () => {
     } as NativeAgentSessionProjection;
   }
 
-  test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
-    // A session with a dozen servers used to render a dozen cards; the popover
-    // now leads with the tool total and only expands the dense list on demand,
-    // where the row itself is the reconnect control.
+  /** Seed an ACP session whose runtime carries exactly this MCP inventory. */
+  function seedMcp(servers: unknown[]): void {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage" ? new Promise(() => undefined) : {},
     );
     useNativeAgentProjectionStore.getState().setProjection(
       ACP_KEY,
       acpProjection("cursor", {
-        runtime: {
-          state: "attached",
-          mcp: [
-            {
-              id: "codex_apps",
-              name: "codex_apps",
-              status: "connected",
-              toolCount: 256,
-              actions: ["reconnect"],
-            },
-            {
-              id: "github",
-              name: "github",
-              status: "failed",
-              toolCount: 0,
-              error: "spawn failed",
-              actions: ["reconnect"],
-            },
-          ],
-        },
-      }),
+        runtime: { state: "attached", mcp: servers },
+      } as Partial<NativeAgentSessionProjection>),
     );
+  }
+
+  function mcpActionCalls(): Array<{ serverId?: string; action?: string }> {
+    return nativeInvokeMock.mock.calls
+      .filter(([command]) => command === "perform_native_agent_mcp_action")
+      .map(([, input]) => input as { serverId?: string; action?: string });
+  }
+
+  test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
+    // A session with a dozen servers used to render a dozen cards; the popover
+    // now leads with the tool total and only expands the dense list on demand,
+    // where the row itself is the reconnect control.
+    seedMcp([
+      {
+        id: "codex_apps",
+        name: "codex_apps",
+        status: "connected",
+        toolCount: 256,
+        actions: ["reconnect"],
+      },
+      {
+        id: "github",
+        name: "github",
+        status: "failed",
+        toolCount: 0,
+        error: "spawn failed",
+        actions: ["reconnect"],
+      },
+    ]);
     render(<AgentInfoButton activeTab={acpTab("cursor")} />);
     open();
 
@@ -4946,14 +4954,123 @@ describe("AgentInfoButton ACP agents", () => {
     fireEvent.click(row);
     await waitFor(() =>
       expect(
-        nativeInvokeMock.mock.calls.some(
-          ([command, input]: [string, { serverId?: string; action?: string }]) =>
-            command === "perform_native_agent_mcp_action" &&
-            input.serverId === "codex_apps" &&
-            input.action === "reconnect",
+        mcpActionCalls().some(
+          (input) => input.serverId === "codex_apps" && input.action === "reconnect",
         ),
       ).toBe(true),
     );
+  });
+
+  test("shows a failed server's error as text rather than only a tooltip", async () => {
+    // The popover is rendered on touch too, where a `title` never appears, so
+    // the reason a server is down has to survive as readable content.
+    seedMcp([
+      {
+        id: "github",
+        name: "github",
+        status: "failed",
+        toolCount: 0,
+        error: "spawn failed: ENOENT",
+        actions: ["reconnect"],
+      },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 0/ })));
+    expect(screen.getByText("spawn failed: ENOENT")).toBeTruthy();
+  });
+
+  test("never makes disable the implicit row action for a connected OpenCode server", async () => {
+    // OpenCode advertises `disable` as the only action on a healthy server. The
+    // row is not labelled as destructive, so clicking it must do nothing and the
+    // teardown must live behind its own labelled button.
+    seedMcp([{ id: "context7", name: "context7", status: "connected", actions: ["disable"] }]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools/ })));
+    // The name region is inert: the only button carrying the server name is the
+    // explicit `disable` control.
+    const named = screen.getAllByRole("button", { name: /context7/ });
+    expect(named.length).toBe(1);
+    expect(named[0]?.textContent).toBe("disable");
+
+    fireEvent.click(screen.getByText("context7"));
+    await waitFor(() => expect(screen.getByText("context7")).toBeTruthy());
+    expect(mcpActionCalls()).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "disable context7" }));
+    await waitFor(() =>
+      expect(
+        mcpActionCalls().some(
+          (input) => input.serverId === "context7" && input.action === "disable",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  test("keeps every non-primary action reachable on a multi-action server", async () => {
+    // Claude offers three actions on a signed-out server. Collapsing the card
+    // must not silently drop the two the row click does not run.
+    seedMcp([
+      {
+        id: "linear",
+        name: "linear",
+        status: "needs-auth",
+        toolCount: 12,
+        actions: ["reconnect", "disable", "sign-in"],
+      },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 12/ })));
+    expect(screen.getByRole("button", { name: "reconnect linear" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "disable linear" })).toBeTruthy();
+
+    // `sign-in` unblocks a signed-out server, so it wins the row itself even
+    // though the adapter listed it last.
+    fireEvent.click(screen.getByRole("button", { name: /^linear/ }));
+    await waitFor(() =>
+      expect(
+        mcpActionCalls().some((input) => input.serverId === "linear" && input.action === "sign-in"),
+      ).toBe(true),
+    );
+  });
+
+  test("reports an unknown tool inventory as unknown rather than zero", async () => {
+    // OpenCode never sends `toolCount`. `Tools 0` would be a claim about a
+    // connected server that the adapter never made.
+    seedMcp([
+      { id: "context7", name: "context7", status: "connected", actions: ["disable"] },
+      { id: "sentry", name: "sentry", status: "connected", actions: ["disable"] },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    const summary = await waitFor(() => screen.getByRole("button", { name: /Tools/ }));
+    expect(summary.textContent).toContain("Tools —");
+    expect(summary.textContent).not.toContain("Tools 0");
+
+    fireEvent.click(summary);
+    // Scoped to the inventory: other panels in the popover use the same dash.
+    const panel = screen.getByLabelText("MCP servers");
+    expect(within(panel).getAllByText("—").length).toBe(2);
+  });
+
+  test("leaves a server with no advertised actions readable instead of disabled", async () => {
+    // Cursor publishes `actions: []`. Rendering those rows as disabled buttons
+    // greyed out servers that are perfectly healthy.
+    seedMcp([
+      { id: "orkestrator", name: "orkestrator", status: "connected", toolCount: 9, actions: [] },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 9/ })));
+    expect(screen.getByText("orkestrator")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /orkestrator/ })).toBeNull();
   });
 
   test("renders drift and notices for a non-Codex platform through the same panel", async () => {

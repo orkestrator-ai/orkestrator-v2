@@ -108,7 +108,53 @@ export function multiReviewFixSessionTabOptions(
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
     initialReasoningEffort: workflow.fixModel.reasoningEffort,
     initialConversationMode: "build",
+    // A backend-owned turn is in flight. Seeding a fresh replacement for a
+    // missing provider session would show an empty tab that looks like the
+    // supervisor's work, so only the real session may be attached to.
+    ...(session.status === "running" ? { requireExistingResumeSession: true } : {}),
   };
+}
+
+/**
+ * What the fix model is doing right now, from the workflow's point of view.
+ * The supervisor drives this session through several phases (package
+ * preparation, consolidation, fixing), so the phase is a better label than
+ * the session's own status while the workflow is active.
+ */
+export function fixSessionActivity(workflow: MultiReviewWorkflow): string {
+  switch (workflow.phase) {
+    case "preparing":
+      return "Preparing review package";
+    case "consolidating":
+      return "Consolidating findings";
+    case "fixing":
+      return "Addressing findings";
+    case "interactive":
+      return "Interactive fix session";
+    case "cancelling":
+      return "Cancelling";
+    default:
+      break;
+  }
+  const session = workflow.fixSession;
+  if (!session) return "Not started";
+  if (session.status === "running") return "Running";
+  if (session.status === "failed") return "Failed";
+  if (session.status === "cancelled") return "Cancelled";
+  return "Idle";
+}
+
+export function fixSessionRuntimeSummary(
+  session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+  now = Date.now(),
+): string | null {
+  const startedAt = Date.parse(session.startedAt);
+  if (!Number.isFinite(startedAt)) return null;
+  const running = session.status === "running";
+  const completedAt = session.completedAt ? Date.parse(session.completedAt) : Number.NaN;
+  if (!running && !Number.isFinite(completedAt)) return null;
+  const end = running ? now : completedAt;
+  return formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
 }
 
 type FixSessionOpenOutcome = "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
@@ -229,13 +275,15 @@ function MultiReviewOverviewTab({
   const hasRunningReviewer = workflow?.reviewers.some(
     (reviewer) => reviewer.status === "running" && reviewer.startedAt,
   );
+  const hasRunningFixSession = workflow?.fixSession?.status === "running";
+  const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession);
 
   useEffect(() => {
-    if (!isActive || !hasRunningReviewer) return;
+    if (!isActive || !hasLiveClock) return;
     setReviewPanelNow(Date.now());
     const interval = window.setInterval(() => setReviewPanelNow(Date.now()), 1_000);
     return () => window.clearInterval(interval);
-  }, [hasRunningReviewer, isActive]);
+  }, [hasLiveClock, isActive]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -447,6 +495,9 @@ function MultiReviewOverviewTab({
       workflow.phase === "consolidating" ||
       workflow.phase === "fixing") &&
     workflow.fixSession?.stalledSince !== undefined;
+  const fixRuntimeSummary = workflow.fixSession
+    ? fixSessionRuntimeSummary(workflow.fixSession, reviewPanelNow)
+    : null;
   const canCancel =
     workflow.phase !== "completed" &&
     workflow.phase !== "cancelled" &&
@@ -492,6 +543,59 @@ function MultiReviewOverviewTab({
               </div>
             </section>
           )}
+          <section className="rounded-xl border border-border/60 bg-card/35 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Fix model</h2>
+              <span className="text-xs text-muted-foreground">{fixSessionActivity(workflow)}</span>
+            </div>
+            <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
+              <button
+                type="button"
+                disabled={!workflow.fixSession?.providerSessionId || !createTab}
+                aria-label="Open fix model session"
+                title={
+                  workflow.fixSession?.providerSessionId
+                    ? "Open the fix model's session in a new tab"
+                    : "The fix model has not opened a session yet"
+                }
+                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+                onClick={() => presentFixSession(workflow, "manual")}
+              >
+                {fixSessionStalled ? (
+                  <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                ) : workflow.fixSession?.status === "running" ? (
+                  <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+                ) : workflow.fixSession?.status === "failed" ? (
+                  <AlertCircle className="size-4 shrink-0 text-destructive" />
+                ) : workflow.fixSession?.status === "cancelled" ? (
+                  <Square className="size-4 shrink-0 text-muted-foreground" />
+                ) : workflow.fixSession?.status === "idle" ? (
+                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <Circle className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium">
+                    Fix model · {workflow.fixModel.agent}
+                  </p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {workflow.fixModel.model}
+                    {workflow.fixModel.reasoningEffort
+                      ? ` · ${workflow.fixModel.reasoningEffort}`
+                      : ""}
+                  </p>
+                  {fixRuntimeSummary ? (
+                    <p
+                      className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                      aria-label="Fix model runtime"
+                    >
+                      {fixRuntimeSummary}
+                    </p>
+                  ) : null}
+                </div>
+              </button>
+            </div>
+          </section>
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>

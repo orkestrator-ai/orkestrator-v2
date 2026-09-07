@@ -395,7 +395,7 @@ describe("build pipeline multi-model review", () => {
       expect(packageGeneration.verificationCount).toBeGreaterThanOrEqual(2);
       expect(
         reviewerPrompts.every((entry) =>
-          entry.prompt.includes("Do not modify files, run git, rerun validation"),
+          entry.prompt.includes("Do not modify, create, or delete files"),
         ),
       ).toBe(true);
       expect(

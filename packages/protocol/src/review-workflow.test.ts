@@ -7,8 +7,13 @@ import {
   hasReviewFindings,
   isLoopedReviewActivePhase,
   isLoopedReviewTerminalPhase,
+  isLegacyReviewPackage,
   isLoopedReviewWorkflow,
+  isPersistedReviewPackage,
+  isReviewPackage,
+  isReviewPackageReference,
   isSafeLoopedReviewTargetBranch,
+  REVIEW_PACKAGE_FORMAT,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
   LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
   LOOPED_REVIEW_MAX_MODEL_LENGTH,
@@ -1737,5 +1742,149 @@ describe("legacy adoption classification", () => {
     expect(legacyLoopedReviewAdoption(legacy({ version: 2 }))).toBeNull();
     expect(legacyLoopedReviewAdoption(legacy({ phase: "unknown" }))).toBeNull();
     expect(legacyLoopedReviewAdoption(legacy({ phase: 7 }))).toBeNull();
+  });
+});
+
+describe("pointer review package", () => {
+  const now = "2026-01-01T00:00:00.000Z";
+  const sha256 = "c".repeat(64);
+
+  function pointerPackage(overrides: Record<string, unknown> = {}) {
+    return {
+      format: REVIEW_PACKAGE_FORMAT,
+      id: "package-1",
+      round: 1,
+      preparedAt: now,
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      commit: { sha: "b".repeat(40), subject: "feat: add review" },
+      diffCommand: `git diff --no-color ${"a".repeat(40)}...${"b".repeat(40)}`,
+      changedFiles: [{ path: "src/a.ts", status: "M" }],
+      validation: [
+        {
+          command: "bun test",
+          status: "passed",
+          exitCode: 0,
+          stdoutPath: ".orkestrator/review-artifacts/package-1/validation-01.stdout.txt",
+          stderrPath: ".orkestrator/review-artifacts/package-1/validation-01.stderr.txt",
+          stdoutBytes: 128,
+          stderrBytes: 0,
+          durationMs: 4_200,
+        },
+      ],
+      uncommittedFiles: [],
+      limitations: [],
+      ...overrides,
+    };
+  }
+
+  function reference(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "file",
+      id: "package-1",
+      round: 1,
+      preparedAt: now,
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      filePath: `.orkestrator/review-artifacts/package-1/review-package-${sha256}.json`,
+      sha256,
+      bytes: 512,
+      changedFileCount: 1,
+      limitations: [],
+      ...overrides,
+    };
+  }
+
+  test("accepts a package that points at its evidence instead of carrying it", () => {
+    expect(isReviewPackage(pointerPackage(), 1)).toBe(true);
+    expect(isPersistedReviewPackage(pointerPackage(), 1)).toBe(true);
+    expect(isReviewPackage(pointerPackage(), 2)).toBe(false);
+    // The inline shape is a different contract and must not pass as this one.
+    expect(isLegacyReviewPackage(pointerPackage())).toBe(false);
+  });
+
+  test("requires the format discriminator and a reproducible diff command", () => {
+    const { format: _format, ...unversioned } = pointerPackage();
+    expect(isReviewPackage(unversioned)).toBe(false);
+    expect(isReviewPackage(pointerPackage({ format: 1 }))).toBe(false);
+    expect(isReviewPackage(pointerPackage({ diffCommand: "" }))).toBe(false);
+    expect(isReviewPackage(pointerPackage({ changedFiles: [{ path: "src/a.ts" }] }))).toBe(false);
+  });
+
+  test("ties artifact paths to whether the command actually ran", () => {
+    const [entry] = pointerPackage().validation;
+    expect(
+      isReviewPackage(
+        pointerPackage({
+          validation: [
+            {
+              ...entry,
+              status: "skipped",
+              exitCode: null,
+              stdoutPath: null,
+              stderrPath: null,
+              stdoutBytes: 0,
+              stderrBytes: 0,
+              limitation: "no runner",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    // A skipped command wrote nothing, so a reviewer told to read its output
+    // would be sent to a file preparation never created.
+    expect(isReviewPackage(pointerPackage({ validation: [{ ...entry, status: "skipped" }] }))).toBe(
+      false,
+    );
+    expect(isReviewPackage(pointerPackage({ validation: [{ ...entry, stderrPath: null }] }))).toBe(
+      false,
+    );
+    expect(isReviewPackage(pointerPackage({ validation: [{ ...entry, stdoutBytes: -1 }] }))).toBe(
+      false,
+    );
+    expect(
+      isReviewPackage(pointerPackage({ validation: [{ ...entry, stdoutBytes: undefined }] })),
+    ).toBe(false);
+  });
+
+  test("accepts a reference with no diff size and still validates a legacy one", () => {
+    expect(isReviewPackageReference(reference(), 1)).toBe(true);
+    expect(isReviewPackageReference(reference({ diffCharacters: 4_096 }), 1)).toBe(true);
+    expect(isReviewPackageReference(reference({ diffCharacters: -1 }))).toBe(false);
+    expect(isReviewPackageReference(reference({ changedFileCount: undefined }))).toBe(false);
+  });
+
+  test("keeps reading inline packages persisted by an older build", () => {
+    const legacy = {
+      id: "package-1",
+      round: 1,
+      preparedAt: now,
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      commit: { sha: "b".repeat(40), subject: "feat", committedFiles: ["src/a.ts"] },
+      completeDiff: "diff --git a/src/a.ts b/src/a.ts",
+      changedFiles: [
+        { path: "src/a.ts", status: "M", content: "x", contentSha256: "sha", omittedReason: null },
+      ],
+      validation: [
+        {
+          command: "bun test",
+          status: "passed",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          durationMs: 1,
+        },
+      ],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    };
+    expect(isLegacyReviewPackage(legacy, 1)).toBe(true);
+    expect(isPersistedReviewPackage(legacy, 1)).toBe(true);
+    expect(isReviewPackage(legacy)).toBe(false);
   });
 });

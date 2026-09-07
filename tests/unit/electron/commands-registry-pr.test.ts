@@ -1441,7 +1441,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         changedFileCount: 2,
         limitations: [],
       });
-      expect(first.diffCharacters).toBeNumber();
+      // Reviewers reproduce the diff from the pinned range, so the reference no
+      // longer measures one.
+      expect(first).not.toHaveProperty("diffCharacters");
       expect(first.bytes).toBeNumber();
       expect(first.sha256).toBeString();
       expect(first.sha256 as string).toMatch(/^[a-f0-9]{64}$/);
@@ -1478,43 +1480,29 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         commit: {
           sha: headRef,
           subject: "change",
-          committedFiles: ["binary.dat", "review.txt"],
         },
+        // Paths and statuses only. Binary files need no special case now that
+        // the package never carries content.
         changedFiles: [
-          {
-            path: "binary.dat",
-            status: "A",
-            content: null,
-            contentSha256: null,
-            omittedReason: "Binary content is represented by the complete binary Git diff.",
-          },
-          {
-            path: "review.txt",
-            status: "M",
-            content,
-            contentSha256: createHash("sha256").update(content).digest("hex"),
-            omittedReason: null,
-          },
+          { path: "binary.dat", status: "A" },
+          { path: "review.txt", status: "M" },
         ],
         validation: [
           {
             command: "bun test tests --parallel",
             status: "passed",
             exitCode: 0,
-            stdout: "TOKEN=visible-for-review\nall tests passed\n",
-            stderr: "exact warning output\n",
+            stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+            stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+            stdoutBytes: "TOKEN=visible-for-review\nall tests passed\n".length,
+            stderrBytes: "exact warning output\n".length,
             durationMs: 123,
-          },
-        ],
-        skippedFiles: [
-          {
-            path: "binary.dat",
-            reason: "Binary content is represented by the complete binary Git diff.",
           },
         ],
         uncommittedFiles: [],
         limitations: [],
       });
+      expect(reviewPackage.diffCommand).toContain(`${baseRef}...${headRef}`);
       // The context key is deliberately absent rather than null. The workflow
       // supplies it, and a null is not a valid ReviewPackageContext — persisting
       // one made the snapshot fail validation on its very next read.
@@ -1534,9 +1522,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           loopedReviewWorkflowAround(first, { round: 2, targetBranch: "main" }),
         ),
       ).toBe(true);
-      expect(reviewPackage.completeDiff).toContain("diff --git a/review.txt b/review.txt");
-      expect(reviewPackage.completeDiff).toContain("GIT binary patch");
-      expect(reviewPackage.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
+      // The evidence is reachable from the pinned commits rather than copied
+      // into the package, so neither the diff nor any file's bytes travel here.
+      expect(reviewPackage).not.toHaveProperty("completeDiff");
+      expect(reviewPackage).not.toHaveProperty("skippedFiles");
+      expect(JSON.stringify(reviewPackage)).not.toContain(content.trim());
+      expect(JSON.stringify(reviewPackage)).not.toContain("all tests passed");
 
       const verify = commands.get("verify_looped_review_package")!;
       await expect(
@@ -1771,8 +1762,11 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         command: "bun run --cwd apps/ios typecheck",
         status: "skipped",
         exitCode: null,
-        stdout: "",
-        stderr: "",
+        // A skipped command wrote no artifact to point at.
+        stdoutPath: null,
+        stderrPath: null,
+        stdoutBytes: 0,
+        stderrBytes: 0,
         durationMs: 0,
         limitation: "Xcode is unavailable in this environment.",
       },
@@ -1780,8 +1774,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         command: "bun test tests --parallel",
         status: "passed",
         exitCode: 0,
-        stdout: "all tests passed\n",
-        stderr: "",
+        stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-02.stdout.txt`,
+        stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-02.stderr.txt`,
+        stdoutBytes: "all tests passed\n".length,
+        stderrBytes: 0,
         durationMs: 4200,
         // No `limitation` key at all. The agent reports null for a command that
         // ran without one, but the persisted contract is `limitation?: string`
@@ -1791,8 +1787,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         command: "bun run build",
         status: "failed",
         exitCode: 2,
-        stdout: "build output\n",
-        stderr: "error TS2345: build failed\n",
+        // The bare filenames the agent sent resolved to this entry's own
+        // ordinal, and the backend recorded the anchored paths.
+        stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-03.stdout.txt`,
+        stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-03.stderr.txt`,
+        stdoutBytes: "build output\n".length,
+        stderrBytes: "error TS2345: build failed\n".length,
         durationMs: 900,
         limitation: "Build ran against a stale cache.",
       },

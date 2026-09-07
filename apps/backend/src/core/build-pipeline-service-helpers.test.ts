@@ -418,10 +418,9 @@ describe("BuildPipelineService", () => {
         true,
       );
       expect(reviewing.sessions.at(-1)).not.toHaveProperty("validationHeadAtStart");
-      expect(provider.sent.at(-1)?.prompt).toContain("Review only the immutable evidence package");
-      expect(provider.sent.at(-1)?.prompt).toContain(
-        "Do not modify files, run git, rerun validation",
-      );
+      expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range under review");
+      expect(provider.sent.at(-1)?.prompt).toContain("Do not modify, create, or delete files");
+      expect(provider.sent.at(-1)?.prompt).toContain("Do not rerun the full test suite");
       expect(provider.sent.at(-1)?.prompt).toContain("review-package-");
     });
   });

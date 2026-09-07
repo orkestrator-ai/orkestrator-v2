@@ -1478,3 +1478,38 @@ describe("runtime-health route", () => {
     );
   });
 });
+
+describe("usage route", () => {
+  test("returns the on-demand account and turn snapshot", async () => {
+    const contextUsage = {
+      usedTokens: 10,
+      totalTokens: 100,
+      percentUsed: 10,
+      source: "codex",
+      estimated: false,
+      updatedAt: "2026-09-07T00:00:00.000Z",
+      turns: [{ turnId: "turn-1", totalTokens: 10 }],
+      account: [{ window: "daily:2026-09-07", tokens: 50 }],
+    };
+    await withRuntimeMethod(
+      "getUsage",
+      async () => contextUsage,
+      async () => {
+        const response = await app.request("/session/session-1/usage");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ contextUsage });
+      },
+    );
+  });
+
+  test("returns 404 for an unknown session", async () => {
+    await withRuntimeMethod(
+      "getUsage",
+      async () => null,
+      async () => {
+        const response = await app.request("/session/missing/usage");
+        expect(response.status).toBe(404);
+      },
+    );
+  });
+});

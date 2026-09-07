@@ -11,6 +11,7 @@ import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-codin
 import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
+  NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
@@ -174,6 +175,11 @@ export interface TurnUsage {
 
 export interface PersistedUsage {
   turn: TurnUsage;
+  /** Provider-native per-turn rows, newest last and bounded to twenty. */
+  turns?: NativeAgentTurnUsage[];
+  /** Cumulative counters used to derive the next turn's exact deltas. */
+  sessionTokens?: number;
+  sessionToolCalls?: number;
   modelId?: string;
   durationMs?: number;
   costUsd?: number;
@@ -212,6 +218,7 @@ export interface SessionState {
   /** Workflow-owned tool restriction, independent of Pi thinking/composer modes. */
   readOnly?: boolean;
   id: string;
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   /**
    * Pi's own session file. Stable across bridge restarts; what re-attach and
@@ -291,8 +298,6 @@ export interface SessionState {
   toolInputs: Map<string, JsonObject>;
   /** Bytes appended since the transcript was last measured against its budget. */
   uncheckedTranscriptBytes: number;
-  /** Accumulates the assistant text of a structured-output turn. */
-  currentTurnOutput: string | null;
   usage?: PersistedUsage;
   currentTurnUsage?: TurnUsage;
   turnStartedAt?: number;
@@ -316,6 +321,7 @@ export interface SessionState {
 export interface PersistedSession {
   readOnly?: boolean;
   id: string;
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   sessionFile?: string;
   piSessionId?: string;

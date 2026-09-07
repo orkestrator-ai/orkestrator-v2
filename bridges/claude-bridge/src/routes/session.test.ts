@@ -98,6 +98,13 @@ const mockPerformSessionMcpAction = mock(async () => ({ ok: true }));
 const mockSteerClaudeSession = mock(() => "applied" as const);
 const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
 const mockConfigureClaudeSession = mock(async () => undefined);
+const mockRefreshClaudeContextUsage = mock(async () => ({
+  usedTokens: 25,
+  totalTokens: 100,
+  percentUsed: 25,
+  source: "claude" as const,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+}));
 const mockDeleteSession = mock((id: string) => id === "s-1");
 const mockGetPendingQuestions = mock<
   () => ReturnType<typeof realSessionManager.getPendingQuestions>
@@ -196,6 +203,7 @@ mock.module("../services/session-manager.js", () => ({
   steerClaudeSession: mockSteerClaudeSession,
   readClaudeSteerDispatch: mockReadClaudeSteerDispatch,
   configureClaudeSession: mockConfigureClaudeSession,
+  refreshClaudeContextUsage: mockRefreshClaudeContextUsage,
 }));
 
 /**
@@ -292,6 +300,7 @@ describe("session routes", () => {
       interrupted: true,
       stillQueued: [],
     }));
+    mockRefreshClaudeContextUsage.mockClear();
     mockSteerClaudeSession.mockReset();
     mockSteerClaudeSession.mockReturnValue("applied");
     mockDeleteSession.mockClear();
@@ -323,6 +332,24 @@ describe("session routes", () => {
     mockGetPromptDispatchState.mockReset();
     mockGetPromptDispatchState.mockImplementation(() => "new");
     resetPersistenceMocks();
+  });
+
+  test("validates and applies a resumed session execution policy", async () => {
+    const policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "restricted",
+    };
+    const accepted = await jsonRequest("POST", "/session/s-1/config", { policy });
+    expect(accepted.status).toBe(200);
+    expect(await jsonBody(accepted)).toMatchObject({ ok: true, policy });
+
+    const rejected = await jsonRequest("POST", "/session/s-1/config", {
+      policy: { ...policy, approvals: "approve-everything" },
+    });
+    expect(rejected.status).toBe(400);
   });
 
   test("runtime health reads without touching or resolving the session", async () => {
@@ -465,6 +492,24 @@ describe("session routes", () => {
       const res = await app.request("/session/s-1");
       expect(res.status).toBe(500);
       expect(await jsonBody(res)).toEqual({ error: "claude home unreadable" });
+    });
+  });
+
+  describe("GET /session/:id/usage", () => {
+    test("requests the detailed context snapshot on demand", async () => {
+      const res = await app.request("/session/s-1/usage");
+
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        contextUsage: {
+          usedTokens: 25,
+          totalTokens: 100,
+          percentUsed: 25,
+          source: "claude",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+      expect(mockRefreshClaudeContextUsage).toHaveBeenCalledTimes(1);
     });
   });
 

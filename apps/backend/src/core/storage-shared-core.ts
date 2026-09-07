@@ -43,6 +43,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_TERMINAL_HISTORY_ENABLED,
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
@@ -857,6 +858,7 @@ export function isPersistedNativeAgentSession(
     isNonBlankString(value.providerSessionId) &&
     (value.owner === undefined || isAgentSessionOwner(value.owner)) &&
     (value.executionPolicy === undefined || value.executionPolicy === "coordinator-read-only") &&
+    (value.policy === undefined || isNativeAgentExecutionPolicy(value.policy)) &&
     (value.origin === "interactive-native" ||
       value.origin === "interactive-tmux" ||
       value.origin === "coordinator" ||

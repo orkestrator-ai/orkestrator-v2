@@ -17,24 +17,38 @@ export function handleSessionMessage(message: JsonObject): boolean {
       process.stdout.write("{not-json}\n");
       return true;
     }
+    if (process.env.FAKE_ACP_INITIALIZE_REQUEST_FILE) {
+      appendFileSync(process.env.FAKE_ACP_INITIALIZE_REQUEST_FILE, `${JSON.stringify(message)}\n`);
+    }
     write({
       jsonrpc: "2.0",
       id: message.id,
       result: {
-        protocolVersion: 1,
+        protocolVersion: Number(process.env.FAKE_ACP_PROTOCOL_VERSION || "1"),
         // Agents that cannot resume a rollout must be rejected rather than
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
           sessionCapabilities: process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} },
-          ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
-            ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
-            : {}),
+          promptCapabilities: {
+            image: process.env.FAKE_ACP_IMAGE_CAPABILITY !== "false",
+            embeddedContext: process.env.FAKE_ACP_EMBEDDED_CONTEXT === "true",
+          },
         },
+        ...(process.env.FAKE_ACP_AUTH_METHOD
+          ? { authMethods: [{ id: process.env.FAKE_ACP_AUTH_METHOD, name: "Test login" }] }
+          : {}),
         // Where Grok states its build. Standard ACP `agentInfo` is read too.
         _meta: { agentVersion: "9.9.9" },
       },
     });
+    return true;
+  }
+  if (message.method === "authenticate" && typeof message.id === "number") {
+    if (process.env.FAKE_ACP_AUTH_REQUEST_FILE) {
+      appendFileSync(process.env.FAKE_ACP_AUTH_REQUEST_FILE, `${JSON.stringify(message)}\n`);
+    }
+    write({ jsonrpc: "2.0", id: message.id, result: {} });
     return true;
   }
   if (message.method === "session/new" && typeof message.id === "number") {

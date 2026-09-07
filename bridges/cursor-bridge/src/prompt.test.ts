@@ -340,7 +340,7 @@ describe("terminal run usage", () => {
       reasoningTokens: 7,
       modelId: "resolved-model",
       durationMs: 123,
-      source: "provider",
+      source: "cursor",
     });
     expect(state.currentRunUsage).toBeUndefined();
     expect(state.currentTurnOutputTokenEstimate).toBeUndefined();
@@ -422,7 +422,7 @@ describe("terminal run usage", () => {
       cacheReadTokens: 5,
       cacheWriteTokens: 1,
       reasoningTokens: 2,
-      source: "provider",
+      source: "cursor",
     });
   });
 
@@ -734,12 +734,35 @@ describe("cumulative agent usage", () => {
     const state = runningSession();
     state.usage = {
       turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      turns: [
+        {
+          turnId: "run-1",
+          requestId: "request-1",
+          modelId: "cursor/model",
+          durationMs: 42,
+        },
+      ],
       updatedAt: new Date(1).toISOString(),
     };
 
     const outcome = await refreshAgentUsage(
       state,
-      usageAgent(async () => usageReport(3_000, 125)),
+      usageAgent(async () => ({
+        ...usageReport(3_000, 125),
+        runs: [
+          {
+            runId: "run-1",
+            usage: {
+              inputTokens: 80,
+              outputTokens: 20,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              totalTokens: 100,
+            },
+            cost: { rawCostCents: 20, chargedCents: 12 },
+          },
+        ],
+      })),
       state.promptSequence,
       100,
       100,
@@ -754,6 +777,17 @@ describe("cumulative agent usage", () => {
       sessionTokens: 3_000,
       // `chargedCents`, not the undiscounted raw cost.
       costUsd: 1.25,
+      account: [{ window: "agent", tokens: 3_000, spendUsd: 1.25 }],
+      turns: [
+        {
+          turnId: "run-1",
+          costUsd: 0.12,
+          rawCostUsd: 0.2,
+          requestId: "request-1",
+          modelId: "cursor/model",
+          durationMs: 42,
+        },
+      ],
     });
   });
 
@@ -905,7 +939,9 @@ describe("cumulative agent usage", () => {
     );
 
     expect(outcome).toBe("retry");
-    expect(state.revision).toBe(before);
+    // The token/cost totals are unchanged, but the generic account window is
+    // newly materialized from the provider report.
+    expect(state.revision).toBe(before + 1);
   });
 
   test("never moves a cumulative token total backward on a later retry", async () => {

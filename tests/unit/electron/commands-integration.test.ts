@@ -2905,7 +2905,7 @@ exit 1
       expect(marker.stateDir).toContain(path.join("cursor-bridge-state"));
       expect(marker.stateDir).not.toContain(path.join("acp-bridge-state"));
       expect(marker.authFile).toBe(path.join(dataDir, "cursor-sdk", "auth.json"));
-      expect(marker.projectSettings).toBe("0");
+      expect(marker.projectSettings).toBe("");
       expect(marker.hasApiKey).toBe(true);
       expect(marker.hostname).toBe("127.0.0.1");
     } finally {

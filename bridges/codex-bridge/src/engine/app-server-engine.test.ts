@@ -160,6 +160,28 @@ function harness(
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+describe("account usage", () => {
+  test("reads and allowlists account token windows", async () => {
+    const h = harness({
+      "account/usage/read": () => ({
+        summary: { lifetimeTokens: 123_000, peakDailyTokens: "4500" },
+        dailyUsageBuckets: [
+          { startDate: "2026-09-06", tokens: 1_250 },
+          { startDate: "/private/path", tokens: -1 },
+        ],
+      }),
+    });
+    await h.engine.start();
+
+    await expect(h.engine.readAccountUsage()).resolves.toEqual([
+      { window: "lifetime", label: "Lifetime", tokens: 123_000 },
+      { window: "peak-daily", label: "Peak day", tokens: 4_500 },
+      { window: "daily:2026-09-06", label: "2026-09-06", tokens: 1_250 },
+    ]);
+    expect(h.child().requests.at(-1)?.method).toBe("account/usage/read");
+  });
+});
+
 describe("startup and capabilities", () => {
   test("advertises app-server capabilities", async () => {
     const h = harness();

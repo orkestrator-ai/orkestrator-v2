@@ -6,15 +6,18 @@ import type {
   AgentReasoningOption,
   NativeAgentComposerState,
 } from "@orkestrator/protocol/native-agent";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import { loadAcpProviderConfig } from "./acp-provider-config.js";
 
-export type AcpProvider = "cursor" | "grok";
+export type AcpProvider = AgentPlatform;
 
 export interface AcpComposerPatch {
   modelId?: string;
   reasoningId?: string;
   fastMode?: boolean;
   mode?: AgentConversationMode;
+  parameterValues?: Record<string, string | boolean>;
 }
 
 export interface AcpConfigOptionValue {
@@ -71,15 +74,30 @@ export type AcpConfigRpc =
       };
     };
 
-const PLATFORM_LABEL: Record<AcpProvider, string> = {
-  cursor: "Cursor",
-  grok: "Grok",
-};
+function providerLabel(provider: AcpProvider): string {
+  try {
+    const configured = loadAcpProviderConfig();
+    return configured.id === provider ? configured.name : provider;
+  } catch {
+    // Pure normalization tests and legacy persisted snapshots may not carry a
+    // launch record. A missing label must not make their composer unreadable.
+    return provider === "grok" ? "Grok" : provider === "cursor" ? "Cursor" : provider;
+  }
+}
 
 const CONVERSATION_MODES: Array<{ id: AgentConversationMode; label: string }> = [
   { id: "build", label: "Build" },
   { id: "plan", label: "Plan" },
 ];
+
+function conversationModes(
+  availableModeIds: AcpConfigWire["availableModeIds"],
+): Array<{ id: AgentConversationMode; label: string }> {
+  return Object.keys(availableModeIds).map((id) => {
+    const builtIn = CONVERSATION_MODES.find((mode) => mode.id === id);
+    return builtIn ?? { id: id as AgentConversationMode, label: modeLabel(id) };
+  });
+}
 
 const EMPTY_WIRE: AcpConfigWire = {
   configOptions: [],
@@ -132,7 +150,13 @@ export function normalizeAcpSessionConfig(
     ? composerFromGrokModels(provider, grokModels, availableModeIds, modes.currentId, configOptions)
     : composerFromConfigOptions(provider, configOptions, availableModeIds, modes.currentId);
 
-  return { composer: withModes(composer, availableModeIds, modes.currentId), wire };
+  return {
+    composer: withGenericBooleanOptions(
+      withModes(composer, availableModeIds, modes.currentId),
+      configOptions,
+    ),
+    wire,
+  };
 }
 
 export function applyConfigOptionUpdate(
@@ -150,7 +174,7 @@ export function applyConfigOptionUpdate(
       currentModeId: reverseModeId(current.wire.availableModeIds, current.composer.selectedModeId),
       availableModes: Object.entries(current.wire.availableModeIds).map(([id, modeId]) => ({
         id: modeId,
-        name: id === "plan" ? "Plan" : "Build",
+        name: modeLabel(id),
       })),
     },
     models: current.wire.usesSetModel
@@ -189,7 +213,7 @@ export function applyCurrentModeUpdate(
         current.composer.modes.length > 0
           ? current.composer.modes
           : Object.keys(current.wire.availableModeIds).length > 0
-            ? CONVERSATION_MODES.filter((mode) => current.wire.availableModeIds[mode.id])
+            ? conversationModes(current.wire.availableModeIds)
             : [],
     },
   };
@@ -388,6 +412,23 @@ export function planComposerApply(
     }
   }
 
+  for (const [configId, value] of Object.entries(patch.parameterValues ?? {})) {
+    const option = current.wire.configOptions.find(
+      (candidate) => candidate.configId === configId && candidate.type === "boolean",
+    );
+    if (
+      !option ||
+      option === fastOption ||
+      typeof value !== "boolean" ||
+      optionIsEnabled(option) === value
+    )
+      continue;
+    calls.push({
+      method: "session/set_config_option",
+      params: { sessionId, configId, value, type: "boolean" },
+    });
+  }
+
   // An agent that offers both surfaces (Cursor) is already served by the
   // config-option calls above; repeating the change as `session/set_model`
   // would re-send effort in a `_meta` field Cursor does not read, and race the
@@ -476,7 +517,7 @@ function composerFromConfigOptions(
       id: option.value,
       label: option.name || option.value,
       ...(option.description ? { description: option.description } : {}),
-      providerLabel: PLATFORM_LABEL[provider],
+      providerLabel: providerLabel(provider),
       reasoning: reasoning.length > 0 ? reasoning : undefined,
       defaultReasoningId: selectedReasoningId,
       supportsSpeed: Boolean(fastOption) || fastSibling,
@@ -498,10 +539,7 @@ function composerFromConfigOptions(
     fastModeEnabled: fastModeAvailable ? fastModeEnabled : null,
     fastModeAvailable,
     selectedModeId: mapModeId(currentModeId),
-    modes:
-      Object.keys(availableModeIds).length > 0
-        ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
-        : [],
+    modes: Object.keys(availableModeIds).length > 0 ? conversationModes(availableModeIds) : [],
   };
 }
 
@@ -540,7 +578,7 @@ function composerFromGrokModels(
       id: entry.modelId,
       label: entry.name || entry.modelId,
       ...(entry.description ? { description: entry.description } : {}),
-      providerLabel: PLATFORM_LABEL[provider],
+      providerLabel: providerLabel(provider),
       reasoning: reasoning.length > 0 ? reasoning : undefined,
       parameters:
         reasoning.length > 0
@@ -588,10 +626,7 @@ function composerFromGrokModels(
         : null,
     fastModeAvailable: selected?.supportsSpeed === true,
     selectedModeId: mapModeId(currentModeId),
-    modes:
-      Object.keys(availableModeIds).length > 0
-        ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
-        : [],
+    modes: Object.keys(availableModeIds).length > 0 ? conversationModes(availableModeIds) : [],
   };
 }
 
@@ -603,7 +638,7 @@ function withModes(
   if (composer.modes.length > 0) {
     return { ...composer, selectedModeId: composer.selectedModeId ?? mapModeId(currentModeId) };
   }
-  const modes = CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id]);
+  const modes = conversationModes(availableModeIds);
   if (modes.length === 0) return composer;
   return {
     ...composer,
@@ -649,18 +684,67 @@ function modeIdMap(available: ParsedMode[]): AcpConfigWire["availableModeIds"] {
 function mapModeId(modeId: string | undefined): AgentConversationMode | undefined {
   if (!modeId) return undefined;
   const normalized = modeId.trim().toLowerCase();
-  if (
-    normalized === "agent" ||
-    normalized === "code" ||
-    normalized === "build" ||
-    normalized === "agentic"
-  ) {
-    return "build";
+  return configuredModeMap()[normalized] ?? (modeId.trim() as AgentConversationMode);
+}
+
+function configuredModeMap(): Record<string, AgentConversationMode> {
+  try {
+    return loadAcpProviderConfig().modeMap;
+  } catch {
+    // Pure normalizer tests and persisted-state inspection can run without a
+    // launcher environment. These are the protocol's conventional spellings;
+    // a live bridge always has a provider record and takes its mapping above.
+    return {
+      agent: "build",
+      code: "build",
+      build: "build",
+      agentic: "build",
+      plan: "plan",
+      architect: "plan",
+      ask: "plan",
+    };
   }
-  if (normalized === "plan" || normalized === "architect" || normalized === "ask") {
-    return "plan";
-  }
-  return undefined;
+}
+
+function modeLabel(id: string): string {
+  return id
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .slice(0, 128);
+}
+
+function withGenericBooleanOptions(
+  composer: NativeAgentComposerState,
+  configOptions: AcpConfigOption[],
+): NativeAgentComposerState {
+  const fastOption = selectFastOption(configOptions);
+  const options = configOptions
+    .filter(
+      (option) =>
+        option.type === "boolean" &&
+        option !== fastOption &&
+        option.configId !== "model" &&
+        option.configId !== "thought_level",
+    )
+    .slice(0, 32);
+  if (options.length === 0) return composer;
+  const parameters: AgentModelParameter[] = options.map((option) => ({
+    id: option.configId,
+    label: modeLabel(option.configId),
+    kind: "toggle",
+    defaultValue: option.currentValue === true,
+    scope: "session",
+  }));
+  return {
+    ...composer,
+    models: composer.models.map((model) => ({
+      ...model,
+      parameters: [...(model.parameters ?? []), ...parameters],
+    })),
+    parameterValues: Object.fromEntries(
+      options.map((option) => [option.configId, option.currentValue === true]),
+    ),
+  };
 }
 
 function reverseModeId(
@@ -675,7 +759,7 @@ function persistedModes(current: AcpNormalizedSessionConfig): Record<string, unk
     currentModeId: reverseModeId(current.wire.availableModeIds, current.composer.selectedModeId),
     availableModes: Object.entries(current.wire.availableModeIds).map(([id, modeId]) => ({
       id: modeId,
-      name: id === "plan" ? "Plan" : "Build",
+      name: modeLabel(id),
     })),
   };
 }
@@ -815,7 +899,7 @@ function parsePersistedComposer(
     !Array.isArray(value.models) ||
     value.models.length > MAX_CATALOG_MODELS ||
     !Array.isArray(value.modes) ||
-    value.modes.length > CONVERSATION_MODES.length ||
+    value.modes.length > 64 ||
     typeof value.fastModeAvailable !== "boolean" ||
     !(typeof value.fastModeEnabled === "boolean" || value.fastModeEnabled === null)
   )

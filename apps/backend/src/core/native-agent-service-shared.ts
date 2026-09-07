@@ -32,6 +32,7 @@ import type {
   NativeAgentComposerControl,
   NativeAgentComposerState,
   NativeAgentControlUpdate,
+  NativeAgentExecutionPolicy,
   NativeAgentDispatchOutcome,
   NativeAgentForkOutcome,
   NativeAgentMessageWindow,
@@ -134,6 +135,8 @@ export interface EnsureNativeAgentSessionInput {
   /** Trusted backend ownership. Renderer-supplied values are replaced. */
   owner?: AgentSessionOwner;
   executionPolicy?: "coordinator-read-only";
+  /** Backend-computed policy. Caller values are replaced at the trust boundary. */
+  policy?: NativeAgentExecutionPolicy;
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
@@ -184,6 +187,8 @@ export interface NativeAgentProjectionInput {
    * cannot shrink a transcript the tab has expanded.
    */
   messageLimit?: number;
+  /** Explicit panel-open read of provider billing/quota data. */
+  refreshUsage?: boolean;
   /** Internal cache namespace for the fixed remote-sync representation. */
   representation?: "sync-v1";
 }

@@ -1,5 +1,6 @@
 import * as shared from "./native-agent-service-shared.js";
 import { COORDINATOR_EXECUTION_POLICY } from "@orkestrator/protocol/coordinator";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -368,6 +369,9 @@ export abstract class NativeAgentServiceBase {
     const coordinator = await resolveCoordinatorRuntime(this.storage, input.environmentId);
     if (coordinator.status === "not-coordinator") {
       const environment = await this.storage.getEnvironment(input.environmentId);
+      const existing = await this.storage.getNativeAgentSession(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      );
       return {
         ...input,
         ...(environment
@@ -379,13 +383,27 @@ export abstract class NativeAgentServiceBase {
               },
             }
           : {}),
-        executionPolicy: undefined,
+        executionPolicy: existing?.executionPolicy,
+        ...(environment
+          ? {
+              policy:
+                existing?.policy ??
+                resolveNativeAgentExecutionPolicy(
+                  environment,
+                  input.origin ?? "interactive-native",
+                  environment.agentSettings?.executionPolicy,
+                ),
+            }
+          : { policy: undefined }),
       };
     }
     if (coordinator.status === "unavailable") {
       throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
     }
     const { coordinatorId, workspace } = coordinator;
+    const existing = await this.storage.getNativeAgentSession(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
     if (coordinator.conversation.agent !== input.agent) {
       throw new Error("Coordinator conversation is unavailable");
     }
@@ -403,7 +421,13 @@ export abstract class NativeAgentServiceBase {
       origin: "coordinator",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
-      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      executionPolicy: existing?.executionPolicy ?? COORDINATOR_EXECUTION_POLICY,
+      policy:
+        existing?.policy ??
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "restricted" },
+          "coordinator",
+        ),
     };
     if (
       "prompt" in input &&
@@ -539,7 +563,7 @@ export abstract class NativeAgentServiceBase {
       const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
-        if ((!existing.owner || !existing.executionPolicy) && input.owner) {
+        if ((!existing.owner || !existing.policy) && input.owner) {
           const enriched = await this.storage.adoptNativeAgentSession({
             key,
             environmentId: input.environmentId,
@@ -550,6 +574,7 @@ export abstract class NativeAgentServiceBase {
             interactionPolicy: existing.interactionPolicy,
             owner: input.owner,
             executionPolicy: input.executionPolicy,
+            policy: input.policy,
           });
           void this.reconcileAgentInteractions().catch(() => undefined);
           return enriched;
@@ -585,6 +610,7 @@ export abstract class NativeAgentServiceBase {
         controls: controlsFromSessionInput(input),
         owner: input.owner,
         executionPolicy: input.executionPolicy,
+        policy: input.policy,
       },
       () => this.createProviderSession(provider, input),
     );
@@ -639,6 +665,7 @@ export abstract class NativeAgentServiceBase {
       controls: input.controls ?? controlsFromSessionInput(input),
       owner: input.owner,
       executionPolicy: input.executionPolicy,
+      policy: input.policy,
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
     void this.reconcileAgentInteractions().catch(() => undefined);

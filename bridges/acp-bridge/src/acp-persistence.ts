@@ -3,7 +3,11 @@ import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
-import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentExecutionPolicy,
+  type NativeAgentComposerState,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import {
   emptyComposerState,
   mergeComposerCatalog,
@@ -44,7 +48,6 @@ import {
   clientSessionKeys,
   configuredAcpMcpServers,
   isObject,
-  parseProvider,
   persistenceScheduled,
   persistenceTail,
   provider,
@@ -79,8 +82,6 @@ import {
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
-import { settleTerminalCursorChildren } from "./acp-cursor-background.js";
-import { isSafeCursorAgentId } from "./acp-cursor-child-discovery.js";
 import {
   boundTranscript,
   boundedString,
@@ -176,6 +177,39 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
   }
   return {
     turn,
+    ...(Array.isArray(value.turns)
+      ? {
+          turns: value.turns.slice(-20).flatMap((candidate) => {
+            if (!isObject(candidate) || typeof candidate.turnId !== "string") return [];
+            const turnId = candidate.turnId.trim().slice(0, 256);
+            if (!turnId) return [];
+            const entry: NonNullable<PersistedUsage["turns"]>[number] = { turnId };
+            for (const key of [
+              "costUsd",
+              "inputTokens",
+              "outputTokens",
+              "cacheReadTokens",
+              "cacheWriteTokens",
+              "reasoningTokens",
+              "totalTokens",
+              "durationMs",
+              "apiDurationMs",
+            ] as const) {
+              const number = candidate[key];
+              if (typeof number === "number" && Number.isFinite(number) && number >= 0) {
+                entry[key] = number;
+              }
+            }
+            if (typeof candidate.requestId === "string") {
+              entry.requestId = candidate.requestId.slice(0, 256);
+            }
+            if (typeof candidate.modelId === "string") {
+              entry.modelId = candidate.modelId.slice(0, 256);
+            }
+            return [entry];
+          }),
+        }
+      : {}),
     ...(Number.isSafeInteger(value.lastTurnTokens) && Number(value.lastTurnTokens) >= 0
       ? { lastTurnTokens: Number(value.lastTurnTokens) }
       : {}),
@@ -188,6 +222,21 @@ export function restorePersistedUsage(value: unknown): PersistedUsage | null {
       : {}),
     updatedAt: value.updatedAt,
   };
+}
+
+const FAIL_CLOSED_LEGACY_POLICY: NativeAgentExecutionPolicy = {
+  id: "interactive-host",
+  sandbox: "provider",
+  approvals: "deny",
+  projectResources: false,
+  toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+  networkAccess: "restricted",
+  note: "Restored from legacy ACP state without a policy; restrictions defaulted closed.",
+};
+
+export function restorePersistedPolicy(value: unknown): NativeAgentExecutionPolicy {
+  if (isNativeAgentExecutionPolicy(value)) return structuredClone(value);
+  return structuredClone(FAIL_CLOSED_LEGACY_POLICY);
 }
 
 export function emptySessionConfig(): AcpNormalizedSessionConfig {
@@ -287,16 +336,7 @@ export async function loadPersistedState(): Promise<void> {
       messages,
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
-      settledCursorAgentIds: new Set(
-        Array.isArray(candidate.settledCursorAgentIds)
-          ? candidate.settledCursorAgentIds
-              .filter(
-                (agentId): agentId is string =>
-                  typeof agentId === "string" && isSafeCursorAgentId(agentId),
-              )
-              .slice(-MAX_CURSOR_SETTLED_CLAIMS)
-          : [],
-      ),
+      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
       cursorTodos: restoreCursorTodosFromMessages(messages),
@@ -335,6 +375,7 @@ export async function loadPersistedState(): Promise<void> {
           Number(candidate.droppedMessages) > 0) ||
         (Number.isSafeInteger(candidate.droppedParts) && Number(candidate.droppedParts) > 0),
       sessionConfig: restoreSessionConfig(candidate),
+      policy: restorePersistedPolicy(candidate.policy),
       dispatching: false,
       historyReplay: false,
       // Drift and notices describe a process that is gone. A restored session
@@ -424,22 +465,8 @@ export async function loadPersistedState(): Promise<void> {
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
   }
-  // Deliberately a second pass, after every session is in `sessions`.
-  //
-  // `settleTerminalCursorChildren` binds unnamed Task cards to child transcript
-  // directories, and `bindDiscoveredCursorChildren` only produces a stable
-  // pairing when it can see *every* session's unnamed launches at once — that
-  // is what makes the answer independent of who asks first. Run inside the loop
-  // above it would see only the sessions restored so far, and because a bound
-  // directory is then claimed for the life of the process, a file whose
-  // sessions happen to be persisted in the wrong order would pin each card to
-  // the other's child permanently.
   for (const state of restored) {
-    // A child whose transcript already ended gets its real outcome back before
-    // the sweep below fails everything still running. `reconcileStaleToolParts`
-    // is right that an active card cannot have survived the restart, but
-    // "failed" is only true of the ones whose result is genuinely unknown.
-    settleTerminalCursorChildren(state);
+    // A child from a dead ACP process cannot still report through this bridge.
     reconcileStaleToolParts(state, true);
   }
 }

@@ -471,14 +471,11 @@ export function registerServerCommands(
             useCursorSdk
               ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
           export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state
-          export CURSOR_BRIDGE_AUTH_FILE=${CONTAINER_CURSOR_SDK_AUTH_FILE}
-          # The container boundary is the isolation boundary, so repository
-          # settings are readable here in exactly the way they are not on the
-          # host — the same distinction ACP_APPROVE_PROJECT_MCPS draws.
-          export CURSOR_BRIDGE_PROJECT_SETTINGS=1`
+          export CURSOR_BRIDGE_AUTH_FILE=${CONTAINER_CURSOR_SDK_AUTH_FILE}`
               : `export ACP_PROVIDER=grok
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/grok
           export ACP_AGENT_PATH="$(command -v grok 2>/dev/null || echo grok)"
+          export ACP_PROVIDER_CONFIG='{"id":"grok","name":"Grok","executable":"grok","argv":["--always-approve","agent","{{model}}","{{effort}}","stdio"],"env":{},"requiresAuthenticate":true,"authMethodEnv":"GROK_AUTH_METHOD_ID","modeMap":{"agent":"build","build":"build","plan":"plan","ask":"plan"},"extensionPrefixes":["x.ai/","_x.ai/"],"acknowledgedExtensionMethods":[],"modelUpdateMethods":["x.ai/models/update","_x.ai/models/update"],"sessionUpdateMethods":["x.ai/session/update","_x.ai/session/update"]}'
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}`
           }
           ${
@@ -581,7 +578,6 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_AGENT_DIR=/home/node/.pi/agent
           export PI_SESSION_DIR=/home/node/.pi/agent/sessions
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
-          export PI_BRIDGE_PROJECT_RESOURCES=1
           export PI_BRIDGE_TOKEN=${quoteShell(token)}
           setsid bun /opt/pi-bridge/dist/index.js > ${logFile} 2>&1 &
         `,

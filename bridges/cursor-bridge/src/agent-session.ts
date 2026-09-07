@@ -10,23 +10,19 @@
 import { randomBytes } from "node:crypto";
 import {
   Agent,
+  type AgentOptions,
   type LocalAgentRunDocument,
   type Run,
   type SDKAgent,
   type SDKAgentInfo,
 } from "@cursor/sdk";
-import {
-  CATALOG_TIMEOUT_MS,
-  MAX_RESUME_ENTRIES,
-  sandboxEnabled,
-  settingSources,
-  workingDirectory,
-} from "./config.js";
+import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { cursorMcpServers } from "./mcp.js";
+import { cursorLocalAgentStore, prewarmCursorWorkspace } from "./sdk-runtime.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import {
   clientSessionKeys,
@@ -47,9 +43,13 @@ export class CredentialError extends Error {
   }
 }
 
-export function newSessionState(clientSessionKey?: string): SessionState {
+export function newSessionState(
+  clientSessionKey?: string,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): SessionState {
   return {
     id: randomBytes(16).toString("hex"),
+    ...(policy ? { policy } : {}),
     ...(clientSessionKey ? { clientSessionKey } : {}),
     status: "idle",
     messages: [],
@@ -86,17 +86,21 @@ export function newSessionState(clientSessionKey?: string): SessionState {
 export async function createSession(
   clientSessionKey: string | undefined,
   patch: ComposerPatch | undefined,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
-    if (existing) return existing;
+    if (existing) {
+      if (policy) existing.policy = resolveCursorExecutionPolicy(policy);
+      return existing;
+    }
     const inFlight = sessionCreations.get(clientSessionKey);
     if (inFlight) return inFlight;
   }
 
   const work = (async () => {
-    const state = newSessionState(clientSessionKey);
+    const state = newSessionState(clientSessionKey, resolveCursorExecutionPolicy(policy));
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);
     sessions.set(state.id, state);
@@ -131,50 +135,124 @@ export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
 }
 
 async function attach(state: SessionState): Promise<SDKAgent> {
+  const policy = resolveCursorExecutionPolicy(state.policy);
+  if (policy.approvals === "deny") {
+    throw new Error(
+      "Cursor SDK cannot enforce an approvals-deny policy, so this session was refused before attach.",
+    );
+  }
   const { apiKey } = await resolveCredential();
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
   const mcpServers = await cursorMcpServers();
   state.mcpServerNames = Object.keys(mcpServers);
-  const options = {
+  const options: AgentOptions = {
     apiKey,
     model: modelSelection(state.composer),
     mode: state.composer.selectedModeId === "plan" ? ("plan" as const) : ("agent" as const),
     local: {
       cwd: workingDirectory,
-      settingSources,
-      sandboxOptions: { enabled: sandboxEnabled },
+      settingSources: policy.projectResources ? ["user", "project", "team", "plugins"] : ["user"],
+      sandboxOptions: { enabled: policy.sandbox === "provider" },
+      autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
     },
+    ...(policy.toolPolicy?.allow ? { tools: policy.toolPolicy.allow } : {}),
+    ...(policy.toolPolicy?.deny ? { disallowedTools: policy.toolPolicy.deny } : {}),
     ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
+  const releaseWarmWorkspace = await prewarmCursorWorkspace(options);
+  state.workspaceWarmRelease = releaseWarmWorkspace;
 
-  // A session that already ran holds an agent id, and resuming it is what
-  // keeps the model's own context across a bridge restart. A resume that fails
-  // is not fatal: the id may name an agent the store no longer has, and a new
-  // agent with the transcript we already hold is a far better outcome than a
-  // tab that can never send again.
-  if (state.agentId) {
-    try {
-      const resumed = await Agent.resume(state.agentId, options);
-      state.agent = resumed;
-      return resumed;
-    } catch {
-      state.agentId = undefined;
+  try {
+    // A session that already ran holds an agent id, and resuming it is what
+    // keeps the model's own context across a bridge restart. A resume that fails
+    // is not fatal: the id may name an agent the store no longer has, and a new
+    // agent with the transcript we already hold is a far better outcome than a
+    // tab that can never send again.
+    if (state.agentId) {
+      try {
+        const resumed = await Agent.resume(state.agentId, options);
+        state.agent = resumed;
+        return resumed;
+      } catch {
+        state.agentId = undefined;
+      }
     }
-  }
 
-  const created = await Agent.create({ ...options, name: "Orkestrator" });
-  // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
-  // state somehow lost its id), the replacement starts its cumulative token
-  // and cost counters from zero; retaining the previous agent's floor would
-  // reject every valid report from the replacement as stale. Keep the latest
-  // turn/context snapshot, which is still useful history, but detach all
-  // account-scoped figures once the replacement is known to exist.
-  if (clearAgentScopedUsage(state)) state.revision += 1;
-  state.agent = created;
-  state.agentId = created.agentId;
-  return created;
+    const created = await Agent.create({ ...options, name: "Orkestrator" });
+    // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
+    // state somehow lost its id), the replacement starts its cumulative token
+    // and cost counters from zero; retaining the previous agent's floor would
+    // reject every valid report from the replacement as stale. Keep the latest
+    // turn/context snapshot, which is still useful history, but detach all
+    // account-scoped figures once the replacement is known to exist.
+    if (clearAgentScopedUsage(state)) state.revision += 1;
+    state.agent = created;
+    state.agentId = created.agentId;
+    return created;
+  } catch (error) {
+    state.workspaceWarmRelease = undefined;
+    await releaseWarmWorkspace?.().catch(() => undefined);
+    throw error;
+  }
+}
+
+let warnedLegacyPolicy = false;
+
+export function resolveCursorExecutionPolicy(
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
+  const fallback: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy =
+    policy ??
+    ({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "full",
+    } as const);
+  const sandboxOverride = process.env.CURSOR_BRIDGE_SANDBOX;
+  const resourcesOverride = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
+  if ((sandboxOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
+    warnedLegacyPolicy = true;
+    console.warn(
+      "[cursor-bridge] CURSOR_BRIDGE_SANDBOX/CURSOR_BRIDGE_PROJECT_SETTINGS are deprecated; configure the session execution policy instead.",
+    );
+  }
+  const resolved: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy = {
+    ...fallback,
+    ...(sandboxOverride !== undefined
+      ? { sandbox: sandboxOverride === "1" ? "provider" : "none" }
+      : {}),
+    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
+  };
+  const notes = resolved.note ? [resolved.note] : [];
+  // Cursor's public SDK has no callback surface for interactive approvals.
+  // Report ask as the auto-reviewed mode it actually runs, while deny keeps
+  // autoReview disabled so any operation requiring escalation fails closed.
+  const approvals = resolved.approvals === "ask" ? "auto-approve" : resolved.approvals;
+  if (resolved.approvals === "ask") {
+    notes.push("Cursor SDK cannot surface interactive approvals; provider auto-review is used.");
+  }
+  // Its public network control is the provider sandbox switch rather than an
+  // independent network policy. Restricted requests therefore force that
+  // sandbox on instead of claiming a restriction with an unsandboxed agent.
+  const sandbox =
+    resolved.networkAccess === "restricted" && resolved.sandbox === "none"
+      ? "provider"
+      : resolved.sandbox;
+  if (resolved.networkAccess === "restricted") {
+    notes.push("Cursor enforces restricted network access through its provider sandbox.");
+  } else if (sandbox === "provider") {
+    notes.push("Cursor SDK cannot independently guarantee full network inside its sandbox.");
+  }
+  return {
+    ...resolved,
+    sandbox,
+    approvals,
+    ...(notes.length > 0 ? { note: notes.join(" ") } : {}),
+  };
 }
 
 function clearAgentScopedUsage(state: SessionState): boolean {
@@ -183,7 +261,8 @@ function clearAgentScopedUsage(state: SessionState): boolean {
     !usage ||
     (usage.sessionTokens === undefined &&
       usage.sessionTokenFloor === undefined &&
-      usage.costUsd === undefined)
+      usage.costUsd === undefined &&
+      usage.account === undefined)
   ) {
     return false;
   }
@@ -191,6 +270,7 @@ function clearAgentScopedUsage(state: SessionState): boolean {
     sessionTokens: _sessionTokens,
     sessionTokenFloor: _floor,
     costUsd: _cost,
+    account: _account,
     ...rest
   } = usage;
   state.usage = { ...rest, updatedAt: new Date().toISOString() };
@@ -206,9 +286,13 @@ function clearAgentScopedUsage(state: SessionState): boolean {
  */
 export async function detachAgent(state: SessionState): Promise<void> {
   const agent = state.agent;
+  const releaseWarmWorkspace = state.workspaceWarmRelease;
   state.agent = null;
-  if (!agent) return;
-  await agent[Symbol.asyncDispose]().catch(() => undefined);
+  state.workspaceWarmRelease = undefined;
+  await Promise.allSettled([
+    ...(agent ? [agent[Symbol.asyncDispose]()] : []),
+    ...(releaseWarmWorkspace ? [releaseWarmWorkspace()] : []),
+  ]);
 }
 
 /** Restore the checkpoint captured immediately before the selected user turn. */
@@ -226,49 +310,44 @@ export async function rewindSessionHistory(state: SessionState, messageId: strin
   }
 
   await detachAgent(state);
-  const { SqliteLocalAgentStore } = await import("@cursor/sdk/sqlite");
-  const store = await SqliteLocalAgentStore.open({ workspaceRef: workingDirectory });
-  try {
-    const runs: LocalAgentRunDocument[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await store.runs.list({
-        filter: { agentIds: [state.agentId], limit: 200, ...(cursor ? { cursor } : {}) },
-      });
-      runs.push(...page.items);
-      cursor = page.nextCursor;
-    } while (cursor && runs.length < 2_000);
-    runs.sort((left, right) => left.turnNumber - right.turnNumber);
-    const userIndex = runs.findIndex((run) => run.runId === selectedMessage.runId);
-    const targetRun = userIndex < 0 ? undefined : runs[userIndex];
-    const checkpoint = targetRun?.startCheckpointRef;
-    if (!targetRun || !checkpoint) throw new Error("Cursor has no checkpoint for that message");
-    const agent = await store.agents.get({ agentId: state.agentId });
-    if (!agent) throw new Error("Cursor no longer has this agent");
-    await store.agents.update({
-      agent: {
-        ...agent,
-        status: "idle",
-        activeRunId: null,
-        latestCheckpoint: checkpoint,
-        updatedAt: Date.now(),
-      },
+  const store = cursorLocalAgentStore;
+  const runs: LocalAgentRunDocument[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await store.runs.list({
+      filter: { agentIds: [state.agentId], limit: 200, ...(cursor ? { cursor } : {}) },
     });
-    const discardedRunIds = runs.slice(userIndex).map((run) => run.runId);
-    if (discardedRunIds.length > 0) {
-      await store.runEvents.delete({ filter: { runIds: discardedRunIds } });
-      await store.runs.delete({ filter: { agentIds: [state.agentId], runIds: discardedRunIds } });
-    }
-    const transcriptIndex = state.messages.findIndex((message) => message.id === messageId);
-    state.messages.splice(transcriptIndex);
-    state.openTextParts.clear();
-    state.currentAssistantMessageId = undefined;
-    state.error = undefined;
-    state.revision += 1;
-    boundTranscript(state);
-  } finally {
-    await store.dispose();
+    runs.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor && runs.length < 2_000);
+  runs.sort((left, right) => left.turnNumber - right.turnNumber);
+  const userIndex = runs.findIndex((run) => run.runId === selectedMessage.runId);
+  const targetRun = userIndex < 0 ? undefined : runs[userIndex];
+  const checkpoint = targetRun?.startCheckpointRef;
+  if (!targetRun || !checkpoint) throw new Error("Cursor has no checkpoint for that message");
+  const agent = await store.agents.get({ agentId: state.agentId });
+  if (!agent) throw new Error("Cursor no longer has this agent");
+  await store.agents.update({
+    agent: {
+      ...agent,
+      status: "idle",
+      activeRunId: null,
+      latestCheckpoint: checkpoint,
+      updatedAt: Date.now(),
+    },
+  });
+  const discardedRunIds = runs.slice(userIndex).map((run) => run.runId);
+  if (discardedRunIds.length > 0) {
+    await store.runEvents.delete({ filter: { runIds: discardedRunIds } });
+    await store.runs.delete({ filter: { agentIds: [state.agentId], runIds: discardedRunIds } });
   }
+  const transcriptIndex = state.messages.findIndex((message) => message.id === messageId);
+  state.messages.splice(transcriptIndex);
+  state.openTextParts.clear();
+  state.currentAssistantMessageId = undefined;
+  state.error = undefined;
+  state.revision += 1;
+  boundTranscript(state);
 }
 
 export interface ComposerPatch {
@@ -392,8 +471,9 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
 export async function resumeSession(
   agentId: string,
   patch: ComposerPatch | undefined,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
-  const state = newSessionState();
+  const state = newSessionState(undefined, resolveCursorExecutionPolicy(policy));
   state.agentId = agentId;
   applyComposerPatch(state, patch);
   state.composer = await hydrateComposer(state.composer);

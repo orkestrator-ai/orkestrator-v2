@@ -40,6 +40,9 @@ function stubSession(
     autoAccept?: boolean;
     onAbort?: () => void;
     contextUsage?: ContextUsage | undefined | (() => never);
+    lastAssistantUsage?: Record<string, unknown>;
+    lastAssistantText?: string;
+    sessionStats?: Record<string, unknown>;
   } = {},
 ): StubSession {
   let settleRun: () => void = () => undefined;
@@ -72,7 +75,22 @@ function stubSession(
     },
     getContextUsage: () =>
       typeof options.contextUsage === "function" ? options.contextUsage() : options.contextUsage,
-    getSessionStats: () => ({ cost: 0 }),
+    getSessionStats: () => options.sessionStats ?? { cost: 0 },
+    getLastAssistantText: () => options.lastAssistantText,
+    sessionManager: {
+      getBranch: () =>
+        options.lastAssistantUsage
+          ? [
+              {
+                type: "message",
+                id: "assistant-entry",
+                parentId: null,
+                timestamp: "2026-09-07T00:00:00.000Z",
+                message: { role: "assistant", usage: options.lastAssistantUsage },
+              },
+            ]
+          : [],
+    },
   } as unknown as AgentSession;
 
   return {
@@ -280,15 +298,14 @@ describe("dispatchPrompt", () => {
 describe("structured output", () => {
   test("parses the turn's final JSON value", async () => {
     const state = runningState();
-    const stub = stubSession();
-    state.currentTurnOutput = '{"verdict":"ready"}';
+    const withOutput = stubSession({ lastAssistantText: '{"verdict":"ready"}' });
 
     const handle = await dispatchPrompt(
       state,
-      stub.session,
+      withOutput.session,
       input({ requestId: "req-1", schema: { type: "object" } }),
     );
-    stub.finish();
+    withOutput.finish();
     await handle.completion;
 
     expect(state.structured.get("req-1")).toMatchObject({
@@ -301,15 +318,14 @@ describe("structured output", () => {
 
   test("reports a turn that ended with prose as malformed rather than throwing", async () => {
     const state = runningState();
-    const stub = stubSession();
-    state.currentTurnOutput = "I could not decide.";
+    const withOutput = stubSession({ lastAssistantText: "I could not decide." });
 
     const handle = await dispatchPrompt(
       state,
-      stub.session,
+      withOutput.session,
       input({ requestId: "req-1", schema: { type: "object" } }),
     );
-    stub.finish();
+    withOutput.finish();
     await handle.completion;
 
     expect(state.structured.get("req-1")).toMatchObject({
@@ -320,15 +336,16 @@ describe("structured output", () => {
 
   test("refuses an output past the size cap instead of retaining it", async () => {
     const state = runningState();
-    const stub = stubSession();
-    state.currentTurnOutput = `{"a":"${"x".repeat(2 * 1024 * 1024)}"}`;
+    const withOutput = stubSession({
+      lastAssistantText: `{"a":"${"x".repeat(2 * 1024 * 1024)}"}`,
+    });
 
     const handle = await dispatchPrompt(
       state,
-      stub.session,
+      withOutput.session,
       input({ requestId: "req-1", schema: { type: "object" } }),
     );
-    stub.finish();
+    withOutput.finish();
     await handle.completion;
 
     const result = state.structured.get("req-1") as { ok: boolean; error?: { message: string } };
@@ -372,7 +389,7 @@ describe("context usage", () => {
       maximumTokens: 200_000,
       percentage: 21,
       lastTurnTokens: 1_000,
-      source: "provider",
+      source: "pi",
     });
     expect(usage?.estimated).toBeUndefined();
   });
@@ -412,5 +429,51 @@ describe("context usage", () => {
 
     expect(usage?.usedTokens).toBe(5_000);
     expect(usage?.maximumTokens).toBeUndefined();
+  });
+
+  test("uses Pi's last assistant usage and session stats for the turn row", async () => {
+    const state = runningState();
+    state.composer = { ...state.composer, selectedModelId: "anthropic/claude" };
+    const stub = stubSession({
+      contextUsage: { tokens: 100, contextWindow: 1_000, percent: 10 },
+      lastAssistantUsage: {
+        input: 80,
+        output: 20,
+        cacheRead: 10,
+        cacheWrite: 5,
+        reasoning: 7,
+        totalTokens: 115,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      sessionStats: {
+        cost: 0.02,
+        toolCalls: 3,
+        tokens: { total: 115 },
+      },
+    });
+    state.session = stub.session;
+    const handle = await dispatchPrompt(state, stub.session, input({ requestId: "support-1" }));
+    state.currentTurnUsage = { inputTokens: 999, outputTokens: 999 };
+    stub.finish();
+    await handle.completion;
+
+    expect(publicContextUsage(state)).toMatchObject({
+      sessionTokens: 115,
+      turns: [
+        {
+          turnId: "assistant-entry",
+          requestId: "support-1",
+          modelId: "anthropic/claude",
+          inputTokens: 80,
+          outputTokens: 20,
+          cacheReadTokens: 10,
+          cacheWriteTokens: 5,
+          reasoningTokens: 7,
+          totalTokens: 115,
+          toolCalls: 3,
+          costUsd: 0.02,
+        },
+      ],
+    });
   });
 });

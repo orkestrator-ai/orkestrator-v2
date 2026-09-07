@@ -1,6 +1,6 @@
 # 15 — Adapter simplification
 
-**Status:** ⬜ Not started · 0/17 tasks · Depends on: 05, 06, 09
+**Status:** 🟨 In progress · safe independent replacements implemented, dependency-bound work remains · Depends on: 05, 06, 09
 
 ## Goal
 
@@ -96,3 +96,32 @@ SDK's session model.
 
 Anything that changes user-visible behaviour. If a replacement would, it
 belongs in the plan that owns that behaviour.
+
+## Implementation notes
+
+- Plan-mode guidance now uses `Options.planModeInstructions`; plan approval
+  takes its payload directly from `ExitPlanMode.input.plan`. Claude task and
+  compaction hooks are registered, while the existing `task_*` messages remain
+  as compatibility/reconciliation input until plan 05 owns a long-lived query.
+- Claude's warm query and live initialization model catalogue remain blocked on
+  plan 05's long-lived session model. The filesystem MCP inventory remains
+  until plan 07 provides an authoritative SDK-backed inventory. Removing it now
+  would make `/mcp/servers` return an empty list.
+- Codex goals are disabled because the pinned app-server exposes no stable goal
+  RPC. `session-titles.ts` remains the documented hermetic exception until plan
+  09's backend title service owns generation.
+- Pi replay consumes `SessionManager.getBranch()` as the SDK's typed
+  `SessionEntry` union (the manager owns JSONL parsing and active-branch
+  selection), including the required `ToolResultMessage.toolName`. Image
+  signature detection, resizing and portable PNG conversion use Pi's helpers;
+  structured output and usage read `getLastAssistantText()` and
+  `getLastAssistantUsage()` instead of duplicate accumulators.
+- `@earendil-works/pi-agent-core` remains because the public coding-agent type
+  declarations import it. `@earendil-works/pi-server` remains because
+  pi-coding-agent 0.85.0 imports it without declaring it; `scripts/vendor.ts`
+  stages both explicit roots so the packaged bridge has a complete runtime
+  closure.
+- Cursor configures the SDK's `JsonlLocalAgentStore` under
+  `CURSOR_BRIDGE_STATE_DIR/cursor-sdk` and holds a
+  `prewarmLocalWorkspace()` lease for each attached agent. Rewind uses the same
+  configured store, so agent, run and checkpoint persistence share one root.

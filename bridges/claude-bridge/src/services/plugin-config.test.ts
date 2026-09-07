@@ -240,6 +240,23 @@ describe("plugin config resolution", () => {
     expect(await getPluginsForSdk(cwd)).toEqual([{ type: "local", path: real }]);
   });
 
+  test("excludes project plugin sources while retaining global plugins", async () => {
+    const global = await makePlugin(join(home, "global-plugin"), { name: "global" });
+    const projectEntry = await makePlugin(join(cwd, "entry-plugin"), { name: "entry" });
+    const projectFile = await makePlugin(join(cwd, "file-plugin"), { name: "file" });
+    await writeClaudeJson({
+      plugins: [{ type: "local", path: global }],
+      projects: { [cwd]: { plugins: [{ type: "local", path: projectEntry }] } },
+    });
+    await mkdir(join(cwd, ".claude"), { recursive: true });
+    await writeFile(
+      join(cwd, ".claude", "plugins.json"),
+      JSON.stringify({ plugins: [{ type: "local", path: projectFile }] }),
+    );
+
+    expect(await getPluginsForSdk(cwd, false)).toEqual([{ type: "local", path: global }]);
+  });
+
   test("reads a plugin manifest, defaulting the name to the directory", async () => {
     const named = await makePlugin(join(cwd, "named"), {
       name: "declared-name",

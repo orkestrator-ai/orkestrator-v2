@@ -224,6 +224,7 @@ export type OpenCodeFake = {
   abortCalls: Array<Record<string, unknown> | undefined>;
   deleteCalls: Array<Record<string, unknown> | undefined>;
   createCalls: Array<Record<string, unknown> | undefined>;
+  updateCalls: Array<Record<string, unknown>>;
   messageCalls: Array<Record<string, unknown> | undefined>;
   promptCalls: Array<Record<string, unknown>>;
   commandDispatchCalls: Array<Record<string, unknown>>;
@@ -273,6 +274,7 @@ export type OpenCodeFake = {
   setAbortResponse(response: Record<string, unknown>): void;
   setDeleteResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
+  setUpdateResponse(response: Record<string, unknown>): void;
   setPromptResponse(response: Record<string, unknown>): void;
   setStatusError(error: unknown): void;
   setStatusResponse(response: Record<string, unknown>): void;
@@ -286,6 +288,7 @@ export function openCodeFake(): OpenCodeFake {
   const abortCalls: Array<Record<string, unknown> | undefined> = [];
   const deleteCalls: Array<Record<string, unknown> | undefined> = [];
   const createCalls: Array<Record<string, unknown> | undefined> = [];
+  const updateCalls: Array<Record<string, unknown>> = [];
   const messageCalls: Array<Record<string, unknown> | undefined> = [];
   const permissionReplies: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
@@ -322,6 +325,7 @@ export function openCodeFake(): OpenCodeFake {
   let abortResponse: Record<string, unknown> = { data: true };
   let deleteResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
+  let updateResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let promptResponse: Record<string, unknown> = { data: true };
   let statusError: unknown = null;
   const statusCalls: Array<Record<string, unknown> | undefined> = [];
@@ -403,6 +407,10 @@ export function openCodeFake(): OpenCodeFake {
         createCalls.push(parameters);
         return createResponse;
       },
+      async update(parameters: Record<string, unknown>) {
+        updateCalls.push(parameters);
+        return updateResponse;
+      },
       async promptAsync(parameters: Record<string, unknown>) {
         promptCalls.push(parameters);
         await promptGate;
@@ -469,6 +477,7 @@ export function openCodeFake(): OpenCodeFake {
       commandListResponse = response;
     },
     createCalls,
+    updateCalls,
     messageCalls,
     get permissionListCallCount() {
       return permissionListCallCount;
@@ -555,6 +564,9 @@ export function openCodeFake(): OpenCodeFake {
     setCreateResponse(response) {
       createResponse = response;
     },
+    setUpdateResponse(response) {
+      updateResponse = response;
+    },
     setPromptResponse(response) {
       promptResponse = response;
     },
@@ -606,7 +618,11 @@ export function openCodeActivityProvider(
   fake: OpenCodeFake,
   dependencies: Pick<
     ProviderDependencies,
-    "now" | "openCodeExistenceCacheTtlMs" | "resolveOpenCodeModelProviders"
+    | "now"
+    | "monitorRetryMs"
+    | "openCodeExistenceCacheTtlMs"
+    | "openCodeStatusReconcileIntervalMs"
+    | "resolveOpenCodeModelProviders"
   > = {},
 ) {
   return createNativeAgentProvider(

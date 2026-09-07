@@ -1224,6 +1224,21 @@ app.get("/session/:id/status", (c) => {
   return c.json(status);
 });
 
+/** Exact account usage is fetched on demand; status polling stays cache-only. */
+app.get("/session/:id/usage", async (c) => {
+  try {
+    const contextUsage = await appServerRuntime.getUsage(c.req.param("id"));
+    if (contextUsage === null) return c.json({ error: "Session not found" }, 404);
+    return c.json({ contextUsage });
+  } catch (error) {
+    console.warn(
+      "[codex-bridge] Account usage read failed:",
+      error instanceof Error ? error.message : error,
+    );
+    return c.json({ error: "Account usage is temporarily unavailable" }, 503);
+  }
+});
+
 /**
  * Side-effect-free activity poll for the backend's session sweep.
  *

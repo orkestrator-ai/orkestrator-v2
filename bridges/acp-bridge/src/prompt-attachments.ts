@@ -19,7 +19,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
  * silently sent. This mirrors the Claude bridge's image attachment reader.
  */
 export interface AcpPromptAttachment {
-  type: "image";
+  type: "image" | "file";
   path: string;
   filename?: string;
 }
@@ -34,6 +34,16 @@ export interface AcpPromptImage {
   absolutePath: string;
   filename?: string;
 }
+
+export interface AcpPromptResource {
+  type: "file";
+  text: string;
+  path: string;
+  absolutePath: string;
+  filename?: string;
+}
+
+export type AcpPromptContent = ({ type: "image" } & AcpPromptImage) | AcpPromptResource;
 
 export type PromptAttachmentErrorCode =
   | "attachment_changed"
@@ -91,12 +101,10 @@ export function parsePromptAttachments(value: unknown): AcpPromptAttachment[] {
       throw new PromptAttachmentError("attachment_invalid", "Each attachment must be an object");
     }
     const record = candidate as Record<string, unknown>;
-    // Files are a separate capability this provider does not advertise, so a
-    // file attachment is a caller bug rather than something to quietly ignore.
-    if (record.type !== "image") {
+    if (record.type !== "image" && record.type !== "file") {
       throw new PromptAttachmentError(
         "attachment_invalid",
-        "Cursor and Grok accept image attachments only",
+        "ACP attachments must be images or files",
       );
     }
     const path = typeof record.path === "string" ? record.path.trim() : "";
@@ -118,7 +126,7 @@ export function parsePromptAttachments(value: unknown): AcpPromptAttachment[] {
       Buffer.byteLength(record.filename) <= MAX_ATTACHMENT_FILENAME_BYTES
         ? record.filename
         : undefined;
-    return { type: "image" as const, path, ...(filename ? { filename } : {}) };
+    return { type: record.type, path, ...(filename ? { filename } : {}) } as AcpPromptAttachment;
   });
 }
 
@@ -154,6 +162,50 @@ export async function readPromptImages(
     });
   }
   return images;
+}
+
+/** Read image and text-resource attachments through the same workspace trust boundary. */
+export async function readPromptContents(
+  attachments: readonly AcpPromptAttachment[],
+  workspaceRoot: string,
+): Promise<AcpPromptContent[]> {
+  const contents: AcpPromptContent[] = [];
+  let totalBytes = 0;
+  for (const attachment of attachments) {
+    const { bytes, absolutePath } = await readWorkspaceImage(attachment.path, workspaceRoot);
+    totalBytes += bytes.length;
+    if (totalBytes > MAX_TOTAL_IMAGE_ATTACHMENT_BYTES) {
+      throw new PromptAttachmentError(
+        "attachment_too_large",
+        "Attachments exceed the 32MB total limit",
+      );
+    }
+    if (attachment.type === "image") {
+      contents.push({
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: imageMimeType(bytes),
+        path: attachment.path,
+        absolutePath,
+        ...(attachment.filename ? { filename: attachment.filename } : {}),
+      });
+      continue;
+    }
+    if (bytes.includes(0)) {
+      throw new PromptAttachmentError(
+        "attachment_unsupported_format",
+        "ACP file attachments must contain text",
+      );
+    }
+    contents.push({
+      type: "file",
+      text: bytes.toString("utf8"),
+      path: attachment.path,
+      absolutePath,
+      ...(attachment.filename ? { filename: attachment.filename } : {}),
+    });
+  }
+  return contents;
 }
 
 /**

@@ -971,12 +971,6 @@ export async function startLocalServerUnlocked(
       "pi-bridge-state",
       createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
     );
-    // A local worktree is the user's own checkout, and `.pi/` in it holds
-    // extensions that are arbitrary TypeScript the bridge process would run.
-    // Pinned explicitly after inheriting process.env so an ambient variable
-    // cannot bypass the local trust boundary; the container launcher is the
-    // only caller that opts in.
-    env.PI_BRIDGE_PROJECT_RESOURCES = "0";
   } else if (kind === "cursor") {
     command = resolveBunBinary(context);
     // Every bridge is spawned from its own package directory, and this one is
@@ -984,8 +978,7 @@ export async function startLocalServerUnlocked(
     // `bunfig.toml` (including `preload`) and `.env` before the entrypoint
     // runs — so starting it in the worktree would let a cloned repository
     // execute code in a host process holding the Cursor credential path, the
-    // bridge token and the agent MCP token. That is the boundary
-    // `CURSOR_BRIDGE_PROJECT_SETTINGS=0` below exists to hold.
+    // bridge token and the agent MCP token.
     //
     // The SDK's Shell tool still defaults to `process.cwd()` when the model
     // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
@@ -997,11 +990,6 @@ export async function startLocalServerUnlocked(
       createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
     );
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
-    // A local worktree can contain repository-controlled Cursor settings and
-    // MCP commands. Cloning a repository must not be enough to run its code,
-    // so the project settings layer stays off on the host. Pinned after
-    // inheriting process.env so an ambient value cannot bypass it.
-    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
@@ -1028,6 +1016,28 @@ export async function startLocalServerUnlocked(
       );
     }
     env.ACP_AGENT_PATH = managedAcpBinary;
+    env.ACP_PROVIDER_CONFIG = JSON.stringify({
+      id: kind,
+      name: AGENT_PLATFORM_LABELS[kind],
+      executable: managedAcpBinary,
+      argv: ["--always-approve", "agent", "{{model}}", "{{effort}}", "stdio"],
+      env: {},
+      requiresAuthenticate: true,
+      authMethodEnv: "GROK_AUTH_METHOD_ID",
+      modeMap: {
+        agent: "build",
+        code: "build",
+        build: "build",
+        agentic: "build",
+        plan: "plan",
+        architect: "plan",
+        ask: "plan",
+      },
+      extensionPrefixes: ["x.ai/", "_x.ai/"],
+      acknowledgedExtensionMethods: [],
+      modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
+      sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
+    });
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");

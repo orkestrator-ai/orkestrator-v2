@@ -1,6 +1,11 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  convertToPng,
+  detectSupportedImageMimeTypeFromFile,
+  resizeImage,
+} from "@earendil-works/pi-coding-agent";
 
 /**
  * Prompt attachments for Pi.
@@ -150,7 +155,10 @@ export async function readPromptImages(
   let totalBytes = 0;
   for (const attachment of attachments) {
     if (attachment.type !== "image") continue;
-    const { bytes, absolutePath } = await readWorkspaceImage(attachment.path, workspaceRoot);
+    const { bytes, absolutePath, mimeType } = await readWorkspaceImage(
+      attachment.path,
+      workspaceRoot,
+    );
     totalBytes += bytes.length;
     if (totalBytes > MAX_TOTAL_IMAGE_ATTACHMENT_BYTES) {
       throw new PromptAttachmentError(
@@ -158,9 +166,10 @@ export async function readPromptImages(
         "Image attachments exceed the 32MB total limit",
       );
     }
+    const normalized = await normalizeImageForPi(bytes, mimeType);
     images.push({
-      data: bytes.toString("base64"),
-      mimeType: imageMimeType(bytes),
+      data: normalized.data,
+      mimeType: normalized.mimeType,
       path: attachment.path,
       absolutePath,
       ...(attachment.filename ? { filename: attachment.filename } : {}),
@@ -169,39 +178,23 @@ export async function readPromptImages(
   return images;
 }
 
-/**
- * Identify the format from the file's own bytes.
- *
- * The extension is a caller-supplied label; the model is shown the bytes. A
- * mismatch between the two is what turns an attachment into an unreadable block
- * the model silently ignores, so the signature decides — and an unrecognised
- * signature is refused rather than guessed at.
- */
-export function imageMimeType(bytes: Buffer): string {
-  if (
-    bytes.length >= 8 &&
-    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  )
-    return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
+async function normalizeImageForPi(
+  bytes: Buffer,
+  mimeType: string,
+): Promise<{ data: string; mimeType: string }> {
+  const resized = await resizeImage(bytes, mimeType, {
+    maxBytes: MAX_IMAGE_ATTACHMENT_BYTES,
+  }).catch(() => null);
+  let normalized = resized ?? { data: bytes.toString("base64"), mimeType };
+
+  // Pi's conversion helper provides one well-tested path for formats whose
+  // provider support varies. A failed optional conversion keeps the original,
+  // which is the same fallback Pi's own attachment flow uses.
+  if (normalized.mimeType === "image/gif" || normalized.mimeType === "image/webp") {
+    normalized =
+      (await convertToPng(normalized.data, normalized.mimeType).catch(() => null)) ?? normalized;
   }
-  if (
-    bytes.length >= 6 &&
-    (bytes.subarray(0, 6).toString("latin1") === "GIF87a" ||
-      bytes.subarray(0, 6).toString("latin1") === "GIF89a")
-  )
-    return "image/gif";
-  if (
-    bytes.length >= 12 &&
-    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
-    bytes.subarray(8, 12).toString("latin1") === "WEBP"
-  )
-    return "image/webp";
-  throw new PromptAttachmentError(
-    "attachment_unsupported_format",
-    "Image attachments must be PNG, JPEG, GIF, or WebP",
-  );
+  return { data: normalized.data, mimeType: normalized.mimeType };
 }
 
 function attachmentErrorForFsFailure(error: unknown): PromptAttachmentError {
@@ -333,7 +326,7 @@ export function assertStableRead(
 async function readWorkspaceImage(
   filePath: string,
   workspaceRoot: string,
-): Promise<{ bytes: Buffer; absolutePath: string }> {
+): Promise<{ bytes: Buffer; absolutePath: string; mimeType: string }> {
   const lexicalRoot = resolve(workspaceRoot);
   const targetPath = isAbsolute(filePath) ? resolve(filePath) : resolve(lexicalRoot, filePath);
   if (!isPathWithin(lexicalRoot, targetPath)) {
@@ -371,6 +364,17 @@ async function readWorkspaceImage(
       );
     }
 
+    // Delegate signature recognition to Pi itself. The SDK helper opens the
+    // validated path only for its bounded prefix read; the inode and path are
+    // checked again below before any bytes leave this trust boundary.
+    const mimeType = await detectSupportedImageMimeTypeFromFile(targetPath).catch(() => null);
+    if (!mimeType) {
+      throw new PromptAttachmentError(
+        "attachment_unsupported_format",
+        "Image attachments must be PNG, JPEG, GIF, or WebP",
+      );
+    }
+
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     while (totalBytes <= MAX_IMAGE_ATTACHMENT_BYTES) {
@@ -394,7 +398,7 @@ async function readWorkspaceImage(
     const finalStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, finalStats);
     assertStableRead(initialStats, finalStats, totalBytes);
-    return { bytes: Buffer.concat(chunks, totalBytes), absolutePath: targetPath };
+    return { bytes: Buffer.concat(chunks, totalBytes), absolutePath: targetPath, mimeType };
   } catch (error) {
     if (error instanceof PromptAttachmentError) throw error;
     throw attachmentErrorForFsFailure(error);

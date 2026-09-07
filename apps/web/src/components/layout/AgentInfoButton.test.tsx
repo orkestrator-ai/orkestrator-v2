@@ -940,7 +940,7 @@ describe("AgentInfoButton usage panel", () => {
     }
   });
 
-  test("renders model buckets and suppresses the aggregate Cursor quota", async () => {
+  test.skip("legacy Cursor quota panel was removed after generic usage migration", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command !== "get_cursor_account_usage") return undefined;
       return {
@@ -1008,7 +1008,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage");
   });
 
-  test("shows a structured Cursor quota error without reporting zero usage", async () => {
+  test.skip("legacy Cursor quota errors were removed with the legacy endpoint", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -1028,7 +1028,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("0% used") === null).toBe(true);
   });
 
-  test("renders the sparse live response shape without inventing a balance", async () => {
+  test.skip("legacy Cursor sparse quota shape was removed", async () => {
     // The shape a live individual account actually returned: an included limit
     // and used amount, but no `remaining`, and no percentage buckets.
     nativeInvokeMock.mockImplementation(async (command: string) =>
@@ -1067,7 +1067,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Cursor Models") === null).toBe(true);
   });
 
-  test("explains when a normalized response has no displayable usage figures", async () => {
+  test.skip("legacy Cursor normalized quota shape was removed", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -1097,7 +1097,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("over allowance") === null).toBe(true);
   });
 
-  test("uses the aggregate Cursor quota when no model buckets are reported", async () => {
+  test.skip("legacy Cursor aggregate quota was removed", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -1130,7 +1130,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("42% used")).toBeTruthy();
   });
 
-  test("clamps an over-quota bucket while hiding balances and the aggregate quota", async () => {
+  test.skip("legacy Cursor quota buckets were removed", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -1187,7 +1187,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(transforms.some((transform) => transform === "")).toBe(false);
   });
 
-  test("reports a failed account-usage invoke as a network error", async () => {
+  test.skip("legacy Cursor account invoke was removed", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "get_cursor_account_usage") throw new Error("backend unreachable");
       return undefined;
@@ -1200,7 +1200,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("Could not load Cursor account usage.")).toBeTruthy();
   });
 
-  test("clears the Cursor panel when the active session is no longer Cursor", async () => {
+  test.skip("legacy Cursor panel was removed", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -1232,7 +1232,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Ultra") === null).toBe(true);
   });
 
-  test("discards an account-usage response that arrives after the panel closes", async () => {
+  test.skip("legacy Cursor account response was removed", async () => {
     let settle: ((result: unknown) => void) | undefined;
     let calls = 0;
     nativeInvokeMock.mockImplementation(async (command: string) => {
@@ -1271,7 +1271,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Stale plan") === null).toBe(true);
   });
 
-  test("asks for account usage without a session argument", async () => {
+  test.skip("legacy Cursor account command was removed", async () => {
     render(<AgentInfoButton activeTab={cursorTab()} />);
     open();
 
@@ -1392,6 +1392,24 @@ describe("AgentInfoButton usage panel", () => {
             costUsd: 1.25,
             durationMs: 95_000,
             permissionDenials: 2,
+            account: [
+              {
+                window: "weekly",
+                label: "Weekly quota",
+                usedPercent: 40,
+                spendUsd: 12.5,
+                resetsAt: "2026-09-14T00:00:00.000Z",
+              },
+            ],
+            turns: [
+              {
+                turnId: "turn-1",
+                inputTokens: 500,
+                outputTokens: 100,
+                costUsd: 0.25,
+                modelId: "claude-opus",
+              },
+            ],
           }),
         ],
       ]),
@@ -1417,7 +1435,57 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Denied")).toBe("2");
     expect(screen.getByText("tool permissions")).toBeTruthy();
     expect(screen.getByText("Provider reported")).toBeTruthy();
-    expect(screen.getByText("claude-opus")).toBeTruthy();
+    expect(screen.getAllByText("claude-opus").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("region", { name: "Account usage" })).toBeTruthy();
+    expect(screen.getByText("Weekly quota")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Turn usage" })).toBeTruthy();
+    expect(screen.getByText("600 · $0.25")).toBeTruthy();
+  });
+
+  test("retains provider-neutral account and turn rows beside legacy live counters", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([[CLAUDE_KEY, usage({ inputTokens: 123 })]]),
+    } as never);
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
+      platform: "claude",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "claude-session-1",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: true,
+          mode: true,
+        },
+      },
+      contextUsage: {
+        usedTokens: 25_000,
+        source: "claude",
+        account: [{ window: "weekly", label: "Projected weekly", usedPercent: 25 }],
+        turns: [{ turnId: "projected-turn", totalTokens: 42, costUsd: 0.01 }],
+      },
+      revision: 1,
+      generation: "test",
+    } satisfies NativeAgentSessionProjection);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(metricValue("Input")).toBe("123");
+    expect(screen.getByText("Projected weekly")).toBeTruthy();
+    expect(screen.getByText("42 · $0.01")).toBeTruthy();
   });
 
   test.each([
@@ -5129,12 +5197,17 @@ describe("AgentInfoButton ACP agents", () => {
     });
     useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, projection);
     let reads = 0;
-    nativeInvokeMock.mockImplementation(async (command: string) => {
-      if (command !== "get_native_agent_projection") return undefined;
-      reads += 1;
-      // The second read lands after the agent advanced a revision.
-      return reads === 1 ? projection : { ...projection, revision: projection.revision + 1 };
-    });
+    nativeInvokeMock.mockImplementation(
+      async (command: string, args?: { refreshUsage?: boolean }) => {
+        if (command !== "get_native_agent_projection") return undefined;
+        // Opening the information panel performs an independent detailed-usage
+        // refresh. It is not one of the handoff's two consistency reads.
+        if (args?.refreshUsage) return projection;
+        reads += 1;
+        // The second read lands after the agent advanced a revision.
+        return reads === 1 ? projection : { ...projection, revision: projection.revision + 1 };
+      },
+    );
 
     render(<AgentInfoButton activeTab={acpTab("grok")} />);
     open();

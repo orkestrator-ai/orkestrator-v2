@@ -13,6 +13,7 @@ import {
 } from "./fake-agent-context.js";
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../structured-prompt-marker.js";
+import { beginClientMethodExercise } from "./fake-agent-final.js";
 
 function retriableProviderErrorMessage(): string {
   const name = process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError";
@@ -33,6 +34,10 @@ export function handlePromptStart(message: JsonObject): boolean {
         process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
+    }
+    if (prompt === "ACP_CLIENT_METHODS" && process.env.FAKE_ACP_CLIENT_FILE) {
+      beginClientMethodExercise(message.id, process.env.FAKE_ACP_CLIENT_FILE);
+      return true;
     }
     if (prompt.startsWith("Background subagent finished.")) {
       if (process.env.FAKE_ACP_BACKGROUND_RELAUNCH === "1") {

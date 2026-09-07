@@ -7,7 +7,12 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
+import {
+  getLastAssistantUsage,
+  type AgentSession,
+  type ContextUsage,
+  type SessionStats,
+} from "@earendil-works/pi-coding-agent";
 import {
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
@@ -151,8 +156,8 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
   // transcript is the honest record of what ran.
   state.status = "idle";
   state.error = undefined;
-  recordUsage(state);
-  recordStructuredOutput(state, input);
+  recordUsage(state, input);
+  recordStructuredOutput(state, session, input, true);
   journal(state, input.requestId, "completed");
   state.revision += 1;
   boundTranscript(state);
@@ -168,8 +173,8 @@ function failTurn(
   settleTurn(state, session);
   state.status = "error";
   state.error = errorText(error);
-  recordUsage(state);
-  recordStructuredOutput(state, input);
+  recordUsage(state, input);
+  recordStructuredOutput(state, session, input, false);
   journal(state, input.requestId, "failed");
   state.revision += 1;
   boundTranscript(state);
@@ -218,22 +223,97 @@ function settleTurn(state: SessionState, session: AgentSession): void {
  * accounts for compaction, so the number it reports is what the *next* turn
  * will actually send, which is the question the usage meter is asking.
  */
-function recordUsage(state: SessionState): void {
-  const turn = state.currentTurnUsage;
+function recordUsage(state: SessionState, input: DispatchInput): void {
+  const session = state.session;
+  const branch = session?.sessionManager?.getBranch() ?? [];
+  const assistantUsage = getLastAssistantUsage(branch);
+  const turn = assistantUsage
+    ? {
+        inputTokens: assistantUsage.input,
+        outputTokens: assistantUsage.output,
+        cacheReadTokens: assistantUsage.cacheRead,
+        cacheWriteTokens: assistantUsage.cacheWrite,
+        ...(assistantUsage.reasoning === undefined
+          ? {}
+          : { reasoningTokens: assistantUsage.reasoning }),
+      }
+    : state.currentTurnUsage;
   const elapsed = state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined;
   const context = readContextUsage(state);
+  const stats = readSessionStats(state);
+  const sessionTokens =
+    stats && typeof stats.tokens?.total === "number" && Number.isFinite(stats.tokens.total)
+      ? stats.tokens.total
+      : undefined;
+  const previous = state.usage;
   if (turn && Object.keys(turn).length > 0) {
+    const turnId =
+      [...branch]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "assistant" &&
+            entry.message.usage !== undefined,
+        )?.id ??
+      input.requestId ??
+      `turn-${state.promptSequence}`;
+    const sessionCost = stats?.cost;
+    const turnCost =
+      sessionCost === undefined
+        ? assistantUsage?.cost.total
+        : Math.max(0, sessionCost - (previous?.costUsd ?? 0));
+    const toolCalls =
+      stats === undefined
+        ? undefined
+        : Math.max(0, stats.toolCalls - (previous?.sessionToolCalls ?? 0));
+    const totalTokens =
+      assistantUsage?.totalTokens ??
+      (turn.inputTokens ?? 0) +
+        (turn.outputTokens ?? 0) +
+        (turn.cacheReadTokens ?? 0) +
+        (turn.cacheWriteTokens ?? 0);
+    const turnEntry = {
+      turnId,
+      ...(turnCost === undefined ? {} : { costUsd: turnCost }),
+      ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
+      ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
+      ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),
+      ...(turn.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: turn.cacheWriteTokens }),
+      ...(turn.reasoningTokens === undefined ? {} : { reasoningTokens: turn.reasoningTokens }),
+      totalTokens,
+      ...(elapsed === undefined ? {} : { durationMs: elapsed }),
+      ...(toolCalls === undefined ? {} : { toolCalls }),
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+      ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+    };
     state.usage = {
       turn,
+      turns: [
+        ...(previous?.turns ?? []).filter((entry) => entry.turnId !== turnId),
+        turnEntry,
+      ].slice(-20),
+      ...(sessionTokens === undefined ? {} : { sessionTokens }),
+      ...(stats && typeof stats.toolCalls === "number"
+        ? { sessionToolCalls: stats.toolCalls }
+        : {}),
       ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       ...context,
-      ...readCost(state),
+      ...(sessionCost === undefined ? readCost(state) : { costUsd: sessionCost }),
       updatedAt: new Date().toISOString(),
     };
   }
   state.currentTurnUsage = undefined;
   state.turnStartedAt = undefined;
+}
+
+function readSessionStats(state: SessionState): SessionStats | undefined {
+  try {
+    return state.session?.getSessionStats();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -293,14 +373,19 @@ function readCost(state: SessionState): { costUsd?: number } {
  * The final assistant text is the carrier, so this reads whatever the turn
  * actually produced rather than any summary field.
  */
-function recordStructuredOutput(state: SessionState, input: DispatchInput): void {
+function recordStructuredOutput(
+  state: SessionState,
+  session: AgentSession,
+  input: DispatchInput,
+  completed: boolean,
+): void {
   const { schema, requestId } = input;
-  if (!schema || !requestId) {
-    state.currentTurnOutput = null;
-    return;
-  }
-  const output = state.currentTurnOutput?.trim() ?? "";
-  state.currentTurnOutput = null;
+  if (!schema || !requestId) return;
+  // The SDK owns the canonical assistant message. Reading it after a completed
+  // run avoids maintaining a second, delta-assembled copy in bridge state.
+  // A failed run deliberately does not read it: it may still name the previous
+  // turn, which must never satisfy this request's schema.
+  const output = completed ? (session.getLastAssistantText()?.trim() ?? "") : "";
 
   if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
     setStructuredResult(state, requestId, {

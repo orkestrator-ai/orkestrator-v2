@@ -81,6 +81,30 @@ describe("ACP bridge", () => {
     expect(await fs.readFile(lifecycleFile, "utf8")).toContain("load:");
   });
 
+  test("applies the backend policy before loading a resumed ACP session", async () => {
+    const bridge = await spawnBridge();
+    const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { sessions: Array<{ id: string }> };
+    const policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      toolPolicy: { deny: ["shell"] },
+      networkAccess: "restricted",
+    };
+
+    const response = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({ sessionId: listed.sessions[0]!.id, policy }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ policy });
+  });
+
   test("pages the ACP session list and de-duplicates across pages", async () => {
     const directory = await temporaryDirectory();
     const counterFile = resolve(directory, "list-cursors.log");
@@ -223,7 +247,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_888,
       reasoningTokens: 31,
       apiDurationMs: 1_448,
-      source: "provider",
+      source: "cursor",
     });
     expect(session.contextUsage?.durationMs).toBeGreaterThanOrEqual(0);
     expect(session.contextUsage).not.toHaveProperty("costUsd");
@@ -269,7 +293,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "provider",
+      source: "cursor",
     });
     expect(sparseSession.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -302,7 +326,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "provider",
+      source: "cursor",
     });
     expect(restored.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(restored.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -363,7 +387,7 @@ describe("ACP bridge", () => {
       inputTokens: 850,
       outputTokens: 50,
       reasoningTokens: 77,
-      source: "provider",
+      source: "cursor",
     });
     // No turn was in flight, so the elapsed time must be carried over rather
     // than measured again from a clock this turn no longer owns.
@@ -516,7 +540,7 @@ describe("ACP bridge", () => {
     expect(session.contextUsage).toMatchObject({
       usedTokens: 1_500,
       maximumTokens: 30_000,
-      source: "provider",
+      source: "cursor",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(5);
   });
@@ -545,7 +569,7 @@ describe("ACP bridge", () => {
       usedTokens: 4_321,
       inputTokens: 4_000,
       outputTokens: 321,
-      source: "provider",
+      source: "cursor",
     });
   });
 
@@ -572,7 +596,7 @@ describe("ACP bridge", () => {
       outputTokens: 20,
       cacheReadTokens: 30,
       cacheWriteTokens: 5,
-      source: "provider",
+      source: "cursor",
     });
   });
 

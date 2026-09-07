@@ -265,22 +265,8 @@ describe("plan approval flow", () => {
       const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
       const call = await nextQueryCall();
 
-      const observePlanWrite = (
-        call.options.hooks as {
-          PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>;
-        }
-      ).PreToolUse[0]!.hooks[0]!;
-      await observePlanWrite({
-        hook_event_name: "PreToolUse",
-        tool_name: "Write",
-        tool_input: {
-          file_path: "/home/node/.claude/plans/approved-plan.md",
-          content: "do stuff",
-        },
-      });
-
       const requestedAt = Date.now();
-      const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", {});
+      const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "do stuff" });
 
       await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
       const [approval] = getPendingPlanApprovals(session.id);
@@ -310,36 +296,15 @@ describe("plan approval flow", () => {
     }
   });
 
-  test("retains a captured plan across rejection and applies an Edit-only revision", async () => {
-    const session = createSession("plan-write-captured");
+  test("uses each ExitPlanMode payload as the authoritative revised plan", async () => {
+    const session = createSession("plan-exit-payload");
     track(session.id);
 
     const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
     const call = await nextQueryCall();
-    const hooks = call.options.hooks as
-      | {
-          PreToolUse?: Array<{
-            hooks: Array<(input: unknown) => Promise<unknown>>;
-          }>;
-        }
-      | undefined;
-    const observePlanWrite = hooks?.PreToolUse?.[0]?.hooks[0];
-    expect(observePlanWrite).toBeDefined();
-    await observePlanWrite!({
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/calm-moon.md",
-        content: "# Plan\n\n1. Inspect the flow.\n2. Show this plan before approval.",
-      },
-      tool_use_id: "write-plan",
-      session_id: "sdk-plan-write-captured",
-      transcript_path: "/tmp/transcript.jsonl",
-      cwd: "/workspace",
-      permission_mode: "plan",
+    const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "# Plan\n\n1. Inspect the flow.\n2. Show this plan before approval.",
     });
-
-    const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", {});
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
     const [approval] = getPendingPlanApprovals(session.id);
     expect(approval?.plan).toBe(
@@ -348,22 +313,11 @@ describe("plan approval flow", () => {
 
     expect(respondToPlanApproval(approval!.id, false, "Clarify verification")).toBe(true);
     await canUseToolPromise;
-    expect(session.observedPlan?.content).toContain("Show this plan before approval");
     call.finish();
     const repromptCall = await nextQueryCall();
-    const repromptHooks = repromptCall.options.hooks as {
-      PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>;
-    };
-    await repromptHooks.PreToolUse[0]!.hooks[0]!({
-      hook_event_name: "PreToolUse",
-      tool_name: "Edit",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/calm-moon.md",
-        old_string: "2. Show this plan before approval.",
-        new_string: "2. Show the revised plan before approval.\n3. Run focused tests.",
-      },
+    const revisedToolPromise = repromptCall.options.canUseTool!("ExitPlanMode", {
+      plan: "# Plan\n\n1. Inspect the flow.\n2. Show the revised plan before approval.\n3. Run focused tests.",
     });
-    const revisedToolPromise = repromptCall.options.canUseTool!("ExitPlanMode", {});
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
     const [revisedApproval] = getPendingPlanApprovals(session.id);
     expect(revisedApproval?.plan).toBe(
@@ -371,63 +325,21 @@ describe("plan approval flow", () => {
     );
     expect(respondToPlanApproval(revisedApproval!.id, true)).toBe(true);
     await expect(revisedToolPromise).resolves.toMatchObject({ behavior: "allow" });
-    expect(session.observedPlan).toBeUndefined();
     repromptCall.push({ type: "result", subtype: "success" });
     repromptCall.finish();
     await promptPromise;
   });
 
-  test("captures only plan-like paths and replays replace_all edits for the same plan", async () => {
-    const session = createSession("plan-path-filter");
+  test("does not register file-edit interception hooks for plan capture", async () => {
+    const session = createSession("plan-direct-capture");
     track(session.id);
     const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
     const call = await nextQueryCall();
-    const observe = (
-      call.options.hooks as {
-        PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>;
-      }
-    ).PreToolUse[0]!.hooks[0]!;
+    expect((call.options.hooks as Record<string, unknown> | undefined)?.PreToolUse).toBeUndefined();
 
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/steady-river.md",
-        content: "# Plan\n\nCheck behavior.\nCheck behavior.",
-      },
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "# Plan\n\nVerify behavior.\nVerify behavior.",
     });
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: { file_path: "/workspace/README.md", content: "# Not the plan" },
-    });
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: { file_path: "/workspace/notes.txt", content: "Not Markdown" },
-    });
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Edit",
-      tool_input: {
-        file_path: "/workspace/plans/another.md",
-        old_string: "Check behavior.",
-        new_string: "Wrong file.",
-        replace_all: true,
-      },
-    });
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Edit",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/steady-river.md",
-        old_string: "Check behavior.",
-        new_string: "Verify behavior.",
-        replace_all: true,
-      },
-    });
-
-    const toolPromise = call.options.canUseTool!("ExitPlanMode", {});
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
     const [approval] = getPendingPlanApprovals(session.id);
     expect(approval?.plan).toBe("# Plan\n\nVerify behavior.\nVerify behavior.");
@@ -444,31 +356,9 @@ describe("plan approval flow", () => {
       permissionMode: "plan",
     });
     const call = await nextQueryCall();
-    const observe = (
-      call.options.hooks as {
-        PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>;
-      }
-    ).PreToolUse[0]!.hooks[0]!;
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Write",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/large-plan.md",
-        content: "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength + 100),
-      },
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength + 100),
     });
-    await observe({
-      hook_event_name: "PreToolUse",
-      tool_name: "Edit",
-      tool_input: {
-        file_path: "/home/node/.claude/plans/large-plan.md",
-        old_string: "x",
-        new_string: "y",
-        replace_all: true,
-      },
-    });
-
-    const toolPromise = call.options.canUseTool!("ExitPlanMode", {});
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
     const [approval] = getPendingPlanApprovals(session.id);
     expect(approval?.plan).toHaveLength(AGENT_INTERACTION_LIMITS.maxTextLength);

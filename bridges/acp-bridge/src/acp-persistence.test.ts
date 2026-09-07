@@ -40,6 +40,88 @@ describe("ACP bridge", () => {
     return JSON.parse(lines[0]!) as string[];
   }
 
+  test("preserves restrictive execution policy across a bridge restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const argsFile = resolve(await temporaryDirectory(), "args.log");
+    const env = {
+      ACP_PROVIDER: "grok",
+      ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
+      FAKE_ACP_ARGS_FILE: argsFile,
+    };
+    const first = await spawnBridge({ stateDirectory, env });
+    const policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "restricted",
+    } as const;
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "policy-restart", policy }),
+    }).then((response) => response.json())) as { id: string };
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8").catch(() => ""),
+      (value) => value.includes('"approvals":"ask"'),
+    );
+    await stopChild(first.child);
+
+    const second = await spawnBridge({ stateDirectory, env });
+    const restored = (await nativeFetch(`${second.base}/session/${created.id}`, {
+      headers: second.headers,
+    }).then((response) => response.json())) as { policy?: unknown };
+    expect(restored.policy).toEqual(policy);
+    expect(
+      (
+        await nativeFetch(`${second.base}/session/${created.id}/attach`, {
+          method: "POST",
+          headers: second.headers,
+        })
+      ).status,
+    ).toBe(200);
+    const invocations = await waitFor(
+      () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.trim().split("\n").length >= 2,
+    );
+    expect(JSON.parse(invocations.trim().split("\n").at(-1)!) as string[]).not.toContain(
+      "--always-approve",
+    );
+  });
+
+  test("restores legacy ACP state with a fail-closed policy", async () => {
+    const stateDirectory = await temporaryDirectory();
+    await fs.writeFile(
+      resolve(stateDirectory, "state.json"),
+      JSON.stringify({
+        version: 3,
+        provider: "cursor",
+        sessions: [
+          {
+            id: "legacy-policy",
+            acpSessionId: "legacy-acp-session",
+            status: "idle",
+            messages: [],
+            revision: 0,
+            structured: [],
+            promptJournal: [],
+          },
+        ],
+      }),
+    );
+    const bridge = await spawnBridge({ stateDirectory });
+    const restored = (await nativeFetch(`${bridge.base}/session/legacy-policy`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
+      policy: { approvals: string; projectResources: boolean; networkAccess: string };
+    };
+    expect(restored.policy).toMatchObject({
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+  });
+
   test("drops a persisted model id that is blank, oversized, or not a string", async () => {
     const stateDirectory = await temporaryDirectory();
     const assistantMessage = (id: string, modelId: unknown) => ({
@@ -183,7 +265,7 @@ describe("ACP bridge", () => {
     // through `spawnBridge`, so it has to supply the provider the composition
     // root requires. `spawnBridge` pins `ACP_PROVIDER` itself, so the other
     // tests are unaffected.
-    process.env.ACP_PROVIDER ??= "cursor";
+    process.env.ACP_PROVIDER ??= "grok";
     const { normalizeBridgePart } = await import("./acp-persistence.js");
 
     expect(

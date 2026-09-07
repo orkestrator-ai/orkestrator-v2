@@ -1,4 +1,5 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { isKnownOpenCodeEvent } from "./opencode-events.js";
 import { openCodeExecutionProfiles } from "./opencode-execution-profiles.js";
@@ -17,27 +18,19 @@ import type {
   AgentModel,
   NativeAgentComposerState,
   NativeAgentContextUsage,
+  NativeAgentControlUpdate,
+  NativeAgentExecutionPolicy,
   NativeAgentForkOutcome,
-  NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
-import {
-  DEFAULT_OPENCODE_MODEL_PROVIDERS,
-  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
-  normalizeOpenCodeModelProviders,
-} from "@orkestrator/protocol/native-agent";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
-import {
-  mimeTypeForFilename,
-  mimeTypeForImageData,
-  promptAttachmentUrl,
-} from "./prompt-attachments.js";
 import {
   AmbiguousPromptDispatchError,
   type AgentInteractionProviderCapability,
@@ -84,42 +77,37 @@ import {
   openCodeStructuredPrompt,
   parseOpenCodeStructuredText,
 } from "./opencode-messages.js";
-import {
-  boundedOwnedOpenCodeCollection,
-  MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS,
-} from "./opencode-snapshots.js";
+import { boundedOwnedOpenCodeCollection } from "./opencode-snapshots.js";
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
 import { openCodeContextUsage } from "./opencode-usage.js";
+import { OpenCodeStreamState } from "./opencode-stream-state.js";
+import {
+  DEFAULT_MONITOR_RETRY_MS,
+  DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
+  effectiveOpenCodePolicy,
+  listOpenCodeResumableSessions,
+  type OpenCodeProviderDependencies,
+  OPENCODE_COMMAND_NAME_TTL_MS,
+  OPENCODE_SUBAGENT_FETCH_CONCURRENCY,
+  OPENCODE_SUBAGENT_MAX_SESSIONS,
+  OPENCODE_SUBAGENT_MESSAGE_LIMIT,
+  openCodeFileParts,
+  openCodeMessageIdScope,
+  openCodeModelSelection,
+  openCodePermissionRules,
+  openCodePromptParts,
+  openCodeReasoningVariant,
+  openCodeRequestOptions,
+  optionalOpenCodeSdkCall,
+  resolveAllowedOpenCodeModelProviders,
+  waitForOpenCodeRetry,
+} from "./opencode-provider-helpers.js";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
-const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
-const DEFAULT_MONITOR_RETRY_MS = 1_000;
-const DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS = 10_000;
-const OPENCODE_SUBAGENT_MAX_SESSIONS = 16;
-const OPENCODE_SUBAGENT_MESSAGE_LIMIT = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
-const OPENCODE_SUBAGENT_FETCH_CONCURRENCY = 4;
-const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
+export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
 
-export interface OpenCodeProviderDependencies {
-  openCodeClient?: OpencodeClient;
-  openCodeClientFactory?: typeof createOpencodeClient;
-  openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
-  monitorRetryMs?: number;
-  now?: () => number;
-  openCodeExistenceCacheTtlMs?: number;
-  autoAnswerRequests?: boolean;
-  onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
-  resolveOpenCodeModelProviders?: () =>
-    | readonly string[]
-    | undefined
-    | Promise<readonly string[] | undefined>;
-}
-
-function openCodeMessageIdScope(connection: BridgeConnection, sessionId: string): string {
-  return JSON.stringify([connection.baseUrl, connection.directory, sessionId]);
-}
 export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   readonly agent = "opencode" as const;
   private readonly client: OpencodeClient;
@@ -156,6 +144,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private commandNames: { names: Set<string>; expiresAt: number } | null = null;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
+  private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
   private readonly now: () => number;
@@ -169,8 +158,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    * of any one session.
    */
   private readonly health = new RuntimeHealthRecorder();
+  private readonly streamState = new OpenCodeStreamState();
   private activeStreamController: AbortController | null = null;
   private reconciliation: Promise<void> | null = null;
+  private streamReconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
   private disposed = false;
   private readonly autoAnswerRequests: boolean;
@@ -219,18 +210,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         dependencies.openCodeExistenceCacheTtlMs ?? DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
       ),
       () => this.requestOptions(),
+      dependencies.openCodeStatusReconcileIntervalMs,
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
     this.resolveOpenCodeModelProviders = dependencies.resolveOpenCodeModelProviders;
-    // An interactive provider has nothing to monitor: every request belongs to a
-    // tab that will answer it. Subscribing anyway would open a permanent event
-    // stream per provider for no consumer.
-    this.monitorPromise = this.autoAnswerRequests ? this.monitorRequests() : Promise.resolve();
+    this.monitorPromise = this.monitorRequests();
   }
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.lifecycle.ownedSessions.add(sessionId);
+    this.streamState.register(sessionId);
     this.interactionTracker.register(sessionId, interaction);
     if (!this.autoAnswerRequests) return;
     const activeReconciliation = this.reconciliation;
@@ -248,12 +238,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     method: string,
     parameters: Record<string, unknown>,
   ): Promise<unknown> {
-    const owner = asRecord(asRecord(this.client)?.[namespace]);
-    const operation = owner?.[method];
-    if (typeof operation !== "function") return { data: {} };
-    return (
-      operation as (parameters: Record<string, unknown>, options: unknown) => Promise<unknown>
-    ).call(owner, parameters, this.requestOptions());
+    return optionalOpenCodeSdkCall(
+      this.client,
+      this.requestOptions(),
+      namespace,
+      method,
+      parameters,
+    );
+  }
+
+  private allowedModelProviders(): Promise<readonly string[]> {
+    return resolveAllowedOpenCodeModelProviders(this.resolveOpenCodeModelProviders);
   }
 
   private async readComposerCatalog(
@@ -294,21 +289,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   /**
-   * The configured allowlist, or the managed default when config is
-   * unavailable. A failed read must not widen the catalogue to every provider.
-   */
-  private async openCodeModelProviders(): Promise<readonly string[]> {
-    if (!this.resolveOpenCodeModelProviders) {
-      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
-    }
-    try {
-      return normalizeOpenCodeModelProviders(await this.resolveOpenCodeModelProviders());
-    } catch {
-      return DEFAULT_OPENCODE_MODEL_PROVIDERS;
-    }
-  }
-
-  /**
    * `promptAsync` returns before OpenCode resolves the requested model. When a
    * provider is disconnected, OpenCode can therefore accept and persist only
    * the user message, publish a transient error, and leave the session idle.
@@ -339,7 +319,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
     const envelope = asRecord(response);
     if (envelope?.error) return;
-    const allowedProviders = await this.openCodeModelProviders();
+    const allowedProviders = await this.allowedModelProviders();
     const catalog = normalizeOpenCodeComposerCatalog(envelope?.data ?? {}, allowedProviders, {
       requireConnected: true,
     });
@@ -365,7 +345,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async modelCatalog(): Promise<AgentModel[]> {
-    return (await this.readComposerCatalog(await this.openCodeModelProviders(), true)).models;
+    return (await this.readComposerCatalog(await this.allowedModelProviders(), true)).models;
   }
 
   async rawModelCatalog(): Promise<AgentModel[]> {
@@ -381,13 +361,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // OpenCode happens to list first, which on a real catalogue of thousands of
     // models truncated the managed pair out entirely — leaving every read of
     // this catalogue, filtered or not, with no selectable model at all.
-    return (await this.readComposerCatalog([], false, await this.openCodeModelProviders())).models;
+    return (await this.readComposerCatalog([], false, await this.allowedModelProviders())).models;
   }
 
   private async monitorRequests(): Promise<void> {
     while (!this.disposed) {
       try {
-        await this.reconcilePendingRequests();
         const streamController = new AbortController();
         this.activeStreamController = streamController;
         const response = await this.client.event.subscribe(
@@ -399,10 +378,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
+        let startupError: unknown;
+        const startup = Promise.all([
+          this.reconcileStreamState(),
+          ...(this.autoAnswerRequests ? [this.reconcilePendingRequests()] : []),
+        ]).catch((error) => {
+          startupError = error;
+          if (this.activeStreamController === streamController) streamController.abort();
+        });
         for await (const raw of response.stream as AsyncIterable<unknown>) {
           if (this.disposed) return;
           this.dispatchRequest(raw);
         }
+        await startup;
+        if (startupError) throw startupError;
         if (this.activeStreamController === streamController) {
           this.activeStreamController = null;
         }
@@ -414,8 +403,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
         this.activeStreamController?.abort();
       }
+      this.streamState.markGap();
+      this.lifecycle.invalidateEvents();
       try {
-        await waitForRetry(this.monitorRetryMs, this.monitorController.signal);
+        await waitForOpenCodeRetry(this.monitorRetryMs, this.monitorController.signal);
       } catch {
         return;
       }
@@ -459,8 +450,35 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       return;
     }
     const properties = event.properties ?? {};
+    const rawSessionId =
+      typeof properties.sessionID === "string" ? properties.sessionID : undefined;
+    const globalEvent =
+      event.type === "mcp.tools.changed" ||
+      event.type === "server.connected" ||
+      event.type === "server.instance.disposed" ||
+      event.type === "global.disposed";
+    if (globalEvent || (rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId))) {
+      const effect = this.streamState.apply(event as OpenCodeEvent);
+      if (effect.status && effect.sessionId) {
+        this.lifecycle.observeEvent(effect.sessionId, effect.status);
+      }
+      if (effect.refreshMcp) {
+        this.interactiveMetadata.clear();
+      }
+      if (effect.refreshInteractions) {
+        await this.interactionAdapter
+          .listPendingInteractions(effect.refreshInteractions)
+          .catch(() => undefined);
+      }
+      if (effect.reconnect) {
+        this.interactiveMetadata.clear();
+        this.lifecycle.invalidateEvents();
+        this.activeStreamController?.abort();
+        return;
+      }
+    }
     const requestId = typeof properties.id === "string" ? properties.id : undefined;
-    const sessionId = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
+    const sessionId = rawSessionId;
     if (!sessionId || !this.lifecycle.ownedSessions.has(sessionId)) return;
     if (requestId && requestId.length > AGENT_INTERACTION_LIMITS.maxIdLength) return;
 
@@ -486,10 +504,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       });
     };
 
-    // An answered question releases the session. A rejected question is no
-    // longer pending/user-resolvable, so it is terminal for an unattended
-    // pipeline rather than a permanent `blocked` state that the supervisor
-    // would park forever.
+    if (!this.autoAnswerRequests) return;
     if (event.type === "question.replied") {
       this.blockedSessions.delete(sessionId);
       this.failedQuestionSessions.delete(sessionId);
@@ -500,7 +515,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       setBoundedSetEntry(this.failedQuestionSessions, sessionId, MAX_TRACKED_INTERACTION_SESSIONS);
       return;
     }
-    if (!this.autoAnswerRequests) return;
     if (!requestId || this.answeringRequestIds.has(requestId)) return;
 
     this.answeringRequestIds.add(requestId);
@@ -563,6 +577,45 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.reconciliation;
   }
 
+  private async reconcileStreamState(): Promise<void> {
+    if (!this.streamReconciliation) {
+      this.streamReconciliation = this.reconcileStreamStateNow().finally(() => {
+        this.streamReconciliation = null;
+      });
+    }
+    return this.streamReconciliation;
+  }
+
+  private async reconcileStreamStateNow(): Promise<void> {
+    if (this.disposed) return;
+    const sessionIds = Array.from(this.lifecycle.ownedSessions);
+    if (sessionIds.length === 0) return;
+    this.streamState.markGap();
+    this.interactiveMetadata.clear();
+    await this.lifecycle.readSessionLifecycle(sessionIds, true, true);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (!this.disposed) {
+        const sessionId = sessionIds[cursor++];
+        if (!sessionId) return;
+        try {
+          const eventVersion = this.streamState.eventVersion(sessionId);
+          const messages = [
+            ...boundedOpenCodeMessageHistory(
+              await this.readMessagesSnapshot(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
+              { count: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+            ),
+          ];
+          this.streamState.replaceMessages(sessionId, messages, eventVersion);
+        } catch {
+          // The dirty flag remains set. The next projection read retries the
+          // authoritative snapshot instead of exposing a partial event tail.
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, sessionIds.length) }, () => worker()));
+  }
+
   private async reconcilePendingRequestsNow(): Promise<void> {
     if (this.disposed || this.lifecycle.ownedSessions.size === 0) return;
     const [permissions, questions] = await Promise.all([
@@ -598,14 +651,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   async createSession(
     _phase: string,
     label: string,
-    _options: ProviderCreateSessionOptions = {},
+    options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     try {
-      const response = await this.client.session.create({ title: label }, this.requestOptions());
+      const effectivePolicy = options.policy ? effectiveOpenCodePolicy(options.policy) : undefined;
+      const permission = effectivePolicy ? openCodePermissionRules(effectivePolicy) : undefined;
+      const response = await this.client.session.create(
+        { title: label, ...(permission ? { permission } : {}) },
+        this.requestOptions(),
+      );
       assertSdkResponse(response, "OpenCode session creation");
       if (!response.data?.id) throw new Error("OpenCode returned an empty session");
       this.lifecycle.rememberExistingSession(response.data.id);
-      this.registerSession(response.data.id, _options.interaction);
+      this.registerSession(response.data.id, options.interaction);
+      if (effectivePolicy) this.sessionPolicies.set(response.data.id, effectivePolicy);
       return response.data.id;
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode session creation is unavailable", {
@@ -616,28 +675,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
-    const parts: Array<Record<string, unknown>> = [{ type: "text", text: shapedPrompt }];
-    // OpenCode accepts inline data, so its images need no staging. Attachments
-    // that arrive already staged are referenced by path instead.
-    for (const image of options.images ?? []) {
-      const mimeType = mimeTypeForImageData(image.filename, image.data);
-      parts.push({
-        type: "file",
-        mime: mimeType,
-        filename: image.filename,
-        url: `data:${mimeType};base64,${image.data}`,
-      });
-    }
-    for (const attachment of options.attachments ?? []) {
-      parts.push({
-        type: "file",
-        mime: mimeTypeForFilename(attachment.filename ?? attachment.path),
-        filename: attachment.filename,
-        url: promptAttachmentUrl(attachment),
-      });
-    }
+    const parts = openCodePromptParts(shapedPrompt, options);
     const selectedModel = options.model ?? this.connection.model;
-    const modelParts = selectedModel?.split("/");
+    const model = openCodeModelSelection(selectedModel);
+    const variant = openCodeReasoningVariant(options, this.connection.effort);
     // Validate the caller-owned marker locally before consulting OpenCode.
     openCodeRequestMarker(options.requestId);
     await this.assertSelectedModelAvailable(selectedModel);
@@ -683,17 +724,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 arguments: command.arguments ?? "",
                 model: options.model ?? this.connection.model,
                 agent: options.executionAgent ?? options.mode,
-                variant:
-                  (typeof options.parameterValues?.reasoning === "string"
-                    ? options.parameterValues.reasoning
-                    : (options.effort ?? this.connection.effort)) === "default"
-                    ? undefined
-                    : typeof options.parameterValues?.reasoning === "string"
-                      ? options.parameterValues.reasoning
-                      : (options.effort ?? this.connection.effort),
+                variant,
                 // Text became the command name and its arguments; only the files
                 // survive as parts.
-                parts: parts.filter((part) => part.type === "file") as never,
+                parts: openCodeFileParts(parts),
               },
               this.requestOptions(),
             )
@@ -702,20 +736,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 sessionID: sessionId,
                 directory: this.connection.directory,
                 messageID,
-                parts: parts as never,
-                model:
-                  modelParts && modelParts.length > 1
-                    ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
-                    : undefined,
+                parts,
+                model,
                 agent: options.executionAgent ?? options.mode ?? "build",
-                variant:
-                  (typeof options.parameterValues?.reasoning === "string"
-                    ? options.parameterValues.reasoning
-                    : (options.effort ?? this.connection.effort)) === "default"
-                    ? undefined
-                    : typeof options.parameterValues?.reasoning === "string"
-                      ? options.parameterValues.reasoning
-                      : (options.effort ?? this.connection.effort),
+                variant,
               },
               this.requestOptions(),
             );
@@ -890,15 +914,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ) {
         throw new RangeError("OpenCode transcript limit is invalid");
       }
-      const response = await this.client.session.messages(
-        { sessionID: sessionId, ...(limit === undefined ? {} : { limit }) },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode transcript read");
-      if (limit === undefined) {
-        return Array.isArray(response.data) ? response.data : [];
-      }
-      return [...boundedOpenCodeMessageHistory(response.data, { count: limit })];
+      const messages = await this.readMessagesSnapshot(sessionId, limit);
+      if (limit === undefined) return messages;
+      return [...boundedOpenCodeMessageHistory(messages, { count: limit })];
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode transcript is unavailable", {
         cause: error,
@@ -906,10 +924,41 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  private async projectedMessages(sessionId: string, limit: number): Promise<unknown[]> {
+    const current = this.streamState.currentMessages(sessionId);
+    if (current) return [...boundedOpenCodeMessageHistory(current, { count: limit })];
+    const messages = await this.readMessagesSnapshot(sessionId, limit);
+    this.streamState.replaceMessages(sessionId, messages);
+    return [...boundedOpenCodeMessageHistory(messages, { count: limit })];
+  }
+
+  private async projectedStatus(sessionId: string): Promise<ProviderStatus> {
+    if (this.blockedSessions.has(sessionId)) return "blocked";
+    if (this.failedQuestionSessions.has(sessionId)) return "error";
+    const lifecycle = (await this.lifecycle.readSessionLifecycle([sessionId], false)).get(
+      sessionId,
+    );
+    if (lifecycle === "running") return "running";
+    if (lifecycle === "idle" || lifecycle === "missing") return lifecycle;
+    if (!lifecycle) {
+      throw new ProviderUnavailableError(`OpenCode lifecycle snapshot omitted ${sessionId}`);
+    }
+    return "error";
+  }
+
+  private async readMessagesSnapshot(sessionId: string, limit?: number): Promise<unknown[]> {
+    const response = await this.client.session.messages(
+      { sessionID: sessionId, ...(limit === undefined ? {} : { limit }) },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode transcript read");
+    return Array.isArray(response.data) ? response.data : [];
+  }
+
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     const [status, rawMessages, metadata] = await Promise.all([
-      this.status(sessionId),
-      this.messages(sessionId, { limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT }),
+      this.projectedStatus(sessionId),
+      this.projectedMessages(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       this.readInteractiveMetadata(sessionId),
     ]);
     const normalizedMessages = rawMessages.flatMap((message, index) => {
@@ -929,9 +978,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const terminal = normalizeOpenCodeTerminalState(
       [...rawMessages].reverse().find((candidate) => Boolean(asRecord(asRecord(candidate)?.info))),
     );
+    const streamNotices = this.streamState.notices(sessionId);
+    const streamedError = streamNotices.find((notice) => notice.kind === "error");
     const latestUsage = openCodeContextUsage(rawMessages);
     return {
-      status: terminal?.kind === "error" ? "error" : status,
+      status: terminal?.kind === "error" || streamedError ? "error" : status,
       messages,
       messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
       ...(metadata.title ? { title: metadata.title } : {}),
@@ -946,9 +997,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         executionProfiles: metadata.executionProfiles,
       },
       ...(latestUsage ? { contextUsage: latestUsage } : {}),
+      ...(this.sessionPolicies.get(sessionId)
+        ? { policy: this.sessionPolicies.get(sessionId) }
+        : {}),
       runtime: metadata.runtime,
-      ...(terminal ? { notices: [terminal] } : {}),
-      ...(terminal?.kind === "error" ? { phase: "error" as const, error: terminal.message } : {}),
+      providerRevision: this.streamState.revision(sessionId),
+      ...([...(terminal ? [terminal] : []), ...streamNotices].length > 0
+        ? { notices: [...(terminal ? [terminal] : []), ...streamNotices] }
+        : {}),
+      ...(terminal?.kind === "error" || streamedError
+        ? {
+            phase: "error" as const,
+            error: terminal?.message ?? streamedError?.message ?? "OpenCode session failed",
+          }
+        : {}),
     };
   }
 
@@ -981,13 +1043,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // Resolved before the cache is consulted: this entry carries a catalogue
     // filtered against a specific allowlist, and a settings edit must invalidate
     // it here as well as in `readComposerCatalog`.
-    const allowedProviders = await this.openCodeModelProviders();
+    const allowedProviders = await this.allowedModelProviders();
     // Composer reads are picker-facing, so they carry the connectivity filter
     // and must key on it exactly as `readComposerCatalog` does.
     const providersKey = openCodeCatalogCacheKey(allowedProviders, true);
     const cached = this.interactiveMetadata.get(sessionId);
     if (cached && cached.expiresAt > Date.now() && cached.providersKey === providersKey) {
-      return cached;
+      return this.applyStreamMetadata(sessionId, cached);
     }
 
     const directory = this.connection.directory;
@@ -1050,7 +1112,22 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       entry,
       MAX_TRACKED_INTERACTION_SESSIONS,
     );
-    return entry;
+    return this.applyStreamMetadata(sessionId, entry);
+  }
+
+  private applyStreamMetadata<
+    T extends {
+      runtime: NativeAgentRuntimeSummary;
+      title?: string;
+    },
+  >(sessionId: string, metadata: T): T {
+    const title = this.streamState.title(sessionId);
+    const runtime = { ...metadata.runtime, ...this.streamState.runtime(sessionId) };
+    return {
+      ...metadata,
+      runtime,
+      ...(title ? { title } : {}),
+    };
   }
 
   private async hydrateSubagentTranscripts(
@@ -1112,37 +1189,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return hydrateNormalizedOpenCodeSubagents(rootMessages, children);
   }
 
-  async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    const response = await this.client.session.list(
-      {
-        directory: this.connection.directory,
-        limit: MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS,
-      },
+  listResumableSessions() {
+    return listOpenCodeResumableSessions(
+      this.client,
+      this.connection.directory,
       this.requestOptions(),
     );
-    assertSdkResponse(response, "OpenCode resumable session list");
-    if (!Array.isArray(response.data)) return [];
-    return response.data.slice(0, 512).flatMap((candidate) => {
-      const session = asRecord(candidate);
-      const id = nonEmptyString(session?.id);
-      if (!id) return [];
-      const time = asRecord(session?.time);
-      const toIso = (value: unknown) => {
-        const date =
-          typeof value === "number" || typeof value === "string" ? new Date(value) : null;
-        return date && !Number.isNaN(date.getTime()) ? date.toISOString() : undefined;
-      };
-      const createdAt = toIso(time?.created);
-      const updatedAt = toIso(time?.updated);
-      return [
-        {
-          sessionId: id,
-          ...(typeof session?.title === "string" ? { title: session.title } : {}),
-          ...(createdAt ? { createdAt } : {}),
-          ...(updatedAt ? { updatedAt } : {}),
-        },
-      ];
-    });
   }
 
   refreshCatalog(): void {
@@ -1204,9 +1256,22 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.capabilitiesAdapter.setSessionTitle(sessionId, title);
   }
 
-  async resumeSession(sessionId: string): Promise<string> {
+  async resumeSession(
+    sessionId: string,
+    _controls?: NativeAgentControlUpdate,
+    policy?: NativeAgentExecutionPolicy,
+  ): Promise<string> {
     const status = await this.status(sessionId);
     if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
+    if (policy) {
+      const effectivePolicy = effectiveOpenCodePolicy(policy);
+      const response = await this.client.session.update(
+        { sessionID: sessionId, permission: openCodePermissionRules(effectivePolicy) },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode resumed session policy update");
+      this.sessionPolicies.set(sessionId, effectivePolicy);
+    }
     this.lifecycle.rememberExistingSession(sessionId);
     return sessionId;
   }
@@ -1425,33 +1490,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.failedQuestionSessions.clear();
     this.answeringRequestIds.clear();
     this.requestTasks.clear();
+    this.streamState.clear();
   }
 
   private requestOptions(): { signal: AbortSignal } {
-    const timeoutMs = Math.max(
-      1,
-      this.connection.requestTimeoutMs ?? DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS,
-    );
-    return {
-      signal: AbortSignal.any([this.monitorController.signal, AbortSignal.timeout(timeoutMs)]),
-    };
+    return openCodeRequestOptions(this.connection, this.monitorController.signal);
   }
-}
-
-function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, ms);
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
 }

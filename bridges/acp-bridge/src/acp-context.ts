@@ -1,19 +1,29 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
+import {
+  PROTOCOL_VERSION,
+  type InitializeRequest,
+  type InitializeResponse,
+} from "@agentclientprotocol/sdk";
 import type {
   NativeAgentComposerState,
   NativeAgentMcpServer,
   NativeAgentRuntimeSummary,
   NativeAgentSlashCommand,
+  NativeAgentExecutionPolicy,
+  NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
+import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
+import { loadAcpProviderConfig, providerArgv } from "./acp-provider-config.js";
 
-export type Provider = "cursor" | "grok";
+export type Provider = AgentPlatform;
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
 
@@ -326,6 +336,8 @@ export interface SessionState {
   usage?: PersistedUsage;
   /** Usage carriers collected for the in-flight turn. Never persisted. */
   currentTurnUsage?: AcpTurnUsage;
+  /** Support correlation retained until the current turn is finalized. */
+  currentTurnRequestId?: string;
   /** Whether the active turn already received a vendor terminal usage carrier. */
   currentTurnSawVendorUsage?: boolean;
   /** Usage carriers for one completed turn while session/load replays history. */
@@ -355,10 +367,13 @@ export interface SessionState {
    * restart re-observes whatever the agent still sends.
    */
   health: RuntimeHealthRecorder;
+  policy?: NativeAgentExecutionPolicy;
 }
 
 export interface PersistedUsage {
   turn: AcpTurnUsage;
+  /** Provider-native per-turn rows, newest last and bounded to twenty. */
+  turns?: NativeAgentTurnUsage[];
   /** Tokens consumed by the most recently completed turn. */
   lastTurnTokens?: number;
   /** Cumulative tokens consumed by completed turns in this session. */
@@ -380,6 +395,7 @@ export interface ApprovalState {
 
 export interface PersistedSession {
   id: string;
+  policy?: NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   acpSessionId: string;
   status: SessionStatus;
@@ -406,18 +422,17 @@ export interface PersistedState {
   sessions: PersistedSession[];
 }
 
-export const provider = parseProvider(process.env.ACP_PROVIDER);
+export const providerConfig = loadAcpProviderConfig();
+// A new ACP provider also adds its platform id to the shared protocol. Keep
+// that compile-time boundary explicit while allowing the launcher record to be
+// data-driven for every already-known platform.
+export const provider = providerConfig.id as Provider;
 export const port = parsePort(process.env.PORT);
 export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
-// `cursor` is the desktop editor's shell command on user machines. Cursor's
-// ACP-capable CLI is `cursor-agent`; never let a missing configuration launch
-// the GUI as an accidental fallback.
-export const executable =
-  process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
-export const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
+export const executable = providerConfig.executable;
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 export const sessions = new Map<string, SessionState>();
@@ -482,11 +497,15 @@ export const agentRuntime: {
   mcp?: NativeAgentMcpServer[];
   authMethods?: Array<{ id: string; name: string }>;
   authenticated?: boolean;
+  promptCapabilities?: InitializeResponse["agentCapabilities"] extends infer _Capabilities
+    ? { audio?: boolean; embeddedContext?: boolean; image?: boolean }
+    : never;
 } = {};
 
 export interface AcpSpawnOptions {
   model?: string;
   effort?: string;
+  policy?: NativeAgentExecutionPolicy;
 }
 
 /** MCP launch configuration shared by every ACP session in this environment. */
@@ -677,6 +696,7 @@ export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
+  readonly clientMethods = new AcpClientMethods(workingDirectory);
   #nextId = 1;
   #pending = new Map<
     number,
@@ -697,46 +717,19 @@ export class AcpProcess {
   onClose: (error: Error) => void = () => undefined;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
-    // Both agents expose their permissive command setting as a global flag, so
-    // keep it before the ACP subcommand.
-    //
-    // Auto-approving *commands* is deliberate and unconditional, including on
-    // local worktrees: an Orkestrator ACP tab is an interactive agent session,
-    // and this matches the Claude bridge's local `bypassPermissions` default.
-    // Explicit deny rules still win, and any permission request an agent emits
-    // despite these defaults continues through the bridge's fail-closed
-    // approval flow below.
-    //
-    // Cursor's separate MCP approval flag is deliberately *not* unconditional.
-    // It is opt-in through ACP_APPROVE_PROJECT_MCPS, which the backend sets
-    // only for container environments. The distinction is who chooses the
-    // command: a permissive session still runs what the model decided to run,
-    // whereas `.cursor/mcp.json` is repository-controlled and would execute on
-    // the host the moment a tab opened, with no model or user involvement at
-    // all. Cloning a repository must not be enough to run its code.
-    //
-    // The check is `=== "1"`, so every other state — unset, empty, "true", or
-    // a stray ambient value — fails closed. Only the container launcher opts
-    // in; `startLocalServerUnlocked` pins it to "0" after inheriting the
-    // parent environment for exactly that reason.
-    const args =
-      provider === "cursor"
-        ? [
-            "--force",
-            ...(approveProjectMcps ? ["--approve-mcps"] : []),
-            ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
-            "acp",
-          ]
-        : [
-            "--always-approve",
-            "agent",
-            ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
-            ...(spawnOptions.effort ? ["--reasoning-effort", spawnOptions.effort] : []),
-            "stdio",
-          ];
+    if (!executable) {
+      throw new Error(`${provider} ACP provider config has no executable`);
+    }
+    // Provider-specific command-line policy belongs in the launcher record.
+    // Any permission request the agent still emits routes through the
+    // bridge's fail-closed approval flow.
+    const args = providerArgv(providerConfig, {
+      ...spawnOptions,
+      approvals: spawnOptions.policy?.approvals,
+    });
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
-      env: process.env,
+      env: { ...process.env, ...providerConfig.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.on("data", (chunk: Buffer | string) => {
@@ -764,24 +757,26 @@ export class AcpProcess {
   }
 
   async initialize(signal?: AbortSignal): Promise<JsonObject> {
-    const result = await this.request(
-      "initialize",
-      {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-          session: { configOptions: { boolean: {} } },
-          _meta: { parameterizedModelPicker: true },
-        },
-        clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
+    const initializeRequest: InitializeRequest = {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+        session: { configOptions: { boolean: {} } },
+        _meta: { parameterizedModelPicker: true },
       },
-      RPC_TIMEOUT_MS,
-      signal,
-    );
+      clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
+    };
+    const result = await this.request("initialize", initializeRequest, RPC_TIMEOUT_MS, signal);
     const initialized = isObject(result) ? result : {};
+    if (initialized.protocolVersion !== PROTOCOL_VERSION) {
+      await this.close();
+      throw new Error(
+        `${provider} negotiated unsupported ACP protocol version ${String(initialized.protocolVersion)}; Orkestrator supports version ${PROTOCOL_VERSION}`,
+      );
+    }
     rememberAgentRuntime(initialized);
-    if (provider === "grok") await this.authenticateIfRequired(initialized, signal);
+    await this.authenticateIfRequired(initialized, signal);
     return initialized;
   }
 
@@ -795,8 +790,12 @@ export class AcpProcess {
       initialized.requiresAuthentication === true ||
       meta.authRequired === true ||
       meta.requiresAuthentication === true;
-    const configured = process.env.GROK_AUTH_METHOD_ID?.trim();
-    const methodId = configured || (required ? agentRuntime.authMethods?.[0]?.id : undefined);
+    const configured = providerConfig.authMethodEnv
+      ? process.env[providerConfig.authMethodEnv]?.trim()
+      : undefined;
+    const shouldAuthenticate = required || providerConfig.requiresAuthenticate;
+    const methodId =
+      configured || (shouldAuthenticate ? agentRuntime.authMethods?.[0]?.id : undefined);
     if (!methodId) {
       agentRuntime.authenticated = !required;
       return;
@@ -940,6 +939,22 @@ export class AcpProcess {
       const params = isObject(message.params) ? message.params : {};
       if (message.method === "session/request_permission") {
         this.onPermission(message.id, params);
+      } else if (isAcpClientMethod(message.method)) {
+        // Client work may touch disk or wait on a child. Start it from the read
+        // loop but never await it here: one slow terminal must not back-pressure
+        // the agent's bounded stdout queue or any other session.
+        void this.clientMethods.handle(message.method, params).then(
+          (result) => this.respond(message.id as number, result),
+          (error: unknown) =>
+            this.#write({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: {
+                code: error instanceof UnsupportedClientMethodError ? -32601 : -32602,
+                message: error instanceof Error ? error.message : "ACP client request failed",
+              },
+            }),
+        );
       } else if (isVendorModelUpdate(message.method, params)) {
         // A model update carries state this bridge does support, so answer it
         // even when the vendor chose the request form over a notification.
@@ -947,7 +962,7 @@ export class AcpProcess {
         // than acknowledge a capability we do not have.
         this.onVendor(message.method, params);
         this.respond(message.id, {});
-      } else if (isCursorAcknowledgedExtensionMethod(message.method)) {
+      } else if (providerConfig.acknowledgedExtensionMethods.includes(message.method)) {
         // `cursor/task` and `cursor/update_todos` are documented as
         // notifications, but Cursor's `extMethod` helper sends them as
         // requests. Refusing either with -32601 leaves the matching tool row
@@ -994,6 +1009,7 @@ export class AcpProcess {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.clientMethods.close();
     this.onClose(error);
   }
 }
@@ -1049,11 +1065,6 @@ export function supportsSessionCapability(initialized: JsonObject, capability: s
 
 export function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-export function parseProvider(value: string | undefined): Provider {
-  if (value === "cursor" || value === "grok") return value;
-  throw new Error("ACP_PROVIDER must be cursor or grok");
 }
 
 export function parsePort(value: string | undefined): number {
@@ -1117,20 +1128,8 @@ export function isCursorAcknowledgedExtensionMethod(method: string): boolean {
 }
 
 export function isVendorModelUpdate(method: string, params: JsonObject): boolean {
-  if (
-    method === "x.ai/models/update" ||
-    method === "_x.ai/models/update" ||
-    method === "cursor/models/update"
-  ) {
-    return true;
-  }
-  if (
-    method !== "x.ai/session/update" &&
-    method !== "_x.ai/session/update" &&
-    method !== "cursor/session/update"
-  ) {
-    return false;
-  }
+  if (providerConfig.modelUpdateMethods.includes(method)) return true;
+  if (!providerConfig.sessionUpdateMethods.includes(method)) return false;
   const update = isObject(params.update) ? params.update : params;
   return update.sessionUpdate === "model_changed" || update.sessionUpdate === "models_update";
 }
@@ -1150,6 +1149,17 @@ function rememberAgentRuntime(initialized: JsonObject): void {
         ? meta.agentVersion
         : undefined;
   if (version) agentRuntime.version = version.slice(0, 64);
+  const capabilities = isObject(initialized.agentCapabilities)
+    ? initialized.agentCapabilities
+    : undefined;
+  const promptCapabilities = isObject(capabilities?.promptCapabilities)
+    ? capabilities.promptCapabilities
+    : undefined;
+  agentRuntime.promptCapabilities = {
+    audio: promptCapabilities?.audio === true,
+    embeddedContext: promptCapabilities?.embeddedContext === true,
+    image: promptCapabilities?.image === true,
+  };
   if (Array.isArray(initialized.authMethods)) {
     agentRuntime.authMethods = initialized.authMethods.slice(0, 32).flatMap((candidate) => {
       if (!isObject(candidate)) return [];
@@ -1163,6 +1173,10 @@ function rememberAgentRuntime(initialized: JsonObject): void {
       return id ? [{ id, name: name || id }] : [];
     });
   }
+}
+
+function isAcpClientMethod(method: string): boolean {
+  return method.startsWith("fs/") || method.startsWith("terminal/");
 }
 
 function rememberVendorRuntime(method: string, params: JsonObject): void {

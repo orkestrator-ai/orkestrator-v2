@@ -13,6 +13,7 @@ import type {
   NativeAgentBackgroundTaskSummary,
   NativeAgentComposerState,
   NativeAgentContextUsage,
+  NativeAgentExecutionPolicy,
   NativeAgentControlUpdate,
   NativeAgentForkOutcome,
   NativeAgentNotice,
@@ -194,6 +195,8 @@ export interface ProviderCreateSessionOptions {
   /** Tab-scoped Orkestrator MCP credential for bridges with per-session config. */
   agentMcp?: { url: string; token: string };
   interaction?: ProviderSessionRegistration;
+  /** Immutable backend-owned execution policy for this provider session. */
+  policy?: NativeAgentExecutionPolicy;
 }
 
 export interface ProviderSendOptions {
@@ -232,6 +235,7 @@ export interface ProviderInteractiveSnapshot {
   phase?: NativeAgentTurnPhase;
   turnStartedAt?: number;
   contextUsage?: NativeAgentContextUsage;
+  policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
   providerQueue?: NativeAgentQueueSnapshot;
@@ -295,6 +299,11 @@ export interface AgentSessionProvider {
    */
   observeSession?(sessionId: string): Promise<ProviderSessionObservation>;
   /**
+   * Ask the provider for its most detailed usage/account snapshot.
+   * Optional because several providers expose usage only on ordinary status reads.
+   */
+  refreshUsage?(sessionId: string): Promise<NativeAgentContextUsage | undefined>;
+  /**
    * Authoritative activity including input parked at the provider. Optional so
    * narrow test providers and non-interactive integrations can fall back to
    * the coarser status contract.
@@ -354,7 +363,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined>;
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
-  resumeSession?(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string>;
+  resumeSession?(
+    sessionId: string,
+    controls?: NativeAgentControlUpdate,
+    policy?: NativeAgentExecutionPolicy,
+  ): Promise<string>;
   forkSession?(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome>;
   slashCommands?(sessionId?: string): Promise<NativeAgentSlashCommand[]>;
   mcpServers?(sessionId: string): Promise<NativeAgentMcpServer[]>;

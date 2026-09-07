@@ -281,6 +281,7 @@ describe("EnvironmentSettingsDialog", () => {
     expect(capturedMenuItems.map((item) => item.id)).toEqual([
       "general",
       "defaults",
+      "policy",
       "claude",
       "codex",
       "opencode",

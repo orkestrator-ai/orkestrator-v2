@@ -285,11 +285,14 @@ export async function getMcpRuntimeConfig(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
   connection?: AgentMcpConnection,
+  includeProjectSources = true,
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
 }> {
-  const configs = await getMergedMcpServers(cwd);
+  const configs = includeProjectSources
+    ? await getMergedMcpServers(cwd)
+    : await loadGlobalMcpServers();
   const agentServer =
     getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);

@@ -3,7 +3,6 @@ import {
   ERROR_MESSAGE_PREFIX,
   type OpenCodeMessage,
   type OpenCodeRuntimeHealth,
-  type PermissionRequest,
 } from "../lib/opencode-client";
 import { OPTIMISTIC_MESSAGE_PREFIX } from "../lib/chat/client-only-messages";
 import { type OpenCodeAttachment, useOpenCodeStore } from "./openCodeStore";
@@ -30,7 +29,6 @@ function resetOpenCodeStore() {
     messageQueue: new Map(),
     isComposing: new Map(),
     pendingQuestions: new Map(),
-    pendingPermissions: new Map(),
     eventSubscriptions: new Map(),
     contextUsage: new Map(),
     // Every map the store owns has to be reset here. A map left out is a map
@@ -243,14 +241,6 @@ describe("openCodeStore clearSession", () => {
       sessionId: "session-closed",
       questions: [],
     });
-    store.addPendingPermission({
-      id: "permission-closed",
-      sessionId: "session-closed",
-      permission: "edit",
-      patterns: [],
-      metadata: {},
-      always: [],
-    });
     store.addPendingQuestion({
       id: "question-kept",
       sessionId: "session-kept",
@@ -266,14 +256,6 @@ describe("openCodeStore clearSession", () => {
     usePromptDraftStore
       .getState()
       .setDraftValue(openCodeQuestionDraftKey("session-kept", "question-kept"), "answer", "other");
-    store.addPendingPermission({
-      id: "permission-kept",
-      sessionId: "session-kept",
-      permission: "read",
-      patterns: [],
-      metadata: {},
-      always: [],
-    });
 
     store.clearSession(closed);
 
@@ -291,7 +273,6 @@ describe("openCodeStore clearSession", () => {
     expect(next.getQueueLength(closed)).toBe(0);
     expect(next.getAttachments(closed)).toHaveLength(0);
     expect(next.getPendingQuestion("question-closed")).toBeUndefined();
-    expect(next.getPendingPermission("permission-closed")).toBeUndefined();
 
     // The sibling tab in the same environment is untouched.
     expect(next.getDraftText(kept)).toBe("draft");
@@ -303,7 +284,6 @@ describe("openCodeStore clearSession", () => {
     expect(next.getContextUsage(kept)?.percentUsed).toBe(10);
     expect(next.getAttachments(kept)).toHaveLength(1);
     expect(next.getPendingQuestion("question-kept")).toBeTruthy();
-    expect(next.getPendingPermission("permission-kept")).toBeTruthy();
     expect(
       usePromptDraftStore
         .getState()
@@ -380,14 +360,6 @@ describe("openCodeStore clearSession", () => {
       sessionId: "",
       questions: [],
     });
-    store.addPendingPermission({
-      id: "perm-unrelated",
-      sessionId: "",
-      permission: "read",
-      patterns: [],
-      metadata: {},
-      always: [],
-    });
 
     store.clearSession(neverStarted);
 
@@ -396,7 +368,6 @@ describe("openCodeStore clearSession", () => {
     expect(next.getDraftText(neverStarted)).toBe("");
     expect(next.getSelectedModel(neverStarted)).toBeUndefined();
     expect(next.getPendingQuestion("req-unrelated")).toBeTruthy();
-    expect(next.getPendingPermission("perm-unrelated")).toBeTruthy();
 
     // Same branch when the tab never had a session record at all.
     store.clearSession(neverOpened);
@@ -404,7 +375,6 @@ describe("openCodeStore clearSession", () => {
     next = useOpenCodeStore.getState();
     expect(next.getDraftText(neverOpened)).toBe("");
     expect(next.getPendingQuestion("req-unrelated")).toBeTruthy();
-    expect(next.getPendingPermission("perm-unrelated")).toBeTruthy();
   });
 });
 
@@ -754,152 +724,6 @@ describe("openCodeStore queue", () => {
   });
 });
 
-describe("openCodeStore pending permissions", () => {
-  beforeEach(() => {
-    resetOpenCodeStore();
-  });
-
-  test("tracks pending permissions per session", () => {
-    const store = useOpenCodeStore.getState();
-
-    const permission: PermissionRequest = {
-      id: "perm-1",
-      sessionId: "session-1",
-      permission: "read",
-      patterns: ["/workspace/**"],
-      metadata: {},
-      always: ["/workspace/**"],
-    };
-
-    store.addPendingPermission(permission);
-
-    const permissions = useOpenCodeStore.getState().getPendingPermissionsForSession("session-1");
-
-    expect(permissions).toHaveLength(1);
-    expect(permissions[0]?.id).toBe("perm-1");
-  });
-
-  test("removePendingPermission drops only the answered request", () => {
-    const store = useOpenCodeStore.getState();
-
-    store.addPendingPermission({
-      id: "perm-1",
-      sessionId: "session-1",
-      permission: "read",
-      patterns: ["/workspace/**"],
-      metadata: {},
-      always: ["/workspace/**"],
-    });
-    store.addPendingPermission({
-      id: "perm-2",
-      sessionId: "session-1",
-      permission: "bash",
-      patterns: ["*"],
-      metadata: {},
-      always: [],
-    });
-
-    expect(store.getPendingPermissionsForSession("session-1")).toHaveLength(2);
-
-    store.removePendingPermission("perm-1");
-
-    expect(store.getPendingPermission("perm-1")).toBeUndefined();
-    expect(store.getPendingPermission("perm-2")?.id).toBe("perm-2");
-    expect(store.getPendingPermissionsForSession("session-1")).toHaveLength(1);
-
-    // Removing an id nobody is holding must not throw or disturb the rest.
-    store.removePendingPermission("perm-missing");
-    expect(store.getPendingPermission("perm-2")?.id).toBe("perm-2");
-  });
-
-  test("returns the same empty array for a session with no pending permissions", () => {
-    // useSyncExternalStore compares snapshots by reference, so a fresh [] on every
-    // read would rerender forever.
-    const first = useOpenCodeStore.getState().getPendingPermissionsForSession("session-none");
-    const second = useOpenCodeStore.getState().getPendingPermissionsForSession("session-none");
-
-    expect(first).toBe(second);
-    expect(first).toEqual([]);
-  });
-
-  test("clearEnvironment removes pending permissions for every tab session", () => {
-    const store = useOpenCodeStore.getState();
-
-    store.setSession("env-env-123:tab-1", {
-      sessionId: "session-1",
-      messages: [],
-      isLoading: false,
-    });
-    store.setSession("env-env-123:tab-2", {
-      sessionId: "session-2",
-      messages: [],
-      isLoading: false,
-    });
-    store.setSession("env-env-999:tab-1", {
-      sessionId: "session-3",
-      messages: [],
-      isLoading: false,
-    });
-
-    store.addPendingPermission({
-      id: "perm-a",
-      sessionId: "session-1",
-      permission: "read",
-      patterns: ["/workspace/a/**"],
-      metadata: {},
-      always: ["/workspace/a/**"],
-    });
-    store.addPendingPermission({
-      id: "perm-b",
-      sessionId: "session-2",
-      permission: "bash",
-      patterns: ["*"],
-      metadata: {},
-      always: [],
-    });
-    store.addPendingPermission({
-      id: "perm-c",
-      sessionId: "session-3",
-      permission: "read",
-      patterns: ["/workspace/c/**"],
-      metadata: {},
-      always: ["/workspace/c/**"],
-    });
-    store.addPendingQuestion({
-      id: "question-a",
-      sessionId: "session-1",
-      questions: [],
-    });
-    store.addPendingQuestion({
-      id: "question-c",
-      sessionId: "session-3",
-      questions: [],
-    });
-    usePromptDraftStore
-      .getState()
-      .setDraftValue(openCodeQuestionDraftKey("session-1", "question-a"), "answer", "target");
-    usePromptDraftStore
-      .getState()
-      .setDraftValue(openCodeQuestionDraftKey("session-3", "question-c"), "answer", "other");
-
-    store.clearEnvironment("env-123");
-
-    expect(useOpenCodeStore.getState().getPendingPermission("perm-a")).toBeUndefined();
-    expect(useOpenCodeStore.getState().getPendingPermission("perm-b")).toBeUndefined();
-    expect(useOpenCodeStore.getState().getPendingPermission("perm-c")).toBeDefined();
-    expect(
-      usePromptDraftStore
-        .getState()
-        .drafts.has(openCodeQuestionDraftKey("session-1", "question-a")),
-    ).toBe(false);
-    expect(
-      usePromptDraftStore
-        .getState()
-        .drafts.has(openCodeQuestionDraftKey("session-3", "question-c")),
-    ).toBe(true);
-  });
-});
-
 describe("openCodeStore selectors and session mutations", () => {
   beforeEach(() => {
     resetOpenCodeStore();
@@ -1224,31 +1048,6 @@ describe("openCodeStore questions and event subscriptions", () => {
     expect(first).toEqual([]);
   });
 
-  test("removes a pending permission without disturbing other requests", () => {
-    const store = useOpenCodeStore.getState();
-    store.addPendingPermission({
-      id: "permission-1",
-      sessionId: "session-1",
-      permission: "edit",
-      patterns: [],
-      metadata: {},
-      always: [],
-    });
-    store.addPendingPermission({
-      id: "permission-2",
-      sessionId: "session-2",
-      permission: "read",
-      patterns: [],
-      metadata: {},
-      always: [],
-    });
-
-    store.removePendingPermission("permission-1");
-
-    expect(store.getPendingPermission("permission-1")).toBeUndefined();
-    expect(store.getPendingPermission("permission-2")?.id).toBe("permission-2");
-  });
-
   test("reuses an active event subscription instead of creating a second stream owner", () => {
     const store = useOpenCodeStore.getState();
     const first = store.getOrCreateEventSubscription("env-1");
@@ -1346,8 +1145,6 @@ describe("openCodeStore questions and event subscriptions", () => {
     });
     store.addPendingQuestion({ id: "question-a", sessionId: "session-a" } as any);
     store.addPendingQuestion({ id: "question-b", sessionId: "session-b" } as any);
-    store.addPendingPermission({ id: "permission-a", sessionId: "session-a" } as any);
-    store.addPendingPermission({ id: "permission-b", sessionId: "session-b" } as any);
     store.setSelectedMode(sessionKeyA, "plan");
     store.setSelectedMode(sessionKeyB, "build");
     useOpenCodeStore.setState((state) => {
@@ -1367,8 +1164,6 @@ describe("openCodeStore questions and event subscriptions", () => {
     expect(useOpenCodeStore.getState().selectedMode.get(sessionKeyB)).toBe("build");
     expect(store.getPendingQuestion("question-a")).toBeUndefined();
     expect(store.getPendingQuestion("question-b")?.id).toBe("question-b");
-    expect(store.getPendingPermission("permission-a")).toBeUndefined();
-    expect(store.getPendingPermission("permission-b")?.id).toBe("permission-b");
     expect(store.hasActiveEventSubscription("env-1")).toBe(false);
     expect(returnSpy).toHaveBeenCalledTimes(1);
   });

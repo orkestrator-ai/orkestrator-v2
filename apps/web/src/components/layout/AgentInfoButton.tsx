@@ -63,7 +63,6 @@ import {
   deleteAgentHandoff,
   beginNativeAgentSignIn,
   forkNativeAgentSession,
-  getCursorAccountUsage,
   getNativeAgentProjection,
   getSystemUsage,
   performNativeAgentSessionAction,
@@ -80,8 +79,10 @@ import {
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
-import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
+import {
+  describeNativeAgentExecutionPolicy,
+  type NativeAgentControlUpdate,
+} from "@orkestrator/protocol/native-agent";
 import {
   AGENT_PLATFORMS,
   AGENT_PLATFORM_LABELS,
@@ -145,7 +146,6 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
 import {
   AgentInteractionCapability,
   AgentRuntimePanel,
-  CursorAccountUsagePanel,
   type AgentInfoUsageSnapshot,
   Metric,
   SystemUsagePanel,
@@ -169,8 +169,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
-  const [cursorAccountUsage, setCursorAccountUsage] = useState<CursorUsageResult | null>(null);
-  const [cursorAccountUsageLoading, setCursorAccountUsageLoading] = useState(false);
   const [systemUsage, setSystemUsage] = useState<SystemUsageSnapshot | null>(null);
   const [systemUsageCheckedAt, setSystemUsageCheckedAt] = useState(() => Date.now());
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
@@ -407,14 +405,28 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           : {}),
       }
     : undefined;
-  const usage: AgentInfoUsageSnapshot | undefined =
-    (activeSession?.provider === "claude"
+  const legacyUsage: AgentInfoUsageSnapshot | undefined =
+    activeSession?.provider === "claude"
       ? claudeUsage
       : activeSession?.provider === "opencode"
         ? openCodeUsage
         : activeSession?.provider === "codex"
           ? codexUsage
-          : undefined) ?? neutralUsage;
+          : undefined;
+  const usage: AgentInfoUsageSnapshot | undefined = legacyUsage
+    ? {
+        ...neutralUsage,
+        ...legacyUsage,
+        // The compatibility stores do not know the provider-neutral usage
+        // extensions. Keep their freshest context counters while retaining
+        // account windows and bounded per-turn rows from the projection.
+        ...(neutralUsage?.turns ? { turns: neutralUsage.turns } : {}),
+        ...(neutralUsage?.account ? { account: neutralUsage.account } : {}),
+        ...(neutralUsage?.permissionDenialDetails
+          ? { permissionDenialDetails: neutralUsage.permissionDenialDetails }
+          : {}),
+      }
+    : neutralUsage;
   const neutralRateLimits =
     neutralProjection?.rateLimits ?? neutralProjection?.contextUsage?.rateLimits;
   const liveClaudeTasks = neutralProjection?.backgroundTasks ?? Object.values(claudeTasks);
@@ -498,34 +510,26 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
-    if (!open || activeSession?.provider !== "cursor") {
-      setCursorAccountUsageLoading(false);
-      if (activeSession?.provider !== "cursor") setCursorAccountUsage(null);
-      return;
-    }
+    if (!open || !activeSession || !currentSessionId) return;
     let cancelled = false;
-    setCursorAccountUsageLoading(true);
-    void getCursorAccountUsage()
-      .then((result) => {
-        if (!cancelled) setCursorAccountUsage(result);
+    const requestedSessionId = currentSessionId;
+    void getNativeAgentProjection({
+      environmentId: activeSession.environmentId,
+      agent: activeSession.provider,
+      logicalSessionKey: activeSession.sessionKey,
+      refreshUsage: true,
+    })
+      .then((projection) => {
+        if (cancelled || !projection || projection.sessionId !== requestedSessionId) return;
+        useNativeAgentProjectionStore
+          .getState()
+          .setProjection(activeSession.sessionKey, projection);
       })
-      .catch(() => {
-        if (!cancelled) {
-          setCursorAccountUsage({
-            ok: false,
-            code: "NETWORK_ERROR",
-            message: "Could not load Cursor account usage.",
-            retryable: true,
-          });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setCursorAccountUsageLoading(false);
-      });
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [activeSession?.provider, open]);
+  }, [activeSession, currentSessionId, open]);
 
   const openForkTab = (
     sessionId: string,
@@ -1079,17 +1083,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   </Button>
                 </div>
               ) : null}
-              {activeSession.provider === "cursor" ? (
-                <CursorAccountUsagePanel
-                  result={cursorAccountUsage}
-                  loading={cursorAccountUsageLoading}
-                />
-              ) : null}
-              <div
-                className={
-                  activeSession.provider === "cursor" ? "border-t border-border/60 pt-4" : undefined
-                }
-              >
+              <div>
                 <UsagePanel
                   usage={usage}
                   modelId={modelId}
@@ -1708,6 +1702,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                   Runtime
                 </div>
+                {neutralProjection?.policy ? (
+                  <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
+                    <div className="font-medium text-foreground">Execution policy</div>
+                    <p className="mt-0.5 leading-relaxed text-muted-foreground">
+                      {describeNativeAgentExecutionPolicy(neutralProjection.policy)}
+                    </p>
+                    {neutralProjection.policy.note ? (
+                      <p className="mt-1 leading-relaxed text-muted-foreground">
+                        {neutralProjection.policy.note}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {neutralProjection?.auth ? (
                   <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
                     <div className="flex items-center justify-between gap-3">

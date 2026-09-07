@@ -187,6 +187,36 @@ theirs too: `message.updated`, `message.part.updated`, `session.updated`,
 The SDK and CLI are pinned to the same exact version, and
 `tests/unit/version-drift.test.ts` enforces that they agree.
 
+## Execution policy
+
+The backend resolves one `NativeAgentExecutionPolicy` when it creates a native
+agent session. The decision is based on the environment boundary and session
+origin, with an optional per-environment override, and is persisted with the
+session. Bridges receive the resolved value on `/session/create`, retain it
+across detach and restart, and expose it in their authoritative snapshot. The
+agent info panel renders that effective value rather than making trust decisions
+in the renderer.
+
+Interactive host sessions default to provider sandboxing, explicit approvals,
+project resources off, and full network access. Container sessions use the
+container as their sandbox, automatically approve inside that boundary, enable
+project resources, and follow the environment network setting. Pipeline runs
+are unattended. The coordinator always uses the immutable
+`coordinator-read-only` policy regardless of an environment override.
+
+| Adapter | Policy mapping |
+| --- | --- |
+| Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options |
+| Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile |
+| Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume |
+| Grok | `--always-approve` only for auto-approval; ACP permission requests otherwise; project MCP trust at the launcher boundary |
+| Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection |
+| OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note |
+
+Legacy bridge environment variables remain accepted temporarily as deprecated
+compatibility overrides. Launchers no longer use them for normal sessions; the
+backend policy is the source of truth.
+
 ## Cursor Agent
 
 **Bridge:** `bridges/cursor-bridge/` · **Transport:** Cursor TypeScript SDK in process
@@ -196,32 +226,10 @@ session and translates `InteractionUpdate` events into the shared transcript
 shape. Cursor has no managed CLI, terminal mode, or ACP fallback. Local and
 container sessions use the same bridge and HTTP routes.
 
-The bridge keeps project `.cursor/` resources disabled on the host and enables
-them only inside containers. Its SDK and native runtime closure are vendored
+Cursor receives project-resource, sandbox and tool restrictions from the
+backend-owned execution policy. Its SDK and native runtime closure are vendored
 into the packaged bridge; see `docs/upgrade-agents.md` for the build and upgrade
 checks.
-
-### Cursor host tabs are ungated
-
-The SDK's own sandbox is off unless `CURSOR_BRIDGE_SANDBOX=1`, and no launcher
-sets it. On a **host worktree** that means Cursor's `shell`, `write` and
-`delete` tools run against the user's machine with no approval surface, because
-the SDK exposes no approval hook this bridge could park a call on.
-
-This is the same posture every platform here takes locally, not a Cursor
-oversight: Grok launches with `--always-approve`, Pi's approval gate is off
-unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, and Claude's local default allows the
-tools it does not explicitly branch on. Sandboxing Cursor alone would give one
-platform a different answer to the same question without making the product any
-safer — a user who wants isolation gets it from a container environment, which
-is the boundary Orkestrator actually enforces.
-
-What is *not* acceptable is leaving that difference unstated, which is what this
-paragraph fixes. Making the gate a real, uniform, backend-owned decision rather
-than a per-bridge default is
-[plan 12](../plans/sdk-coverage/12-execution-policy-and-host-container-parity.md);
-until it lands, `sandboxEnabled` staying `false` by default is a documented
-choice with a test pinning it, not an accident.
 
 ## Grok Build
 
@@ -230,17 +238,14 @@ choice with a test pinning it, not an accident.
 The bridge spawns the `grok` CLI and speaks the Agent Client Protocol over its
 stdio. One bridge process serves the environment and spawns one CLI child per
 session, lazily re-attaching through `ensureSessionProcess` when needed. It
-launches Grok as
-`--always-approve agent [--model M] [--reasoning-effort E] stdio`.
+launches Grok as `agent [--model M] [--reasoning-effort E] stdio`, adding
+`--always-approve` only when the execution policy selects automatic approval.
 
 Because these are command-line flags rather than a typed SDK, **the argv is a
 versioned contract that nothing in CI can check** — the bridge's own tests run
 against a fake agent that accepts anything, so a renamed upstream flag leaves the
 suite green and breaks every session at runtime. `docs/upgrade-agents.md` has the
 manual verification steps to run after a version bump.
-
-The permissive command flag is deliberate and matches the Claude bridge's local
-default.
 
 Protocol handling lives in `index.ts`. The bridge sends `initialize`,
 `session/new`, `session/load`, `session/list`, and `session/prompt`, and
@@ -309,21 +314,12 @@ That also gives fork a real implementation: `createBranchedSession` writes a new
 file holding the path to the chosen entry, so a fork is an independent
 conversation rather than a copy of what was on screen.
 
-Approvals exist but are off by default. Pi ships no permission system — a gate
-is something you build on its `tool_call` extension hook — so the bridge
-registers exactly that as an inline extension, enabled by
-`PI_BRIDGE_REQUIRE_APPROVAL=1`. The default is permissive for the same reason
-the Claude bridge's is: an Orkestrator tab is an interactive session in an
-already-isolated environment. When the gate is on, timeout, disconnect, session
-close and a malformed answer all deny, and a turn that ends with a call still
-parked denies it rather than leaving the turn awaiting a promise nobody will
-settle.
-
-Project-local `.pi/` resources — extensions, skills, prompt templates — are
-opt-in through `PI_BRIDGE_PROJECT_RESOURCES` and only the container launcher
-opts in. A Pi extension is arbitrary TypeScript the bridge process would run, so
-this is the same boundary `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge:
-cloning a repository must not be enough to run its code on the user's machine.
+Pi ships no permission system, so its adapter implements the execution policy's
+approval mode on the SDK `tool_call` extension hook. Timeout, disconnect,
+session close and a malformed answer all deny, and a turn that ends with a call
+still parked denies it rather than leaving the turn awaiting a promise nobody
+will settle. The same policy controls project-local `.pi/` extensions, skills
+and prompt templates through Pi's resource loader and project-trust callback.
 
 The SDK and the `pi` binary a terminal tab runs are the same program published
 two ways, so they are pinned to one version and `tests/unit/version-drift.test.ts`

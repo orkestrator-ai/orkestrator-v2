@@ -510,6 +510,64 @@ describe("usage and account rate limits", () => {
     expect(h.events.some((event) => event.data?.contextUsage !== undefined)).toBe(true);
   });
 
+  test("retains one bounded snapshot per Codex turn", async () => {
+    const { h, sessionId } = await usageSession();
+    for (let index = 0; index < 22; index += 1) {
+      h.child().notify("thread/tokenUsage/updated", {
+        threadId: "thread-1",
+        turnId: `turn-${index}`,
+        tokenUsage: {
+          total: { totalTokens: index + 10, inputTokens: index + 7, outputTokens: 3 },
+          last: { totalTokens: index + 1, inputTokens: index, outputTokens: 1 },
+          modelContextWindow: 100,
+        },
+      });
+    }
+    // A repeated notification updates the same row instead of appending it.
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-1",
+      turnId: "turn-21",
+      tokenUsage: {
+        total: { totalTokens: 99 },
+        last: { totalTokens: 9, inputTokens: 7, outputTokens: 2 },
+        modelContextWindow: 100,
+      },
+    });
+    await h.drain();
+
+    const usage = h.runtime.getStatus(sessionId)?.contextUsage;
+    expect(usage?.turns).toHaveLength(20);
+    expect(usage?.turns?.[0]?.turnId).toBe("turn-2");
+    expect(usage?.turns?.at(-1)).toMatchObject({
+      turnId: "turn-21",
+      inputTokens: 7,
+      outputTokens: 2,
+      totalTokens: 9,
+    });
+  });
+
+  test("reads account token windows only when requested", async () => {
+    const h = await harness({
+      "account/usage/read": () => ({
+        summary: { lifetimeTokens: 5_000, peakDailyTokens: 900 },
+        dailyUsageBuckets: [{ startDate: "2026-09-07", tokens: 450 }],
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-usage", attachments: [] });
+
+    const usage = await h.runtime.getUsage(sessionId);
+
+    expect(usage?.account).toEqual([
+      { window: "lifetime", label: "Lifetime", tokens: 5_000 },
+      { window: "peak-daily", label: "Peak day", tokens: 900 },
+      { window: "daily:2026-09-07", label: "2026-09-07", tokens: 450 },
+    ]);
+    expect(
+      h.child().requests.filter((request) => request.method === "account/usage/read"),
+    ).toHaveLength(1);
+  });
+
   test("getStatus reports no usage before any has been observed", async () => {
     const { h, sessionId } = await usageSession();
     expect(h.runtime.getStatus(sessionId)?.contextUsage).toBeUndefined();
@@ -553,6 +611,16 @@ describe("usage and account rate limits", () => {
         { slot: "secondary", usedPercent: 20 },
       ],
       credits: { balance: "12.50", hasCredits: true },
+      account: [
+        {
+          window: "primary",
+          label: "Five hour",
+          usedPercent: 60,
+          resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
+        },
+        { window: "secondary", label: "Secondary", usedPercent: 20 },
+        { window: "credits", label: "Credits", creditsRemaining: 12.5 },
+      ],
     });
 
     // A genuinely secondary-only update, with no primary or credits at all.

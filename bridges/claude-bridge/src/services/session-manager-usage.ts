@@ -158,6 +158,10 @@ export function inProgressClaudeUsage(
     ...(previous?.permissionDenials !== undefined
       ? { permissionDenials: previous.permissionDenials }
       : {}),
+    ...(previous?.permissionDenialDetails
+      ? { permissionDenialDetails: previous.permissionDenialDetails }
+      : {}),
+    ...(previous?.turns ? { turns: previous.turns } : {}),
     ...(canReusePreviousContext && previous?.contextCategories
       ? { contextCategories: previous.contextCategories }
       : {}),

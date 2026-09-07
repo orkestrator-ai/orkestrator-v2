@@ -256,6 +256,13 @@ const AGENT_PINS: Record<string, AgentPins> = {
   grok: {
     dockerArg: "GROK_BUILD_VERSION",
     containerInstall: "pinned-archive",
+    sdkPins: [
+      {
+        file: "bridges/acp-bridge/package.json",
+        dep: "@agentclientprotocol/sdk",
+        tracksCli: false,
+      },
+    ],
   },
   pi: {
     dockerArg: "PI_CLI_VERSION",

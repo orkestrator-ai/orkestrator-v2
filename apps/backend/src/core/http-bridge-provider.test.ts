@@ -105,13 +105,24 @@ describe("HTTP bridge provider", () => {
         branchLabel: "Alternative",
       },
     ]);
+    const policy = {
+      id: "interactive-host" as const,
+      sandbox: "provider" as const,
+      approvals: "deny" as const,
+      projectResources: false,
+      networkAccess: "restricted" as const,
+    };
     await expect(
-      provider.resumeSession?.("opaque-session", {
-        modelId: "model-a",
-        reasoningId: "high",
-        mode: "plan",
-        fastMode: true,
-      }),
+      provider.resumeSession?.(
+        "opaque-session",
+        {
+          modelId: "model-a",
+          reasoningId: "high",
+          mode: "plan",
+          fastMode: true,
+        },
+        policy,
+      ),
     ).resolves.toBe("bridge-session");
 
     expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toEqual([
@@ -124,7 +135,28 @@ describe("HTTP bridge provider", () => {
       reasoningId: "high",
       mode: "plan",
       fastMode: true,
+      policy,
     });
+  });
+
+  test("applies policy to a resumed Claude session before returning it", async () => {
+    const { provider, requests } = httpProvider(() => Response.json({ ok: true }));
+    const policy = {
+      id: "interactive-host" as const,
+      sandbox: "provider" as const,
+      approvals: "ask" as const,
+      projectResources: false,
+      networkAccess: "restricted" as const,
+    };
+
+    await expect(provider.resumeSession?.("claude-session", undefined, policy)).resolves.toBe(
+      "claude-session",
+    );
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toEqual([
+      ["http://claude.test/session/claude-session", "GET"],
+      ["http://claude.test/session/claude-session/config", "POST"],
+    ]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({ policy });
   });
 
   test("normalizes hostile authentication payloads", async () => {

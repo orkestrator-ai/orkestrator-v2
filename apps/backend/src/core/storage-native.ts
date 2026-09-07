@@ -298,7 +298,7 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy"
+          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
         >
       >,
     createProviderSession: () => Promise<string>,
@@ -339,6 +339,7 @@ export abstract class StorageNative extends StorageReviews {
             ...existing,
             owner: input.owner,
             ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
+            ...(input.policy ? { policy: input.policy } : {}),
             updatedAt: nowIso(),
           };
           sessions[input.key] = migratedOwner;
@@ -381,7 +382,7 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy"
+          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -433,16 +434,19 @@ export abstract class StorageNative extends StorageReviews {
             : existing.controls;
           const ownerChanged = !existing.owner && Boolean(input.owner);
           const policyChanged = !existing.executionPolicy && Boolean(input.executionPolicy);
+          const normalizedPolicyChanged = !existing.policy && Boolean(input.policy);
           if (
             (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) ||
             ownerChanged ||
-            policyChanged
+            policyChanged ||
+            normalizedPolicyChanged
           ) {
             const updated: PersistedNativeAgentSession = {
               ...existing,
               controls,
               ...(input.owner ? { owner: input.owner } : {}),
               ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
+              ...(input.policy ? { policy: input.policy } : {}),
               updatedAt: nowIso(),
             };
             sessions[input.key] = updated;

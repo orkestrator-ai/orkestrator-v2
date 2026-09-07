@@ -28,6 +28,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.sessionConfig.composer,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
@@ -77,6 +78,8 @@ export function publicContextUsage(state: SessionState) {
         ...(state.usage.sessionTokens === undefined
           ? {}
           : { sessionTokens: state.usage.sessionTokens }),
+        ...(state.usage.turns?.length ? { turns: state.usage.turns } : {}),
+        source: provider,
         updatedAt: state.usage.updatedAt,
       })
     : null;

@@ -20,7 +20,13 @@ import {
 import { listModels, refreshModels } from "./models.js";
 import { publicCursorMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
-import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
+import {
+  dispatchPrompt,
+  errorText,
+  journal,
+  refreshAgentUsage,
+  setPromptJournal,
+} from "./prompt.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -31,12 +37,14 @@ import {
   messageWindow,
   parseFromIndex,
   publicActivity,
+  publicContextUsage,
   publicDispatch,
   publicRuntime,
   publicSession,
   publicStatus,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -165,7 +173,11 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
-    const state = await createSession(clientSessionKey, parseComposerPatch(body));
+    const state = await createSession(
+      clientSessionKey,
+      parseComposerPatch(body),
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    );
     json(response, 201, publicSession(state));
     return true;
   }
@@ -173,7 +185,11 @@ async function routeGlobal(
     const body = await readJson(request);
     const agentId = readBoundedString(body.sessionId, 1_024, "sessionId");
     if (!agentId) throw new HttpError(400, "sessionId is required");
-    const state = await resumeSession(agentId, parseComposerPatch(body));
+    const state = await resumeSession(
+      agentId,
+      parseComposerPatch(body),
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    );
     json(response, 201, publicSession(state));
     return true;
   }
@@ -266,6 +282,14 @@ async function routeSession(
             message: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
           };
     return json(response, 200, publicStatus(state, readiness));
+  }
+  if (action === "usage" && request.method === "GET") {
+    const agent = await ensureAgent(state);
+    if (state.usage) {
+      const floor = Math.max(state.usage.sessionTokenFloor ?? 0, state.usage.sessionTokens ?? 0);
+      await refreshAgentUsage(state, agent, state.promptSequence, floor);
+    }
+    return json(response, 200, { contextUsage: publicContextUsage(state) });
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, publicActivity(state));

@@ -17,6 +17,35 @@ import {
 } from "./agent-provider-test-support.js";
 
 describe("OpenCode provider", () => {
+  test("applies the backend policy before adopting a resumed session", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(
+        provider.resumeSession?.("owned-session", undefined, {
+          id: "interactive-host",
+          sandbox: "provider",
+          approvals: "deny",
+          projectResources: true,
+          toolPolicy: { allow: ["read"], deny: ["shell"] },
+          networkAccess: "restricted",
+        }),
+      ).resolves.toBe("owned-session");
+      expect(fake.updateCalls).toEqual([
+        {
+          sessionID: "owned-session",
+          permission: [
+            { permission: "*", pattern: "*", action: "deny" },
+            { permission: "read", pattern: "*", action: "allow" },
+            { permission: "shell", pattern: "*", action: "deny" },
+          ],
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("treats a status-map omission as idle when the session still exists", async () => {
     const fake = openCodeFake();
     fake.setStatusResponse({ data: {} });
@@ -187,6 +216,7 @@ describe("OpenCode provider", () => {
     const provider = openCodeActivityProvider(fake, {
       now: () => now,
       openCodeExistenceCacheTtlMs: 100,
+      openCodeStatusReconcileIntervalMs: 100,
     });
     try {
       await expect(provider.activity?.("idle-session")).resolves.toBe("idle");
@@ -216,7 +246,9 @@ describe("OpenCode provider", () => {
       await expect(provider.activity?.("session-that-deletes")).resolves.toBe("idle");
       await expect(provider.status("session-that-deletes")).resolves.toBe("missing");
       await expect(provider.activity?.("session-that-deletes")).resolves.toBe("missing");
-      expect(fake.sessionGetCallCount).toBe(2);
+      // The strong status read publishes the missing transition into the SSE
+      // lifecycle cache, so the following activity read needs no second probe.
+      expect(fake.sessionGetCallCount).toBe(1);
     } finally {
       await provider.dispose?.();
     }

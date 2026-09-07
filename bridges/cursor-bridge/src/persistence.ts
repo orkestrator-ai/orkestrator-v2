@@ -9,6 +9,7 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
 import { readTodos } from "./tool-rendering.js";
@@ -85,6 +86,7 @@ async function persistNow(): Promise<void> {
 function toPersisted(state: SessionState): PersistedSession {
   return {
     id: state.id,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.agentId ? { agentId: state.agentId } : {}),
     // A session that was mid-turn when the process died is not running now.
@@ -144,6 +146,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
     nonBlank(entry.clientSessionKey) ? entry.clientSessionKey : undefined,
   );
   state.id = entry.id;
+  if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
   if (nonBlank(entry.agentId)) state.agentId = entry.agentId;
   state.status = entry.status === "error" ? "error" : "idle";
   if (nonBlank(entry.error)) state.error = entry.error;
@@ -260,6 +263,12 @@ function restoreUsage(value: unknown): SessionState["usage"] {
   const turn = restoreTurnUsage(value.turn);
   if (!turn) return undefined;
   const context = restoreTurnUsage(value.context);
+  const turns = Array.isArray(value.turns)
+    ? value.turns.slice(-20).filter((entry) => isObject(entry) && nonBlank(entry.turnId))
+    : [];
+  const account = Array.isArray(value.account)
+    ? value.account.slice(-16).filter((entry) => isObject(entry) && nonBlank(entry.window))
+    : [];
   return {
     turn,
     ...(context ? { context } : {}),
@@ -279,6 +288,12 @@ function restoreUsage(value: unknown): SessionState["usage"] {
       : {}),
     ...(typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0
       ? { costUsd: value.costUsd }
+      : {}),
+    ...(turns.length > 0
+      ? { turns: turns as NonNullable<NonNullable<SessionState["usage"]>["turns"]> }
+      : {}),
+    ...(account.length > 0
+      ? { account: account as NonNullable<NonNullable<SessionState["usage"]>["account"]> }
       : {}),
     updatedAt: nonBlank(value.updatedAt) ? value.updatedAt : new Date().toISOString(),
   };

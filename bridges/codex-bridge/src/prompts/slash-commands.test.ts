@@ -81,12 +81,11 @@ describe("slash command parsing and metadata", () => {
     }
   });
 
-  test("recognizes only the CLI-native goal command", () => {
-    expect(isCodexCliNativeSlashCommand("/GOAL")).toBe(true);
+  test("does not expose an app-server command without a stable RPC", () => {
+    expect(isCodexCliNativeSlashCommand("/GOAL")).toBe(false);
     expect(isCodexCliNativeSlashCommand("/help")).toBe(false);
     expect(BUILTIN_SLASH_COMMANDS.map((command) => command.name)).toEqual([
       "/help",
-      "/goal",
       "/models",
       "/steer",
     ]);
@@ -225,7 +224,6 @@ describe("prompt command discovery", () => {
 
     const definitions = await getAvailableSlashCommandDefinitions(cwd);
     expect(definitions.map((definition) => definition.name)).toEqual([
-      "/goal",
       "/help",
       "/home-only",
       "/models",

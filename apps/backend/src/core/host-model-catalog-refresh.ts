@@ -245,6 +245,20 @@ async function refreshAcp(
     env.ACP_BRIDGE_TOKEN = token;
     env.ACP_PROVIDER = agent;
     env.ACP_AGENT_PATH = executable;
+    env.ACP_PROVIDER_CONFIG = JSON.stringify({
+      id: agent,
+      name: "Grok",
+      executable,
+      argv: ["--always-approve", "agent", "{{model}}", "{{effort}}", "stdio"],
+      env: {},
+      requiresAuthenticate: true,
+      authMethodEnv: "GROK_AUTH_METHOD_ID",
+      modeMap: { agent: "build", build: "build", plan: "plan", ask: "plan" },
+      extensionPrefixes: ["x.ai/", "_x.ai/"],
+      acknowledgedExtensionMethods: [],
+      modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
+      sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
+    });
     env.ACP_APPROVE_PROJECT_MCPS = "0";
   }
   const models = await withShortLivedBridge(

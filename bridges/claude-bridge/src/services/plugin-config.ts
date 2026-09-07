@@ -290,8 +290,13 @@ export async function getMergedPlugins(cwd: string): Promise<PluginConfig[]> {
 /**
  * Convert merged configs to SDK-compatible plugin config array
  */
-export async function getPluginsForSdk(cwd: string): Promise<SdkPluginConfig[]> {
-  const configs = await getMergedPlugins(cwd);
+export async function getPluginsForSdk(
+  cwd: string,
+  includeProjectSources = true,
+): Promise<SdkPluginConfig[]> {
+  const configs = includeProjectSources
+    ? await getMergedPlugins(cwd)
+    : [...(await loadGlobalPlugins()), ...(await loadCliInstalledPlugins())];
 
   // Filter to only include plugins that exist
   const validPlugins: SdkPluginConfig[] = [];

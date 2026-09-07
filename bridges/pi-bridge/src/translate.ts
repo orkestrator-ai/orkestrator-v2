@@ -303,9 +303,6 @@ function applyTextDelta(state: SessionState, text: string, kind: "text" | "think
   // reasoning is not part of it: it is shown in its own collapsed block.
   if (kind === "text") {
     message.content = appendBounded(message, message.content, text);
-    if (state.currentTurnOutput !== null) {
-      state.currentTurnOutput = appendBounded(message, state.currentTurnOutput, text);
-    }
   }
   state.revision += 1;
 }

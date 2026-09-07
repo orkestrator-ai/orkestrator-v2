@@ -8,7 +8,6 @@ import {
   type OpenCodeConversationMode,
   type OpencodeClient,
   type QuestionRequest,
-  type PermissionRequest,
   type OpenCodeEvent,
 } from "@/lib/opencode-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
@@ -100,7 +99,6 @@ interface OpenCodeState extends OpenCodeChatSlice, NativeEventSubscriptionSlice<
 
   // Agent-specific state (per-request)
   pendingQuestions: Map<string, QuestionRequest>;
-  pendingPermissions: Map<string, PermissionRequest>;
 
   // Agent-specific actions (per-environment)
   setModels: (environmentId: string, models: OpenCodeModel[], source?: OpenCodeModelSource) => void;
@@ -118,8 +116,6 @@ interface OpenCodeState extends OpenCodeChatSlice, NativeEventSubscriptionSlice<
   // Agent-specific actions (per-request)
   addPendingQuestion: (question: QuestionRequest) => void;
   removePendingQuestion: (requestId: string) => void;
-  addPendingPermission: (permission: PermissionRequest) => void;
-  removePendingPermission: (requestId: string) => void;
 
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -136,8 +132,6 @@ interface OpenCodeState extends OpenCodeChatSlice, NativeEventSubscriptionSlice<
   isComposingFor: (sessionKey: string) => boolean;
   getPendingQuestionsForSession: (sessionId: string) => QuestionRequest[];
   getPendingQuestion: (requestId: string) => QuestionRequest | undefined;
-  getPendingPermissionsForSession: (sessionId: string) => PermissionRequest[];
-  getPendingPermission: (requestId: string) => PermissionRequest | undefined;
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
   getRuntimeHealth: (environmentId: string) => OpenCodeRuntimeHealth | undefined;
   getAgents: (environmentId: string) => OpenCodeAgent[];
@@ -149,7 +143,6 @@ interface OpenCodeState extends OpenCodeChatSlice, NativeEventSubscriptionSlice<
 const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
-const EMPTY_PERMISSIONS: PermissionRequest[] = [];
 const EMPTY_AGENTS: OpenCodeAgent[] = [];
 
 /**
@@ -200,7 +193,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   runtimeHealth: new Map(),
   selectedAgent: new Map(),
   pendingQuestions: new Map(),
-  pendingPermissions: new Map(),
 
   // Agent-specific actions
   setModels: (environmentId, models, source = "server") =>
@@ -296,13 +288,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
           sweptDraftKeys.push(openCodeQuestionDraftKey(question.sessionId, requestId));
         }
       }
-      const pendingPermissions = new Map(state.pendingPermissions);
-      for (const [requestId, permission] of pendingPermissions) {
-        if (permission.sessionId === session.sessionId) {
-          pendingPermissions.delete(requestId);
-        }
-      }
-      return { ...patch, pendingQuestions, pendingPermissions };
+      return { ...patch, pendingQuestions };
     });
     usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
@@ -341,13 +327,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         }
       }
 
-      const newPendingPermissions = new Map(state.pendingPermissions);
-      for (const [requestId, permission] of newPendingPermissions) {
-        if (environmentSessionIds.has(permission.sessionId)) {
-          newPendingPermissions.delete(requestId);
-        }
-      }
-
       return {
         ...buildClearEnvironmentPatch(state, environmentId, {
           environmentKeyed: [
@@ -362,7 +341,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
         }),
         // Keyed by requestId, so they need the session-id sweep above.
         pendingQuestions: newPendingQuestions,
-        pendingPermissions: newPendingPermissions,
       };
     });
     usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
@@ -392,20 +370,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     }
   },
 
-  addPendingPermission: (permission) =>
-    set((state) => {
-      const next = new Map(state.pendingPermissions);
-      next.set(permission.id, permission);
-      return { pendingPermissions: next };
-    }),
-
-  removePendingPermission: (requestId) =>
-    set((state) => {
-      const next = new Map(state.pendingPermissions);
-      next.delete(requestId);
-      return { pendingPermissions: next };
-    }),
-
   // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
   getModels: (environmentId) => get().models.get(environmentId) ?? EMPTY_MODELS,
@@ -428,18 +392,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
   },
 
   getPendingQuestion: (requestId) => get().pendingQuestions.get(requestId),
-
-  getPendingPermissionsForSession: (sessionId) => {
-    const permissions: PermissionRequest[] = [];
-    for (const permission of get().pendingPermissions.values()) {
-      if (permission.sessionId === sessionId) {
-        permissions.push(permission);
-      }
-    }
-    return permissions.length > 0 ? permissions : EMPTY_PERMISSIONS;
-  },
-
-  getPendingPermission: (requestId) => get().pendingPermissions.get(requestId),
 
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
   getRuntimeHealth: (environmentId) => get().runtimeHealth.get(environmentId),

@@ -133,6 +133,7 @@ function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession
     setThinkingLevel: () => undefined,
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
+    getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
     ...overrides,
   } as unknown as AgentSession;
 }
@@ -1493,6 +1494,7 @@ describe("at-most-once dispatch", () => {
         abort: async () => undefined,
         getContextUsage: () => undefined,
         getSessionStats: () => ({ cost: 0 }),
+        getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
         setModel: async () => undefined,
         setThinkingLevel: () => undefined,
       } as unknown as AgentSession;
@@ -1555,6 +1557,7 @@ describe("at-most-once dispatch", () => {
       },
       setModel: async () => undefined,
       setThinkingLevel: () => undefined,
+      getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
     } as unknown as AgentSession;
 
     const response = await call(`/session/${state.id}/prompt`, {

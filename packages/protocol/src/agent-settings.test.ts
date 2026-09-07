@@ -293,5 +293,6 @@ describe("isEmptyAgentSettings", () => {
     expect(isEmptyAgentSettings({ platforms: { claude: { mode: "native" } } })).toBe(false);
     expect(isEmptyAgentSettings({ defaultAgent: "codex" })).toBe(false);
     expect(isEmptyAgentSettings({ multiReview: { reviewerCount: 3 } })).toBe(false);
+    expect(isEmptyAgentSettings({ executionPolicy: { approvals: "ask" } })).toBe(false);
   });
 });

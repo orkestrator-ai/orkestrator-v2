@@ -59,7 +59,6 @@ import {
   NATIVE_AGENT_SYNC_MAX_PAGE_BYTES,
   NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES,
 } from "@orkestrator/protocol/native-agent";
-import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import {
@@ -111,10 +110,6 @@ export async function launchNativeAgentJob(input: {
   activateTab?: boolean;
 }): Promise<NativeAgentJobLaunchResult> {
   return invoke<NativeAgentJobLaunchResult>("launch_native_agent_job", input);
-}
-
-export async function getCursorAccountUsage(): Promise<CursorUsageResult> {
-  return invoke<CursorUsageResult>("get_cursor_account_usage");
 }
 
 export async function startLoopedReview(
@@ -353,6 +348,8 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
   logicalSessionKey: string;
   /** Omit to keep the window this session already has; never to shrink it. */
   messageLimit?: number;
+  /** Request the provider's detailed billing/quota snapshot. */
+  refreshUsage?: boolean;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("get_native_agent_projection", input);
 }

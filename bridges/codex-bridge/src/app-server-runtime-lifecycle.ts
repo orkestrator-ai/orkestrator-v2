@@ -30,6 +30,9 @@ import {
   AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
   AmbiguousDispatchResolution,
   mergeRateLimitWindows,
+  mergeTurnUsage,
+  mergeAccountUsage,
+  accountUsageFromLimits,
   isJsonObject,
   DEFAULT_COMPACTION_TIMEOUT_MS,
   MAX_STEER_REQUESTS,
@@ -134,7 +137,11 @@ import {
   type JsonSchema,
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
-import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
+import {
+  fallbackReasoningId,
+  isNativeAgentExecutionPolicy,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   async start(): Promise<void> {
@@ -166,6 +173,14 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
                 sandbox: "read-only",
                 networkAccessEnabled: false,
                 permissionProfile: requiredCoordinatorPermissionProfile(),
+                policy: {
+                  id: "coordinator-read-only",
+                  sandbox: "provider",
+                  approvals: "deny",
+                  projectResources: false,
+                  toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+                  networkAccess: "restricted",
+                },
               }
             : persisted.config,
         title: persisted.title,
@@ -725,6 +740,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           ...usage,
           rateLimits: this.accountRateLimits,
           ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+          account: mergeAccountUsage(
+            usage.account,
+            accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+          ),
           updatedAt: new Date(this.now()).toISOString(),
         };
         this.usageByThread.set(threadId, merged);
@@ -840,10 +859,16 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         this.applyConfirmedModel(context, event.model, event.turnId);
         return;
       case "thread.usage.updated": {
+        const previous = this.usageByThread.get(threadId);
         const usage = {
           ...event.usage,
+          turns: mergeTurnUsage(previous?.turns, event.usage.turns),
           ...(this.accountRateLimits.length > 0 ? { rateLimits: this.accountRateLimits } : {}),
           ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+          account: mergeAccountUsage(
+            previous?.account,
+            accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+          ),
         };
         this.usageByThread.set(threadId, usage);
         for (const sessionId of context.bridgeSessionIds) {
@@ -1674,6 +1699,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
     const coordinatorReadOnly =
       process.env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only";
+    const requestedPolicy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
+    const policy: NativeAgentExecutionPolicy | undefined = coordinatorReadOnly
+      ? {
+          id: "coordinator-read-only",
+          sandbox: "provider",
+          approvals: "deny",
+          projectResources: false,
+          toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+          networkAccess: "restricted",
+        }
+      : requestedPolicy;
     const model =
       typeof body.model === "string" && body.model.trim().length > 0
         ? body.model.trim()
@@ -1733,12 +1769,23 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // Explicit null clears a previously set tier rather than inheriting it.
       serviceTier: body.fastMode === true ? "fast" : null,
       cwd: this.options.cwd,
-      approvalPolicy: "never",
+      approvalPolicy:
+        policy?.approvals === "ask"
+          ? "on-request"
+          : policy?.approvals === "deny"
+            ? "never"
+            : "never",
       // A coordinator policy is process authority supplied by the trusted
       // backend launcher. It is deliberately independent of conversation mode
       // and re-applied for create, resume, config updates, forks and every turn.
-      sandbox: coordinatorReadOnly || mode === "plan" ? "read-only" : "danger-full-access",
-      networkAccessEnabled: coordinatorReadOnly ? false : true,
+      sandbox:
+        coordinatorReadOnly || mode === "plan" || policy?.approvals === "deny"
+          ? "read-only"
+          : policy?.sandbox === "provider"
+            ? "workspace-write"
+            : "danger-full-access",
+      networkAccessEnabled: policy ? policy.networkAccess === "full" : true,
+      ...(policy ? { policy } : {}),
       ...(agentMcp ? { agentMcp } : {}),
       ...(coordinatorReadOnly ? { permissionProfile: requiredCoordinatorPermissionProfile() } : {}),
     };

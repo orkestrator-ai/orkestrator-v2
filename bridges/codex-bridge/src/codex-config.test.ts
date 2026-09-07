@@ -35,7 +35,6 @@ describe("Codex app-server configuration", () => {
   test("defaults the concurrent spawned-thread limit to five", () => {
     expect(resolveCodexMaxConcurrentThreads(undefined)).toBe(5);
     expect(codexAppServerConfigOverrides({})).toEqual({
-      "features.goals": "true",
       "features.mcp_2026_07_28": "true",
       "agents.max_concurrent_threads_per_session": "5",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "6",
@@ -48,7 +47,6 @@ describe("Codex app-server configuration", () => {
         [CODEX_MAX_CONCURRENT_THREADS_ENV]: "8",
       }),
     ).toEqual({
-      "features.goals": "true",
       "features.mcp_2026_07_28": "true",
       "agents.max_concurrent_threads_per_session": "8",
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",

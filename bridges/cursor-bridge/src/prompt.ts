@@ -7,6 +7,7 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
+import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk";
 import {
   CANCEL_ACK_TIMEOUT_MS,
@@ -137,6 +138,8 @@ export interface FollowableRun {
 }
 
 interface TerminalRunResult {
+  id?: string;
+  requestId?: string;
   status: string;
   result?: string;
   error?: { message: string };
@@ -286,7 +289,7 @@ function finishTurn(
   // transcript is the honest record of what ran.
   state.status = "idle";
   state.error = undefined;
-  recordUsage(state, result, streamed);
+  recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, result.result, input);
   journal(state, input.requestId, "completed");
   state.revision += 1;
@@ -307,7 +310,7 @@ function failTurn(
   state.pendingCancelPromptSequence = undefined;
   state.status = "error";
   state.error = errorText(error);
-  recordUsage(state, result, streamed);
+  recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, undefined, input);
   journal(state, input.requestId, "failed");
   state.revision += 1;
@@ -331,6 +334,7 @@ function recordUsage(
   state: SessionState,
   result: TerminalRunResult | undefined,
   streamed: StreamedUsage,
+  input: DispatchInput,
 ): void {
   // `RunResult.usage` is the SDK's authoritative cumulative usage for the run.
   // Local runs may omit usage from the `turn-ended` delta while still
@@ -356,6 +360,24 @@ function recordUsage(
   const previousFloor = Math.max(previous?.sessionTokenFloor ?? 0, previous?.sessionTokens ?? 0);
   const sessionTokenFloor = previousFloor + (measured ? turnTokenTotal(turn) : 0);
   if (measured) {
+    const turnId = result?.id ?? input.requestId ?? `turn-${state.promptSequence}`;
+    const turns = [
+      ...(previous?.turns ?? []).filter((entry) => entry.turnId !== turnId),
+      {
+        turnId,
+        ...(turn.inputTokens !== undefined ? { inputTokens: turn.inputTokens } : {}),
+        ...(turn.outputTokens !== undefined ? { outputTokens: turn.outputTokens } : {}),
+        ...(turn.cacheReadTokens !== undefined ? { cacheReadTokens: turn.cacheReadTokens } : {}),
+        ...(turn.cacheWriteTokens !== undefined ? { cacheWriteTokens: turn.cacheWriteTokens } : {}),
+        ...(turn.reasoningTokens !== undefined ? { reasoningTokens: turn.reasoningTokens } : {}),
+        totalTokens: turnTokenTotal(turn),
+        ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
+        ...((result?.requestId ?? input.requestId)
+          ? { requestId: result?.requestId ?? input.requestId }
+          : {}),
+        ...(modelId ? { modelId } : {}),
+      },
+    ].slice(-20);
     state.usage = {
       turn,
       // Recorded only when it is genuinely a second reading. A run that
@@ -375,6 +397,8 @@ function recordUsage(
       // provider snapshot yet.
       sessionTokenFloor,
       ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
+      turns,
+      ...(previous?.account ? { account: previous.account } : {}),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -495,8 +519,22 @@ export async function refreshAgentUsage(
   const nextSessionTokens = sessionTokens ?? current.sessionTokens;
   const nextSessionTokenFloor = Math.max(current.sessionTokenFloor ?? 0, sessionTokens ?? 0);
   const nextCostUsd = costUsd ?? current.costUsd;
+  const reportTurns = normalizeAgentUsageRuns(report.runs, current.turns);
+  const account = stale
+    ? current.account
+    : [
+        {
+          window: "agent",
+          label: "Agent total",
+          ...(sessionTokens === undefined ? {} : { tokens: sessionTokens }),
+          ...(chargedCents === undefined ? {} : { spendUsd: chargedCents / 100 }),
+        },
+      ];
   const publicChanged =
-    nextSessionTokens !== current.sessionTokens || nextCostUsd !== current.costUsd;
+    nextSessionTokens !== current.sessionTokens ||
+    nextCostUsd !== current.costUsd ||
+    JSON.stringify(reportTurns) !== JSON.stringify(current.turns) ||
+    JSON.stringify(account) !== JSON.stringify(current.account);
   const floorChanged = nextSessionTokenFloor !== current.sessionTokenFloor;
   if (publicChanged || floorChanged) {
     state.usage = {
@@ -504,6 +542,8 @@ export async function refreshAgentUsage(
       ...(nextSessionTokens === undefined ? {} : { sessionTokens: nextSessionTokens }),
       sessionTokenFloor: nextSessionTokenFloor,
       ...(nextCostUsd === undefined ? {} : { costUsd: nextCostUsd }),
+      ...(reportTurns ? { turns: reportTurns } : {}),
+      ...(account ? { account } : {}),
       ...(publicChanged ? { updatedAt: new Date().toISOString() } : {}),
     };
     if (publicChanged) state.revision += 1;
@@ -520,6 +560,42 @@ export async function refreshAgentUsage(
   // billing event lands. Keep the bounded follow-ups in that case too.
   const costSettled = previousCostUsd !== undefined && costUsd !== previousCostUsd;
   return sessionTokens === undefined || !costSettled ? "retry" : "complete";
+}
+
+function normalizeAgentUsageRuns(
+  value: unknown,
+  previous: NativeAgentTurnUsage[] | undefined,
+): NativeAgentTurnUsage[] | undefined {
+  if (!Array.isArray(value)) return previous;
+  const support = new Map((previous ?? []).map((entry) => [entry.turnId, entry]));
+  const turns = value.slice(-20).flatMap((candidate) => {
+    if (!isObject(candidate) || !nonBlank(candidate.runId) || !isObject(candidate.usage)) return [];
+    const usage = terminalTurnUsage(candidate.usage);
+    if (!usage) return [];
+    const prior = support.get(candidate.runId);
+    const cost = isObject(candidate.cost) ? candidate.cost : undefined;
+    const chargedCents = nonNegativeNumber(cost?.chargedCents);
+    const rawCostCents = nonNegativeNumber(cost?.rawCostCents);
+    return [
+      {
+        turnId: candidate.runId,
+        ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+        ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(usage.cacheWriteTokens !== undefined
+          ? { cacheWriteTokens: usage.cacheWriteTokens }
+          : {}),
+        ...(usage.reasoningTokens !== undefined ? { reasoningTokens: usage.reasoningTokens } : {}),
+        totalTokens: turnTokenTotal(usage),
+        ...(chargedCents === undefined ? {} : { costUsd: chargedCents / 100 }),
+        ...(rawCostCents === undefined ? {} : { rawCostUsd: rawCostCents / 100 }),
+        ...(prior?.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
+        ...(prior?.requestId === undefined ? {} : { requestId: prior.requestId }),
+        ...(prior?.modelId === undefined ? {} : { modelId: prior.modelId }),
+      },
+    ];
+  });
+  return turns.length > 0 ? turns : previous;
 }
 
 function nonNegativeNumber(value: unknown): number | undefined {

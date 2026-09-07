@@ -88,7 +88,7 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
-  test("does not monitor or answer requests when OpenCode auto-answering is omitted", async () => {
+  test("monitors projection events without answering requests when auto-answering is omitted", async () => {
     const fake = openCodeFake();
     fake.setPending(
       [{ id: "permission-1", sessionID: "owned-session" }],
@@ -108,7 +108,7 @@ describe("OpenCode provider runtime", () => {
 
     try {
       await provider.createSession("build", "Interactive task");
-      expect(fake.subscriptions).toHaveLength(0);
+      await waitUntil(() => fake.subscriptions.length === 1);
       expect(fake.permissionReplies).toHaveLength(0);
       expect(fake.questionRejections).toHaveLength(0);
     } finally {

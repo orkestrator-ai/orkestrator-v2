@@ -165,9 +165,10 @@ export async function resumeSession(
   selectedSessionId: string,
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
+  policy?: AcpSpawnOptions["policy"],
 ): Promise<SessionState> {
   const existing = sessions.get(selectedSessionId);
-  if (existing) return resumeExistingSession(existing, signal, patch);
+  if (existing) return resumeExistingSession(existing, signal, patch, policy);
   const acpSessionId = parseExternalSessionToken(selectedSessionId);
   if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
   // Checked before the `sessions` scan below: an adoption registers its state
@@ -178,13 +179,13 @@ export async function resumeSession(
   const pending = sessionResumes.get(acpSessionId);
   if (pending) {
     const adopted = await pending;
-    return patch ? resumeExistingSession(adopted, signal, patch) : adopted;
+    return patch || policy ? resumeExistingSession(adopted, signal, patch, policy) : adopted;
   }
   const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
-  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy);
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");
-  const operation = resumeSessionReserved(acpSessionId, signal, patch);
+  const operation = resumeSessionReserved(acpSessionId, signal, patch, policy);
   sessionResumes.set(acpSessionId, operation);
   try {
     return await operation;
@@ -197,12 +198,20 @@ export async function resumeExistingSession(
   state: SessionState,
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
+  policy?: AcpSpawnOptions["policy"],
 ): Promise<SessionState> {
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
   state.dispatching = true;
   try {
+    if (policy && JSON.stringify(state.policy) !== JSON.stringify(policy)) {
+      const previous = state.child;
+      state.child = null;
+      clearApprovals(state);
+      state.policy = policy;
+      await previous?.close();
+    }
     await ensureSessionProcess(state, signal);
     if (patch) await applyComposerPatch(state, patch, signal);
     return state;
@@ -215,8 +224,9 @@ export async function resumeSessionReserved(
   acpSessionId: string,
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
+  policy?: AcpSpawnOptions["policy"],
 ): Promise<SessionState> {
-  const child = new AcpProcess();
+  const child = new AcpProcess({ policy });
   let state: SessionState | undefined;
   try {
     const initialized = await child.initialize(signal);
@@ -252,6 +262,7 @@ export async function resumeSessionReserved(
       droppedParts: 0,
       transcriptTruncated: false,
       sessionConfig: emptySessionConfig(),
+      ...(policy ? { policy } : {}),
       dispatching: true,
       historyReplay: "hydrate",
       health: new RuntimeHealthRecorder(),
@@ -343,6 +354,7 @@ export async function createSessionReserved(
   const child = new AcpProcess({
     model: spawnOptions.model,
     effort: spawnOptions.effort ?? spawnOptions.reasoningId,
+    policy: spawnOptions.policy,
   });
   try {
     await child.initialize(signal);
@@ -389,6 +401,7 @@ export async function createSessionReserved(
       droppedParts: 0,
       transcriptTruncated: false,
       sessionConfig,
+      ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
@@ -436,7 +449,13 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     if (state.child !== child || sessions.get(state.id) !== state) return;
     applyVendorUpdate(state, method, params);
   };
-  child.onPermission = (requestId, params) => parkPermission(state, requestId, params);
+  child.onPermission = (requestId, params) => {
+    if (state.policy?.approvals === "deny") {
+      child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      return;
+    }
+    parkPermission(state, requestId, params);
+  };
   child.onClose = (error) => {
     // Only the currently attached child owns this session's approvals. A
     // superseded child can exit long after a replacement attached (close()
@@ -513,7 +532,7 @@ export async function ensureSessionProcess(
 
 export async function spawnAndLoadSession(state: SessionState): Promise<AcpProcess> {
   if (state.child) return state.child;
-  const child = new AcpProcess();
+  const child = new AcpProcess({ policy: state.policy });
   try {
     const initialized = await child.initialize();
     const capabilities = isObject(initialized.agentCapabilities)
@@ -935,7 +954,10 @@ export function composerPatchFromSpawn(
 }
 
 export function parseComposerPatch(body: JsonObject): AcpComposerPatch | undefined {
-  const mode = body.mode === "plan" || body.mode === "build" ? body.mode : undefined;
+  const mode =
+    typeof body.mode === "string" && body.mode.trim()
+      ? (body.mode.trim() as AcpComposerPatch["mode"])
+      : undefined;
   const modelId =
     typeof body.modelId === "string"
       ? body.modelId.trim()
@@ -955,6 +977,20 @@ export function parseComposerPatch(body: JsonObject): AcpComposerPatch | undefin
     ...(reasoningId ? { reasoningId } : {}),
     ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
     ...(mode ? { mode } : {}),
+    ...(isObject(body.parameterValues)
+      ? {
+          parameterValues: Object.fromEntries(
+            Object.entries(body.parameterValues)
+              .filter(
+                ([key, value]) =>
+                  Buffer.byteLength(key) <= 256 &&
+                  (typeof value === "boolean" ||
+                    (typeof value === "string" && Buffer.byteLength(value) <= 1_024)),
+              )
+              .slice(0, 32),
+          ) as Record<string, string | boolean>,
+        }
+      : {}),
   };
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
@@ -964,7 +1000,14 @@ export async function applyComposerPatch(
   patch: AcpComposerPatch,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (!patch.modelId && !patch.reasoningId && patch.fastMode === undefined && !patch.mode) return;
+  if (
+    !patch.modelId &&
+    !patch.reasoningId &&
+    patch.fastMode === undefined &&
+    !patch.mode &&
+    !patch.parameterValues
+  )
+    return;
   const child = await ensureSessionProcess(state, signal);
   const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch);
   for (const call of calls) {
@@ -1067,6 +1110,13 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
     // standard ACP usage updates continue to provide safe accounting.
     state.ignoreUncorrelatedVendorUsage = true;
     state.pendingLateTurnUsage = undefined;
+    state.health.recordNotice({
+      method: "usage",
+      severity: "warning",
+      source: "provider",
+      message:
+        "Late provider usage could not be correlated with a turn; vendor-only usage updates are disabled until this agent process restarts.",
+    });
     return;
   }
   if (state.turnStartedAt !== undefined) state.currentTurnSawVendorUsage = true;
@@ -1111,6 +1161,7 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
       : previous?.sessionTokens;
   state.usage = {
     turn: accumulatedTurn,
+    ...(previous?.turns?.length ? { turns: previous.turns } : {}),
     ...(turnInFlight
       ? previous?.lastTurnTokens === undefined
         ? {}
@@ -1153,6 +1204,7 @@ export function finalizeHistoryReplayTurnUsage(state: SessionState): void {
   const modelId = state.sessionConfig.composer.selectedModelId;
   state.usage = {
     turn,
+    ...(previous?.turns?.length ? { turns: previous.turns } : {}),
     ...(lastTurnTokens === undefined ? {} : { lastTurnTokens }),
     ...(lastTurnTokens === undefined
       ? previous?.sessionTokens === undefined
@@ -1172,6 +1224,25 @@ export function finalizeTurnUsage(state: SessionState): void {
   if (!state.usage || lastTurnTokens === undefined) return;
   state.usage.lastTurnTokens = lastTurnTokens;
   state.usage.sessionTokens = (state.usage.sessionTokens ?? 0) + lastTurnTokens;
+  const turnId = state.currentTurnRequestId || `turn-${state.promptSequence}`;
+  const turn = state.currentTurnUsage!;
+  state.usage.turns = [
+    ...(state.usage.turns ?? []).filter((entry) => entry.turnId !== turnId),
+    {
+      turnId,
+      ...(turn.costUsd === undefined ? {} : { costUsd: turn.costUsd }),
+      ...(turn.inputTokens === undefined ? {} : { inputTokens: turn.inputTokens }),
+      ...(turn.outputTokens === undefined ? {} : { outputTokens: turn.outputTokens }),
+      ...(turn.cacheReadTokens === undefined ? {} : { cacheReadTokens: turn.cacheReadTokens }),
+      ...(turn.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: turn.cacheWriteTokens }),
+      ...(turn.reasoningTokens === undefined ? {} : { reasoningTokens: turn.reasoningTokens }),
+      totalTokens: lastTurnTokens,
+      ...(turn.apiDurationMs === undefined ? {} : { apiDurationMs: turn.apiDurationMs }),
+      ...(state.usage.durationMs === undefined ? {} : { durationMs: state.usage.durationMs }),
+      ...(state.currentTurnRequestId ? { requestId: state.currentTurnRequestId } : {}),
+      ...(state.usage.modelId ? { modelId: state.usage.modelId } : {}),
+    },
+  ].slice(-20);
 }
 
 /** Mark a completed turn as eligible for one bounded, uncorrelated late carrier. */

@@ -22,6 +22,64 @@ import {
 } from "./session-manager-test-harness.js";
 
 describe("background task reducer", () => {
+  test("projects SDK task and subagent hooks through the existing background-task snapshot", async () => {
+    const created = createSession("hook task lifecycle");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate work");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+
+    await hooks.TaskCreated![0]!.hooks[0]!({
+      hook_event_name: "TaskCreated",
+      task_id: "task-hook-1",
+      task_subject: "Check the adapter",
+      task_description: "Inspect lifecycle projection",
+    });
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-hook-1",
+      agent_type: "Explore",
+    });
+
+    expect(created.backgroundTasks?.["task-hook-1"]).toMatchObject({
+      id: "task-hook-1",
+      description: "Check the adapter",
+      status: "running",
+      isBackgrounded: true,
+    });
+    expect(created.backgroundTasks?.["agent-hook-1"]).toMatchObject({
+      id: "agent-hook-1",
+      description: "Explore",
+      status: "running",
+      isBackgrounded: true,
+    });
+
+    await hooks.TaskCompleted![0]!.hooks[0]!({
+      hook_event_name: "TaskCompleted",
+      task_id: "task-hook-1",
+      task_subject: "Check the adapter",
+    });
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-hook-1",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-hook-1.jsonl",
+    });
+
+    expect(created.backgroundTasks?.["task-hook-1"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["agent-hook-1"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["task-hook-1"]?.endedAt).toBeNumber();
+    expect(created.backgroundTasks?.["agent-hook-1"]?.endedAt).toBeNumber();
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
   test("drops unresolved Bash candidates past the bound without failing the turn", async () => {
     const created = createSession("bounded Bash candidates");
     track(created.id);

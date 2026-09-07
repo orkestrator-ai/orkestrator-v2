@@ -1,4 +1,5 @@
 import { type OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2/types";
 import { createUuid } from "./uuid";
 import {
   structuredOutputFailure,
@@ -181,9 +182,7 @@ export async function sendPrompt(
   },
 ): Promise<SendPromptResult> {
   try {
-    // Build the parts array with proper typing
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const parts: any[] = [{ type: "text" as const, text: message }];
+    const parts: Array<TextPartInput | FilePartInput> = [{ type: "text", text: message }];
 
     if (options?.attachments) {
       for (const attachment of options.attachments) {

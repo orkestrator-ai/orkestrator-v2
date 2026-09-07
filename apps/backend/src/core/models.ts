@@ -518,6 +518,8 @@ export interface PersistedNativeAgentSession {
   owner?: import("@orkestrator/protocol/coordinator").AgentSessionOwner;
   /** Immutable backend-owned execution policy; renderer inputs never replace it. */
   executionPolicy?: "coordinator-read-only";
+  /** Immutable normalized policy passed to the provider when this session was created. */
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   agent: NativeAgentProvider;
   logicalSessionKey: string;
   providerSessionId: string;

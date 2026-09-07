@@ -56,8 +56,12 @@ export async function requestToolApproval(
         "This review session is read-only. Read the supplied package; commands, edits, and extension tools are disabled.",
     };
   }
-  if (!approvalsEnabled()) return { block: false };
+  const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
+  if (approvals === "auto-approve") return { block: false };
   if (READ_ONLY_TOOLS.has(toolName)) return { block: false };
+  if (approvals === "deny") {
+    return { block: true, reason: "The execution policy denies this tool call." };
+  }
   if (state.approvals.size >= MAX_PENDING_APPROVALS) {
     // Refusing is the only safe answer: parking it would grow the map without
     // bound, and letting it through would approve on a resource limit.

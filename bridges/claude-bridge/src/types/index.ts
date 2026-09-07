@@ -102,6 +102,7 @@ export interface SdkResultMessage extends SdkMessageBase {
   duration_api_ms?: number;
   is_error?: boolean;
   num_turns?: number;
+  ttft_ms?: number;
   errors?: string[];
   usage?: Record<string, unknown>;
   modelUsage?: Record<
@@ -280,7 +281,7 @@ export interface ClaudeQueryControl {
   accountInfo?: () => Promise<import("@anthropic-ai/claude-agent-sdk").AccountInfo>;
   stopTask?: (taskId: string) => Promise<void>;
   backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
-  getContextUsage?: () => Promise<unknown>;
+  getContextUsage?: (options?: { detail?: "summary" | "full" }) => Promise<unknown>;
   /**
    * Structured data behind Claude Code's `/usage` screen.
    *
@@ -292,16 +293,10 @@ export interface ClaudeQueryControl {
   close?: () => void | Promise<void>;
 }
 
-/** Last complete or bounded plan observed while this session remains in plan mode. */
-export interface ObservedPlan {
-  content: string;
-  path: string;
-  truncated: boolean;
-}
-
 /** Session state */
 export interface SessionState {
   id: string;
+  executionPolicy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   title?: string;
   /** Whether a title generation request is already in flight */
   titleGenerationPending?: boolean;
@@ -386,11 +381,6 @@ export interface SessionState {
    * Absent means "never set", which callers must treat as off.
    */
   planMode?: boolean;
-  /**
-   * Bridge-authoritative plan capture retained across rejection re-prompts.
-   * Cleared whenever the session enters or leaves a plan-mode lifecycle.
-   */
-  observedPlan?: ObservedPlan;
   /**
    * Recently accepted idempotent prompt request ids.
    *
@@ -547,6 +537,25 @@ export interface SessionUsageSnapshot {
   source: "claude";
   updatedAt: string;
   permissionDenials?: number;
+  permissionDenialDetails?: Array<{
+    toolName: string;
+    toolUseId?: string;
+    reason?: string;
+  }>;
+  turns?: Array<{
+    turnId: string;
+    costUsd?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    totalTokens?: number;
+    durationMs?: number;
+    apiDurationMs?: number;
+    ttftMs?: number;
+    numTurns?: number;
+    modelId?: string;
+  }>;
   contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
   rateLimits?: SessionRateLimitWindow[];
 }

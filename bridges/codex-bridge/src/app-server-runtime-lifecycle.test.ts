@@ -2331,6 +2331,63 @@ describe("session lifecycle", () => {
     });
   });
 
+  test("the unsandboxed default policy runs with full access and no approvals", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: false,
+        networkAccess: "full",
+      },
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "build it",
+      requestId: "req-open",
+      attachments: [],
+    });
+
+    expect(
+      h.child().requests.find((request) => request.method === "thread/start")!.params,
+    ).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    // `dangerFullAccess` carries no network field, which is why the backend
+    // resolver never pairs `sandbox: "none"` with restricted network access.
+    expect(
+      h.child().requests.find((request) => request.method === "turn/start")!.params.sandboxPolicy,
+    ).toEqual({ type: "dangerFullAccess" });
+  });
+
+  test("a restricted-network policy keeps its sandbox so the restriction is sent", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: false,
+        networkAccess: "restricted",
+      },
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "build it",
+      requestId: "req-restricted",
+      attachments: [],
+    });
+
+    expect(
+      h.child().requests.find((request) => request.method === "thread/start")!.params,
+    ).toMatchObject({ approvalPolicy: "never", sandbox: "workspace-write" });
+    expect(
+      h.child().requests.find((request) => request.method === "turn/start")!.params.sandboxPolicy,
+    ).toMatchObject({ type: "workspaceWrite", networkAccess: false });
+  });
+
   test("coordinator policy pins build mode to read-only without network access", async () => {
     const previous = process.env.CODEX_BRIDGE_EXECUTION_POLICY;
     const previousProfile = process.env.CODEX_BRIDGE_PERMISSION_PROFILE;

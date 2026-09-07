@@ -8,6 +8,8 @@ import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 
+import { UNAPPLIED_NETWORK_RESTRICTION_NOTE } from "./native-agent-execution-policy.js";
+
 import {
   ProviderSessionFailedError,
   ProviderUnavailableError,
@@ -1327,12 +1329,16 @@ describe("NativeAgentService", () => {
         expect(fenced).not.toBeNull();
         expect(fenced).toMatchObject({ revision: 0 });
         await expect(resumed).resolves.toMatchObject({ sessionId: "provider-resumed" });
+        // The fixture environment is a local worktree that asks for restricted
+        // network access. An unsandboxed session cannot apply that, so the
+        // policy reports the access it has and discloses the gap.
         expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls, {
           id: "interactive-host",
-          sandbox: "provider",
-          approvals: "ask",
+          sandbox: "none",
+          approvals: "auto-approve",
           projectResources: false,
-          networkAccess: "restricted",
+          networkAccess: "full",
+          note: UNAPPLIED_NETWORK_RESTRICTION_NOTE,
         });
         const key = nativeAgentSessionStorageKey(
           identity.environmentId,
@@ -1369,7 +1375,7 @@ describe("NativeAgentService", () => {
         });
 
         expect(stub.createSession.mock.calls[0]?.[2]).toMatchObject({
-          policy: { id: "interactive-host", approvals: "ask" },
+          policy: { id: "interactive-host", approvals: "auto-approve" },
         });
         expect(stub.createSession.mock.calls[1]?.[2]).toMatchObject({
           policy: { id: "interactive-host", approvals: "deny" },

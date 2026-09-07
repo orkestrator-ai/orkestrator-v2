@@ -4282,4 +4282,49 @@ describe("sendPrompt", () => {
     call.finish();
     await prompt;
   });
+
+  test("the unsandboxed default policy bypasses permissions and sends no sandbox", async () => {
+    const session = createSession("default policy");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    };
+    const prompt = sendPrompt(session.id, "Build it");
+    const call = await nextQueryCall();
+
+    expect(call.options.permissionMode).toBe("bypassPermissions");
+    // The SDK sandbox block is what carries the network axis, so omitting it is
+    // also why the backend resolver refuses to pair `none` with `restricted`.
+    expect(call.options.sandbox).toBeUndefined();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("a provider-sandbox policy forwards the sandbox and its network axis", async () => {
+    const session = createSession("sandboxed policy");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+    };
+    const prompt = sendPrompt(session.id, "Inspect it");
+    const call = await nextQueryCall();
+
+    expect(call.options.sandbox).toMatchObject({
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+      network: { allowLocalBinding: false },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
 });

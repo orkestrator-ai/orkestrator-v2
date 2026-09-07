@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import {
+  resolveNativeAgentExecutionPolicy,
+  SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+  UNAPPLIED_NETWORK_RESTRICTION_NOTE,
+} from "./native-agent-execution-policy.js";
 import {
   effectiveOpenCodePolicy,
   openCodeAgentFor,
@@ -9,13 +13,17 @@ import {
 
 describe("resolveNativeAgentExecutionPolicy", () => {
   const host = { environmentType: "local" as const, networkAccessMode: "full" as const };
+  const restrictedHost = {
+    environmentType: "local" as const,
+    networkAccessMode: "restricted" as const,
+  };
   const container = {
     environmentType: "containerized" as const,
     networkAccessMode: "restricted" as const,
   };
 
   test.each([
-    [host, "interactive-native", "interactive-host", "provider", "ask", false, "full"],
+    [host, "interactive-native", "interactive-host", "none", "auto-approve", false, "full"],
     [
       container,
       "interactive-native",
@@ -25,9 +33,19 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       true,
       "restricted",
     ],
-    [host, "build-pipeline", "pipeline", "provider", "auto-approve", false, "full"],
+    [host, "interactive-tmux", "interactive-host", "none", "auto-approve", false, "full"],
+    [
+      container,
+      "interactive-tmux",
+      "interactive-container",
+      "container",
+      "auto-approve",
+      true,
+      "restricted",
+    ],
+    [host, "build-pipeline", "pipeline", "none", "auto-approve", false, "full"],
     [container, "build-pipeline", "pipeline", "container", "auto-approve", true, "restricted"],
-    [host, "looped-review", "pipeline", "provider", "auto-approve", false, "full"],
+    [host, "looped-review", "pipeline", "none", "auto-approve", false, "full"],
     [container, "looped-review", "pipeline", "container", "auto-approve", true, "restricted"],
   ] as const)(
     "%s / %s",
@@ -41,6 +59,16 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       });
     },
   );
+
+  test("the default host policy is unsandboxed, unattended and unrestricted", () => {
+    expect(resolveNativeAgentExecutionPolicy(host, "interactive-native")).toEqual({
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    });
+  });
 
   test("coordinator is fixed read-only and ignores overrides", () => {
     expect(
@@ -68,7 +96,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
         approvals: "deny",
         projectResources: true,
         toolPolicy: { allow: ["read"] },
-        networkAccess: "restricted",
+        networkAccess: "full",
       }),
     ).toEqual({
       id: "interactive-host",
@@ -76,8 +104,80 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       approvals: "deny",
       projectResources: true,
       toolPolicy: { allow: ["read"] },
+      networkAccess: "full",
+    });
+  });
+
+  test("an override that restricts the network sandboxes the session that enforces it", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(host, "interactive-native", {
+        networkAccess: "restricted",
+      }),
+    ).toEqual({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+      note: SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+    });
+  });
+
+  test("an override cannot ask for no sandbox and a restricted network at once", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(host, "interactive-native", {
+        sandbox: "none",
+        networkAccess: "restricted",
+      }),
+    ).toMatchObject({ sandbox: "provider", networkAccess: "restricted" });
+  });
+
+  test("a host session keeps full network access and says the environment's is unenforceable", () => {
+    expect(resolveNativeAgentExecutionPolicy(restrictedHost, "build-pipeline")).toEqual({
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+      note: UNAPPLIED_NETWORK_RESTRICTION_NOTE,
+    });
+  });
+
+  test("a restricted host environment applies its restriction once a sandbox is set", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(restrictedHost, "interactive-native", {
+        sandbox: "provider",
+        networkAccess: "restricted",
+      }),
+    ).toEqual({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
       networkAccess: "restricted",
     });
+  });
+
+  test("a sandbox alone still does not apply the environment's restriction, and says so", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(restrictedHost, "interactive-native", {
+        sandbox: "provider",
+      }),
+    ).toMatchObject({
+      sandbox: "provider",
+      networkAccess: "full",
+      note: UNAPPLIED_NETWORK_RESTRICTION_NOTE,
+    });
+  });
+
+  test("a container keeps its own boundary and needs no reconciliation note", () => {
+    const policy = resolveNativeAgentExecutionPolicy(container, "interactive-native");
+    expect(policy).toMatchObject({ sandbox: "container", networkAccess: "restricted" });
+    expect(policy.note).toBeUndefined();
+  });
+
+  test("the unsandboxed default carries no note", () => {
+    expect(resolveNativeAgentExecutionPolicy(host, "looped-review").note).toBeUndefined();
   });
 });
 
@@ -97,6 +197,18 @@ describe("OpenCode execution policy translation", () => {
       { permission: "read", pattern: "*", action: "allow" },
       { permission: "shell", pattern: "*", action: "deny" },
     ]);
+  });
+
+  test("allows every permission for the unattended default policy", () => {
+    expect(
+      openCodePermissionRules({
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: false,
+        networkAccess: "full",
+      }),
+    ).toEqual([{ permission: "*", pattern: "*", action: "allow" }]);
   });
 
   test("a coordinator policy reports the project-resource axis it cannot honour", () => {

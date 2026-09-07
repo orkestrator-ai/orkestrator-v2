@@ -2688,6 +2688,53 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("applies configured Claude SDK parameters to a new session", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      agentSettings: {
+        platforms: {
+          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+        },
+      },
+    });
+
+    render(<AgentNativeTab tabId="tab-claude-sdk-defaults" data={freshTab("claude")} isActive />);
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "claude",
+      parameterValues: { thinking: "budget-16384", context1m: true },
+    });
+  });
+
+  test("does not render Claude SDK parameters in the compose bar", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "select" as const,
+          id: "parameter:thinking",
+          label: "Thinking",
+          value: "adaptive",
+          options: [{ id: "adaptive", label: "Adaptive" }],
+        },
+        {
+          kind: "toggle" as const,
+          id: "parameter:context1m",
+          label: "1M context beta",
+          value: false,
+        },
+      ],
+    }));
+
+    render(
+      <AgentNativeTab tabId="tab-claude-hidden-parameters" data={freshTab("claude")} isActive />,
+    );
+
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Thinking: Adaptive/)).toBeNull();
+    expect(screen.queryByText(/1M context beta: Off/)).toBeNull();
+  });
+
   test("drops a configured speed default for a model that does not support it", async () => {
     useAgentModelCatalogStore.setState({
       cursorModels: [

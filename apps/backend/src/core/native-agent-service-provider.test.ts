@@ -459,6 +459,31 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("persists generic parameters when it creates a session", async () => {
+    const stub = createProviderStub("claude");
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-parameter-defaults-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:claude-tab",
+          parameterValues: { thinking: "budget-16384", context1m: true },
+        };
+
+        await service.ensureSession(input);
+
+        const stored = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+        );
+        expect(stored?.controls?.parameterValues).toEqual(input.parameterValues);
+      },
+    );
+  });
+
   test("keeps a transient Pi session startup in the connecting request", async () => {
     let attempts = 0;
     const delays: number[] = [];

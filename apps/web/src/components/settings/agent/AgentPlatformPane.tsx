@@ -16,6 +16,13 @@ import { useMemo } from "react";
 import { Bot, Loader2, RefreshCw, Terminal } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   effortLabel,
@@ -34,6 +41,7 @@ import {
   type AgentSettingsTier,
   type AgentSettingsTiers,
   type ClaudeNativeBackend,
+  type ClaudeThinkingMode,
 } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
@@ -89,6 +97,17 @@ const CLAUDE_BACKEND_OPTIONS: Array<{
   { value: "sdk", label: "Agent SDK", hint: "Uses the Claude Agent SDK via bridge server" },
   { value: "tmux", label: "Tmux", hint: "Drives the Claude CLI under tmux (Max plan friendly)" },
 ];
+
+const CLAUDE_THINKING_OPTIONS: Array<{ value: ClaudeThinkingMode; label: string }> = [
+  { value: "adaptive", label: "Adaptive" },
+  { value: "budget-8192", label: "8K budget" },
+  { value: "budget-16384", label: "16K budget" },
+  { value: "disabled", label: "Disabled" },
+];
+
+function claudeThinkingLabel(value: ClaudeThinkingMode | undefined): string {
+  return CLAUDE_THINKING_OPTIONS.find((option) => option.value === value)?.label ?? "Adaptive";
+}
 
 export function AgentPlatformPane({
   platform,
@@ -379,6 +398,91 @@ export function AgentPlatformPane({
           </p>
         )}
       </div>
+
+      {platform === "claude" && (
+        <div className="space-y-5">
+          <div>
+            <h3 className="text-sm font-medium text-foreground">Agent SDK session defaults</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Applied when a new Claude Native session starts with the Agent SDK. Existing sessions
+              keep the values they started with.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="claude-thinking-mode">
+              Thinking
+            </label>
+            <Select
+              value={stored?.claudeThinkingMode ?? INHERIT}
+              onValueChange={(value) =>
+                set(
+                  "claudeThinkingMode",
+                  value === INHERIT ? undefined : (value as ClaudeThinkingMode),
+                )
+              }
+              disabled={disabled}
+            >
+              <SelectTrigger id="claude-thinking-mode" className="w-full max-w-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={INHERIT}>
+                  {canInherit
+                    ? `Inherit — ${claudeThinkingLabel(inherited.claudeThinkingMode)} (from ${
+                        TIER_LABELS[inheritedFrom(parentTiers, "claude", "claudeThinkingMode")]
+                      })`
+                    : "Provider default — Adaptive"}
+                </SelectItem>
+                {CLAUDE_THINKING_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground/80">
+              Adaptive lets Claude choose its thinking budget. Fixed budgets cap extended thinking
+              per response.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div>
+              <h4 className="text-sm font-medium text-foreground">1M context beta</h4>
+              <p className="mt-1 text-xs text-muted-foreground/80">
+                Enables Claude&apos;s larger context window for supported Opus and Sonnet models.
+              </p>
+            </div>
+            <OptionCards
+              ariaLabel="Claude 1M context beta"
+              value={
+                stored?.claudeContext1m === undefined
+                  ? INHERIT
+                  : stored.claudeContext1m
+                    ? "on"
+                    : "off"
+              }
+              onChange={(value) =>
+                set("claudeContext1m", value === INHERIT ? undefined : value === "on")
+              }
+              disabled={disabled}
+              columns="sm:grid-cols-3"
+              inherit={{
+                label: canInherit
+                  ? `Inherit — ${inherited.claudeContext1m ? "On" : "Off"} (from ${
+                      TIER_LABELS[inheritedFrom(parentTiers, "claude", "claudeContext1m")]
+                    })`
+                  : "Provider default — Off",
+              }}
+              options={[
+                { value: "off", label: "Off" },
+                { value: "on", label: "On" },
+              ]}
+            />
+          </div>
+        </div>
+      )}
 
       {children}
     </div>

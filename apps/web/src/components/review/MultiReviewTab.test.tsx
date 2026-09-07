@@ -1667,3 +1667,33 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.getByText("Consolidated report ready")).toBeTruthy();
   });
 });
+
+test("renders backend-owned package preparation after remount with cancel available", () => {
+  const workflow = reviewingWorkflow();
+  workflow.phase = "preparing";
+  workflow.reviewers = workflow.reviewers.map((reviewer) => ({
+    ...reviewer,
+    status: "pending",
+    providerSessionId: undefined,
+  }));
+  useMultiReviewStore.getState().replaceWorkflow(workflow);
+  const view = render(
+    <MultiReviewTab
+      data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
+      isActive={true}
+      hydrateWorkflow={async () => workflow}
+    />,
+  );
+  expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true);
+  view.unmount();
+  render(
+    <MultiReviewTab
+      data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
+      isActive={true}
+      hydrateWorkflow={async () => workflow}
+    />,
+  );
+  expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
+});

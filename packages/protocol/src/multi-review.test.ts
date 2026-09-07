@@ -1,3 +1,4 @@
+import { reviewPackageArtifactPath } from "./review-artifacts";
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -418,4 +419,60 @@ describe("multi review protocol", () => {
       }),
     ).toBe(false);
   });
+});
+
+test("preparation and immutable package references survive strict workflow validation", () => {
+  const timestamp = new Date(0).toISOString();
+  const workflow = {
+    version: 1,
+    controller: "backend",
+    id: "package-workflow",
+    environmentId: "env",
+    projectId: "project",
+    targetBranch: "main",
+    reviewers: [{ id: "reviewer", agent: "claude", model: "opus", status: "pending" }],
+    fixModel: { agent: "codex", model: "default" },
+    phase: "preparing",
+    activeRequest: {
+      kind: "prepare",
+      requestId: "prepare-1",
+      state: "dispatching",
+      createdAt: timestamp,
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 1,
+  };
+  expect(isMultiReviewWorkflow(workflow)).toBe(true);
+  expect(isMultiReviewTerminalPhase("preparing")).toBe(false);
+  const id = "review-package-multi-test";
+  const sha256 = "a".repeat(64);
+  const reviewPackage = {
+    kind: "file",
+    id,
+    round: 1,
+    preparedAt: timestamp,
+    targetBranch: "main",
+    baseRef: "1".repeat(40),
+    headRef: "2".repeat(40),
+    filePath: reviewPackageArtifactPath(id, sha256),
+    sha256,
+    bytes: 1024,
+    changedFileCount: 1,
+    diffCharacters: 200,
+    limitations: [],
+  };
+  // Use the canonical path constructor; package identity is checked by the protocol.
+  const { activeRequest: _request, ...reviewing } = workflow;
+  const candidate = { ...reviewing, phase: "reviewing", reviewPackage };
+  expect(isMultiReviewWorkflow(candidate)).toBe(true);
+  expect(
+    isMultiReviewWorkflow({ ...candidate, reviewPackage: { ...reviewPackage, sha256: "bad" } }),
+  ).toBe(false);
+  expect(
+    isMultiReviewWorkflow({
+      ...candidate,
+      reviewPackage: { ...reviewPackage, targetBranch: "other" },
+    }),
+  ).toBe(false);
 });

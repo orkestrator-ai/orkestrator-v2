@@ -346,3 +346,15 @@ describe("loading", () => {
     expect(sessions.size).toBe(0);
   });
 });
+
+test("preserves the read-only review restriction across bridge restart", async () => {
+  const state = newSessionState("review-key");
+  state.readOnly = true;
+  sessions.set(state.id, state);
+  schedulePersist();
+  await drainPersistence();
+  sessions.clear();
+  clientSessionKeys.clear();
+  await loadPersistedState();
+  expect(sessions.get(state.id)?.readOnly).toBe(true);
+});

@@ -374,8 +374,8 @@ export function MultiReviewLaunchDialog({
             Configure Multi Review
           </DialogTitle>
           <DialogDescription>
-            Run independent structured reviews, then use one fix model to reconcile them into a
-            single report.
+            The fix model commits relevant pending changes and collects validation once. Independent
+            read-only reviewers share that package, then their findings become one report.
           </DialogDescription>
         </DialogHeader>
 
@@ -452,7 +452,7 @@ export function MultiReviewLaunchDialog({
               </div>
               <ModelRow
                 row={fixModel}
-                label="Consolidation & fix model"
+                label="Preparation, consolidation & fix model"
                 models={models}
                 catalog={catalog}
                 favorites={favorites}

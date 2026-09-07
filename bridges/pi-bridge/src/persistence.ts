@@ -153,6 +153,7 @@ async function persistNow(): Promise<void> {
 function toPersisted(state: SessionState): PersistedSession {
   return {
     id: state.id,
+    ...(state.readOnly ? { readOnly: true } : {}),
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
@@ -221,6 +222,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   const state = newSessionState(
     nonBlank(entry.clientSessionKey) ? entry.clientSessionKey : undefined,
   );
+  state.readOnly = entry.readOnly === true;
   state.id = entry.id;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;

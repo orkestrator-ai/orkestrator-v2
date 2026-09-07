@@ -141,6 +141,9 @@ describe("backend looped-review prompt contracts", () => {
     expect(prompt).toContain("The enforced schema applies to your final response only");
     expect(prompt).toContain("Never send a JSON object or array as an interim update");
     expect(prompt).toContain("do not wrap progress in schema field names");
+    expect(prompt).toContain(
+      "a message that begins with `{` or `[` is folded away as machine output",
+    );
     expect(prompt).toContain("make the final assistant response the only JSON object");
   });
 

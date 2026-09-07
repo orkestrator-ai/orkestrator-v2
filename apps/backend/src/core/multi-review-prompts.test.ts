@@ -202,6 +202,9 @@ describe("multi review preparation prompt", () => {
     // works, one JSON object at the end.
     expect(prompt).toContain("The enforced schema applies to your final response only");
     expect(prompt).toContain("Never send a JSON object or array as an interim update");
+    expect(prompt).toContain(
+      "a message that begins with `{` or `[` is folded away as machine output",
+    );
     expect(prompt).toContain("make the final assistant response the only JSON object");
   });
 });

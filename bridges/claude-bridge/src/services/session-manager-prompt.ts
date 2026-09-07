@@ -867,6 +867,26 @@ export async function sendPrompt(
       } else {
         const taskId =
           hookInput.hook_event_name === "TaskCompleted" ? hookInput.task_id : hookInput.agent_id;
+        // A subagent's `agent_id` *is* the id its `task_notification` reports,
+        // and this hook is delivered on the control channel — so for a
+        // backgrounded subagent it normally arrives before the notification
+        // the SDK injects back into the root loop. Settling first hands the
+        // last reference to this query to `closeQueryControlIfUnused`, whose
+        // `Query.close()` is destructive, and then closes held stdin: the CLI
+        // dies in the gap, having written the notification to its rollout with
+        // nothing left to answer it. Retain exactly as the `task_notification`
+        // and `background_tasks_changed` branches do — the edge that follows
+        // still writes the authoritative terminal status over this one.
+        const settlesReleasedTurn =
+          turnReleasedToBackgroundTasks &&
+          session.backgroundTaskControls?.get(taskId) === queryIteratorControl &&
+          LIVE_BACKGROUND_TASK_STATUSES.has(
+            session.backgroundTasks?.[taskId]?.status ?? "completed",
+          );
+        if (settlesReleasedTurn) {
+          receivedResult = false;
+          waitForContinuationAfterNotification();
+        }
         if (settleBackgroundTask(session, taskId, "completed")) {
           emitBackgroundTaskSnapshot(session);
         }

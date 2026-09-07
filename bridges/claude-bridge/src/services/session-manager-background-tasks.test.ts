@@ -80,6 +80,175 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
+  test("keeps the released query alive when a subagent stop hook precedes its notification", async () => {
+    const created = createSession("subagent stop hook before notification");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate the survey");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    // A backgrounded subagent is announced by the hook and by the message
+    // stream under the same id: the SDK's `agent_id` *is* the background task
+    // id the notification later reports.
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-survey-1",
+      agent_type: "Explore",
+    });
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-survey-1",
+      description: "Survey bridge permissions",
+      is_backgrounded: true,
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(
+      () =>
+        created.status === "idle" &&
+        created.backgroundTasks?.["agent-survey-1"]?.status === "running",
+    );
+    expect(inputClosed).toBe(false);
+
+    // The stop hook is delivered on the control channel and lands before the
+    // notification the SDK injects into the root loop. Settling the task there
+    // releases the last reference to this query, so nothing but explicit
+    // retention keeps the CLI alive long enough to answer.
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-survey-1",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-survey-1.jsonl",
+    });
+    expect(created.backgroundTasks?.["agent-survey-1"]?.status).toBe("completed");
+    expect(call.isClosed()).toBe(false);
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-survey-1",
+      status: "completed",
+      summary: "Survey complete",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-after-subagent-stop-hook",
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the proposal." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() => created.status === "running");
+    expect(inputClosed).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.backgroundTasks?.["agent-survey-1"]?.status).toBe("completed");
+  });
+
+  test("bounds a query retained by a subagent stop hook when no continuation follows", async () => {
+    const created = createSession("stop hook without a continuation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate to a silent provider", undefined, {
+      retainedContinuationTimeoutMs: 25,
+    });
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    const inputCompletion = input.next();
+
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-silent-hook",
+      agent_type: "Explore",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-silent-hook",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-silent-hook.jsonl",
+    });
+
+    // Retention buys the continuation a window, not an unbounded lease: a
+    // provider that answers the stop hook with nothing must still release the
+    // held stdin and the CLI child behind it.
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    await waitFor(() => call.isClosed());
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.backgroundTasks?.["agent-silent-hook"]?.status).toBe("completed");
+  });
+
+  test("closes input normally when a subagent stops before the turn's result", async () => {
+    const created = createSession("foreground subagent stop");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate in the foreground");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    // The turn never released, so there is no continuation owed and no reason
+    // to keep the query alive past its own result.
+    await hooks.SubagentStart![0]!.hooks[0]!({
+      hook_event_name: "SubagentStart",
+      agent_id: "agent-foreground",
+      agent_type: "Explore",
+    });
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-foreground",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-foreground.jsonl",
+    });
+    expect(created.status).toBe("running");
+    expect(inputClosed).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+  });
+
   test("drops unresolved Bash candidates past the bound without failing the turn", async () => {
     const created = createSession("bounded Bash candidates");
     track(created.id);

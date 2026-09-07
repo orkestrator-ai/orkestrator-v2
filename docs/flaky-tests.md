@@ -2948,3 +2948,15 @@ below.
 Focused validation and the passing complete concurrent suite are recorded in
 the rows above. NativeAgent and FeaturesView remain open because stress passes
 alone do not supply the root cause and fix required for resolution.
+
+## tmux generated blocking hooks under the aggregate run (`tests/unit/electron/tmux-commands.test.ts`)
+
+- **Status:** open — recurrence of the existing entries dated 2026-08-19 and 2026-08-24
+- **Date observed:** 2026-09-07
+- **Original command:** `bun run test` (full four-group concurrent suite) on `fix-session-wakeup-2275ef14bae5-r1`
+- **Worker configuration:** the aggregate root/agent-support group, `--parallel` with the planned root worker pool.
+- **Failure:** `Electron tmux backend command registration > generated blocking hooks use an integer timeout and fail closed on expiry` (1,603.43 ms). The duration is well inside Bun's outer budget, so this recurrence is not the 5,000 ms timeout shape the two earlier entries recorded.
+- **Suite counts:** root and agent-support group — 4,073 ran, 4,068 passed, 3 skipped, 2 failed. The run's other failure, `Electron backend command registry > rehydration resumes only persisted cleanup after a merge was already confirmed` in `tests/unit/electron/commands-registry-environments.test.ts`, fails identically when its owning file runs alone and with this change reverted, so it is a deterministic pre-existing failure rather than a flake and has no entry here.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-commands.test.ts -t "generated blocking hooks use an integer timeout and fail closed on expiry"` → passed in 2.3 s.
+- **Attribution:** the change in flight touches `bridges/claude-bridge` only and cannot reach the Electron tmux command registry. The isolated rerun passed against the same working tree.
+- **Hypothesis:** unchanged from the earlier entries — real shim and tmux processes contend for host resources in the aggregate group. The sub-two-second duration here suggests an ordering or shim-availability race rather than budget exhaustion, so a recurrence should capture which shim invocation returned before asserting the fail-closed path.

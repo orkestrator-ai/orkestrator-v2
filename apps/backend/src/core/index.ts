@@ -8,6 +8,10 @@ import {
   type CommandContext,
 } from "./commands.js";
 import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./local-server-reaper.js";
+import {
+  coordinatorBridgeEnvironmentFields,
+  coordinatorBridgeIdentityFromEnvironment,
+} from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
@@ -34,6 +38,7 @@ import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -215,7 +220,9 @@ export class OrkestratorBackend {
         },
         resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
-        coordinatorDelegationAvailable: () => this.controlMcp.getSettings().running,
+        coordinatorDelegationAvailable: (platform) =>
+          this.controlMcp.getSettings().running &&
+          coordinatorProviderQualification(platform).delegation,
       },
     );
     context.nativeAgents = this.nativeAgents;
@@ -223,7 +230,7 @@ export class OrkestratorBackend {
       const workspace = await storage.getCoordinatorWorkspace(projectId);
       if (!workspace) return false;
       for (const conversation of workspace.conversations) {
-        if (conversation.closedAt) continue;
+        if (conversation.closedAt || !conversation.agent) continue;
         const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
         const observed = this.nativeAgents.sessionActivitySnapshot(
           runtimeId,
@@ -393,7 +400,7 @@ export class OrkestratorBackend {
         ]);
         const coordinatorRuntimes = workspaces.flatMap((workspace) =>
           workspace.conversations.flatMap((conversation): Environment[] =>
-            conversation.codexBridgePid === undefined
+            conversation.bridgePid === undefined || !conversation.agent
               ? []
               : [
                   {
@@ -410,11 +417,10 @@ export class OrkestratorBackend {
                     networkAccessMode: "restricted",
                     order: 0,
                     environmentType: "local",
-                    codexBridgePid: conversation.codexBridgePid,
-                    localCodexPort: conversation.codexBridgePort,
+                    ...coordinatorBridgeEnvironmentFields(conversation),
                     setupPhase: "ready",
                     setupScriptsComplete: true,
-                  },
+                  } as Environment,
                 ],
           ),
         );
@@ -436,10 +442,7 @@ export class OrkestratorBackend {
                   conversation.id === conversationId
                     ? {
                         ...conversation,
-                        codexBridgePid:
-                          fields.codexBridgePid === null ? undefined : fields.codexBridgePid,
-                        codexBridgePort:
-                          fields.localCodexPort === null ? undefined : fields.localCodexPort,
+                        ...coordinatorBridgeIdentityFromEnvironment(conversation.agent, fields),
                       }
                     : conversation,
                 ),

@@ -2949,6 +2949,26 @@ Focused validation and the passing complete concurrent suite are recorded in
 the rows above. NativeAgent and FeaturesView remain open because stress passes
 alone do not supply the root cause and fix required for resolution.
 
+## `restarting a packaged reviewer re-verifies and reuses the read-only package prompt` (`apps/backend/src/core/multi-review-service.test.ts:4684`)
+
+- **Observed:** 2026-09-07, during coordinator multi-provider work.
+- **Command:** `bun --cwd=apps/backend test --preload ../../tests/setup-node.ts src --parallel`
+  (Bun's default worker count on this host).
+- **Suite counts:** 2,627 total, 2,626 passed, 1 failed across 114 files.
+- **Failure message:** not captured — the run was invoked with `--only-failures`
+  on the first observation and the case passed on every subsequent run, so no
+  assertion text was retained.
+- **Isolated rerun:** `bun --cwd=apps/backend test --preload ../../tests/setup-node.ts
+  src/core/multi-review-service.test.ts -t "re-verifies and reuses the read-only package prompt"`
+  → 1 passed, 0 failed, repeated three times.
+- **Hypothesis:** unattributed. The case restarts a reviewer and re-verifies a
+  packaged prompt, which is subprocess- and filesystem-backed, so it belongs to
+  the same family as the timeout clusters resolved in the 2026-08-27 sweep. No
+  evidence was gathered to confirm that, and the failing assertion is unknown.
+- **Not caused by the change under test:** the coordinator work does not touch
+  multi-review packaging, and the file passes in isolation and in every
+  subsequent aggregate run.
+
 ## tmux generated blocking hooks under the aggregate run (`tests/unit/electron/tmux-commands.test.ts`)
 
 - **Status:** open — recurrence of the two entries dated 2026-08-14 that name this case,

@@ -425,6 +425,10 @@ export abstract class NativeAgentServiceBase {
     const existing = await this.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );
+    // The persisted conversation decides the platform, never the caller. The
+    // resolver has already rejected an unassigned conversation and one whose
+    // platform is no longer qualified, so a mismatch here is a caller pointing
+    // at somebody else's session.
     if (coordinator.conversation.agent !== input.agent) {
       throw new Error("Coordinator conversation is unavailable");
     }
@@ -433,9 +437,6 @@ export abstract class NativeAgentServiceBase {
       workspace.repositoryStatus.operationState !== "idle"
     ) {
       throw new Error("The project checkout is changing; wait for the Git operation to finish");
-    }
-    if (input.agent !== "codex") {
-      throw new Error("Only Codex is qualified for read-only coordination");
     }
     const trusted = {
       ...input,
@@ -456,9 +457,11 @@ export abstract class NativeAgentServiceBase {
       !(COORDINATOR_CONTEXT_APPLIED in input)
     ) {
       const status = workspace.repositoryStatus;
-      const delegation = this.options.coordinatorDelegationAvailable?.()
-        ? `Delegation: create workers with the Orkestrator launch_environment tool. Codex subagents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n`
-        : `Delegation: Orkestrator worker controls are unavailable in this session. Codex subagents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
+      const delegation = this.options.coordinatorDelegationAvailable?.(
+        coordinator.conversation.agent,
+      )
+        ? `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n`
+        : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,
         [COORDINATOR_CONTEXT_APPLIED]: true,

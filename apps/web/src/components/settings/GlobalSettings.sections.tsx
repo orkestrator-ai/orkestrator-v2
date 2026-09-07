@@ -122,8 +122,38 @@ function formatLogBytes(bytes: number): string {
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
+/**
+ * Ordered strongest first, and worded in terms of what the user gets rather
+ * than the internal tier name: the difference that matters to them is whether
+ * anything outside the agent is actually stopping a write.
+ */
+const COORDINATOR_TIER_CHOICES = [
+  {
+    id: "enforced" as const,
+    label: "Enforced only (recommended)",
+    description:
+      "Offer a platform only where the provider or the operating system blocks file writes, mutating commands and network access regardless of what the agent attempts.",
+  },
+  {
+    id: "provider-configured" as const,
+    label: "Also allow provider-configured",
+    description:
+      "Additionally offer platforms that are told to deny those actions but expose no way for Orkestrator to verify it.",
+  },
+  {
+    id: "advisory" as const,
+    label: "Also allow advisory",
+    description:
+      "Additionally offer platforms where the agent is only asked to request permission first. A tool that does not ask is not stopped.",
+  },
+];
+
 export type GlobalSettingsSectionSettings = Record<string, any> & {
   enabledAgentPlatforms: AgentPlatform[];
+  coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
+  setCoordinatorProviderTiers: Dispatch<
+    SetStateAction<"enforced" | "provider-configured" | "advisory">
+  >;
   setEnabledAgentPlatforms: Dispatch<SetStateAction<AgentPlatform[]>>;
   agentSettings: AgentSettingsTier;
   setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
@@ -176,6 +206,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setAgentSettings,
     enabledAgentPlatforms,
     setEnabledAgentPlatforms,
+    coordinatorProviderTiers,
+    setCoordinatorProviderTiers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     openCodeProviderDraft,
@@ -805,6 +837,44 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <p className="text-xs text-muted-foreground/70">
         Disabling a platform hides new launch choices; existing sessions and files are kept.
       </p>
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Coordinator runs read-only against your real checkout. This chooses how strongly that
+          boundary has to be held for a platform to be offered there. It does not affect worker
+          environments.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Coordinator safety level"
+          className="mt-3 gap-0 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/40"
+        >
+          {COORDINATOR_TIER_CHOICES.map((choice, index) => (
+            <label
+              key={choice.id}
+              className={cn(
+                "flex cursor-pointer items-start gap-3 px-4 py-3.5",
+                index > 0 && "border-t border-zinc-800/80",
+              )}
+            >
+              <input
+                type="radio"
+                name="coordinator-provider-tiers"
+                value={choice.id}
+                checked={coordinatorProviderTiers === choice.id}
+                onChange={() => setCoordinatorProviderTiers(choice.id)}
+                className="mt-1 size-3.5 shrink-0 accent-cyan-500"
+              />
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="text-sm font-medium text-foreground">{choice.label}</span>
+                <span className="text-xs leading-relaxed text-muted-foreground">
+                  {choice.description}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
     </div>
   );
 

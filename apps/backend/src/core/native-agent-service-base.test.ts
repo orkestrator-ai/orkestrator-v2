@@ -3563,10 +3563,14 @@ describe("NativeAgentService", () => {
     const release = mock(() => undefined);
     const admit = mock(() => release);
     let delegationAvailable = true;
+    // Records the argument: delegation is not only a Control MCP question, and
+    // answering it without the platform is what would let the prompt promise
+    // `launch_environment` on a provider that cannot receive the worker's reply.
+    const delegationFor = mock((_platform: string) => delegationAvailable);
     const service = new NativeAgentService(storage, refusingInvoke, {
       provider: async () => provider.provider,
       beginCoordinatorTurn: admit,
-      coordinatorDelegationAvailable: () => delegationAvailable,
+      coordinatorDelegationAvailable: delegationFor,
     });
     try {
       const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
@@ -3589,7 +3593,9 @@ describe("NativeAgentService", () => {
       expect(sent.match(/<orkestrator-coordinator-context>/g)).toHaveLength(1);
       expect(sent).toContain("Inspect this");
       expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
-      expect(sent).toContain("Codex subagents remain inside this coordinator session");
+      expect(sent).toContain("Provider sub-agents remain inside this coordinator session");
+      // The conversation's own platform, not a bare availability question.
+      expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(
         (await storage.getCoordinatorWorkspace(project.id))!.conversations[0]
           ?.repositoryContextRevisionAcknowledged,
@@ -3687,18 +3693,53 @@ describe("NativeAgentService", () => {
           ...workspace!.repositoryStatus!,
           operationState: "idle",
         },
-        conversations: workspace!.conversations.map((conversation) => ({
-          ...conversation,
-          agent: "claude",
-        })),
       }));
+      // The persisted conversation decides the platform. A caller naming a
+      // different one is asking for somebody else's session.
       await expect(
         service.ensureSession({
           environmentId: runtimeId,
           agent: "claude",
           logicalSessionKey: "coordinator-coordinator-1:conversation-1",
         }),
-      ).rejects.toThrow("Only Codex");
+      ).rejects.toThrow("Coordinator conversation is unavailable");
+
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: { ...config.global, enabledAgentPlatforms: ["codex"] },
+      });
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((conversation) => ({
+          ...conversation,
+          agent: "claude",
+        })),
+      }));
+      // Turning a platform off has to close the door on conversations already
+      // assigned to it, not only on new ones.
+      await expect(
+        service.ensureSession({
+          environmentId: runtimeId,
+          agent: "claude",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        }),
+      ).rejects.toThrow("not qualified");
+
+      await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((conversation) => ({
+          ...conversation,
+          agent: undefined,
+        })),
+      }));
+      await expect(
+        service.ensureSession({
+          environmentId: runtimeId,
+          agent: "codex",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        }),
+      ).rejects.toThrow("no agent yet");
     } finally {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });

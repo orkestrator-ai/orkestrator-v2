@@ -479,6 +479,8 @@ export interface CursorSdkLoginProgress {
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
+  /** Weakest read-only guarantee a coordinator conversation may run under. */
+  coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
   favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
   containerResources: ContainerResources;
   envFilePatterns: string[];

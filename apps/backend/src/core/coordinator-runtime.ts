@@ -4,13 +4,16 @@ import {
   type CoordinatorConversation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { Project } from "./models.js";
 import type { StorageService } from "./storage.js";
+import { coordinatorProviderAllowed } from "./coordinator-providers.js";
 
 export type CoordinatorRuntimeUnavailableReason =
   | "workspace"
   | "workspace-not-ready"
   | "conversation"
+  | "unassigned"
   | "unsupported-agent"
   | "checkout";
 
@@ -26,7 +29,7 @@ export type CoordinatorRuntimeResolution =
       coordinatorId: string;
       conversationId: string;
       workspace: CoordinatorWorkspace;
-      conversation: CoordinatorConversation;
+      conversation: CoordinatorConversation & { agent: AgentPlatform };
       project: Project;
     };
 
@@ -55,7 +58,21 @@ export async function resolveCoordinatorRuntime(
   if (!conversation || !conversationId) {
     return { status: "unavailable", coordinatorId, reason: "conversation" };
   }
-  if (conversation.agent !== "codex") {
+  // No provider yet: the conversation exists, but nothing has been
+  // materialized for it. Callers that need a runtime must say so distinctly,
+  // because "waiting for a first prompt" is not a failure.
+  if (!conversation.agent) {
+    return { status: "unavailable", coordinatorId, reason: "unassigned" };
+  }
+  const config = await storage.loadConfig().catch(() => null);
+  if (
+    !coordinatorProviderAllowed(conversation.agent, {
+      tierSetting: config?.global.coordinatorProviderTiers,
+      ...(config
+        ? { enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms) }
+        : {}),
+    })
+  ) {
     return { status: "unavailable", coordinatorId, reason: "unsupported-agent" };
   }
 
@@ -68,7 +85,7 @@ export async function resolveCoordinatorRuntime(
     coordinatorId,
     conversationId,
     workspace,
-    conversation,
+    conversation: { ...conversation, agent: conversation.agent },
     project,
   };
 }
@@ -81,8 +98,10 @@ export function coordinatorRuntimeUnavailableMessage(
       return "Coordinator workspace is not ready";
     case "conversation":
       return "The coordinator conversation is unavailable";
+    case "unassigned":
+      return "This coordinator conversation has no agent yet; send its first prompt to choose one";
     case "unsupported-agent":
-      return "Only Codex is qualified for read-only coordination";
+      return "This agent platform is not qualified for read-only coordination on this host";
     case "checkout":
       return "Native agent coordinator checkout is unavailable";
     case "workspace":

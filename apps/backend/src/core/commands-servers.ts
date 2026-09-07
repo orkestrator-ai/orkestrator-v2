@@ -22,6 +22,7 @@ import {
 } from "./commands-dependencies.js";
 import {
   enqueueLocalServerEnvironmentOperation,
+  coordinatorBridgeEnvironmentFields,
   localServerFields,
   releaseLocalServerOwnership,
   terminateLocalServerChild,
@@ -105,12 +106,54 @@ import {
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
-import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+
+/** Provider-neutral process authority every coordinator bridge honours. */
+export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
 import { realpath } from "node:fs/promises";
 import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
-import { resolveCoordinatorRuntime } from "./coordinator-runtime.js";
+import {
+  coordinatorRuntimeUnavailableMessage,
+  resolveCoordinatorRuntime,
+} from "./coordinator-runtime.js";
+
+/**
+ * A private Claude configuration directory holding only the credential.
+ *
+ * Mirrors `prepareCoordinatorCodexHome`. Claude's own config directory holds
+ * `settings.json` (which can declare hooks), `plugins/` and MCP server
+ * definitions; copying any of them would let a user's own configuration run
+ * code inside a session whose whole purpose is not to change the checkout.
+ */
+export async function prepareCoordinatorClaudeHome(
+  destination: string,
+  source = process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(homedir(), ".claude"),
+): Promise<void> {
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  await chmod(destination, 0o700);
+  for (const filename of [".credentials.json", "credentials.json"]) {
+    const sourceFile = path.join(source, filename);
+    const sourceStat = await lstat(sourceFile).catch(() => null);
+    if (!sourceStat) continue;
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+      throw new Error("Claude credential file must be a regular file, not a symbolic link");
+    }
+    const destinationFile = path.join(destination, filename);
+    const temporary = `${destinationFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      await copyFile(sourceFile, temporary);
+      await chmod(temporary, 0o600);
+      await rename(temporary, destinationFile);
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+}
 
 export async function prepareCoordinatorCodexHome(
   destination: string,
@@ -175,8 +218,11 @@ async function localRuntimeEnvironment(
     order: 0,
     environmentType: "local",
     worktreePath: projectPath,
-    localCodexPort: coordinator.conversation.codexBridgePort,
-    codexBridgePid: coordinator.conversation.codexBridgePid,
+    // A coordinator conversation stores one bridge identity, not one per
+    // platform. Project it into whichever Environment field pair its own agent
+    // uses, so every lifecycle helper that reads those fields keeps working
+    // without learning what a coordinator is.
+    ...coordinatorBridgeEnvironmentFields(coordinator.conversation),
     setupPhase: "ready",
     setupScriptsComplete: true,
   } as Environment;
@@ -867,17 +913,27 @@ export async function startLocalServerUnlocked(
     await terminateLocalServerChild(key, existing);
   }
 
-  const environment = await localRuntimeEnvironment(environmentId, context);
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
-  if (coordinatorId && kind !== "codex") {
-    throw new Error("Only Codex is qualified for read-only coordination");
-  }
-  if (!environment?.worktreePath) {
-    throw retryableBridgeStartupError("Local environment worktree is not available");
-  }
+  // Resolved before the worktree check so an unassigned or unqualified
+  // conversation reports what is actually wrong. `localRuntimeEnvironment`
+  // synthesizes its Environment from a *ready* runtime, so those cases would
+  // otherwise surface as a retryable missing worktree and be retried forever.
   const coordinator = coordinatorId
     ? await resolveCoordinatorRuntime(context.storage, environmentId)
     : null;
+  if (coordinator?.status === "unavailable") {
+    throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+  }
+  // The conversation's own provider is the authority. A request to start some
+  // other bridge against a coordinator runtime id would hand that platform the
+  // conversation's scoped credential and its private runtime directory.
+  if (coordinator?.status === "ready" && coordinator.conversation.agent !== kind) {
+    throw new Error("This coordinator conversation belongs to a different agent platform");
+  }
+  const environment = await localRuntimeEnvironment(environmentId, context);
+  if (!environment?.worktreePath) {
+    throw retryableBridgeStartupError("Local environment worktree is not available");
+  }
   const selectedConversation = coordinator?.status === "ready" ? coordinator.conversation : null;
   const coordinatorConversationId =
     coordinator?.status === "ready" ? coordinator.conversationId : null;
@@ -915,6 +971,10 @@ export async function startLocalServerUnlocked(
     // when Control MCP is disabled or unavailable.
     delete env[ORKESTRATOR_AGENT_MCP_URL_ENV];
     delete env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
+    // Provider-neutral process authority. A bridge launched with this refuses
+    // to run any session under a weaker policy, whatever a request body or a
+    // persisted record says, so a permissive record cannot survive a restart.
+    env[ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV] = COORDINATOR_EXECUTION_POLICY;
   }
 
   if (kind === "opencode") {
@@ -924,6 +984,30 @@ export async function startLocalServerUnlocked(
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
     await applyClaudeHostCredentialEnvironment(context, env);
+    if (coordinatorId) {
+      // The same isolation Codex gets: credentials, and nothing else. The
+      // user's own `~/.claude` carries settings, hooks, plugins and MCP
+      // servers, every one of which is a program this boundary exists to keep
+      // out of a session pointed at their real checkout.
+      const coordinatorClaudeHome = path.join(
+        context.storage.getDataDir(),
+        "coordinator-runtime",
+        coordinatorId,
+        "conversations",
+        coordinatorConversationId!,
+        "claude-home",
+      );
+      // Seeded from whatever directory this run would otherwise have used,
+      // which `applyClaudeHostCredentialEnvironment` may already have pointed
+      // at an isolated agent-test home. On macOS the credential lives in the
+      // Keychain rather than this directory; that lookup is by service name
+      // and is unaffected by the override.
+      await prepareCoordinatorClaudeHome(
+        coordinatorClaudeHome,
+        env.CLAUDE_CONFIG_DIR?.trim() || undefined,
+      );
+      env.CLAUDE_CONFIG_DIR = coordinatorClaudeHome;
+    }
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
@@ -961,6 +1045,13 @@ export async function startLocalServerUnlocked(
     // is what makes `pi` in a terminal tab and a Pi native tab share an
     // account. Containers are handed an explicit path instead.
     delete env.PI_AGENT_DIR;
+    if (coordinatorId) {
+      // Pi's project resources are arbitrary TypeScript from the checkout, and
+      // a coordinator points at the user's own repository rather than a
+      // disposable clone. The bridge already reads the policy for this; the
+      // explicit `0` also closes the deprecated env override.
+      env.PI_BRIDGE_PROJECT_RESOURCES = "0";
+    }
     env.PI_SESSION_DIR = path.join(
       context.storage.getDataDir(),
       "pi-bridge-sessions",
@@ -1138,7 +1229,7 @@ export async function startLocalServerUnlocked(
                 ...workspace,
                 conversations: workspace.conversations.map((conversation) =>
                   conversation.id === coordinatorConversationId
-                    ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                    ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
                     : conversation,
                 ),
                 updatedAt: new Date().toISOString(),
@@ -1180,7 +1271,7 @@ export async function startLocalServerUnlocked(
               ...workspace,
               conversations: workspace.conversations.map((conversation) =>
                 conversation.id === coordinatorConversationId
-                  ? { ...conversation, codexBridgePort: port, codexBridgePid: child.pid }
+                  ? { ...conversation, bridgePort: port, bridgePid: child.pid }
                   : conversation,
               ),
               lifecycleState: "ready",
@@ -1213,7 +1304,7 @@ export async function startLocalServerUnlocked(
                 ...workspace,
                 conversations: workspace.conversations.map((conversation) =>
                   conversation.id === coordinatorConversationId
-                    ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                    ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
                     : conversation,
                 ),
                 lifecycleState: "error",

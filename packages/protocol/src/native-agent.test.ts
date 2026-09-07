@@ -8,6 +8,7 @@ import {
   isFallbackExecutionProfileId,
   MAX_OPENCODE_MODEL_PROVIDERS,
   fallbackReasoningId,
+  isNativeAgentExecutionPolicy,
   isNativeAgentTabData,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
@@ -806,5 +807,43 @@ describe("background task launch id recovery", () => {
   test("tolerates a malformed toolArgs without throwing", () => {
     expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: [1, 2] })).toBe(false);
     expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: null })).toBe(false);
+  });
+});
+
+describe("native agent execution policy guard", () => {
+  const valid = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    networkAccess: "restricted",
+  } as const;
+
+  test("accepts a policy with and without the optional sub-policies", () => {
+    expect(isNativeAgentExecutionPolicy(valid)).toBe(true);
+    expect(
+      isNativeAgentExecutionPolicy({
+        ...valid,
+        toolPolicy: { deny: ["write", "shell"] },
+        capabilityPolicy: { deny: ["file.write", "shell.mutate"] },
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects rather than throws when a sub-policy is null or not an object", () => {
+    // This guard runs on request bodies at every bridge's trust boundary, so a
+    // `null` here has to be a rejection, not a TypeError out of the validator.
+    for (const malformed of [null, 7, "capabilityPolicy", [], true]) {
+      expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: malformed })).toBe(false);
+      expect(isNativeAgentExecutionPolicy({ ...valid, toolPolicy: malformed })).toBe(false);
+    }
+  });
+
+  test("rejects a capability that is not one this protocol names", () => {
+    expect(
+      isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: ["fs.write"] } }),
+    ).toBe(false);
+    expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: {} })).toBe(false);
+    expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: [1] } })).toBe(false);
   });
 });

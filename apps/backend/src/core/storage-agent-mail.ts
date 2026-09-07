@@ -461,7 +461,7 @@ export class StorageAgentMail extends StorageDrafts {
             nativeSessionTitle: conversation.title,
           }),
           tabOrdinal: 1,
-          agent: conversation.agent,
+          agent: conversation.agent ?? null,
           kind: "native",
           locked: true,
           ownerKind: "coordinator",
@@ -1250,6 +1250,62 @@ export class StorageAgentMail extends StorageDrafts {
       if (message.userSeenAt) return false;
       message.userSeenAt = new Date().toISOString();
       return true;
+    });
+  }
+
+  /**
+   * Make already-stored mail deliverable once a mailbox gains an agent.
+   *
+   * A coordinator conversation has no provider until its first prompt, and a
+   * mailbox with no agent cannot be injected into — so a workflow notice or a
+   * worker reply that arrives in the meantime is filed as `stored` and would
+   * otherwise sit there for good. Assignment is the moment that becomes
+   * deliverable, and this applies exactly the eligibility rule
+   * `retryAgentMailInject` uses for the same transition, rather than a looser
+   * one that could wake mail the user muted or already acknowledged.
+   */
+  async promoteStoredAgentMailForMailbox(environmentId: string, tabId: string): Promise<number> {
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const mailboxId = agentMailboxId(environmentId, tabId);
+      const mailbox = store.mailboxes[mailboxId];
+      if (!mailbox) return 0;
+      if (!agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject)
+        return 0;
+      let promoted = 0;
+      for (const message of mailbox.messages) {
+        if (
+          message.placement !== "stored" ||
+          message.ackedAt ||
+          message.discardedAt ||
+          mailbox.mutedInbound ||
+          message.injectDepth !== 0 ||
+          message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS ||
+          message.trust === "cross-project" ||
+          message.trust === "external"
+        ) {
+          continue;
+        }
+        message.placement = "pending-inject";
+        delete message.placementReason;
+        message.injectRequestId ??= `mail-inject-${message.id}`;
+        if (
+          !store.pendingInject.some(
+            (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
+          )
+        ) {
+          store.pendingInject.push({ mailboxId, messageId: message.id });
+        }
+        message.revision += 1;
+        promoted += 1;
+      }
+      if (promoted === 0) return 0;
+      mailbox.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.announce("agent-mail-summary", "all");
+      return promoted;
     });
   }
 

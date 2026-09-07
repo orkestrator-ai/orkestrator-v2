@@ -4,7 +4,12 @@ import {
   SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   UNAPPLIED_NETWORK_RESTRICTION_NOTE,
 } from "./native-agent-execution-policy.js";
-import { effectiveOpenCodePolicy, openCodePermissionRules } from "./opencode-provider-helpers.js";
+import {
+  effectiveOpenCodePolicy,
+  openCodeAgentFor,
+  openCodeCoordinatorAgent,
+  openCodePermissionRules,
+} from "./opencode-provider-helpers.js";
 
 describe("resolveNativeAgentExecutionPolicy", () => {
   const host = { environmentType: "local" as const, networkAccessMode: "full" as const };
@@ -79,6 +84,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       approvals: "deny",
       projectResources: false,
       toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
       networkAccess: "restricted",
     });
   });
@@ -205,15 +211,92 @@ describe("OpenCode execution policy translation", () => {
     ).toEqual([{ permission: "*", pattern: "*", action: "allow" }]);
   });
 
-  test("fails closed instead of weakening coordinator project isolation", () => {
-    expect(() =>
-      effectiveOpenCodePolicy({
+  test("a coordinator policy reports the project-resource axis it cannot honour", () => {
+    const effective = effectiveOpenCodePolicy({
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+      networkAccess: "restricted",
+    });
+    // Not silently dropped: this is exactly why OpenCode is offered as
+    // provider-configured rather than enforced.
+    expect(effective.projectResources).toBe(true);
+    expect(effective.note).toContain("project configuration");
+    expect(effective.approvals).toBe("deny");
+  });
+
+  test("a coordinator denies everything but the reads it needs to be useful", () => {
+    const rules = openCodePermissionRules({
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: true,
+      networkAccess: "restricted",
+    });
+    expect(rules[0]).toEqual({ permission: "*", pattern: "*", action: "deny" });
+    const allowed = rules.filter((rule) => rule.action === "allow").map((rule) => rule.permission);
+    expect(allowed).toContain("read");
+    expect(allowed).toContain("grep");
+    expect(allowed).not.toContain("edit");
+    expect(allowed).not.toContain("bash");
+    expect(allowed).not.toContain("write");
+  });
+
+  test("an explicit deny still wins over the coordinator read allowances", () => {
+    const rules = openCodePermissionRules({
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: true,
+      toolPolicy: { deny: ["read"] },
+      networkAccess: "restricted",
+    });
+    expect(rules.at(-1)).toEqual({ permission: "read", pattern: "*", action: "deny" });
+  });
+
+  test("the coordinator runs OpenCode's read-only agent whatever the caller asked for", () => {
+    expect(
+      openCodeCoordinatorAgent({
         id: "coordinator-read-only",
         sandbox: "provider",
         approvals: "deny",
-        projectResources: false,
+        projectResources: true,
         networkAccess: "restricted",
       }),
-    ).toThrow("cannot enforce the coordinator project-resource boundary");
+    ).toBe("plan");
+    expect(
+      openCodeCoordinatorAgent({
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: true,
+        networkAccess: "full",
+      }),
+    ).toBeUndefined();
+    expect(openCodeCoordinatorAgent(undefined)).toBeUndefined();
+  });
+
+  test("a slash command keeps OpenCode's own agent resolution", () => {
+    const interactive = {
+      id: "interactive-host" as const,
+      sandbox: "provider" as const,
+      approvals: "ask" as const,
+      projectResources: true,
+      networkAccess: "full" as const,
+    };
+    // Naming a fallback for a command would override one that declares its own.
+    expect(openCodeAgentFor(interactive, {})).toBeUndefined();
+    expect(openCodeAgentFor(interactive, {}, "build")).toBe("build");
+    expect(openCodeAgentFor(interactive, { executionAgent: "reviewer" }, "build")).toBe("reviewer");
+    // The coordinator override outranks anything the caller chose.
+    expect(
+      openCodeAgentFor(
+        { ...interactive, id: "coordinator-read-only" },
+        { executionAgent: "reviewer" },
+        "build",
+      ),
+    ).toBe("plan");
   });
 });

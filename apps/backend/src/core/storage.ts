@@ -57,6 +57,43 @@ export class StorageService extends StorageKanban {
       workspaces: {},
       workflows: [],
     }));
+    /**
+     * Coordinator bridges were Codex-only, so the persisted identity was named
+     * for it. Reading the old keys keeps a live bridge attached across the
+     * upgrade; without this the reaper would not see the running child and the
+     * next launch would allocate a second one against the same rollout.
+     */
+    const migrateCoordinatorBridgeFields = (workspace: unknown): unknown => {
+      if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) return workspace;
+      const record = workspace as Record<string, unknown> & {
+        conversations?: unknown;
+      };
+      const rename = (item: Record<string, unknown>): Record<string, unknown> => {
+        const { codexBridgePort, codexBridgePid, ...rest } = item;
+        if (codexBridgePort === undefined && codexBridgePid === undefined) return item;
+        return {
+          ...rest,
+          ...(rest.bridgePort === undefined && typeof codexBridgePort === "number"
+            ? { bridgePort: codexBridgePort }
+            : {}),
+          ...(rest.bridgePid === undefined && typeof codexBridgePid === "number"
+            ? { bridgePid: codexBridgePid }
+            : {}),
+        };
+      };
+      return {
+        ...rename(record),
+        ...(Array.isArray(record.conversations)
+          ? {
+              conversations: record.conversations.map((conversation) =>
+                conversation && typeof conversation === "object" && !Array.isArray(conversation)
+                  ? rename(conversation as Record<string, unknown>)
+                  : conversation,
+              ),
+            }
+          : {}),
+      };
+    };
     const empty = () => ({
       version: COORDINATOR_WORKSPACE_VERSION,
       revision: 0,
@@ -84,11 +121,12 @@ export class StorageService extends StorageKanban {
     }
     const workspaces: Record<string, CoordinatorWorkspace> = {};
     for (const [projectId, workspace] of Object.entries(store.workspaces)) {
-      if (!isCoordinatorWorkspace(workspace) || workspace.projectId !== projectId) {
+      const migrated = migrateCoordinatorBridgeFields(workspace);
+      if (!isCoordinatorWorkspace(migrated) || migrated.projectId !== projectId) {
         console.warn("[coordinator] Ignoring invalid coordinator workspace record");
         continue;
       }
-      workspaces[projectId] = workspace;
+      workspaces[projectId] = migrated;
     }
     const workflows = Array.isArray(store.workflows)
       ? store.workflows.filter(

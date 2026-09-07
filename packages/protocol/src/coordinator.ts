@@ -10,11 +10,46 @@ export type AgentSessionOwner =
 
 export type CoordinatorLifecycleState = "ready" | "paused" | "error";
 
+/**
+ * How strongly a platform can be held to the coordinator's read-only boundary.
+ *
+ * The distinction is not cosmetic. `enforced` means the provider or the OS
+ * blocks a mutation whatever the model does; `provider-configured` means the
+ * SDK was told to deny but exposes no way to verify it; `advisory` means
+ * enforcement depends on the agent choosing to ask permission first. A user
+ * deciding whether to point a coordinator at a real checkout needs that
+ * difference, so it is carried in the snapshot rather than flattened to a
+ * boolean.
+ */
+export type CoordinatorProviderTier =
+  | "enforced"
+  | "provider-configured"
+  | "advisory"
+  | "unavailable";
+
+export interface CoordinatorProviderQualification {
+  tier: CoordinatorProviderTier;
+  /** Whether this host's tier setting admits the platform right now. */
+  available: boolean;
+  /** Why it is unavailable, or the caveat that comes with a lower tier. */
+  reason?: string;
+  /** Whether Orkestrator's delegation tools are reachable on this platform. */
+  delegation: boolean;
+}
+
 export interface CoordinatorConversation {
   id: string;
   tabId: string;
   logicalSessionKey: string;
-  agent: AgentPlatform;
+  /**
+   * Absent until the first prompt assigns one.
+   *
+   * A conversation is created without a provider so the composer can offer the
+   * whole qualified catalogue before anything is materialized. Assignment is
+   * one-way for the life of the conversation: once a provider session exists,
+   * its transcript and rollout belong to that platform.
+   */
+  agent?: AgentPlatform;
   providerSessionId?: string;
   title: string;
   createdAt: string;
@@ -22,8 +57,8 @@ export interface CoordinatorConversation {
   mailboxIncarnationId: string;
   /** Repository context included in the newest successfully dispatched turn. */
   repositoryContextRevisionAcknowledged?: number;
-  codexBridgePort?: number;
-  codexBridgePid?: number;
+  bridgePort?: number;
+  bridgePid?: number;
 }
 
 export interface CoordinatorWorkflowAssociation {
@@ -68,15 +103,15 @@ export interface CoordinatorWorkspace {
   createdAt: string;
   updatedAt: string;
   lastStartupError?: string;
-  codexBridgePort?: number;
-  codexBridgePid?: number;
+  bridgePort?: number;
+  bridgePid?: number;
   repositoryStatus?: ProjectGitStatus;
 }
 
 export interface CoordinatorSnapshot {
   workspace: CoordinatorWorkspace;
   projectPath: string;
-  providerAvailability: Partial<Record<AgentPlatform, { available: boolean; reason?: string }>>;
+  providerAvailability: Partial<Record<AgentPlatform, CoordinatorProviderQualification>>;
   controlMcp: { enabled: boolean; running: boolean; error: string | null };
   workflows: CoordinatorWorkflowAssociation[];
 }
@@ -190,7 +225,7 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
         typeof item.id === "string" &&
         typeof item.tabId === "string" &&
         typeof item.logicalSessionKey === "string" &&
-        isAgentPlatform(item.agent) &&
+        (item.agent === undefined || isAgentPlatform(item.agent)) &&
         typeof item.title === "string" &&
         typeof item.createdAt === "string" &&
         typeof item.mailboxIncarnationId === "string" &&

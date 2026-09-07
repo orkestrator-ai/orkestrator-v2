@@ -49,7 +49,8 @@ type SdkMcpServerConfig = SdkMcpStdioServerConfig | SdkMcpSSEServerConfig | SdkM
  */
 export type SdkMcpServersConfig = Record<string, SdkMcpServerConfig>;
 
-const AGENT_MCP_SERVER_NAME = "orkestrator";
+/** Reserved name for Orkestrator's own scoped server; never a project's. */
+export const AGENT_MCP_SERVER_NAME = "orkestrator";
 const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 

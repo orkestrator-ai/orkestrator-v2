@@ -82,7 +82,10 @@ const snapshot: CoordinatorSnapshot = {
     repositoryStatus: gitStatus,
   },
   projectPath: "/checkout",
-  providerAvailability: { codex: { available: true } },
+  providerAvailability: {
+    codex: { tier: "enforced", available: true, delegation: true },
+    claude: { tier: "enforced", available: true, delegation: true },
+  },
   controlMcp: { enabled: true, running: true, error: null },
   workflows: [],
 };
@@ -96,6 +99,7 @@ const getGit = mock(async () => ensuredGit);
 const switchBranch = mock(async () => ensuredGit);
 const syncGit = mock(async () => ensuredGit);
 const getCoordinator = mock(async () => ensuredSnapshot);
+const assignAgent = mock(async () => ensuredSnapshot);
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
@@ -110,13 +114,41 @@ mock.module("@/lib/backend", () => ({
   selectCoordinatorConversation: select,
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
+  assignCoordinatorConversationAgent: assignAgent,
 }));
 
 const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
   <div
     data-testid="native-agent"
     data-coordinator-project-id={String(props.coordinatorProjectId ?? "")}
-  />
+    data-platform={String((props.data as { platform?: string } | undefined)?.platform ?? "")}
+    data-available-platforms={(props.availablePlatforms as string[] | undefined)?.join(",") ?? ""}
+    data-initial-prompt={String(props.initialPrompt ?? "")}
+    data-initial-model={String(props.initialAgentModel ?? "")}
+    data-platform-notes={JSON.stringify(props.platformNotes ?? {})}
+  >
+    {props.onAssignPlatform ? (
+      <button
+        type="button"
+        onClick={() => {
+          // The real tab awaits this and renders a failure itself, so the stub
+          // has to absorb the rejection the same way rather than turning a
+          // reported error into an unhandled one.
+          void (
+            props.onAssignPlatform as (
+              platform: string,
+              prompt: string,
+              options: Record<string, unknown>,
+            ) => Promise<void>
+          )("claude", "Inspect the repository", { modelId: "opus", fastMode: false }).catch(
+            () => undefined,
+          );
+        }}
+      >
+        Assign claude
+      </button>
+    ) : null}
+  </div>
 ));
 
 mock.module("@/components/native-agent", () => ({
@@ -140,6 +172,7 @@ describe("CoordinatorPanel", () => {
     switchBranch.mockClear();
     syncGit.mockClear();
     getCoordinator.mockClear();
+    assignAgent.mockClear();
     renderAgentNativeTab.mockClear();
     ensuredSnapshot = snapshot;
     ensuredGit = gitStatus;
@@ -170,6 +203,182 @@ describe("CoordinatorPanel", () => {
     });
   });
 
+  test("an unassigned conversation offers every qualified platform and binds on first send", async () => {
+    const unassignedConversation = {
+      ...snapshot.workspace.conversations[0]!,
+      agent: undefined,
+    };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: { ...snapshot.workspace, conversations: [unassignedConversation] },
+    };
+    const assignedSnapshot: CoordinatorSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...unassignedConversation, agent: "claude" }],
+      },
+    };
+    assignAgent.mockImplementation(async () => assignedSnapshot);
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    const agent = await screen.findByTestId("native-agent");
+    // The composer, not a locked provider: this is the state the user reported
+    // as "locked to codex".
+    expect(agent.getAttribute("data-platform")).toBe("");
+    expect(agent.getAttribute("data-available-platforms")).toBe("claude,codex");
+    expect(screen.getByRole("button", { name: "First, no agent chosen yet" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() =>
+      expect(assignAgent).toHaveBeenCalledWith("project-1", "conversation-1", "claude"),
+    );
+    const assigned = await screen.findByTestId("native-agent");
+    await waitFor(() => expect(assigned.getAttribute("data-platform")).toBe("claude"));
+    // The first prompt and its model reach the newly bound tab rather than
+    // being discarded with the composer.
+    expect(assigned.getAttribute("data-initial-prompt")).toBe("Inspect the repository");
+    expect(assigned.getAttribute("data-initial-model")).toBe("opus");
+  });
+
+  test("the opening prompt is held until the turn is observed, not dropped on the next render", async () => {
+    const unassignedConversation = {
+      ...snapshot.workspace.conversations[0]!,
+      agent: undefined,
+    };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: { ...snapshot.workspace, conversations: [unassignedConversation] },
+    };
+    const assignedSnapshot: CoordinatorSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...unassignedConversation, agent: "claude" }],
+      },
+    };
+    assignAgent.mockImplementation(async () => assignedSnapshot);
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    const assigned = await screen.findByTestId("native-agent");
+    await waitFor(() => expect(assigned.getAttribute("data-platform")).toBe("claude"));
+    expect(assigned.getAttribute("data-initial-prompt")).toBe("Inspect the repository");
+
+    // The snapshot poll re-renders the panel within a second or two. The agent
+    // tab dispatches only after its own first authoritative read, so dropping
+    // the prompt here raced that read and left it unsent in the composer.
+    act(() => {
+      ensuredSnapshot = { ...assignedSnapshot };
+    });
+    await waitFor(() => expect(getCoordinator).toHaveBeenCalled());
+    expect((await screen.findByTestId("native-agent")).getAttribute("data-initial-prompt")).toBe(
+      "Inspect the repository",
+    );
+
+    // Evidence of the turn is what releases it.
+    const sessionKey = createSessionKey(
+      coordinatorRuntimeId("coordinator-1", "conversation-1"),
+      "coordinator-tab",
+    );
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        platform: "claude",
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        connection: "connected",
+        turn: { phase: "running" },
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: {},
+        revision: 1,
+        generation: "test",
+      } as never);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(""),
+    );
+  });
+
+  test("a caveat on an available platform reaches the composer, an unavailable one does not", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+      providerAvailability: {
+        codex: { tier: "enforced", available: true, delegation: true },
+        pi: {
+          tier: "enforced",
+          available: true,
+          reason: "Pi has no MCP client.",
+          delegation: false,
+        },
+        cursor: {
+          tier: "provider-configured",
+          available: true,
+          reason: "Cursor applies the restriction.",
+          delegation: true,
+        },
+        grok: {
+          tier: "advisory",
+          available: false,
+          reason: "Grok is only asked to comply.",
+          delegation: true,
+        },
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    const agent = await screen.findByTestId("native-agent");
+    const notes = JSON.parse(agent.getAttribute("data-platform-notes") ?? "{}");
+    expect(notes.pi).toBe("Pi has no MCP client.");
+    // A weaker tier says so explicitly; an enforced one does not need the
+    // disclaimer and must not carry it.
+    expect(notes.cursor).toContain("cannot verify this boundary independently");
+    expect(notes.codex).toBeUndefined();
+    expect(notes.grok).toBeUndefined();
+  });
+
+  test("explains an assigned conversation whose platform became unavailable", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      providerAvailability: {
+        codex: {
+          tier: "enforced",
+          available: false,
+          reason: "Codex is turned off in settings.",
+          delegation: true,
+        },
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText("Codex is turned off in settings.")).toBeTruthy();
+    expect(screen.getByText(/Codex is unavailable for Coordinator/)).toBeTruthy();
+  });
+
+  test("reports an assignment failure without binding the conversation", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    assignAgent.mockImplementation(async () => {
+      throw new Error("assignment failed");
+    });
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    // Still unassigned, so the user can retry or pick a different platform.
+    const agent = await screen.findByTestId("native-agent");
+    expect(agent.getAttribute("data-platform")).toBe("");
+  });
+
   afterEach(cleanup);
   afterAll(() => {
     mock.module("@/lib/backend", () => backendSnapshot);
@@ -179,7 +388,7 @@ describe("CoordinatorPanel", () => {
   test("reports selection and pause failures", async () => {
     const first = render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    fireEvent.click(screen.getByRole("button", { name: "First" }));
+    fireEvent.click(screen.getByRole("button", { name: "First, Codex" }));
     expect(await screen.findByText("select failed")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
@@ -224,7 +433,9 @@ describe("CoordinatorPanel", () => {
     }));
     ensuredSnapshot = {
       ...snapshot,
-      providerAvailability: { codex: { available: false, reason: "Sign in first" } },
+      providerAvailability: {
+        codex: { tier: "enforced", available: false, reason: "Sign in first", delegation: true },
+      },
     };
     const unavailable = render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText("Sign in first")).toBeTruthy();

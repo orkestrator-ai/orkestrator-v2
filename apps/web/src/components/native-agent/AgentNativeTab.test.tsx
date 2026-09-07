@@ -983,6 +983,130 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
+  test("a coordinator tab assigns through the backend instead of locking a pane", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+    const onAssignPlatform = mock<
+      (platform: AgentPlatform, prompt: string, options: unknown) => Promise<void>
+    >(async () => undefined);
+
+    const { container } = render(
+      <AgentNativeTab
+        tabId="coordinator-tab"
+        data={{ environmentId: "coordinator:workspace-1:conversation-1", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={onAssignPlatform}
+        availablePlatforms={["claude", "codex"]}
+        unassignedPlaceholder="Ask the coordinator to inspect or plan…"
+      />,
+    );
+
+    expect(screen.getByText("Ask the coordinator to inspect or plan…")).toBeTruthy();
+    // A coordinator conversation owns its provider session, so there is no
+    // rollout for it to adopt.
+    expect(screen.queryByRole("button", { name: "Resume Session" }) === null).toBe(true);
+
+    const input = container.querySelector<HTMLElement>(".native-compose-input")!;
+    fireEvent.input(input, { target: { textContent: "Inspect this" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(onAssignPlatform).toHaveBeenCalledTimes(1));
+    expect(onAssignPlatform.mock.calls[0]![0]).toBe("claude");
+    expect(onAssignPlatform.mock.calls[0]![1]).toContain("Inspect this");
+    // The pane store owns a normal tab's lock; a coordinator conversation is
+    // backend state and must not be locked locally.
+    expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("a failed coordinator assignment is reported and leaves the composer usable", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+    const onAssignPlatform = mock(async () => {
+      throw new Error("Coordinator provider is unavailable");
+    });
+
+    const { container } = render(
+      <AgentNativeTab
+        tabId="coordinator-tab-failure"
+        data={{ environmentId: "coordinator:workspace-1:conversation-2", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={onAssignPlatform}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    const input = container.querySelector<HTMLElement>(".native-compose-input")!;
+    fireEvent.input(input, { target: { textContent: "Inspect this" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByText("Coordinator provider is unavailable")).toBeTruthy();
+  });
+
+  test("an unassigned coordinator tab with no qualified platform explains itself", () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-empty"
+        data={{ environmentId: "coordinator:workspace-1:conversation-3", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={mock(async () => undefined)}
+        availablePlatforms={["grok"]}
+        emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement."
+      />,
+    );
+
+    // Offering a Send button that can only fail is worse than saying why.
+    expect(
+      screen.getByText("No agent platform meets this coordinator's read-only requirement."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("unassigned-native-compose-bar") === null).toBe(true);
+  });
+
+  test("a coordinator platform caveat is shown beside the picker", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-note"
+        data={{ environmentId: "coordinator:workspace-1:conversation-4", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        onAssignPlatform={mock(async () => undefined)}
+        availablePlatforms={["claude", "codex"]}
+        platformNotes={{ claude: "Claude's command sandbox is unavailable on this host." }}
+      />,
+    );
+
+    expect((await screen.findByTestId("unassigned-platform-note")).textContent).toContain(
+      "command sandbox is unavailable",
+    );
+  });
+
   test("unassigned composer adopts the environment default agent and model", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({

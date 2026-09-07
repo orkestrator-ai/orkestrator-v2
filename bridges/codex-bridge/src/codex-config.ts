@@ -11,6 +11,20 @@ export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
  */
 export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
+/**
+ * Whether this process was launched to serve a read-only coordinator.
+ *
+ * `ORKESTRATOR_BRIDGE_EXECUTION_POLICY` is the provider-neutral name every
+ * bridge now answers to; the Codex-specific variable predates it and is still
+ * honoured so an older launcher keeps working.
+ */
+export function isCoordinatorReadOnlyEnvironment(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only" ||
+    env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only"
+  );
+}
+
 export function resolveCodexMaxConcurrentThreads(value: string | undefined): number {
   if (!value?.trim()) return DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
   const parsed = Number(value);
@@ -36,7 +50,7 @@ export function codexAppServerConfigOverrides(
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
-  if (env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
+  if (isCoordinatorReadOnlyEnvironment(env)) {
     const permissionProfile = env.CODEX_BRIDGE_PERMISSION_PROFILE?.trim();
     const readableRuntimeRoot = env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT?.trim();
     const projectRoot = env.CWD?.trim();

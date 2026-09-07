@@ -87,6 +87,7 @@ import {
   DEFAULT_MONITOR_RETRY_MS,
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
+  openCodeAgentFor,
   listOpenCodeResumableSessions,
   type OpenCodeProviderDependencies,
   OPENCODE_COMMAND_NAME_TTL_MS,
@@ -723,7 +724,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 // answers 400, which the caller reads as a failed dispatch.
                 arguments: command.arguments ?? "",
                 model: options.model ?? this.connection.model,
-                agent: options.executionAgent ?? options.mode,
+                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options),
                 variant,
                 // Text became the command name and its arguments; only the files
                 // survive as parts.
@@ -738,7 +739,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 messageID,
                 parts,
                 model,
-                agent: options.executionAgent ?? options.mode ?? "build",
+                agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
               },
               this.requestOptions(),

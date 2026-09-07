@@ -35,7 +35,11 @@ export function resolveNativeAgentExecutionPolicy(
         sandbox: "provider",
         approvals: "deny",
         projectResources: false,
+        // Codex's own tool names, kept because its config consumes them
+        // directly. Every other bridge reads `capabilityPolicy` instead, which
+        // is why the same policy object can now be handed to any of them.
         toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+        capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
         networkAccess: "restricted",
       }
     : {

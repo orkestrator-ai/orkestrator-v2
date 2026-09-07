@@ -161,6 +161,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [enabledAgentPlatforms, setEnabledAgentPlatforms] = useState<AgentPlatform[]>(
     global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
+  const [coordinatorProviderTiers, setCoordinatorProviderTiers] = useState<
+    "enforced" | "provider-configured" | "advisory"
+  >(global.coordinatorProviderTiers ?? "enforced");
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
@@ -478,6 +481,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     allowedDomains,
     preferredEditor,
     enabledAgentPlatforms,
+    coordinatorProviderTiers,
     agentSettings,
     openCodeModelProviders,
     codexMaxConcurrentThreads,
@@ -586,6 +590,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostClaudeCredentials: boolean;
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
+        coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
         favoriteModels: Array<{ platform: AgentPlatform; modelId: string }>;
         agentSettings: AgentSettingsTier;
         openCodeModelProviders: string[];
@@ -610,6 +615,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         useHostClaudeCredentials,
         preferredEditor,
         enabledAgentPlatforms,
+        coordinatorProviderTiers,
         favoriteModels: global.favoriteModels ?? [],
         agentSettings: normalizeAgentSettings(agentSettings),
         openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
@@ -879,6 +885,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAgentSettings,
     enabledAgentPlatforms,
     setEnabledAgentPlatforms,
+    coordinatorProviderTiers,
+    setCoordinatorProviderTiers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     openCodeProviderDraft,

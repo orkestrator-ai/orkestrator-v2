@@ -8,12 +8,20 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  firstEnabledAgentPlatform,
+  normalizeAgentPlatforms,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import type { StorageService } from "./storage.js";
 import { resolveProjectGitRoot } from "./project-git-service.js";
+import {
+  coordinatorProviderQualification,
+  coordinatorProviderQualifications,
+  type CoordinatorHostCapabilities,
+} from "./coordinator-providers.js";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
-const SUPPORTED_COORDINATOR_PROVIDERS = new Set<AgentPlatform>(["codex"]);
 
 export function sanitizeCoordinatorError(value: unknown): string {
   const text = (value instanceof Error ? value.message : String(value))
@@ -27,17 +35,12 @@ export function sanitizeCoordinatorError(value: unknown): string {
   return text.slice(0, MAX_STARTUP_ERROR_CHARS) || "Coordinator startup failed";
 }
 
-function conversation(
-  workspaceId: string,
-  agent: AgentPlatform,
-  title = "Coordinator",
-): CoordinatorConversation {
+function conversation(workspaceId: string, title = "Coordinator"): CoordinatorConversation {
   const id = randomUUID();
   return {
     id,
     tabId: `coordinator-${id}`,
     logicalSessionKey: `coordinator-${workspaceId}:${id}`,
-    agent,
     title,
     createdAt: new Date().toISOString(),
     mailboxIncarnationId: randomUUID(),
@@ -67,7 +70,56 @@ export class CoordinatorService {
       running: boolean;
       error: string | null;
     },
+    private readonly host?: CoordinatorHostCapabilities,
   ) {}
+
+  /**
+   * The qualification inputs, read fresh.
+   *
+   * Turning a platform off, or lowering the coordinator safety level, has to
+   * affect the next answer rather than the next restart — an assigned
+   * conversation on a platform that just became unavailable must stop being
+   * offered immediately.
+   */
+  private async qualificationOptions(): Promise<{
+    tierSetting: unknown;
+    enabledPlatforms: AgentPlatform[];
+    host?: CoordinatorHostCapabilities;
+  }> {
+    const config = await this.storage.loadConfig();
+    return {
+      tierSetting: config.global.coordinatorProviderTiers,
+      enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
+      ...(this.host ? { host: this.host } : {}),
+    };
+  }
+
+  /** Whether this platform may hold a coordinator conversation right now. */
+  async providerAllowed(platform: AgentPlatform): Promise<boolean> {
+    return coordinatorProviderQualification(platform, await this.qualificationOptions()).available;
+  }
+
+  async providerUnavailableMessage(platform: AgentPlatform): Promise<string> {
+    const qualification = coordinatorProviderQualification(
+      platform,
+      await this.qualificationOptions(),
+    );
+    return (
+      qualification.reason ?? "This agent platform is not available for Coordinator on this host."
+    );
+  }
+
+  /** The platform a fresh conversation should preselect, when one qualifies. */
+  async preferredAgent(projectId: string): Promise<AgentPlatform | undefined> {
+    const options = await this.qualificationOptions();
+    const configured = await this.configuredAgent(projectId);
+    if (coordinatorProviderQualification(configured, options).available) return configured;
+    const fallback = options.enabledPlatforms.filter(
+      (platform) => coordinatorProviderQualification(platform, options).available,
+    );
+    if (fallback.length === 0) return undefined;
+    return firstEnabledAgentPlatform(fallback, configured);
+  }
 
   private serialize<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.projectOperations.get(projectId) ?? Promise.resolve();
@@ -102,58 +154,37 @@ export class CoordinatorService {
   async ensure(projectId: string): Promise<CoordinatorSnapshot> {
     return this.serialize(projectId, async () => {
       const projectPath = await this.canonicalProjectPath(projectId);
-      const configuredAgent = await this.configuredAgent(projectId);
       const before = await this.storage.getCoordinatorWorkspace(projectId);
-      const canRecoverError = Boolean(
-        before &&
-        before.lifecycleState === "error" &&
-        SUPPORTED_COORDINATOR_PROVIDERS.has(configuredAgent),
-      );
-      const hasMaterializedSession = canRecoverError
-        ? (await this.storage.listNativeAgentSessions()).some(
-            (session) =>
-              session.owner?.kind === "coordinator" && session.owner.coordinatorId === before!.id,
-          )
-        : false;
+      // A workspace only reaches `error` through a real startup failure now
+      // that an unqualified default no longer produces one: a fresh
+      // conversation has no provider until the user picks one. Retry therefore
+      // means "try that same conversation again", and never silently rewrites
+      // which platform a conversation belongs to.
+      const canRecoverError = before?.lifecycleState === "error";
       const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
         if (current) {
           if (!canRecoverError || current.id !== before?.id) return current;
           return {
             ...current,
             lifecycleState: "ready",
-            // An unsupported-provider workspace has no materialized provider
-            // session, so it is safe to adopt the newly qualified default. A
-            // transient bridge startup failure may already have durable
-            // sessions and must preserve their provider identity while Retry
-            // clears the gate and attempts the same conversation again.
-            conversations: hasMaterializedSession
-              ? current.conversations
-              : current.conversations.map((item) =>
-                  item.closedAt ? item : { ...item, agent: configuredAgent },
-                ),
             lastStartupError: undefined,
             updatedAt: new Date().toISOString(),
           };
         }
         const id = randomUUID();
-        const initial = conversation(id, configuredAgent);
+        const initial = conversation(id);
         const now = new Date().toISOString();
         return {
           version: COORDINATOR_WORKSPACE_VERSION,
           id,
           projectId,
           executionPolicy: COORDINATOR_EXECUTION_POLICY,
-          lifecycleState: SUPPORTED_COORDINATOR_PROVIDERS.has(configuredAgent) ? "ready" : "error",
+          lifecycleState: "ready",
           conversations: [initial],
           selectedConversationId: initial.id,
           repositoryContextRevision: 0,
           createdAt: now,
           updatedAt: now,
-          ...(!SUPPORTED_COORDINATOR_PROVIDERS.has(configuredAgent)
-            ? {
-                lastStartupError: `${configuredAgent} is not available for Coordinator because its read-only boundary has not been qualified. Select Codex in project defaults to use Coordinator.`,
-              }
-            : {}),
         };
       });
       if (!workspace) throw new Error("Coordinator workspace could not be created");
@@ -171,18 +202,7 @@ export class CoordinatorService {
     workspace: CoordinatorWorkspace,
     projectPath: string,
   ): Promise<CoordinatorSnapshot> {
-    const availability = Object.fromEntries(
-      (["claude", "codex", "opencode", "cursor", "grok", "pi"] as AgentPlatform[]).map((agent) => [
-        agent,
-        SUPPORTED_COORDINATOR_PROVIDERS.has(agent)
-          ? { available: true }
-          : {
-              available: false,
-              reason:
-                "Read-only execution and scoped MCP access are not qualified for this provider.",
-            },
-      ]),
-    );
+    const availability = coordinatorProviderQualifications(await this.qualificationOptions());
     const mcp = this.controlMcp();
     return {
       workspace,
@@ -201,21 +221,10 @@ export class CoordinatorService {
       const projectPath = await this.canonicalProjectPath(projectId);
       const existing = await this.storage.getCoordinatorWorkspace(projectId);
       if (!existing) throw new Error("Coordinator workspace disappeared");
-      const currentAgent =
-        existing.conversations.find((item) => item.id === existing.selectedConversationId)?.agent ??
-        existing.conversations.at(-1)?.agent;
-      const configuredAgent = await this.configuredAgent(projectId);
-      const activeAgent =
-        currentAgent && SUPPORTED_COORDINATOR_PROVIDERS.has(currentAgent)
-          ? currentAgent
-          : configuredAgent;
-      if (!activeAgent) {
-        throw new Error("Coordinator provider could not be resolved");
-      }
-      if (!SUPPORTED_COORDINATOR_PROVIDERS.has(activeAgent)) {
-        throw new Error("The configured provider is unavailable for Coordinator");
-      }
-      const created = conversation(existing.id, activeAgent, title?.trim() || "Coordinator");
+      // Deliberately unassigned. Inheriting the selected conversation's
+      // provider is what made a new conversation look locked: the composer had
+      // one platform before the user had said anything.
+      const created = conversation(existing.id, title?.trim() || "Coordinator");
       const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
         if (!current) throw new Error("Coordinator workspace disappeared");
         if (current.conversations.filter((item) => !item.closedAt).length >= 16) {
@@ -229,6 +238,74 @@ export class CoordinatorService {
         };
       });
       if (!workspace) throw new Error("Coordinator workspace disappeared");
+      return this.snapshot(workspace, projectPath);
+    });
+  }
+
+  /**
+   * Bind a conversation to the provider its first prompt chose.
+   *
+   * One-way for the life of the conversation once a provider session exists.
+   * Before that a re-assignment is allowed on purpose: a first send that failed
+   * to start a bridge leaves nothing materialized, and stranding the user on the
+   * platform that just failed would make the conversation unusable.
+   */
+  async assignConversationAgent(
+    projectId: string,
+    conversationId: string,
+    agent: AgentPlatform,
+  ): Promise<CoordinatorSnapshot> {
+    return this.serialize(projectId, async () => {
+      const projectPath = await this.canonicalProjectPath(projectId);
+      const existing = await this.storage.getCoordinatorWorkspace(projectId);
+      if (!existing) throw new Error("Coordinator workspace was not found");
+      const target = existing.conversations.find((item) => item.id === conversationId);
+      if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
+      if (target.agent === agent) return this.snapshot(existing, projectPath);
+      if (!(await this.providerAllowed(agent))) {
+        throw new Error(await this.providerUnavailableMessage(agent));
+      }
+      if (target.agent) {
+        // Storage, not the absence of a `providerSessionId`, is the authority:
+        // the field is a projection and may lag a session that already exists.
+        const sessions = await this.storage.listNativeAgentSessions();
+        const materialized = sessions.some(
+          (session) =>
+            session.owner?.kind === "coordinator" &&
+            session.owner.coordinatorId === existing.id &&
+            session.logicalSessionKey === target.logicalSessionKey,
+        );
+        if (materialized) {
+          throw new Error(
+            "This conversation already has a provider session. Start a new conversation to use a different agent.",
+          );
+        }
+      }
+      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
+        if (!current) throw new Error("Coordinator workspace was not found");
+        const item = current.conversations.find((entry) => entry.id === conversationId);
+        if (!item || item.closedAt) throw new Error("Coordinator conversation was not found");
+        return {
+          ...current,
+          conversations: current.conversations.map((entry) =>
+            entry.id === conversationId ? { ...entry, agent } : entry,
+          ),
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      if (!workspace) throw new Error("Coordinator workspace was not found");
+      // The mailbox now has an agent, so mail that arrived while the
+      // conversation was unassigned becomes deliverable. Both steps are
+      // best-effort: assignment is what the user asked for, and a mail store
+      // that cannot be written must not strand the conversation without a
+      // provider.
+      await this.storage.synchronizeAgentMailboxes().catch(() => undefined);
+      await this.storage
+        .promoteStoredAgentMailForMailbox(
+          coordinatorRuntimeId(workspace.id, conversationId),
+          target.tabId,
+        )
+        .catch(() => undefined);
       return this.snapshot(workspace, projectPath);
     });
   }
@@ -283,12 +360,21 @@ export class CoordinatorService {
 
   async setPaused(projectId: string, paused: boolean): Promise<CoordinatorSnapshot> {
     const projectPath = await this.canonicalProjectPath(projectId);
+    const options = await this.qualificationOptions();
+    const allowedAgents = new Set(
+      options.enabledPlatforms.filter(
+        (platform) => coordinatorProviderQualification(platform, options).available,
+      ),
+    );
     const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
       if (!current) throw new Error("Coordinator workspace was not found");
       const selected =
         current.conversations.find((item) => item.id === current.selectedConversationId) ??
         current.conversations.at(-1);
-      if (!paused && (!selected || !SUPPORTED_COORDINATOR_PROVIDERS.has(selected.agent))) {
+      // An unassigned conversation has nothing to be unavailable: resuming it
+      // just returns the user to the composer, which is where the provider
+      // gate is applied.
+      if (!paused && selected?.agent && !allowedAgents.has(selected.agent)) {
         throw new Error("The configured provider is unavailable for Coordinator");
       }
       return {

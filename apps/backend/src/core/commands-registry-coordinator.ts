@@ -7,6 +7,8 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { localServerStopCommandName } from "./commands-runtime-state.js";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { createHash, randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput, isStartMultiReviewInput } from "./commands-dependencies.js";
@@ -119,6 +121,19 @@ export function registerCoordinatorCommands(
       typeof title === "string" ? title : undefined,
     );
   });
+  register(
+    "assign_coordinator_conversation_agent",
+    async ({ projectId, conversationId, agent }, context) => {
+      if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+      const platform = asNonBlankString(agent, "agent");
+      if (!isAgentPlatform(platform)) throw new Error("Unsupported agent platform");
+      return context.coordinators.assignConversationAgent(
+        asNonBlankString(projectId, "projectId"),
+        asNonBlankString(conversationId, "conversationId"),
+        platform,
+      );
+    },
+  );
   register("select_coordinator_conversation", async ({ projectId, conversationId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.selectConversation(
@@ -134,33 +149,40 @@ export function registerCoordinatorCommands(
     if (!current) throw new Error("Coordinator workspace was not found");
     const item = current?.workspace.conversations.find((entry) => entry.id === conversation);
     if (!item) throw new Error("Coordinator conversation was not found");
-    if (context.nativeAgents) {
-      await context.nativeAgents
-        .stopProjectionSession({
-          environmentId: coordinatorRuntimeId(current.workspace.id, item.id),
-          agent: item.agent,
-          logicalSessionKey: item.logicalSessionKey,
-        })
-        .catch(() => undefined);
+    // An unassigned conversation never reached a provider: there is no session
+    // to stop, no bridge to retire and no rollout to invalidate. Only the
+    // credential revocation below is unconditional.
+    if (item.agent) {
+      if (context.nativeAgents) {
+        await context.nativeAgents
+          .stopProjectionSession({
+            environmentId: coordinatorRuntimeId(current.workspace.id, item.id),
+            agent: item.agent,
+            logicalSessionKey: item.logicalSessionKey,
+          })
+          .catch(() => undefined);
+      }
     }
     context.controlMcp?.revokeCoordinatorCredentials(current.workspace.id, conversation);
-    // A bridge carries one private MCP configuration. Retire it when a tab
-    // credential is revoked; another open tab reattaches through a fresh child
-    // and freshly scoped credential without losing provider history.
-    await Promise.resolve(
-      dependencies.commands.get("stop_local_codex_server_cmd")?.(
-        { environmentId: coordinatorRuntimeId(current.workspace.id, item.id) },
-        context,
-      ),
-    ).catch(() => undefined);
-    const sessionKey = nativeAgentSessionStorageKey(
-      coordinatorRuntimeId(current.workspace.id, item.id),
-      item.agent,
-      item.logicalSessionKey,
-    );
-    const session = await context.storage.getNativeAgentSession(sessionKey);
-    if (session) {
-      await context.storage.invalidateNativeAgentSession(sessionKey, session.providerSessionId);
+    if (item.agent) {
+      // A bridge carries one private MCP configuration. Retire it when a tab
+      // credential is revoked; another open tab reattaches through a fresh child
+      // and freshly scoped credential without losing provider history.
+      await Promise.resolve(
+        dependencies.commands.get(localServerStopCommandName(item.agent))?.(
+          { environmentId: coordinatorRuntimeId(current.workspace.id, item.id) },
+          context,
+        ),
+      ).catch(() => undefined);
+      const sessionKey = nativeAgentSessionStorageKey(
+        coordinatorRuntimeId(current.workspace.id, item.id),
+        item.agent,
+        item.logicalSessionKey,
+      );
+      const session = await context.storage.getNativeAgentSession(sessionKey);
+      if (session) {
+        await context.storage.invalidateNativeAgentSession(sessionKey, session.providerSessionId);
+      }
     }
     const snapshot = await context.coordinators.closeConversation(id, conversation);
     await context.storage.synchronizeAgentMailboxes();

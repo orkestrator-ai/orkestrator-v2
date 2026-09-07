@@ -5,6 +5,12 @@ import {
   type TranscriptRecord,
   type TranscriptSubagentPart,
 } from "./subagent-transcript.js";
+import {
+  parseSpawnResult,
+  parentAgentPath,
+  requestedSpawnPath,
+  type SpawnResult,
+} from "./subagent-spawn.js";
 
 export interface PersistedSessionMetaLike {
   transcriptPath?: string | null;
@@ -30,6 +36,11 @@ interface DeriveTranscriptSubagentPartsOptions {
    */
   ownedSubagentIds?: readonly string[];
   fallbackAgentIdsInSpawnOrder?: readonly (string | undefined)[];
+  activityAgentIdsByPath?: ReadonlyMap<string, string | null>;
+  resolveChildPaths?: (
+    parentId: string,
+    paths: readonly string[],
+  ) => Promise<ReadonlyMap<string, string | null>>;
   loadSessionMeta: (threadId: string) => Promise<PersistedSessionMetaLike | null>;
   loadTranscript: (path: string) => Promise<TranscriptLike>;
 }
@@ -68,6 +79,8 @@ export async function deriveTranscriptSubagentPartsForTurn({
   currentTurnEndedAt,
   ownedSubagentIds,
   fallbackAgentIdsInSpawnOrder = [],
+  activityAgentIdsByPath = new Map(),
+  resolveChildPaths,
   loadSessionMeta,
   loadTranscript,
 }: DeriveTranscriptSubagentPartsOptions): Promise<TranscriptSubagentPart[]> {
@@ -124,10 +137,24 @@ export async function deriveTranscriptSubagentPartsForTurn({
     return callId ? [callId] : [];
   });
   const outputAgentIdByCallId = new Map<string, string>();
+  const resultsByCallId = new Map<string, SpawnResult>();
+  const pathsByCallId = new Map<string, string>();
+  const parentPath = parentAgentPath(parentTranscript.records);
 
   for (const record of parentRecords) {
     const outputAgent = parseSpawnOutputAgent(record);
     if (outputAgent) outputAgentIdByCallId.set(outputAgent.callId, outputAgent.agentId);
+    const callId = asNonEmptyString(record.payload?.call_id);
+    if (!callId || record.type !== "response_item") continue;
+    if (record.payload?.type === "function_call" && record.payload.name === "spawn_agent") {
+      const path = requestedSpawnPath(record, parentPath);
+      if (path) pathsByCallId.set(callId, path);
+    }
+    if (record.payload?.type === "function_call_output") {
+      const result = parseSpawnResult(record.payload.output);
+      resultsByCallId.set(callId, result);
+      if (result.agentPath) pathsByCallId.set(callId, result.agentPath);
+    }
   }
 
   // Multi-agent v2 spawn outputs only return a task path; the child thread ID
@@ -139,28 +166,66 @@ export async function deriveTranscriptSubagentPartsForTurn({
     }
   }
 
+  // Only unresolved successful path results need a disk discovery fallback.
+  // Live evidence identifies the child before hydration and never changes row ownership.
+  const unresolvedPaths = new Set<string>();
+  for (const callId of spawnCalls) {
+    const result = resultsByCallId.get(callId);
+    const path = pathsByCallId.get(callId);
+    if (
+      path &&
+      result?.agentPath &&
+      !result.failed &&
+      !activityAgentIdByCallId.has(callId) &&
+      !outputAgentIdByCallId.has(callId) &&
+      !activityAgentIdsByPath.has(path)
+    )
+      unresolvedPaths.add(path);
+  }
+  const persistedPaths =
+    resolveChildPaths && unresolvedPaths.size > 0
+      ? await resolveChildPaths(threadId, [...unresolvedPaths])
+      : new Map<string, string | null>();
+
   const requestedAgentIds = new Set<string>();
   // In multi-agent v2 the rollout output may contain only `task_name`, while
   // the native collab item already knows the child thread id. Positional
   // pairing is safe when this row owns every spawn in the window one-for-one;
   // for steered rows spanning other spawns, keep requiring an exact activity
   // or rollout id so a child cannot be attached to the wrong assistant row.
+  const successfulSpawnCalls = spawnCalls.filter((callId) => !resultsByCallId.get(callId)?.failed);
+  const fallbackAgentIdByCallId = new Map<string, string>();
+  if (fallbackAgentIdsInSpawnOrder.length === spawnCalls.length) {
+    for (const [spawnIndex, callId] of spawnCalls.entries()) {
+      const agentId = asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
+      if (agentId) fallbackAgentIdByCallId.set(callId, agentId);
+    }
+  } else if (fallbackAgentIdsInSpawnOrder.length === successfulSpawnCalls.length) {
+    for (const [spawnIndex, callId] of successfulSpawnCalls.entries()) {
+      const agentId = asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
+      if (agentId) fallbackAgentIdByCallId.set(callId, agentId);
+    }
+  }
   const ownedFallbacksAlign =
     owned !== undefined &&
-    fallbackAgentIdsInSpawnOrder.length === spawnCalls.length &&
-    fallbackAgentIdsInSpawnOrder.every((agentId) => {
-      const normalized = asNonEmptyString(agentId);
-      return normalized !== undefined && owned.has(normalized);
+    successfulSpawnCalls.every((callId) => {
+      const agentId = fallbackAgentIdByCallId.get(callId);
+      return agentId !== undefined && owned.has(agentId);
     });
-  for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
+  for (const spawnCallId of spawnCalls) {
+    if (resultsByCallId.get(spawnCallId)?.failed) continue;
+    const path = pathsByCallId.get(spawnCallId);
+    const pathEvidence = path
+      ? activityAgentIdsByPath.has(path)
+        ? activityAgentIdsByPath.get(path)
+        : persistedPaths.get(path)
+      : undefined;
     const fallbackAgentId =
-      !owned || ownedFallbacksAlign
-        ? asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex])
-        : undefined;
+      !owned || ownedFallbacksAlign ? fallbackAgentIdByCallId.get(spawnCallId) : undefined;
     const requestedAgentId =
       activityAgentIdByCallId.get(spawnCallId) ??
       outputAgentIdByCallId.get(spawnCallId) ??
-      fallbackAgentId;
+      (pathEvidence === null ? undefined : (pathEvidence ?? fallbackAgentId));
     if (!requestedAgentId) continue;
     if (owned && !owned.has(requestedAgentId)) continue;
 
@@ -176,6 +241,22 @@ export async function deriveTranscriptSubagentPartsForTurn({
   const selectedSpawnCallIds = owned
     ? new Set(resolvedAgentIdBySpawnCallId.keys())
     : new Set(spawnCalls);
+  // Rejected launches have no child ID to own. Keep them in their time window.
+  if (owned) {
+    for (const record of parentRecords) {
+      const callId = asNonEmptyString(record.payload?.call_id);
+      if (
+        record.type !== "response_item" ||
+        record.payload?.type !== "function_call" ||
+        record.payload.name !== "spawn_agent" ||
+        !callId ||
+        !resultsByCallId.get(callId)?.failed
+      )
+        continue;
+      if (turnEndedAt === undefined || Date.parse(record.timestamp!) < turnEndedAt)
+        selectedSpawnCallIds.add(callId);
+    }
+  }
 
   const childRecordsByAgentId = new Map(
     await Promise.all(

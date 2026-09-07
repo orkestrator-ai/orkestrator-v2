@@ -22,8 +22,12 @@ import {
 } from "../codex-collaboration.js";
 import { relative } from "node:path";
 import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-parts.js";
+import { indexAgentPaths } from "../subagent-spawn.js";
 import { readCachedTranscript } from "../transcript-cache.js";
-import { createSharedTranscriptMetaLoader } from "../history/rollout.js";
+import {
+  createSharedTranscriptMetaLoader,
+  resolvePersistedChildThreadIds,
+} from "../history/rollout.js";
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
@@ -48,6 +52,10 @@ export interface TurnRenderState {
   completedItemParts: Map<string, { source: EngineItem | null; parts: NormalizedPart[] }>;
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
+  /** Positive, ambiguous, and absent child-path lookups retained for this turn. */
+  subagentPathIds: Map<string, string | null | undefined>;
+  /** Cached misses already retried by the final authoritative probe. */
+  subagentTerminalPathRetries: Set<string>;
   /** When the rollout-transcript probe for sub-agent activity last ran. */
   subagentProbedAt: number;
   fileChange: FileChangeDiffContext;
@@ -64,6 +72,7 @@ export interface TurnRenderState {
  * retained, which is the same behavior as a probe that failed.
  */
 export const SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS = 2_000;
+export const MAX_SUBAGENT_PATH_RESOLUTIONS_PER_TURN = 128;
 
 export function createTurnRenderState(): TurnRenderState {
   return {
@@ -71,6 +80,8 @@ export function createTurnRenderState(): TurnRenderState {
     completedItemParts: new Map(),
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
+    subagentPathIds: new Map(),
+    subagentTerminalPathRetries: new Set(),
     subagentProbedAt: 0,
     fileChange: { baselines: new BaselineMap(), cache: new Map() },
   };
@@ -98,6 +109,8 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
   state.completedItemParts.clear();
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
+  state.subagentPathIds.clear();
+  state.subagentTerminalPathRetries.clear();
   state.subagentProbedAt = 0;
   state.fileChange.baselines.clear();
   state.fileChange.cache.clear();
@@ -211,6 +224,11 @@ export interface SubagentPartsLoadOptions {
   turnStartedAt?: string;
   turnEndedAt?: string;
   items: EngineItem[];
+  /** Per-turn cache; `has(path)` distinguishes a cached miss from no lookup. */
+  childPathResolutions?: Map<string, string | null | undefined>;
+  /** A terminal probe may retry each cached miss exactly once. */
+  retryMissingChildPaths?: boolean;
+  retriedMissingChildPaths?: Set<string>;
 }
 
 /**
@@ -249,6 +267,7 @@ export interface SubagentPartsLoaderDependencies {
   createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
   deriveTranscriptParts: typeof deriveTranscriptSubagentPartsForTurn;
   readTranscript: typeof readCachedTranscript;
+  resolveChildPaths?: typeof resolvePersistedChildThreadIds;
 }
 
 /**
@@ -265,16 +284,62 @@ export async function loadSubagentPartsFromTranscripts(
     createTranscriptMetaLoader: createSharedTranscriptMetaLoader,
     deriveTranscriptParts: deriveTranscriptSubagentPartsForTurn,
     readTranscript: readCachedTranscript,
+    resolveChildPaths: resolvePersistedChildThreadIds,
   },
 ): Promise<NormalizedPart[]> {
   const loadSessionMeta = dependencies.createTranscriptMetaLoader();
   const owned = ownedSubagentIds(options.items);
+  const resolveChildPaths = dependencies.resolveChildPaths ?? resolvePersistedChildThreadIds;
+  const resolveChildPathsCached = options.childPathResolutions
+    ? async (parentId: string, paths: readonly string[]) => {
+        const remainingCapacity = Math.max(
+          0,
+          MAX_SUBAGENT_PATH_RESOLUTIONS_PER_TURN - options.childPathResolutions!.size,
+        );
+        const uncached = paths
+          .filter((path) => !options.childPathResolutions!.has(path))
+          .slice(0, remainingCapacity);
+        const terminalRetries = options.retryMissingChildPaths
+          ? paths.filter(
+              (path) =>
+                options.childPathResolutions!.has(path) &&
+                options.childPathResolutions!.get(path) === undefined &&
+                !options.retriedMissingChildPaths?.has(path),
+            )
+          : [];
+        const lookupPaths = [...terminalRetries, ...uncached].slice(
+          0,
+          MAX_SUBAGENT_PATH_RESOLUTIONS_PER_TURN,
+        );
+        if (lookupPaths.length > 0) {
+          const discovered = await resolveChildPaths(parentId, lookupPaths);
+          for (const path of lookupPaths) {
+            options.childPathResolutions!.set(
+              path,
+              discovered.has(path) ? discovered.get(path) : undefined,
+            );
+          }
+          const terminalRetryPaths = new Set(terminalRetries);
+          for (const path of lookupPaths) {
+            if (terminalRetryPaths.has(path)) options.retriedMissingChildPaths?.add(path);
+          }
+        }
+        const resolved = new Map<string, string | null>();
+        for (const path of paths) {
+          const value = options.childPathResolutions!.get(path);
+          if (value !== undefined) resolved.set(path, value);
+        }
+        return resolved;
+      }
+    : resolveChildPaths;
   const transcriptParts = await dependencies.deriveTranscriptParts({
     threadId: options.threadId,
     currentTurnStartedAt: options.turnStartedAt,
     ...(options.turnEndedAt ? { currentTurnEndedAt: options.turnEndedAt } : {}),
     ...(owned ? { ownedSubagentIds: owned } : {}),
     fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(options.items),
+    activityAgentIdsByPath: indexAgentPaths(options.items),
+    resolveChildPaths: resolveChildPathsCached,
     loadSessionMeta,
     loadTranscript: (path) => dependencies.readTranscript(path),
   });
@@ -291,6 +356,28 @@ export async function loadSubagentPartsFromTranscripts(
     subagentActions: part.subagentActions as NormalizedPart[],
     subagentActionCount: part.subagentActionCount,
   }));
+}
+
+function subagentEvidenceFingerprint(items: readonly EngineItem[]): string {
+  return JSON.stringify(
+    items.flatMap((item) => {
+      if (item.type === "subagent_activity") {
+        return [[item.id, item.type, item.activity, item.agent_thread_id, item.agent_path]];
+      }
+      const collab = normalizeCodexCollabToolCallItem(item);
+      return collab
+        ? [
+            [
+              collab.id,
+              collab.tool,
+              collab.status,
+              collab.receiver_thread_ids,
+              collab.agents_states,
+            ],
+          ]
+        : [];
+    }),
+  );
 }
 
 export interface RenderedTurn {
@@ -343,15 +430,31 @@ export async function renderTurn(
     // Collected only here: streaming renders arrive ~10x/second while the probe
     // runs every couple of seconds, so a snapshot taken unconditionally would be
     // built and thrown away on the vast majority of renders.
-    const loadSnapshot = collectTurnItems(turn, options.segment);
+    let loadSnapshot = collectTurnItems(turn, options.segment);
     options.state.subagentProbedAt = Date.now();
     try {
-      subagentParts = await load({
-        threadId: options.threadId,
-        turnStartedAt: options.segment?.startedAt ?? turn.startedAt,
-        ...(options.segment?.endedAt ? { turnEndedAt: options.segment.endedAt } : {}),
-        items: loadSnapshot.items,
-      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const evidenceBefore = subagentEvidenceFingerprint(loadSnapshot.items);
+        const loaded = await load({
+          threadId: options.threadId,
+          turnStartedAt: options.segment?.startedAt ?? turn.startedAt,
+          ...(options.segment?.endedAt ? { turnEndedAt: options.segment.endedAt } : {}),
+          items: loadSnapshot.items,
+          ...(!options.loadSubagentParts
+            ? {
+                childPathResolutions: options.state.subagentPathIds,
+                retryMissingChildPaths: turn.isTerminal(),
+                retriedMissingChildPaths: options.state.subagentTerminalPathRetries,
+              }
+            : {}),
+        });
+        const latestSnapshot = collectTurnItems(turn, options.segment);
+        if (subagentEvidenceFingerprint(latestSnapshot.items) === evidenceBefore) {
+          subagentParts = loaded;
+          break;
+        }
+        loadSnapshot = latestSnapshot;
+      }
     } catch (error) {
       // Sub-agent detail is additive; losing it must not blank the transcript.
       console.error("[codex-bridge] Failed to load sub-agent activity:", error);

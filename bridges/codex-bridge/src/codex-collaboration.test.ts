@@ -785,6 +785,29 @@ describe("Codex collaboration state", () => {
     expect(part).toEqual(source);
   });
 
+  test("pairs a receiver-less failure with the existing anonymous failure card", () => {
+    const parts = applyCodexCollabStateToSubagentParts(
+      [
+        makeAgent(undefined, { subagentPrompt: "Running child" }),
+        makeAgent(undefined, { subagentPrompt: "Rejected child", toolState: "failure" }),
+      ],
+      [
+        {
+          id: "spawn-failed",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Rejected child",
+          status: "failed",
+        },
+      ],
+    );
+
+    expect(parts.map((part) => [part.subagentPrompt, part.toolState])).toEqual([
+      ["Running child", "pending"],
+      ["Rejected child", "failure"],
+    ]);
+  });
+
   test("falls back to an unclaimed anonymous row when the preferred index is occupied", () => {
     const parts = applyCodexCollabStateToSubagentParts(
       [makeAgent("existing"), makeAgent(undefined)],

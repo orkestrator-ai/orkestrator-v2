@@ -1,3 +1,5 @@
+import { parseSpawnResult } from "./subagent-spawn.js";
+
 type ToolState = "success" | "failure" | "pending";
 
 export interface TranscriptActionPart {
@@ -41,6 +43,7 @@ interface MergeablePart {
 
 interface SpawnedSubagent {
   callId: string;
+  failed?: true;
   agentId?: string;
   nickname?: string;
   role?: string;
@@ -1056,6 +1059,12 @@ export function deriveSubagentPartsFromTranscriptRecords(
         continue;
       }
 
+      const result = parseSpawnResult(payload.output);
+      if (result.failed) {
+        spawned.failed = true;
+        spawned.agentId = undefined;
+        continue;
+      }
       const output = parseJson<Record<string, unknown>>(payload.output);
       spawned.agentId =
         asString(output?.agent_id) ??
@@ -1067,6 +1076,16 @@ export function deriveSubagentPartsFromTranscriptRecords(
   }
 
   return spawnedSubagents.map((spawned) => {
+    if (spawned.failed) {
+      const { reopenedAfterTerminal: _reopened, ...part } = parseChildTranscript([], spawned);
+      return {
+        ...part,
+        toolState: "failure" as const,
+        subagentActions: [
+          { type: "text" as const, content: "Agent could not start: agent limit reached." },
+        ],
+      };
+    }
     const childRecords = spawned.agentId ? (childRecordsByAgentId.get(spawned.agentId) ?? []) : [];
     const part = parseChildTranscript(childRecords, spawned);
     const parentOutcome = spawned.agentId ? collabOutcomeByAgentId.get(spawned.agentId) : undefined;

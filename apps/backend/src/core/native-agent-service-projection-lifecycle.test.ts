@@ -27,6 +27,40 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService projection lifecycle", () => {
+  test("keeps non-blocking questions visible without blocking the active turn", async () => {
+    const interactions = pendingInteractionSnapshot(10_000, ["question"]);
+    interactions.requests[0]!.blocking = false;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "running", messages: [] }),
+      interactions: {
+        listPendingInteractions: async () => interactions,
+        resolveInteraction: async () => ({
+          result: "applied",
+          interactionId: "interaction-0",
+          sessionId: "provider-session",
+          revision: 2,
+        }),
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-nonblocking-question-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-nonblocking",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.turn.phase).toBe("running");
+        expect(projection?.interactions).toHaveLength(1);
+      },
+    );
+  });
+
   test("projects pending interactions and routes neutral stop, controls, and resolution", async () => {
     const resolveInteraction = mock(async () => ({
       result: "applied" as const,

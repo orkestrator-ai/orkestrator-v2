@@ -21,6 +21,7 @@ export interface AgentNativeTabProps {
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;
   executionPolicy?: "coordinator-read-only";
+  coordinatorProjectId?: string;
   coordinatorWorkspacePath?: string;
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;

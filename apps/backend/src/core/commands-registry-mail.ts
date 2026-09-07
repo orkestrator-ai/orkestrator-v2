@@ -112,6 +112,14 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
     await requireMessagingEnabled(storage);
     return storage.getAgentMailStatus(required(messageId, "messageId"));
   });
+  register("list_agent_mail_sent", async ({ environmentId, tabId }, { storage }) => {
+    await requireMessagingEnabled(storage);
+    if (environmentId === undefined && tabId === undefined) return storage.listUserSentAgentMail();
+    return storage.listAgentMailSentByMailbox(
+      required(environmentId, "environmentId"),
+      required(tabId, "tabId"),
+    );
+  });
   register(
     "send_agent_mail",
     ({ requestId, toEnvironmentId, toTabId, subject, body, replyToMessageId }, { storage }) =>
@@ -175,12 +183,16 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       );
     },
   );
-  register("retry_agent_mail_inject", ({ environmentId, tabId, messageId }, { storage }) =>
-    storage.retryAgentMailInject(
-      required(environmentId, "environmentId"),
-      required(tabId, "tabId"),
-      required(messageId, "messageId"),
-    ),
+  register(
+    "retry_agent_mail_inject",
+    async ({ environmentId, tabId, messageId }, { storage, drainAgentMail }) => {
+      const resolvedEnvironmentId = required(environmentId, "environmentId");
+      const resolvedTabId = required(tabId, "tabId");
+      const resolvedMessageId = required(messageId, "messageId");
+      await storage.retryAgentMailInject(resolvedEnvironmentId, resolvedTabId, resolvedMessageId);
+      await drainAgentMail?.();
+      return storage.getAgentMailMessage(resolvedEnvironmentId, resolvedTabId, resolvedMessageId);
+    },
   );
   register("discard_agent_mail_inject", ({ environmentId, tabId, messageId }, { storage }) =>
     storage.discardAgentMail(

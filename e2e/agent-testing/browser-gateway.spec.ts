@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 
@@ -20,6 +21,13 @@ type Environment = {
   branch: string;
   containerId?: string | null;
   status: string;
+};
+type AgentMessagingSettings = {
+  enabled: boolean;
+  paused: boolean;
+  defaultInjectPolicy: "off" | "idle";
+  allowCrossProject: boolean;
+  retentionDays: number;
 };
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -164,6 +172,126 @@ test("real browser gateway exercises an authoritative local environment", async 
   } finally {
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+  }
+});
+
+test("agent mail rehydrates after an inactive recipient is opened and the page reloads", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  expect(status.browserUrl).toBeTruthy();
+  expect(status.testProject).toBeTruthy();
+  const invoke = await authenticatedInvoke(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject);
+  expect(fixture).toBeTruthy();
+  const staleEnvironments = await invoke<Environment[]>("get_environments", {
+    projectId: fixture!.id,
+  });
+  for (const stale of staleEnvironments.filter(({ name }) => name.startsWith("mail-"))) {
+    await invoke("stop_environment", { environmentId: stale.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: stale.id }).catch(() => undefined);
+  }
+  const previousSettings = await invoke<AgentMessagingSettings>("get_agent_messaging_settings");
+  const suffix = Date.now();
+  const sender = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `mail-sender-${suffix}`,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  const recipient = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `mail-recipient-${suffix}`,
+    networkAccessMode: "restricted",
+    environmentType: "local",
+  });
+  const senderTabId = "mail-sender-agent";
+  const recipientTabId = "mail-recipient-agent";
+  try {
+    await invoke("update_agent_messaging_settings", {
+      settings: {
+        ...previousSettings,
+        enabled: true,
+        paused: false,
+        defaultInjectPolicy: "off",
+      },
+    });
+    for (const [environment, tabId] of [
+      [sender, senderTabId],
+      [recipient, recipientTabId],
+    ] as const) {
+      await invoke("start_environment", { environmentId: environment.id });
+      const currentLayout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+        environmentId: environment.id,
+      });
+      await invoke("save_pane_layout", {
+        environmentId: environment.id,
+        expectedRevision: currentLayout?.revision ?? 0,
+        layout: {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "pane-mail",
+          root: {
+            kind: "leaf",
+            id: "pane-mail",
+            tabs: [
+              {
+                id: tabId,
+                type: "agent-native",
+                nativeAgentData: { environmentId: environment.id, platform: "claude" },
+              },
+            ],
+            activeTabId: tabId,
+          },
+        },
+      });
+    }
+
+    await page.goto(status.browserUrl!);
+    const expandProject = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+    await expect(expandProject).toBeVisible({ timeout: 30_000 });
+    await expandProject.click();
+    await page.getByText(sender.name, { exact: true }).first().click();
+    await expect(page.getByText(sender.name, { exact: true }).first()).toBeVisible();
+    await invoke("send_agent_mail", {
+      requestId: `browser-mail-${suffix}`,
+      toEnvironmentId: recipient.id,
+      toTabId: recipientTabId,
+      subject: "Inactive recipient",
+      body: "This message arrived while the recipient environment was inactive.",
+    });
+
+    await page.getByText(recipient.name, { exact: true }).first().click();
+    await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+    ).toBeVisible();
+
+    await page.reload();
+    const expandAfterReload = page.getByRole("button", {
+      name: `Expand project ${fixture!.name}`,
+    });
+    await expect(expandAfterReload).toBeVisible({ timeout: 30_000 });
+    await expandAfterReload.click();
+    await page.getByText(recipient.name, { exact: true }).first().click();
+    await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "1 unseen agent messages; open inbox", exact: true }),
+    ).toBeVisible();
+  } finally {
+    await invoke("update_agent_messaging_settings", { settings: previousSettings }).catch(
+      () => undefined,
+    );
+    for (const environment of [sender, recipient]) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
   }
 });
 

@@ -34,7 +34,6 @@ export interface InteractionRequest {
   itemId: string | null;
   generation: EngineGeneration;
   requestedAt: number;
-  expiresAt: number;
   /**
    * Whether the turn is waiting on this request.
    *
@@ -43,7 +42,8 @@ export interface InteractionRequest {
    * A non-blocking question is still shown, but it must not hold the turn's
    * activity at `waiting`.
    */
-  blocking: boolean;
+  isBlocking: boolean;
+  expiresAt?: number;
   autoResolutionMs?: number;
   questions?: InteractionQuestion[];
   serverName?: string;
@@ -138,17 +138,17 @@ export function describeInteraction(options: {
   const turnId = text(params.turnId) ?? null;
 
   if (options.method === "item/tool/requestUserInput") {
+    // Current app-server versions always send this boolean. Legacy recordings
+    // omitted it: preserve their auto-resolution behavior when present, while
+    // treating a request with neither field as blocking.
+    if (params.isBlocking !== undefined && typeof params.isBlocking !== "boolean") return null;
     const autoResolutionMs =
       typeof params.autoResolutionMs === "number" && params.autoResolutionMs > 0
         ? params.autoResolutionMs
         : undefined;
-    // `isBlocking` supersedes `autoResolutionMs`, which the generated protocol
-    // marks deprecated. Read the new field first; only when app-server omits it
-    // entirely does the presence of an auto-resolution deadline stand in, and a
-    // request with neither is treated as blocking so nothing silently proceeds
-    // past a question the user has not seen.
-    const blocking =
+    const isBlocking =
       typeof params.isBlocking === "boolean" ? params.isBlocking : autoResolutionMs === undefined;
+    const waitsIndefinitely = params.isBlocking === true;
     const questions = Array.isArray(params.questions)
       ? params.questions.flatMap((raw) => {
           const question = record(raw);
@@ -190,10 +190,14 @@ export function describeInteraction(options: {
       itemId: text(params.itemId) ?? null,
       generation: options.generation,
       requestedAt: options.requestedAt,
-      expiresAt: autoResolutionMs
-        ? Math.min(options.defaultExpiresAt, options.requestedAt + autoResolutionMs)
-        : options.defaultExpiresAt,
-      blocking,
+      isBlocking,
+      ...(waitsIndefinitely
+        ? {}
+        : {
+            expiresAt: autoResolutionMs
+              ? Math.min(options.defaultExpiresAt, options.requestedAt + autoResolutionMs)
+              : options.defaultExpiresAt,
+          }),
       ...(autoResolutionMs ? { autoResolutionMs } : {}),
       questions,
     };
@@ -216,10 +220,8 @@ export function describeInteraction(options: {
     itemId: null,
     generation: options.generation,
     requestedAt: options.requestedAt,
+    isBlocking: true,
     expiresAt: options.defaultExpiresAt,
-    // An elicitation is always a blocking request: the MCP server is waiting
-    // on the response before its tool call can continue.
-    blocking: true,
     serverName: text(params.serverName),
     message: text(params.message),
     ...(mode === "url"

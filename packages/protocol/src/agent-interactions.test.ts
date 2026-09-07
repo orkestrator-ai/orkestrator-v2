@@ -196,6 +196,13 @@ describe("agent interaction request contract", () => {
     expect(isAgentInteractionRequest(request())).toBe(true);
   });
 
+  test("accepts blocking metadata and a blocking request without a deadline", () => {
+    expect(isAgentInteractionRequest({ ...request(), blocking: false })).toBe(true);
+    const blocking = { ...request(), blocking: true, expiresAt: undefined };
+    expect(isAgentInteractionRequest(blocking)).toBe(true);
+    expect(isAgentInteractionRequest({ ...blocking, blocking: "yes" })).toBe(false);
+  });
+
   test("accepts plan availability only on plan approvals", () => {
     const plan = request("plan-approval");
     plan.presentation.questions = [];

@@ -32,8 +32,13 @@ export interface NormalizedPart {
     | "compaction"
     | "image"
     | "status"
-    | "progress";
+    | "progress"
+    | "async-question";
   content: string;
+  asyncQuestion?: {
+    itemId: string;
+    questions: Array<{ id: string; title: string; options: string[] }>;
+  };
   /**
    * Original attachment name, when `content` holds a staged path whose basename
    * is not what the user picked. The renderer titles the row with this.

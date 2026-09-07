@@ -236,10 +236,18 @@ export const EnvironmentItem = memo(function EnvironmentItem({
     if (!messagingEnabled) return 0;
     let count = 0;
     for (const mailbox of state.summary.values()) {
-      if (mailbox.environmentId === environment.id) count += mailbox.unreadCount;
+      if (mailbox.environmentId === environment.id)
+        count += mailbox.userUnseenCount ?? mailbox.unreadCount;
     }
     return count;
   });
+  const hasFailedMail = useAgentMailStore(
+    (state) =>
+      messagingEnabled &&
+      Array.from(state.summary.values()).some(
+        (mailbox) => mailbox.environmentId === environment.id && mailbox.failedInjectCount > 0,
+      ),
+  );
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
@@ -500,6 +508,12 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     >
                       {unreadMail > 99 ? "99+" : unreadMail}
                     </span>
+                  )}
+                  {hasFailedMail && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
+                      aria-label="Agent message delivery failed"
+                    />
                   )}
                 </span>
                 {subtitle && (

@@ -32,6 +32,37 @@ function strArray(value: unknown): string[] {
     : [];
 }
 
+const MAX_ASYNC_QUESTIONS = 16;
+const MAX_ASYNC_OPTIONS = 32;
+const MAX_ASYNC_TEXT_LENGTH = 16_384;
+const MAX_ASYNC_ITEM_ID_LENGTH = 2_048;
+
+function asyncQuestions(value: unknown): Array<{ title: string; options?: string[] }> | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ASYNC_QUESTIONS) {
+    return undefined;
+  }
+  const questions: Array<{ title: string; options?: string[] }> = [];
+  for (const rawQuestion of value) {
+    if (!isRecord(rawQuestion)) return undefined;
+    const title = str(rawQuestion.title);
+    if (!title || title.length > MAX_ASYNC_TEXT_LENGTH) return undefined;
+    if (rawQuestion.options !== undefined && rawQuestion.options !== null) {
+      if (!Array.isArray(rawQuestion.options) || rawQuestion.options.length > MAX_ASYNC_OPTIONS) {
+        return undefined;
+      }
+      const options = rawQuestion.options.filter(
+        (option): option is string =>
+          typeof option === "string" && option.length > 0 && option.length <= MAX_ASYNC_TEXT_LENGTH,
+      );
+      if (options.length !== rawQuestion.options.length) return undefined;
+      questions.push(options.length > 0 ? { title, options } : { title });
+    } else {
+      questions.push({ title });
+    }
+  }
+  return questions;
+}
+
 /** app-server `inProgress` → SDK `in_progress`; `declined` has no SDK peer. */
 function commandStatus(value: unknown): "in_progress" | "completed" | "failed" {
   switch (value) {
@@ -121,10 +152,20 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
   if (!id) return { item: null, unsupportedType: type };
 
   switch (type) {
-    case "agentMessage":
+    case "agentMessage": {
+      const questions =
+        raw.delivery === "async" && id.length <= MAX_ASYNC_ITEM_ID_LENGTH
+          ? asyncQuestions(raw.questions)
+          : undefined;
       return {
-        item: { id, type: "agent_message", text: str(raw.text) ?? "" } as EngineItem,
+        item: {
+          id,
+          type: "agent_message",
+          text: str(raw.text) ?? "",
+          ...(questions ? { delivery: "async" as const, questions } : {}),
+        } as EngineItem,
       };
+    }
 
     case "reasoning": {
       // The SDK collapses reasoning to one string. Prefer the summary, which is

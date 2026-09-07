@@ -19,6 +19,7 @@ import {
 import { PEER_MAIL_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import {
   AgentPlatformContext,
+  AsyncQuestionResponseContext,
   BackgroundTaskStopContext,
   MessageExpansionScopeContext,
   NativeMessagePartRendererContext,
@@ -39,6 +40,8 @@ export const NativeMessage = memo(function NativeMessage({
   loadToolDetails,
   stopBackgroundTask,
   platform,
+  asyncQuestionResponses = [],
+  respondToAsyncQuestion,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -74,7 +77,9 @@ export const NativeMessage = memo(function NativeMessage({
     ? resolveModelLabel?.(confirmedModelId).trim() || confirmedModelId
     : assistantLabel;
 
-  const hasTextParts = message.parts.some((part) => part.type === "text");
+  const hasTextParts = message.parts.some(
+    (part) => part.type === "text" || part.type === "async-question",
+  );
   const hasContent = messageHasVisibleContent(message);
   // An empty assistant message with no attributable content or actions carries
   // no footer. Every assistant block that does render a footer includes its
@@ -82,14 +87,14 @@ export const NativeMessage = memo(function NativeMessage({
   const showAssistantFooter = !isUser && !isSystem && !isError && hasContent;
   const userCopyContent = isUser
     ? message.parts
-        .filter((part) => part.type === "text")
+        .filter((part) => part.type === "text" || part.type === "async-question")
         .map((part) => part.content)
         .join("\n\n")
         .trim() || message.content
     : "";
   const assistantCopyContent = !isUser
     ? message.parts
-        .filter((part) => part.type === "text")
+        .filter((part) => part.type === "text" || part.type === "async-question")
         .map((part) => part.content)
         .join("\n\n")
         .trim() || message.content
@@ -178,49 +183,57 @@ export const NativeMessage = memo(function NativeMessage({
   return (
     <ToolDetailLoaderContext.Provider value={loadToolDetails}>
       <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
-        <AgentPlatformContext.Provider value={platform}>
-          <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-            <NativeMessagePartRendererContext.Provider
-              value={(props) => <MessagePart {...props} />}
-            >
-              <MessageShell
-                isUser={isUser}
-                authorLabel={isUser ? "You" : assistantAuthorLabel}
-                timestampLabel={formatTime(message.createdAt)}
-                durationLabel={durationLabel}
-                showHeader={!isContinuation}
-                showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-                className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-                onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-                actions={
-                  (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-                    <>
-                      {messageActions}
-                      {(isUser ? userCopyContent : assistantCopyContent) ? (
-                        <MessageCopyButton
-                          content={isUser ? userCopyContent : assistantCopyContent}
-                          wrapperClassName="mt-0 pr-0"
-                        />
-                      ) : null}
-                    </>
-                  ) : undefined
-                }
+        <AsyncQuestionResponseContext.Provider
+          value={{
+            responses: asyncQuestionResponses,
+            respond: respondToAsyncQuestion,
+            draftScope: stableAgentExpansionScope,
+          }}
+        >
+          <AgentPlatformContext.Provider value={platform}>
+            <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+              <NativeMessagePartRendererContext.Provider
+                value={(props) => <MessagePart {...props} />}
               >
-                {renderMessageParts(message, { showTextCopy: false, containerId })}
+                <MessageShell
+                  isUser={isUser}
+                  authorLabel={isUser ? "You" : assistantAuthorLabel}
+                  timestampLabel={formatTime(message.createdAt)}
+                  durationLabel={durationLabel}
+                  showHeader={!isContinuation}
+                  showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+                  className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+                  onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
+                  actions={
+                    (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+                      <>
+                        {messageActions}
+                        {(isUser ? userCopyContent : assistantCopyContent) ? (
+                          <MessageCopyButton
+                            content={isUser ? userCopyContent : assistantCopyContent}
+                            wrapperClassName="mt-0 pr-0"
+                          />
+                        ) : null}
+                      </>
+                    ) : undefined
+                  }
+                >
+                  {renderMessageParts(message, { showTextCopy: false, containerId })}
 
-                {!hasTextParts && message.content && (
-                  <TextPart
-                    content={message.content}
-                    showCopy={false}
-                    truncateUserPrompt={isUser}
-                    renderJsonPayload={!isUser}
-                    expansionKey={`${message.id}-content/json`}
-                  />
-                )}
-              </MessageShell>
-            </NativeMessagePartRendererContext.Provider>
-          </MessageExpansionScopeContext.Provider>
-        </AgentPlatformContext.Provider>
+                  {!hasTextParts && message.content && (
+                    <TextPart
+                      content={message.content}
+                      showCopy={false}
+                      truncateUserPrompt={isUser}
+                      renderJsonPayload={!isUser}
+                      expansionKey={`${message.id}-content/json`}
+                    />
+                  )}
+                </MessageShell>
+              </NativeMessagePartRendererContext.Provider>
+            </MessageExpansionScopeContext.Provider>
+          </AgentPlatformContext.Provider>
+        </AsyncQuestionResponseContext.Provider>
       </BackgroundTaskStopContext.Provider>
     </ToolDetailLoaderContext.Provider>
   );

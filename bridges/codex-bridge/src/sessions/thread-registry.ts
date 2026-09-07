@@ -45,6 +45,32 @@ export type ExternalSessionStatus = "idle" | "running" | "error";
  * than growing for the lifetime of the tab.
  */
 export const MAX_LOCAL_MESSAGES = 50;
+export const MAX_ASYNC_QUESTION_ITEM_IDS = 64;
+export const MAX_ASYNC_QUESTION_ITEM_ID_LENGTH = 2_048;
+
+function appendAsyncQuestionItemIds(
+  target: string[],
+  messages: readonly NormalizedMessage[],
+): boolean {
+  let changed = false;
+  for (const message of messages) {
+    for (const part of message.parts) {
+      const itemId = part.type === "async-question" ? part.asyncQuestion?.itemId : undefined;
+      if (
+        typeof itemId !== "string" ||
+        itemId.length === 0 ||
+        itemId.length > MAX_ASYNC_QUESTION_ITEM_ID_LENGTH ||
+        target.includes(itemId)
+      ) {
+        continue;
+      }
+      target.push(itemId);
+      changed = true;
+      if (target.length > MAX_ASYNC_QUESTION_ITEM_IDS) target.shift();
+    }
+  }
+  return changed;
+}
 
 export function phaseToExternalStatus(phase: SessionPhase): ExternalSessionStatus {
   switch (phase) {
@@ -82,6 +108,8 @@ export interface BridgeSession {
   pendingAttachments: PromptAttachmentInput[];
   /** Built-in slash-command transcript entries, which have no Codex rollout. */
   localMessages: NormalizedMessage[];
+  /** Bounded content-free attention index used by the no-touch activity poll. */
+  asyncQuestionItemIds: string[];
   /**
    * Monotonic in-memory transcript revision for cheap change detection.
    *
@@ -114,6 +142,8 @@ export interface ThreadContext {
   bridgeSessionIds: Set<string>;
   /** The one canonical transcript for this Codex thread. */
   messages: NormalizedMessage[];
+  /** Bounded item-id index shared by every session attached to this thread. */
+  asyncQuestionItemIds: string[];
   activeTurn: TurnAccumulator | null;
   phase: SessionPhase;
   /**
@@ -219,6 +249,7 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "asyncQuestionItemIds"
       | "recoveredContextPending"
     >,
   ): BridgeSession {
@@ -226,6 +257,7 @@ export class ThreadRegistry {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      asyncQuestionItemIds: [],
       messageRevision: 0,
       recoveredContextPending: false,
       lastAccessed: this.now(),
@@ -249,13 +281,15 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "asyncQuestionItemIds"
       | "recoveredContextPending"
-    > & { lastAccessed: number },
+    > & { lastAccessed: number; asyncQuestionItemIds?: string[] },
   ): BridgeSession {
     const record: BridgeSession = {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
       messageRevision: 0,
       recoveredContextPending: false,
       createdAt: session.lastAccessed,
@@ -288,7 +322,24 @@ export class ThreadRegistry {
     session.localMessages.push(...messages);
     const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
     if (excess > 0) session.localMessages.splice(0, excess);
+    appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
     session.messageRevision += 1;
+  }
+
+  /** Incrementally indexes new transcript parts without rescanning history on polls. */
+  recordAsyncQuestionMessages(context: ThreadContext, ...messages: NormalizedMessage[]): boolean {
+    const changed = appendAsyncQuestionItemIds(context.asyncQuestionItemIds, messages);
+    if (!changed) return false;
+    for (const sessionId of context.bridgeSessionIds) {
+      const session = this.sessions.get(sessionId);
+      if (session) appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
+    }
+    return true;
+  }
+
+  /** One-time hydration cost; subsequent activity reads use the bounded index. */
+  indexHydratedAsyncQuestions(context: ThreadContext): boolean {
+    return this.recordAsyncQuestionMessages(context, ...context.messages);
   }
 
   getThread(threadId: string): ThreadContext | undefined {
@@ -332,6 +383,7 @@ export class ThreadRegistry {
         engineGeneration: options.engineGeneration ?? 0,
         bridgeSessionIds: new Set(),
         messages: [],
+        asyncQuestionItemIds: [...(session?.asyncQuestionItemIds ?? [])],
         activeTurn: null,
         phase: "idle",
         dispatchInFlight: false,
@@ -368,6 +420,16 @@ export class ThreadRegistry {
       session.confirmedModelsByTurn = Object.fromEntries(context.confirmedModelsByTurn);
     }
     context.bridgeSessionIds.add(sessionId);
+    if (session) {
+      for (const itemId of context.asyncQuestionItemIds) {
+        if (!session.asyncQuestionItemIds.includes(itemId)) {
+          session.asyncQuestionItemIds.push(itemId);
+          if (session.asyncQuestionItemIds.length > MAX_ASYNC_QUESTION_ITEM_IDS) {
+            session.asyncQuestionItemIds.shift();
+          }
+        }
+      }
+    }
     return context;
   }
 

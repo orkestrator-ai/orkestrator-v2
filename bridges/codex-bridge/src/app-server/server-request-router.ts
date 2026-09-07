@@ -12,9 +12,10 @@
  * UI. Requests without an addressable UI are declined explicitly and surfaced in
  * the transcript rather than being dropped.
  *
- * Nothing here ever takes a thread reducer lock. Human-facing requests are
- * parked with a bounded timeout; requests the UI cannot represent are cancelled
- * promptly instead of stalling the thread.
+ * Nothing here ever takes a thread reducer lock. Blocking questions remain
+ * parked for an explicit answer; timed questions and approvals retain bounded
+ * fail-closed deadlines. Requests the UI cannot represent are cancelled promptly
+ * instead of stalling the thread.
  */
 import { JSON_RPC_METHOD_NOT_FOUND } from "./errors.js";
 import {
@@ -170,7 +171,7 @@ interface PendingInteraction {
   request: InteractionRequest;
   generation: EngineGeneration;
   requestId: string | number;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 export class ServerRequestRouter {
@@ -720,17 +721,20 @@ export class ServerRequestRouter {
     }
     if (!accepted) return false;
 
-    const timer = setTimeout(
-      () => {
-        const parked = this.parkedInteractions.get(interaction.interactionId);
-        if (!parked) return;
-        this.counts.interactionsExpired += 1;
-        record.timedOut = true;
-        void this.settleInteraction(parked, { action: "cancel" }, "timed-out");
-      },
-      Math.max(1, interaction.expiresAt - requestedAt),
-    );
-    timer.unref?.();
+    const timer =
+      interaction.expiresAt === undefined
+        ? undefined
+        : setTimeout(
+            () => {
+              const parked = this.parkedInteractions.get(interaction.interactionId);
+              if (!parked) return;
+              this.counts.interactionsExpired += 1;
+              record.timedOut = true;
+              void this.settleInteraction(parked, { action: "cancel" }, "timed-out");
+            },
+            Math.max(1, interaction.expiresAt - requestedAt),
+          );
+    timer?.unref?.();
 
     this.parkedInteractions.set(interaction.interactionId, {
       key,
@@ -738,7 +742,7 @@ export class ServerRequestRouter {
       request: interaction,
       generation,
       requestId: request.id,
-      timer,
+      ...(timer ? { timer } : {}),
     });
     this.parkedKeys.add(key);
     this.counts.interactionsPresented += 1;
@@ -752,7 +756,7 @@ export class ServerRequestRouter {
     options: { skipSend?: boolean } = {},
   ): Promise<void> {
     if (!this.parkedInteractions.delete(parked.request.interactionId)) return;
-    clearTimeout(parked.timer);
+    if (parked.timer) clearTimeout(parked.timer);
     this.parkedKeys.delete(parked.key);
     if (resolution === "answered") this.counts.interactionsAnswered += 1;
 

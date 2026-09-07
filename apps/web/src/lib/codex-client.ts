@@ -416,7 +416,8 @@ export interface CodexInteraction {
   turnId: string | null;
   itemId: string | null;
   requestedAt: number;
-  expiresAt: number;
+  isBlocking?: boolean;
+  expiresAt?: number;
   autoResolutionMs?: number;
   questions?: CodexInteractionQuestion[];
   serverName?: string;
@@ -480,8 +481,10 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
     typeof raw.threadId !== "string" ||
     typeof raw.requestedAt !== "number" ||
     !Number.isFinite(raw.requestedAt) ||
-    typeof raw.expiresAt !== "number" ||
-    !Number.isFinite(raw.expiresAt)
+    (raw.isBlocking !== undefined && typeof raw.isBlocking !== "boolean") ||
+    (raw.isBlocking !== true && raw.expiresAt === undefined) ||
+    (raw.expiresAt !== undefined &&
+      (typeof raw.expiresAt !== "number" || !Number.isFinite(raw.expiresAt)))
   ) {
     return null;
   }
@@ -499,7 +502,10 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
     turnId: typeof raw.turnId === "string" ? raw.turnId : null,
     itemId: typeof raw.itemId === "string" ? raw.itemId : null,
     requestedAt: raw.requestedAt,
-    expiresAt: raw.expiresAt,
+    // Older bridge builds omitted this field and always meant a blocking,
+    // deadline-bound interaction. Preserve that meaning during rolling updates.
+    isBlocking: raw.isBlocking === undefined ? true : raw.isBlocking,
+    ...(typeof raw.expiresAt === "number" ? { expiresAt: raw.expiresAt } : {}),
     ...(typeof raw.autoResolutionMs === "number" ? { autoResolutionMs: raw.autoResolutionMs } : {}),
     ...(questions ? { questions } : {}),
     ...(typeof raw.serverName === "string" ? { serverName: raw.serverName } : {}),

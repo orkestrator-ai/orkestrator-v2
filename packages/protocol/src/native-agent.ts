@@ -612,6 +612,29 @@ export interface NativeAgentQueueSnapshot<TItem = unknown> {
   };
 }
 
+export const NATIVE_ASYNC_QUESTION_REQUEST_PREFIX = "async-question:";
+
+/** Stable idempotency key used when an async Codex question becomes a user message. */
+export function nativeAsyncQuestionRequestId(itemId: string): string {
+  return `${NATIVE_ASYNC_QUESTION_REQUEST_PREFIX}${encodeURIComponent(itemId)}`;
+}
+
+export function nativeAsyncQuestionItemId(requestId: string): string | undefined {
+  if (!requestId.startsWith(NATIVE_ASYNC_QUESTION_REQUEST_PREFIX)) return undefined;
+  try {
+    const itemId = decodeURIComponent(requestId.slice(NATIVE_ASYNC_QUESTION_REQUEST_PREFIX.length));
+    return itemId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface NativeAgentAsyncQuestionResponse {
+  itemId: string;
+  requestId: string;
+  state: "queued" | "dispatching" | "sent" | "failed";
+}
+
 export interface NativeAgentContextUsage {
   usedTokens: number;
   maximumTokens?: number;
@@ -997,6 +1020,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   readiness?: NativeAgentReadiness;
   capabilities: NativeAgentCapabilities;
   queue?: NativeAgentQueueSnapshot;
+  /** Content-free durable delivery state for transcript-native async questions. */
+  asyncQuestionResponses?: NativeAgentAsyncQuestionResponse[];
   contextUsage?: NativeAgentContextUsage;
   /** Provider limits can arrive before the first token-usage snapshot. */
   rateLimits?: NativeAgentRateLimitWindow[];
@@ -1043,6 +1068,7 @@ export type NativeAgentProjectionField =
   | "composer"
   | "readiness"
   | "queue"
+  | "asyncQuestionResponses"
   | "contextUsage"
   | "rateLimits"
   | "runtime"
@@ -1129,6 +1155,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "readiness",
   "capabilities",
   "queue",
+  "asyncQuestionResponses",
   "contextUsage",
   "rateLimits",
   "runtime",
@@ -1149,6 +1176,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "composer",
   "readiness",
   "queue",
+  "asyncQuestionResponses",
   "contextUsage",
   "rateLimits",
   "runtime",

@@ -3573,6 +3573,46 @@ describe("activity polling", () => {
     expect(h.runtime.getActivity(sessionId)).toBe("working");
   });
 
+  test("activity snapshots expose only bounded async-question item ids", async () => {
+    const { h, sessionId } = await workingSession();
+    const context = h.runtime.getRegistry().getThread("thread-1")!;
+    context.messages.push({
+      id: "assistant-question",
+      role: "assistant",
+      content: "Which target?",
+      parts: [
+        {
+          type: "async-question",
+          content: "Which target?",
+          asyncQuestion: {
+            itemId: "question-1",
+            questions: [{ id: "question-1:0", title: "Which target?", options: ["Staging"] }],
+          },
+        },
+      ],
+      createdAt: "2026-09-06T10:00:00.000Z",
+    });
+    h.runtime.getRegistry().recordAsyncQuestionMessages(context, context.messages.at(-1)!);
+
+    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({
+      activity: "working",
+      asyncQuestionItemIds: ["question-1"],
+    });
+    expect(JSON.stringify(h.runtime.getActivitySnapshot(sessionId))).not.toContain("Which target?");
+  });
+
+  test("activity snapshots do not inspect the transcript", async () => {
+    const { h, sessionId } = await workingSession();
+    const context = h.runtime.getRegistry().getThread("thread-1")!;
+    context.messages = new Proxy(context.messages, {
+      get() {
+        throw new Error("activity poll scanned transcript messages");
+      },
+    });
+
+    expect(h.runtime.getActivitySnapshot(sessionId)).toEqual({ activity: "working" });
+  });
+
   test("a parked approval is waiting rather than working", async () => {
     const { h, sessionId } = await workingSession();
     await parkApproval(h);

@@ -49,6 +49,8 @@ export interface PersistedBridgeSession {
   structuredOutput?: StructuredOutputResult;
   /** Sparse turn -> model overlay for reroutes absent from Codex rollouts. */
   confirmedModelsByTurn?: Record<string, string>;
+  /** Bounded content-free async-question attention index. */
+  asyncQuestionItemIds?: string[];
   lastAccessed: string;
 }
 
@@ -158,6 +160,16 @@ function isPersistedBridgeSession(
       Object.entries(session.confirmedModelsByTurn).some(
         ([turnId, modelId]) =>
           turnId.trim().length === 0 || typeof modelId !== "string" || modelId.trim().length === 0,
+      ))
+  ) {
+    return false;
+  }
+  if (
+    session.asyncQuestionItemIds !== undefined &&
+    (!Array.isArray(session.asyncQuestionItemIds) ||
+      session.asyncQuestionItemIds.length > 64 ||
+      session.asyncQuestionItemIds.some(
+        (itemId) => typeof itemId !== "string" || itemId.length === 0 || itemId.length > 2_048,
       ))
   ) {
     return false;
@@ -431,18 +443,21 @@ export class BridgeSessionStore {
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
     confirmedModelsByTurn?: Record<string, string>;
+    asyncQuestionItemIds?: string[];
   }): PersistedBridgeSession {
+    const { agentMcp: _agentMcp, ...persistedConfig } = options.config;
     return {
       bridgeSessionId: options.bridgeSessionId,
       threadId: options.threadId,
       cwdHash: hashCwd(options.cwd),
-      config: options.config,
+      config: persistedConfig,
       title: options.title,
       titleSource: options.titleSource,
       lastAcceptedRequestId: options.lastAcceptedRequestId,
       structuredOutputRequestId: options.structuredOutputRequestId,
       structuredOutput: options.structuredOutput,
       confirmedModelsByTurn: options.confirmedModelsByTurn,
+      asyncQuestionItemIds: options.asyncQuestionItemIds,
       lastAccessed: new Date(this.now()).toISOString(),
     };
   }

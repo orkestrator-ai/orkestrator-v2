@@ -166,6 +166,14 @@ export interface NativeTextPart extends NativeBasePart {
   type: "text";
 }
 
+export interface NativeAsyncQuestionPart extends NativeBasePart {
+  type: "async-question";
+  asyncQuestion: {
+    itemId: string;
+    questions: Array<{ id: string; title: string; options: string[] }>;
+  };
+}
+
 export interface NativeThinkingPart extends NativeBasePart {
   type: "thinking";
 }
@@ -252,6 +260,7 @@ export interface NativeAgentGroupPart extends NativeBasePart {
 
 export type NativeMessagePart =
   | NativeTextPart
+  | NativeAsyncQuestionPart
   | NativeThinkingPart
   | NativeFilePart
   | NativeToolInvocationPart

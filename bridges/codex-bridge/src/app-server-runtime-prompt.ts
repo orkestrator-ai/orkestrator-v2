@@ -146,6 +146,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       requestId?: string;
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
+      agentMcp?: { url: string; token: string };
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }
@@ -155,6 +156,16 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     if (!session) return { ok: false, status: 404, error: "Session not found" };
     if (!input.requestId?.trim()) {
       return { ok: false, status: 400, error: "requestId is required" };
+    }
+    if (input.agentMcp) {
+      const scoped = this.toEngineConfig({
+        mode: session.config.mode,
+        model: session.config.model,
+        modelReasoningEffort: session.config.reasoningEffort,
+        fastMode: session.config.serviceTier === "fast",
+        agentMcp: input.agentMcp,
+      }).agentMcp;
+      if (scoped) session.config = { ...session.config, agentMcp: scoped };
     }
     await this.touchSession(sessionId);
     // Startup recovery may still be deciding whether this thread's last turn is
@@ -184,6 +195,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       requestId?: string;
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
+      agentMcp?: { url: string; token: string };
     },
   ): Promise<
     | { ok: true; result: PromptAcceptedResult }

@@ -709,6 +709,7 @@ export interface PromptOptions {
   outputSchema?: JsonSchema;
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
+  agentMcp?: { url: string; token: string };
   attachments?: Array<{
     type: "file" | "image";
     path: string;

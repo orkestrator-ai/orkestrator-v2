@@ -28,6 +28,7 @@ import type {
   AppConfig,
   AgentModel,
   AgentReasoningOption,
+  CodexModelCatalogEntry,
 } from "./commands-dependencies.js";
 import {
   configureTerminalHistoryRetention,
@@ -35,6 +36,10 @@ import {
 } from "./terminal-history.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import {
+  coordinatorRuntimeUnavailableMessage,
+  resolveCoordinatorRuntime,
+} from "./coordinator-runtime.js";
 import {
   syncDiffStatsTracking,
   asString,
@@ -69,6 +74,37 @@ export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
 /** The fetch receives only the budget left after bridge readiness work. */
 export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()): number {
   return Math.max(1_000, deadline - now);
+}
+
+function effortLabel(effort: string): string {
+  if (effort === "xhigh") return "Extra high";
+  return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
+}
+
+function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
+  return ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+}
+
+function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const reasoning =
+      model.reasoningOptions?.map((option) => ({
+        id: option.effort,
+        label: option.label,
+      })) ?? reasoningOptions(model.reasoningEfforts ?? ["medium", "high"]);
+    return {
+      platform: "codex",
+      id: model.id,
+      label: model.name,
+      providerLabel: "Codex",
+      reasoning,
+      defaultReasoningId:
+        fallbackReasoningId(reasoning, model.defaultReasoningEffort) ??
+        model.defaultReasoningEffort,
+      supportsSpeed: true,
+      supportsMode: true,
+    };
+  });
 }
 
 export function registerProjectCommands(
@@ -458,8 +494,20 @@ export function registerProjectCommands(
       throw new Error("ensureAgent must be one of: cursor, grok, pi");
     }
     const environment = await storage.getEnvironment(id);
-    if (!environment) throw new Error(`Environment not found: ${id}`);
     const cache = await storage.getAgentModelCatalogCache();
+    if (!environment) {
+      const coordinator = await resolveCoordinatorRuntime(storage, id);
+      if (coordinator.status === "not-coordinator") {
+        throw new Error(`Environment not found: ${id}`);
+      }
+      if (coordinator.status === "unavailable") {
+        throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+      }
+      if (ensureAgent) {
+        throw new Error("Coordinator model discovery supports Codex only");
+      }
+      return normalizedCodexModels(cache.codex?.models ?? []);
+    }
     // Bounds the extra work a first-use read may add, so the model picker
     // cannot be left waiting on a cold bridge for an open-ended time. Only the
     // first-use branch consumes it; a read served from the durable cache is
@@ -591,27 +639,21 @@ export function registerProjectCommands(
         );
       }
     }
-    const effortLabel = (effort: string) => {
-      if (effort === "xhigh") return "Extra high";
-      return effort.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase());
-    };
-    const reasoning = (ids: readonly string[]): AgentReasoningOption[] =>
-      ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
     const cataloguedOpenCodeModels =
       selectableLiveOpenCodeModels.length > 0
         ? selectableLiveOpenCodeModels
         : openCodeModels.map((model): AgentModel => {
-            const reasoningOptions = [
+            const modelReasoningOptions = [
               { id: "default", label: "Default" },
-              ...reasoning(model.variants ?? []),
+              ...reasoningOptions(model.variants ?? []),
             ];
             return {
               platform: "opencode",
               id: model.id,
               label: openCodeModelDisplayLabel(model.id, model.name),
               providerLabel: model.provider,
-              reasoning: reasoningOptions,
-              defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
+              reasoning: modelReasoningOptions,
+              defaultReasoningId: fallbackReasoningId(modelReasoningOptions) ?? "default",
               supportsSpeed: false,
               // OpenCode has primary agents, not a Build/Plan permission mode.
               supportsMode: false,
@@ -642,31 +684,13 @@ export function registerProjectCommands(
           id: model.id,
           label: model.name,
           providerLabel: "Claude",
-          reasoning: reasoning(efforts),
+          reasoning: reasoningOptions(efforts),
           defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
           supportsSpeed: model.supportsFastMode !== false,
           supportsMode: true,
         };
       }),
-      ...codexModels.map((model): AgentModel => {
-        const reasoningOptions =
-          model.reasoningOptions?.map((option) => ({
-            id: option.effort,
-            label: option.label,
-          })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]);
-        return {
-          platform: "codex",
-          id: model.id,
-          label: model.name,
-          providerLabel: "Codex",
-          reasoning: reasoningOptions,
-          defaultReasoningId:
-            fallbackReasoningId(reasoningOptions, model.defaultReasoningEffort) ??
-            model.defaultReasoningEffort,
-          supportsSpeed: true,
-          supportsMode: true,
-        };
-      }),
+      ...normalizedCodexModels(codexModels),
       ...cataloguedOpenCodeModels,
       ...favoriteOpenCodeModels,
       ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),

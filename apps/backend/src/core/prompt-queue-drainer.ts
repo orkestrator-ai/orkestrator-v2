@@ -170,6 +170,32 @@ export class PromptQueueDrainer {
     return boundary.empty ? boundary.value : { outcome: "held", reason: "queue" };
   }
 
+  /** Read-only gate used by agent mail before it claims a durable message. */
+  async mailInjectPresence(input: {
+    environmentId: string;
+    tabId: string;
+  }): Promise<"idle" | "working" | "draft" | "environment_unready"> {
+    const stateKey = createClaudeTmuxStateKey(input.environmentId, input.tabId);
+    const queueKey = `${TMUX_AGENT}\0${stateKey}`;
+    const draftKey = `${TMUX_AGENT}:${input.environmentId}:${encodeURIComponent(stateKey)}`;
+    const [environment, queue, draft] = await Promise.all([
+      this.storage.getEnvironment(input.environmentId),
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (
+      !environment ||
+      environment.deletionRequestedAt ||
+      !isEnvironmentReadyForAgents(environment)
+    ) {
+      return "environment_unready";
+    }
+    if (this.composeDraftHoldsQueue(draft?.value)) return "draft";
+    if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) return "working";
+    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", input);
+    return status?.running && status.busy !== true ? "idle" : "working";
+  }
+
   private async runSweep(): Promise<void> {
     const now = Date.now();
     const queues = await this.storage.listAllPromptQueues();

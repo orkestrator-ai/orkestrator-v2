@@ -105,14 +105,12 @@ import {
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
-import {
-  coordinatorConversationIdFromRuntimeId,
-  coordinatorIdFromRuntimeId,
-} from "@orkestrator/protocol/coordinator";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { realpath } from "node:fs/promises";
 import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { sanitizeCoordinatorError } from "./coordinator-service.js";
+import { resolveCoordinatorRuntime } from "./coordinator-runtime.js";
 
 export async function prepareCoordinatorCodexHome(
   destination: string,
@@ -158,36 +156,27 @@ async function localRuntimeEnvironment(
 ): Promise<Environment | null> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (environment) return environment;
-  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
-  if (!coordinatorId) return null;
-  const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
-  if (!workspace) return null;
-  const project = await context.storage.getProject(workspace.projectId);
-  if (!project?.localPath) return null;
-  const projectPath = await realpath(project.localPath).catch(() => null);
+  const coordinator = await resolveCoordinatorRuntime(context.storage, environmentId);
+  if (coordinator.status !== "ready") return null;
+  const projectPath = await realpath(coordinator.project.localPath!).catch(() => null);
   if (!projectPath) return null;
-  const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
-  const conversation = workspace.conversations.find(
-    (item) => item.id === conversationId && !item.closedAt,
-  );
-  if (!conversation || workspace.lifecycleState !== "ready") return null;
   return {
     id: environmentId,
-    projectId: workspace.projectId,
+    projectId: coordinator.workspace.projectId,
     name: "Coordinator",
-    branch: workspace.repositoryStatus?.branch ?? "",
+    branch: coordinator.workspace.repositoryStatus?.branch ?? "",
     containerId: null,
     status: "running",
     prUrl: null,
     prState: null,
     hasMergeConflicts: null,
-    createdAt: workspace.createdAt,
+    createdAt: coordinator.workspace.createdAt,
     networkAccessMode: "restricted",
     order: 0,
     environmentType: "local",
     worktreePath: projectPath,
-    localCodexPort: conversation?.codexBridgePort,
-    codexBridgePid: conversation?.codexBridgePid,
+    localCodexPort: coordinator.conversation.codexBridgePort,
+    codexBridgePid: coordinator.conversation.codexBridgePid,
     setupPhase: "ready",
     setupScriptsComplete: true,
   } as Environment;
@@ -880,19 +869,18 @@ export async function startLocalServerUnlocked(
 
   const environment = await localRuntimeEnvironment(environmentId, context);
   const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
-  const coordinatorConversationId = coordinatorConversationIdFromRuntimeId(environmentId);
   if (coordinatorId && kind !== "codex") {
     throw new Error("Only Codex is qualified for read-only coordination");
   }
   if (!environment?.worktreePath) {
     throw retryableBridgeStartupError("Local environment worktree is not available");
   }
-  const coordinatorWorkspace = coordinatorId
-    ? await context.storage.getCoordinatorWorkspaceById(coordinatorId)
+  const coordinator = coordinatorId
+    ? await resolveCoordinatorRuntime(context.storage, environmentId)
     : null;
-  const selectedConversation = coordinatorWorkspace?.conversations.find(
-    (item) => item.id === coordinatorConversationId && !item.closedAt,
-  );
+  const selectedConversation = coordinator?.status === "ready" ? coordinator.conversation : null;
+  const coordinatorConversationId =
+    coordinator?.status === "ready" ? coordinator.conversationId : null;
   let agentToolConnection: AgentToolConnection | undefined;
   if (!coordinatorId) {
     agentToolConnection = context.agentTools?.connection(

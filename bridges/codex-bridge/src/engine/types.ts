@@ -258,6 +258,8 @@ export interface EngineTurnConfig {
    * read rules.
    */
   permissionProfile?: string;
+  /** In-memory only: never persisted or logged with the bridge session record. */
+  agentMcp?: { url: string; token: string };
 }
 
 export interface StartThreadOptions {

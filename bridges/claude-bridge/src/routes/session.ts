@@ -436,6 +436,14 @@ session.post("/:id/prompt", async (c) => {
     const promptSuggestions =
       typeof body.promptSuggestions === "boolean" ? body.promptSuggestions : undefined;
     const outputSchema = body.outputSchema;
+    const agentMcpRecord =
+      body.agentMcp && typeof body.agentMcp === "object" && !Array.isArray(body.agentMcp)
+        ? (body.agentMcp as Record<string, unknown>)
+        : undefined;
+    const agentMcp =
+      typeof agentMcpRecord?.url === "string" && typeof agentMcpRecord.token === "string"
+        ? { url: agentMcpRecord.url, token: agentMcpRecord.token }
+        : undefined;
     // Every prompt is deduplicated on this id, not just structured ones: a plain
     // prompt retried after a lost HTTP response would otherwise run its shell
     // commands and file edits twice. Clients always send one; the fallback keeps
@@ -526,6 +534,7 @@ session.post("/:id/prompt", async (c) => {
             agent,
             includeLocalSettings,
             promptSuggestions,
+            ...(agentMcp ? { agentMcp } : {}),
             requestId,
           },
           {
@@ -587,6 +596,7 @@ session.post("/:id/prompt", async (c) => {
       agent,
       includeLocalSettings,
       promptSuggestions,
+      ...(agentMcp ? { agentMcp } : {}),
       outputSchema,
       requestId,
     }).catch((error) => {

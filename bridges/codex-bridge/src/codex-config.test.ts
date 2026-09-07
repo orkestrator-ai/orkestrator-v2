@@ -79,7 +79,7 @@ describe("Codex app-server configuration", () => {
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
   });
 
-  test("keeps coordinator credentials out of model-created shell environments", () => {
+  test("keeps coordinator credentials out of model-created execution environments", () => {
     const overrides = codexAppServerConfigOverrides({
       CODEX_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
       CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
@@ -94,6 +94,7 @@ describe("Codex app-server configuration", () => {
       "permissions.coordinator-conversation-1.network.enabled": "false",
       'projects."/projects/example".trust_level': '"untrusted"',
       "features.apps": "false",
+      "features.code_mode_host": "false",
       "features.hooks": "false",
       "features.plugins": "false",
       "features.workspace_dependencies": "false",

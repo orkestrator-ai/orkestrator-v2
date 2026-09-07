@@ -275,6 +275,11 @@ export function createPeerMailNativeMessageFromCarrier(
     ) {
       return null;
     }
+    if (value.to !== undefined) {
+      if (!value.to || typeof value.to !== "object" || Array.isArray(value.to)) return null;
+      const to = value.to as Record<string, unknown>;
+      if (typeof to.environmentId !== "string" || typeof to.tabId !== "string") return null;
+    }
     const from = value.from as Record<string, unknown>;
     if (
       from.kind !== "user" &&

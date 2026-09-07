@@ -77,6 +77,52 @@ describe("describeInteraction: params coercion", () => {
 });
 
 describe("describeInteraction: questions", () => {
+  test("an explicitly blocking question has no automatic expiry", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: true,
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: true });
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: true,
+        questions: [question()],
+      })?.expiresAt,
+    ).toBeUndefined();
+  });
+
+  test("a non-blocking question retains the bounded product deadline", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: false,
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: false, expiresAt: DEFAULT_EXPIRES_AT });
+  });
+
+  test("a legacy question remains blocking but keeps its bounded deadline", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        questions: [question()],
+      }),
+    ).toMatchObject({ isBlocking: true, expiresAt: DEFAULT_EXPIRES_AT });
+  });
+
+  test("rejects a malformed isBlocking value", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        isBlocking: "yes",
+        questions: [question()],
+      }),
+    ).toBeNull();
+  });
+
   test("carries the whole question set with its ids, options and flags", () => {
     const described = describeWith(QUESTION, {
       threadId: "thread-1",
@@ -253,7 +299,7 @@ describe("describeInteraction: the blocking flag", () => {
       isBlocking: false,
       autoResolutionMs: null,
     });
-    expect(described?.blocking).toBe(false);
+    expect(described?.isBlocking).toBe(false);
   });
 
   test("isBlocking true wins even when an auto-resolution deadline is present", () => {
@@ -263,9 +309,8 @@ describe("describeInteraction: the blocking flag", () => {
       isBlocking: true,
       autoResolutionMs: 60_000,
     });
-    expect(described?.blocking).toBe(true);
-    // The deadline still clamps the park; only the blocking decision moved.
-    expect(described?.expiresAt).toBe(REQUESTED_AT + 60_000);
+    expect(described?.isBlocking).toBe(true);
+    expect(described?.expiresAt).toBeUndefined();
   });
 
   test("an app-server that omits isBlocking falls back to the deprecated field", () => {
@@ -274,22 +319,20 @@ describe("describeInteraction: the blocking flag", () => {
         threadId: "thread-1",
         questions: [question()],
         autoResolutionMs: 60_000,
-      })?.blocking,
+      })?.isBlocking,
     ).toBe(false);
     expect(
-      describeWith(QUESTION, { threadId: "thread-1", questions: [question()] })?.blocking,
+      describeWith(QUESTION, { threadId: "thread-1", questions: [question()] })?.isBlocking,
     ).toBe(true);
   });
 
   test("a non-boolean isBlocking is not trusted", () => {
-    // Fail towards blocking: showing a card the turn waits on is recoverable,
-    // proceeding past a question the user never answered is not.
     const described = describeWith(QUESTION, {
       threadId: "thread-1",
       questions: [question()],
       isBlocking: "false",
     });
-    expect(described?.blocking).toBe(true);
+    expect(described).toBeNull();
   });
 });
 
@@ -344,7 +387,7 @@ describe("describeInteraction: MCP elicitation", () => {
     expect(described?.kind).toBe("mcp-form");
     expect(described?.schema).toEqual({ type: "object" });
     expect(described?.serverName).toBe("deploy");
-    expect(described?.blocking).toBe(true);
+    expect(described?.isBlocking).toBe(true);
   });
 
   test("url mode becomes an mcp-url card carrying the link and elicitation id", () => {

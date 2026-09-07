@@ -15,6 +15,7 @@ import {
   agentMailCapabilities,
   agentMailboxId,
   normalizeAgentMessagingSettings,
+  resolveTabDisplayName,
   type AgentMailMailboxSnapshot,
   type AgentMailMailboxBatchSnapshot,
   type AgentMailInboxSnapshot,
@@ -43,6 +44,8 @@ type PersistedMailbox = {
   tabId: string;
   tabType: string;
   title: string | null;
+  displayName?: string;
+  tabOrdinal?: number;
   agent: AgentPlatform | null;
   kind: MailboxKind;
   locked: boolean;
@@ -73,7 +76,13 @@ type PersistedAgentMailStore = {
   revision: number;
   mailboxes: Record<string, PersistedMailbox>;
   idempotency: Record<string, IdempotencyRecord>;
-  pendingInject: Array<{ mailboxId: string; messageId: string }>;
+  pendingInject: Array<{
+    mailboxId: string;
+    messageId: string;
+    nextAttemptAt?: string;
+    attempts?: number;
+    lastHoldReason?: string;
+  }>;
   counterparts: Record<string, AgentMailMessageSummary>;
 };
 
@@ -94,19 +103,10 @@ export type AgentMailSender =
 export type PendingAgentMailInject = {
   mailbox: MailboxDescriptor;
   message: AgentMailMessage;
+  deferredUntil?: string;
 };
 
-const TERMINAL_TYPES = new Set([
-  "claude",
-  "codex",
-  "opencode",
-  "cursor",
-  "grok",
-  "pi",
-  "plain",
-  "root",
-]);
-const UI_TYPES = new Set(["browser", "file"]);
+const TERMINAL_TYPES = new Set(["claude", "codex", "opencode"]);
 const WORKFLOW_TYPES = new Set(["claude-build", "looped-review", "multi-review"]);
 const SETTLED_PLACEMENTS = new Set(["undeliverable", "bounced", "expired"]);
 
@@ -124,6 +124,13 @@ function emptyStore(): PersistedAgentMailStore {
 function metadataMessage(message: AgentMailMessage): AgentMailMessageSummary {
   const { body: _body, ...summary } = message;
   return summary;
+}
+
+function countsAsPendingInject(message: AgentMailMessage | AgentMailMessageSummary): boolean {
+  return (
+    message.placement === "pending-inject" ||
+    (message.placement === "inject-held" && message.placementReason === "loop-budget-exhausted")
+  );
 }
 
 function idempotencyKey(senderScope: string, requestId: string): string {
@@ -194,7 +201,6 @@ function mailboxKind(tabType: string): MailboxKind | null {
   if (tabType === "agent-native") return "native";
   if (tabType === "claude-tmux") return "tmux";
   if (TERMINAL_TYPES.has(tabType)) return "terminal";
-  if (UI_TYPES.has(tabType)) return "ui";
   return null;
 }
 
@@ -223,6 +229,22 @@ function storeByteLength(store: PersistedAgentMailStore): number {
 }
 
 export class StorageAgentMail extends StorageDrafts {
+  private readonly agentMailLayoutRevisions = new Map<string, number>();
+  private agentMailRuntimeProvider:
+    | ((mailbox: {
+        mailboxId: string;
+        environmentId: string;
+        tabId: string;
+        agent: AgentPlatform | null;
+        logicalSessionKey?: string;
+        kind: MailboxKind;
+      }) => { presence?: MailboxDescriptor["presence"]; title?: string } | undefined)
+    | null = null;
+
+  setAgentMailRuntimeProvider(provider: StorageAgentMail["agentMailRuntimeProvider"]): void {
+    this.agentMailRuntimeProvider = provider;
+  }
+
   private enqueueAgentMailMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(this.agentMailFile(), "agent mail storage");
@@ -241,7 +263,7 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   private async loadAgentMailStore(): Promise<PersistedAgentMailStore> {
-    const value = await this.loadJson<unknown>(this.agentMailFile(), emptyStore);
+    const value = await this.loadJsonCached<unknown>(this.agentMailFile(), emptyStore);
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Agent mail store is malformed");
     }
@@ -251,6 +273,9 @@ export class StorageAgentMail extends StorageDrafts {
     }
     const store = value as PersistedAgentMailStore;
     store.revision = Number.isSafeInteger(store.revision) ? store.revision : 0;
+    const pendingByMessage = new Map(
+      (store.pendingInject ?? []).map((entry) => [`${entry.mailboxId}\0${entry.messageId}`, entry]),
+    );
     store.pendingInject = [];
     store.counterparts ??= {};
     for (const mailbox of Object.values(store.mailboxes)) {
@@ -259,8 +284,15 @@ export class StorageAgentMail extends StorageDrafts {
       mailbox.mutedInbound ??= false;
       mailbox.mutedOutbound ??= false;
       for (const message of mailbox.messages) {
-        if (message.placement === "pending-inject") {
-          store.pendingInject.push({ mailboxId: mailbox.mailboxId, messageId: message.id });
+        if (
+          message.placement === "pending-inject" ||
+          (message.placement === "inject-held" && message.placementReason === "submitting")
+        ) {
+          store.pendingInject.push({
+            mailboxId: mailbox.mailboxId,
+            messageId: message.id,
+            ...pendingByMessage.get(`${mailbox.mailboxId}\0${message.id}`),
+          });
         }
       }
     }
@@ -301,6 +333,20 @@ export class StorageAgentMail extends StorageDrafts {
     return tabId;
   }
 
+  async listAgentMailPullTabIds(environmentId: string): Promise<string[]> {
+    if (!environmentId.trim()) return [];
+    const store = await this.loadAgentMailStore();
+    return Object.values(store.mailboxes)
+      .filter(
+        (mailbox) =>
+          mailbox.environmentId === environmentId &&
+          !mailbox.tombstonedAt &&
+          agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canPull,
+      )
+      .sort((a, b) => (a.tabOrdinal ?? 0) - (b.tabOrdinal ?? 0) || a.tabId.localeCompare(b.tabId))
+      .map((mailbox) => mailbox.tabId);
+  }
+
   async synchronizeAgentMailboxes(): Promise<void> {
     const [projects, environments, layoutsResult, coordinators] = await Promise.all([
       this.loadProjects(),
@@ -309,6 +355,14 @@ export class StorageAgentMail extends StorageDrafts {
       this.listCoordinatorWorkspaces(),
     ]);
     if (!layoutsResult.available) return;
+    const sessionsByEnvironment = new Map(
+      await Promise.all(
+        environments.map(
+          async (environment) =>
+            [environment.id, await this.getSessionsByEnvironment(environment.id)] as const,
+        ),
+      ),
+    );
     const projectById = new Map(projects.map((project) => [project.id, project]));
     const environmentById = new Map(
       environments.map((environment) => [environment.id, environment]),
@@ -334,14 +388,36 @@ export class StorageAgentMail extends StorageDrafts {
       if (!environment || environment.deletionRequestedAt) continue;
       const project = projectById.get(environment.projectId);
       if (!project) continue;
+      let tabOrdinal = 0;
       for (const leaf of paneLayoutLeaves(layout.root)) {
         for (const tab of leaf.tabs) {
+          tabOrdinal += 1;
           if (!isAddressableTab(tab)) continue;
           const tabId = tab.id as string;
           const tabType = tab.type as string;
           const kind = mailboxKind(tabType)!;
           const { agent, locked } = tabAgent(tab);
           const mailboxId = agentMailboxId(environmentId, tabId);
+          const logicalSessionKey = `env-${environmentId}:${tabId}`;
+          const runtime = this.agentMailRuntimeProvider?.({
+            mailboxId,
+            environmentId,
+            tabId,
+            agent,
+            logicalSessionKey,
+            kind,
+          });
+          const customSessionName = sessionsByEnvironment
+            .get(environmentId)
+            ?.find((session) => session.tabId === tabId)?.name;
+          const displayName = resolveTabDisplayName({
+            tabType,
+            tabOrdinal,
+            agent,
+            customSessionName,
+            nativeSessionTitle: runtime?.title,
+            displayTitle: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
+          });
           observed.set(mailboxId, {
             mailboxId,
             projectId: project.id,
@@ -351,7 +427,9 @@ export class StorageAgentMail extends StorageDrafts {
             environmentStatus: environment.status,
             tabId,
             tabType,
-            title: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
+            title: displayName,
+            displayName,
+            tabOrdinal,
             agent,
             kind,
             locked,
@@ -376,6 +454,13 @@ export class StorageAgentMail extends StorageDrafts {
           tabId: conversation.tabId,
           tabType: "agent-native",
           title: conversation.title,
+          displayName: resolveTabDisplayName({
+            tabType: "agent-native",
+            tabOrdinal: 1,
+            agent: conversation.agent,
+            nativeSessionTitle: conversation.title,
+          }),
+          tabOrdinal: 1,
           agent: conversation.agent,
           kind: "native",
           locked: true,
@@ -408,27 +493,10 @@ export class StorageAgentMail extends StorageDrafts {
           changedMailboxIds.add(mailboxId);
           continue;
         }
-        const nextMetadata = JSON.stringify(metadata);
-        const currentMetadata = JSON.stringify({
-          mailboxId: current.mailboxId,
-          projectId: current.projectId,
-          projectName: current.projectName,
-          environmentId: current.environmentId,
-          environmentName: current.environmentName,
-          environmentStatus: current.environmentStatus,
-          tabId: current.tabId,
-          tabType: current.tabType,
-          title: current.title,
-          agent: current.agent,
-          kind: current.kind,
-          locked: current.locked,
-          ownerKind: current.ownerKind,
-          coordinatorId: current.coordinatorId,
-          conversationId: current.conversationId,
-          logicalSessionKey: current.logicalSessionKey,
-          ...(metadata.incarnationId ? { incarnationId: current.incarnationId } : {}),
-        });
-        if (nextMetadata !== currentMetadata) {
+        const changed = Object.entries(metadata).some(
+          ([key, value]) => current[key as keyof PersistedMailbox] !== value,
+        );
+        if (changed) {
           Object.assign(current, metadata);
           current.revision += 1;
           changedMailboxIds.add(mailboxId);
@@ -456,21 +524,56 @@ export class StorageAgentMail extends StorageDrafts {
         this.announce("agent-mail", mailboxId, store.mailboxes[mailboxId]?.projectId);
       }
     });
+    this.agentMailLayoutRevisions.clear();
+    for (const [environmentId, layout] of Object.entries(layoutsResult.layouts)) {
+      this.agentMailLayoutRevisions.set(environmentId, layout.revision);
+    }
+    for (const workspace of coordinators) {
+      for (const conversation of workspace.conversations) {
+        if (!conversation.closedAt) {
+          this.agentMailLayoutRevisions.set(
+            coordinatorRuntimeId(workspace.id, conversation.id),
+            -1,
+          );
+        }
+      }
+    }
+  }
+
+  private async ensureAgentMailDirectoryFresh(environmentIds: string[]): Promise<void> {
+    for (const environmentId of new Set(environmentIds.filter(Boolean))) {
+      const layout = await this.getPaneLayout(environmentId);
+      const revision = layout?.revision ?? -1;
+      if (this.agentMailLayoutRevisions.get(environmentId) !== revision) {
+        await this.synchronizeAgentMailboxes();
+        return;
+      }
+    }
   }
 
   private descriptor(mailbox: PersistedMailbox, defaultPolicy: "off" | "idle"): MailboxDescriptor {
-    const unreadCount = mailbox.messages.filter(
+    const userUnseenCount = mailbox.messages.filter(
       (message) =>
         message.toIncarnationId === mailbox.incarnationId &&
-        !message.ackedAt &&
         !message.userSeenAt &&
         !message.discardedAt,
     ).length;
+    const agentUnackedCount = mailbox.messages.filter(
+      (message) =>
+        message.toIncarnationId === mailbox.incarnationId &&
+        !message.ackedAt &&
+        !message.discardedAt,
+    ).length;
+    const runtime = this.agentMailRuntimeProvider?.(mailbox);
     const presence = mailbox.tombstonedAt
       ? "tab_closed"
       : mailbox.environmentStatus !== "running"
         ? "environment_stopped"
-        : "unknown";
+        : (runtime?.presence ?? "unknown");
+    // Naming is synchronized on session-title resources. Do not recompute it
+    // here from only the runtime title: that would incorrectly outrank a
+    // persisted custom session name between observer passes.
+    const displayName = mailbox.displayName ?? mailbox.title ?? mailbox.tabId;
     return {
       mailboxId: mailbox.mailboxId,
       incarnationId: mailbox.incarnationId,
@@ -481,7 +584,9 @@ export class StorageAgentMail extends StorageDrafts {
       environmentStatus: mailbox.environmentStatus,
       tabId: mailbox.tabId,
       tabType: mailbox.tabType,
-      title: mailbox.title,
+      title: displayName,
+      displayName,
+      tabOrdinal: mailbox.tabOrdinal ?? 1,
       agent: mailbox.agent,
       kind: mailbox.kind,
       presence,
@@ -494,7 +599,18 @@ export class StorageAgentMail extends StorageDrafts {
       injectOverride: mailbox.injectOverride,
       mutedInbound: mailbox.mutedInbound,
       mutedOutbound: mailbox.mutedOutbound,
-      unreadCount,
+      unreadCount: userUnseenCount,
+      userUnseenCount,
+      agentUnackedCount,
+      pendingInjectCount: mailbox.messages.filter(
+        (message) =>
+          message.toIncarnationId === mailbox.incarnationId && countsAsPendingInject(message),
+      ).length,
+      failedInjectCount: mailbox.messages.filter(
+        (message) =>
+          message.toIncarnationId === mailbox.incarnationId &&
+          message.placement === "inject_failed",
+      ).length,
       capabilities: agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked),
       ...(mailbox.ownerKind ? { ownerKind: mailbox.ownerKind } : {}),
       ...(mailbox.coordinatorId ? { coordinatorId: mailbox.coordinatorId } : {}),
@@ -512,9 +628,10 @@ export class StorageAgentMail extends StorageDrafts {
       offset?: number;
       limit?: number;
       includeTombstoned?: boolean;
+      currentEnvironmentId?: string;
+      environmentId?: string;
     } = {},
   ): Promise<{ mailboxes: MailboxDescriptor[]; total: number; offset: number; limit: number }> {
-    await this.synchronizeAgentMailboxes();
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const query = options.q?.trim().toLocaleLowerCase();
@@ -525,6 +642,9 @@ export class StorageAgentMail extends StorageDrafts {
     );
     const filtered = Object.values(store.mailboxes)
       .filter((mailbox) => options.includeTombstoned || !mailbox.tombstonedAt)
+      .filter(
+        (mailbox) => !options.environmentId || mailbox.environmentId === options.environmentId,
+      )
       .filter(
         (mailbox) =>
           !options.projectId ||
@@ -537,11 +657,20 @@ export class StorageAgentMail extends StorageDrafts {
           .filter((value): value is string => typeof value === "string")
           .some((value) => value.toLocaleLowerCase().includes(query));
       })
-      .sort((a, b) =>
-        `${a.projectName}\0${a.environmentName}\0${a.tabId}`.localeCompare(
-          `${b.projectName}\0${b.environmentName}\0${b.tabId}`,
-        ),
-      );
+      .filter(
+        (mailbox) => agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canPull,
+      )
+      .sort((a, b) => {
+        const aCurrent = a.environmentId === options.currentEnvironmentId ? 0 : 1;
+        const bCurrent = b.environmentId === options.currentEnvironmentId ? 0 : 1;
+        return (
+          aCurrent - bCurrent ||
+          a.projectName.localeCompare(b.projectName) ||
+          a.environmentName.localeCompare(b.environmentName) ||
+          (a.tabOrdinal ?? 0) - (b.tabOrdinal ?? 0) ||
+          a.tabId.localeCompare(b.tabId)
+        );
+      });
     return {
       mailboxes: filtered
         .slice(offset, offset + limit)
@@ -553,7 +682,6 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async getAgentMailSummary(): Promise<AgentMailSummarySnapshot> {
-    await this.synchronizeAgentMailboxes();
     const store = await this.loadAgentMailStore();
     return {
       revision: store.revision,
@@ -562,17 +690,27 @@ export class StorageAgentMail extends StorageDrafts {
         projectId: mailbox.projectId,
         environmentId: mailbox.environmentId,
         tabId: mailbox.tabId,
+        userUnseenCount: mailbox.messages.filter(
+          (message) =>
+            message.toIncarnationId === mailbox.incarnationId &&
+            !message.userSeenAt &&
+            !message.discardedAt,
+        ).length,
         unreadCount: mailbox.messages.filter(
           (message) =>
             message.toIncarnationId === mailbox.incarnationId &&
-            !message.ackedAt &&
             !message.userSeenAt &&
+            !message.discardedAt,
+        ).length,
+        agentUnackedCount: mailbox.messages.filter(
+          (message) =>
+            message.toIncarnationId === mailbox.incarnationId &&
+            !message.ackedAt &&
             !message.discardedAt,
         ).length,
         pendingInjectCount: mailbox.messages.filter(
           (message) =>
-            message.toIncarnationId === mailbox.incarnationId &&
-            message.placement === "pending-inject",
+            message.toIncarnationId === mailbox.incarnationId && countsAsPendingInject(message),
         ).length,
         failedInjectCount: mailbox.messages.filter(
           (message) =>
@@ -594,7 +732,6 @@ export class StorageAgentMail extends StorageDrafts {
       incarnationId?: string;
     } = {},
   ): Promise<AgentMailMailboxSnapshot> {
-    await this.synchronizeAgentMailboxes();
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
     if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
@@ -629,7 +766,6 @@ export class StorageAgentMail extends StorageDrafts {
     if (addresses.length > AGENT_MAIL_MAX_MAILBOXES) {
       throw new Error(`At most ${AGENT_MAIL_MAX_MAILBOXES} mailboxes may be read at once`);
     }
-    await this.synchronizeAgentMailboxes();
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
@@ -656,7 +792,6 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async getAgentMailInboxSnapshot(): Promise<AgentMailInboxSnapshot> {
-    await this.synchronizeAgentMailboxes();
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const defaultPolicy = normalizeAgentMessagingSettings(
       config.global.agentMessaging,
@@ -690,10 +825,12 @@ export class StorageAgentMail extends StorageDrafts {
           environmentId: descriptor.environmentId,
           tabId: descriptor.tabId,
           unreadCount: descriptor.unreadCount,
+          userUnseenCount: descriptor.userUnseenCount,
+          agentUnackedCount: descriptor.agentUnackedCount,
           pendingInjectCount: messages.filter(
             (message) =>
               message.toIncarnationId === descriptor.incarnationId &&
-              message.placement === "pending-inject",
+              countsAsPendingInject(message),
           ).length,
           failedInjectCount: messages.filter(
             (message) =>
@@ -743,7 +880,10 @@ export class StorageAgentMail extends StorageDrafts {
     const subject = input.subject?.trim() || undefined;
     if (subject && subject.length > AGENT_MAIL_MAX_SUBJECT_LENGTH)
       throw new Error("subject must be at most 200 characters");
-    await this.synchronizeAgentMailboxes();
+    await this.ensureAgentMailDirectoryFresh([
+      input.toEnvironmentId,
+      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
+    ]);
     const config = await this.loadConfig();
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     if (!settings.enabled)
@@ -1127,9 +1267,35 @@ export class StorageAgentMail extends StorageDrafts {
         throw new AgentMailError("message-not-found", "Message not found in this mailbox");
       const resumesLoopBudget =
         message.placement === "inject-held" && message.placementReason === "loop-budget-exhausted";
-      if (message.placement !== "inject_failed" && !resumesLoopBudget) return message;
+      const wakesPending = message.placement === "pending-inject";
+      const wakesStored =
+        message.placement === "stored" &&
+        !message.ackedAt &&
+        !message.discardedAt &&
+        !mailbox.mutedInbound &&
+        message.injectDepth === 0 &&
+        message.threadDepth < AGENT_MAIL_MAX_THREAD_HOPS &&
+        message.trust !== "cross-project" &&
+        message.trust !== "external" &&
+        agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject;
+      if (
+        message.placement !== "inject_failed" &&
+        !resumesLoopBudget &&
+        !wakesPending &&
+        !wakesStored
+      )
+        return message;
+      if (wakesPending) {
+        const pending = store.pendingInject.find(
+          (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
+        );
+        if (pending) {
+          delete pending.nextAttemptAt;
+          pending.attempts = 0;
+        }
+      }
       message.placement = "pending-inject";
-      delete message.placementReason;
+      if (!wakesPending || wakesStored) delete message.placementReason;
       message.injectRequestId ??= `mail-inject-${message.id}`;
       if (resumesLoopBudget) {
         // Preserve the thread identity while beginning a new user-authorized
@@ -1220,23 +1386,51 @@ export class StorageAgentMail extends StorageDrafts {
     throw new AgentMailError("message-not-found", "Message status is no longer retained");
   }
 
-  async listPendingAgentMailInjects(limit = 100): Promise<PendingAgentMailInject[]> {
-    await this.synchronizeAgentMailboxes();
+  async listPendingAgentMailInjects(
+    limit = 100,
+    options: { includeDeferred?: boolean } = {},
+  ): Promise<PendingAgentMailInject[]> {
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const pending: PendingAgentMailInject[] = [];
-    for (const { mailboxId, messageId } of store.pendingInject) {
+    const now = Date.now();
+    const entries = store.pendingInject.toSorted((a, b) => {
+      const aDeferred = a.nextAttemptAt && Date.parse(a.nextAttemptAt) > now ? 1 : 0;
+      const bDeferred = b.nextAttemptAt && Date.parse(b.nextAttemptAt) > now ? 1 : 0;
+      return aDeferred - bDeferred;
+    });
+    for (const { mailboxId, messageId, nextAttemptAt } of entries) {
+      const deferred = Boolean(nextAttemptAt && Date.parse(nextAttemptAt) > now);
+      if (deferred && !options.includeDeferred) continue;
       const mailbox = store.mailboxes[mailboxId];
       const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
       if (!mailbox || !message || message.placement !== "pending-inject") continue;
-      pending.push({ mailbox: this.descriptor(mailbox, settings.defaultInjectPolicy), message });
+      pending.push({
+        mailbox: this.descriptor(mailbox, settings.defaultInjectPolicy),
+        message,
+        ...(deferred && nextAttemptAt ? { deferredUntil: nextAttemptAt } : {}),
+      });
       if (pending.length >= Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS))) break;
     }
     return pending;
   }
 
+  /** Activity edges make a held delivery immediately eligible without announcing UI churn. */
+  async resetAgentMailInjectBackoff(mailboxId: string): Promise<void> {
+    await this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      let changed = false;
+      for (const entry of store.pendingInject) {
+        if (entry.mailboxId !== mailboxId || !entry.nextAttemptAt) continue;
+        delete entry.nextAttemptAt;
+        entry.attempts = 0;
+        changed = true;
+      }
+      if (changed) await this.saveAgentMailStore(store);
+    });
+  }
+
   async listInterruptedAgentMailInjects(): Promise<PendingAgentMailInject[]> {
-    await this.synchronizeAgentMailboxes();
     const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     const interrupted: PendingAgentMailInject[] = [];
@@ -1252,6 +1446,41 @@ export class StorageAgentMail extends StorageDrafts {
       }
     }
     return interrupted;
+  }
+
+  async listAgentMailSentByMailbox(
+    environmentId: string,
+    tabId: string,
+  ): Promise<AgentMailMessageSummary[]> {
+    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const cutoff =
+      Date.now() -
+      normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
+    const mailboxId = agentMailboxId(environmentId, tabId);
+    return Object.values(store.mailboxes)
+      .flatMap((mailbox) => mailbox.messages)
+      .filter(
+        (message) =>
+          Date.parse(message.createdAt) >= cutoff &&
+          (message.from.kind === "tab" || message.from.kind === "coordinator") &&
+          agentMailboxId(message.from.environmentId, message.from.tabId) === mailboxId,
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX)
+      .map(metadataMessage);
+  }
+
+  async listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {
+    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const cutoff =
+      Date.now() -
+      normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays * 86_400_000;
+    return Object.values(store.mailboxes)
+      .flatMap((mailbox) => mailbox.messages)
+      .filter((message) => message.from.kind === "user" && Date.parse(message.createdAt) >= cutoff)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX)
+      .map(metadataMessage);
   }
 
   async beginAgentMailInject(
@@ -1273,13 +1502,12 @@ export class StorageAgentMail extends StorageDrafts {
       )
         return null;
       message.placement = "inject-held";
+      const pendingEntry = store.pendingInject.find(
+        (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === messageId,
+      );
+      if (pendingEntry) pendingEntry.lastHoldReason = message.placementReason;
       message.placementReason = "submitting";
-      message.revision += 1;
-      mailbox.revision += 1;
-      store.revision += 1;
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
       return message;
     });
   }
@@ -1303,23 +1531,48 @@ export class StorageAgentMail extends StorageDrafts {
         message.placementReason !== "submitting"
       )
         return null;
+      const pendingIndex = store.pendingInject.findIndex(
+        (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === messageId,
+      );
+      const pendingEntry = pendingIndex >= 0 ? store.pendingInject[pendingIndex] : undefined;
+      let announce = true;
       if (outcome.outcome === "accepted") {
         message.placement = "injected";
         message.injectedAt = new Date().toISOString();
         delete message.placementReason;
+        if (pendingIndex >= 0) store.pendingInject.splice(pendingIndex, 1);
       } else if (outcome.outcome === "held") {
+        const reason = outcome.reason.slice(0, 100);
+        const previousReason = pendingEntry?.lastHoldReason;
         message.placement = "pending-inject";
-        message.placementReason = outcome.reason.slice(0, 100);
+        message.placementReason = reason;
+        const attempts = Math.min(5, (pendingEntry?.attempts ?? 0) + 1);
+        const delayMs = Math.min(30_000, 2_000 * 2 ** (attempts - 1));
+        const next = {
+          mailboxId,
+          messageId,
+          attempts,
+          nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
+          lastHoldReason: reason,
+        };
+        if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
+        else store.pendingInject.push(next);
+        announce = previousReason !== reason;
       } else {
         message.placement = "inject_failed";
         message.placementReason = outcome.reason;
+        if (pendingIndex >= 0) store.pendingInject.splice(pendingIndex, 1);
       }
-      message.revision += 1;
-      mailbox.revision += 1;
-      store.revision += 1;
+      if (announce) {
+        message.revision += 1;
+        mailbox.revision += 1;
+        store.revision += 1;
+      }
       await this.saveAgentMailStore(store);
-      this.announce("agent-mail", mailboxId, mailbox.projectId);
-      this.announce("agent-mail-summary", "all");
+      if (announce) {
+        this.announce("agent-mail", mailboxId, mailbox.projectId);
+        this.announce("agent-mail-summary", "all");
+      }
       return message;
     });
   }

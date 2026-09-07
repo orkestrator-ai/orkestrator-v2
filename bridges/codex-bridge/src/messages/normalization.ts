@@ -301,6 +301,22 @@ export async function itemToParts(
 ): Promise<NormalizedPart[]> {
   switch (item.type) {
     case "agent_message":
+      if (item.delivery === "async" && item.questions?.length) {
+        return [
+          {
+            type: "async-question",
+            content: item.text,
+            asyncQuestion: {
+              itemId: item.id,
+              questions: item.questions.map((question, index) => ({
+                id: `${item.id}:${index}`,
+                title: question.title,
+                options: question.options ?? [],
+              })),
+            },
+          },
+        ];
+      }
       return [{ type: "text", content: item.text }];
     case "reasoning":
       return hasVisibleText(item.text) ? [{ type: "thinking", content: item.text }] : [];

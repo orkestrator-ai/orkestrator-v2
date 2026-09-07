@@ -320,8 +320,18 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxRetries?: number;
   onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
+  /** Reports newly persisted, content-free background questions to the shell. */
+  onAsyncQuestionAttention?: (event: { environmentId: string; sessionKey: string }) => void;
   /** Atomically admits a coordinator prompt against checkout mutations. */
   beginCoordinatorTurn?: (projectId: string) => () => void;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    tabId: string,
+    target: "host" | "container",
+  ) => { url: string; token: string };
+  /** Authoritative availability of the scoped worker-delegation MCP. */
+  coordinatorDelegationAvailable?: () => boolean;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
   /** Test seam for exercising deterministic detail-cache byte eviction. */

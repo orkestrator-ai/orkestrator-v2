@@ -27,8 +27,19 @@ import {
   recoverBackgroundTaskLaunchId,
   applyNativeAgentProjectionDelta,
   isNativeAgentProjectionUpdate,
+  nativeAsyncQuestionItemId,
+  nativeAsyncQuestionRequestId,
   type NativeAgentSessionProjection,
 } from "./native-agent";
+
+describe("native async question identities", () => {
+  test("round-trips arbitrary provider item ids and rejects unrelated requests", () => {
+    const itemId = "call/1 with spaces:%";
+    expect(nativeAsyncQuestionItemId(nativeAsyncQuestionRequestId(itemId))).toBe(itemId);
+    expect(nativeAsyncQuestionItemId("ordinary-request")).toBeUndefined();
+    expect(nativeAsyncQuestionItemId("async-question:%zz")).toBeUndefined();
+  });
+});
 
 describe("native agent capability table", () => {
   test("answers every platform with an independent object", () => {
@@ -324,6 +335,35 @@ describe("native agent projection synchronization", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  test("accepts async-question response state in projection deltas", () => {
+    expect(
+      isNativeAgentProjectionUpdate({
+        syncVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        historyEpoch: "epoch",
+        historyComplete: true,
+        delta: {
+          messageUpserts: [],
+          deletedMessageIds: [],
+          setFields: {
+            asyncQuestionResponses: [
+              {
+                itemId: "question-1",
+                requestId: nativeAsyncQuestionRequestId("question-1"),
+                state: "queued",
+              },
+            ],
+          },
+          unsetFields: [],
+          revision: 2,
+          generation: "generation-1",
+        },
+      }),
+    ).toBe(true);
   });
 });
 

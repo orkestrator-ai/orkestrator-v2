@@ -1212,7 +1212,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const text = prompt.trim();
       if (!text) throw new Error("Prompt must not be blank");
       await enqueuePromptQueueMessage(queueKey, environmentId, {
-        id: crypto.randomUUID(),
+        id: options.requestId ?? crypto.randomUUID(),
         text,
         ...(options.model ? { model: options.model } : {}),
         ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),

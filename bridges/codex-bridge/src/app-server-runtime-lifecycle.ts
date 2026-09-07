@@ -175,6 +175,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
+        asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
       this.lastPersistedAccess.set(persisted.bridgeSessionId, Date.parse(persisted.lastAccessed));
@@ -548,6 +549,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       if (context.messages.length === 0) {
         const hydrated = await hydrateMessagesFromPersistedSession(threadId);
         context.messages = hydrated.messages;
+        this.registry.indexHydratedAsyncQuestions(context);
         this.applyPersistedModelOverrides(context);
         if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
         if (!session.title) {
@@ -1570,6 +1572,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       });
       message.parts = rendered.parts;
       message.content = rendered.content;
+      if (this.registry.recordAsyncQuestionMessages(context, message)) {
+        for (const sessionId of context.bridgeSessionIds) {
+          const session = this.registry.getSession(sessionId);
+          if (session) void this.persistSession(session);
+        }
+      }
       snapshotChars += normalizedMessageSnapshotChars(message);
       // Sampled before the render, so an item that mutated while it was awaited
       // still shows as pending work rather than being recorded as rendered.
@@ -1672,6 +1680,32 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         : undefined;
     const reasoningEffort =
       typeof body.modelReasoningEffort === "string" ? body.modelReasoningEffort : undefined;
+    const rawAgentMcp = body.agentMcp;
+    let agentMcp: EngineTurnConfig["agentMcp"];
+    if (rawAgentMcp && typeof rawAgentMcp === "object" && !Array.isArray(rawAgentMcp)) {
+      const candidate = rawAgentMcp as Record<string, unknown>;
+      if (
+        typeof candidate.url === "string" &&
+        typeof candidate.token === "string" &&
+        candidate.token.length > 0 &&
+        candidate.token.length <= 1_024
+      ) {
+        try {
+          const url = new URL(candidate.url);
+          if (
+            url.protocol === "http:" &&
+            ["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname) &&
+            url.pathname === "/mcp" &&
+            !url.username &&
+            !url.password
+          ) {
+            agentMcp = { url: url.toString(), token: candidate.token };
+          }
+        } catch {
+          // Ignore malformed injected configuration; process-level MCP remains available.
+        }
+      }
+    }
     return {
       mode,
       model,
@@ -1685,6 +1719,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // and re-applied for create, resume, config updates, forks and every turn.
       sandbox: coordinatorReadOnly || mode === "plan" ? "read-only" : "danger-full-access",
       networkAccessEnabled: coordinatorReadOnly ? false : true,
+      ...(agentMcp ? { agentMcp } : {}),
       ...(coordinatorReadOnly ? { permissionProfile: requiredCoordinatorPermissionProfile() } : {}),
     };
   }

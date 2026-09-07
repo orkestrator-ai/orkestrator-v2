@@ -308,6 +308,8 @@ export interface Environment {
    * it clears the badge everywhere, because the work has now been seen.
    */
   hasUnreadWork?: boolean;
+  /** Bounded content-free dedupe keys for agent events that requested attention. */
+  agentAttentionKeys?: string[];
   /** Durable intent to open the configured agent once setup is ready. */
   pendingAgentLaunch?: boolean;
   /** One-shot agent selected for pendingAgentLaunch. */

@@ -4,6 +4,7 @@ import type {
   AgentMailMailboxBatchSnapshot,
   AgentMailInboxSnapshot,
   AgentMailMessage,
+  AgentMailMessageSummary,
   AgentMailSummarySnapshot,
   AgentMessagingSettings,
   MailboxDescriptor,
@@ -57,8 +58,16 @@ export function sendAgentMail(input: {
   toTabId: string;
   subject?: string;
   body: string;
+  replyToMessageId?: string;
 }): Promise<AgentMailMessage> {
   return invoke("send_agent_mail", input);
+}
+
+export function listAgentMailSent(address?: {
+  environmentId: string;
+  tabId: string;
+}): Promise<AgentMailMessageSummary[]> {
+  return invoke("list_agent_mail_sent", address ?? {});
 }
 
 export function ackAgentMail(

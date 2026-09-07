@@ -40,6 +40,19 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("forwards tab-scoped MCP credentials only in Claude and Codex request bodies", async () => {
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    for (const connection of [claudeConnection, codexConnection]) {
+      const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
+      await created.provider.createSession("build", "Scoped", { agentMcp });
+      expect(JSON.parse(String(created.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "work", { requestId: "request-1", agentMcp });
+      expect(JSON.parse(String(sent.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+    }
+  });
+
   test("uses the connection speed default for session creation and prompt dispatch", async () => {
     const cursor = httpProvider(() => Response.json({ sessionId: "cursor-session" }), {
       ...cursorConnection,
@@ -1133,6 +1146,34 @@ describe("HTTP bridge provider", () => {
       expect(requests.map((request) => request.url)).toEqual([
         `${connection.baseUrl}/session/session%2F1/activity`,
       ]);
+    }
+  });
+
+  test("reads bounded Codex async-question ids from the activity observation", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          activity: "working",
+          asyncQuestionItemIds: ["question-1", "question-1", "question-2"],
+        }),
+      codexConnection,
+    );
+
+    await expect(provider.observeActivity?.("session/1")).resolves.toEqual({
+      state: "working",
+      asyncQuestionItemIds: ["question-1", "question-2"],
+    });
+  });
+
+  test("rejects malformed Codex activity attention metadata", async () => {
+    for (const asyncQuestionItemIds of ["question-1", [""], ["x".repeat(2_049)]]) {
+      const { provider } = httpProvider(
+        () => Response.json({ activity: "working", asyncQuestionItemIds }),
+        codexConnection,
+      );
+      await expect(provider.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     }
   });
 

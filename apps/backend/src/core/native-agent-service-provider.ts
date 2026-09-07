@@ -109,11 +109,11 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
+import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
 import {
-  agentSessionOwnerKey,
-  coordinatorConversationIdFromRuntimeId,
-  coordinatorIdFromRuntimeId,
-} from "@orkestrator/protocol/coordinator";
+  coordinatorRuntimeUnavailableMessage,
+  resolveCoordinatorRuntime,
+} from "./coordinator-runtime.js";
 
 export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation {
   protected async provider(
@@ -316,36 +316,26 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
 
   protected async assertEnvironmentLive(environmentId: string): Promise<Environment> {
     this.assertAcceptingWork();
-    const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
-    if (coordinatorId) {
-      const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
-      if (!workspace || workspace.lifecycleState !== "ready") {
-        throw new Error("Native agent coordinator is unavailable");
-      }
-      const conversationId = coordinatorConversationIdFromRuntimeId(environmentId);
-      const conversation = workspace.conversations.find(
-        (item) => item.id === conversationId && !item.closedAt,
-      );
-      if (!conversation || conversation.agent !== "codex") {
-        throw new Error("The coordinator conversation is unavailable");
-      }
-      const project = await this.storage.getProject(workspace.projectId);
-      if (!project?.localPath) throw new Error("Native agent coordinator checkout is unavailable");
+    const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    if (coordinator.status === "ready") {
       return {
         id: environmentId,
-        projectId: workspace.projectId,
+        projectId: coordinator.workspace.projectId,
         name: "Coordinator",
-        branch: workspace.repositoryStatus?.branch ?? "",
+        branch: coordinator.workspace.repositoryStatus?.branch ?? "",
         containerId: null,
         status: "running",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
-        createdAt: workspace.createdAt,
+        createdAt: coordinator.workspace.createdAt,
         networkAccessMode: "restricted",
         order: 0,
         environmentType: "local",
-        worktreePath: project.localPath,
+        worktreePath: coordinator.project.localPath,
         setupPhase: "ready",
         setupScriptsComplete: true,
       } as Environment;
@@ -387,12 +377,31 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     input: EnsureNativeAgentSessionInput,
   ): Promise<string> {
     await this.assertEnvironmentLive(input.environmentId);
+    const environment = await this.storage.getEnvironment(input.environmentId);
+    const prefix = `env-${input.environmentId}:`;
+    const tabId = input.logicalSessionKey.startsWith(prefix)
+      ? input.logicalSessionKey.slice(prefix.length)
+      : "";
+    const agentMcp =
+      (input.agent === "claude" || input.agent === "codex") &&
+      input.owner?.kind === "environment" &&
+      tabId &&
+      environment &&
+      this.options.resolveAgentToolConnection
+        ? this.options.resolveAgentToolConnection(
+            input.environmentId,
+            input.owner.projectId,
+            tabId,
+            environment.environmentType === "local" ? "host" : "container",
+          )
+        : undefined;
     const options = {
       clientSessionKey: input.logicalSessionKey,
       model: input.model,
       effort: input.reasoningEffort,
       mode: input.sessionMode,
       fastMode: input.fastMode,
+      agentMcp,
       interaction: {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:

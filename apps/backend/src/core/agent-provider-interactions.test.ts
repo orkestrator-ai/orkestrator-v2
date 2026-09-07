@@ -411,6 +411,7 @@ describe("provider-neutral interaction adapters", () => {
 
     const question = (await provider.interactions!.listPendingInteractions("session-1"))
       .requests[0]!;
+    expect(question.blocking).toBe(true);
     expect(question.presentation.questions[0]?.multiple).toBe(false);
     interactions = [];
     await expect(
@@ -462,6 +463,7 @@ describe("provider-neutral interaction adapters", () => {
         kind: "mcp-form",
         requestedAt,
         expiresAt,
+        isBlocking: false,
         message: "Choose a region",
         schema: {
           type: "object",
@@ -474,6 +476,7 @@ describe("provider-neutral interaction adapters", () => {
         kind: "mcp-url",
         requestedAt,
         expiresAt,
+        isBlocking: false,
         message: "Authorize",
         url: "https://example.test/authorize",
       },
@@ -515,6 +518,8 @@ describe("provider-neutral interaction adapters", () => {
     expect(first.requests[1]!.presentation.body).toContain("Change: update: /workspace/a.ts");
     expect(first.requests[2]!.presentation.body).toContain("Permissions: network");
     expect(first.requests[3]!.presentation.questions).toHaveLength(1);
+    expect(first.requests[3]!.blocking).toBe(false);
+    expect(first.requests[4]!.blocking).toBe(false);
     expect(first.requests[3]!.presentation.questions[0]!.description).toContain('"region"');
 
     await expect(

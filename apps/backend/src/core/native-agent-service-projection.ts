@@ -1,6 +1,10 @@
 import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
-import { recoverBackgroundTaskLaunchId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAsyncQuestionItemId,
+  recoverBackgroundTaskLaunchId,
+  type NativeAgentAsyncQuestionResponse,
+} from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_MISSING_SESSION_GRACE_MS,
@@ -229,6 +233,30 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
 }
 
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
+  protected async recordAsyncQuestionAttention(
+    environmentId: string,
+    sessionKey: string,
+    itemIds: readonly string[],
+  ): Promise<void> {
+    const attentionKeys = itemIds.slice(-64).map((itemId) => {
+      const digest = createHash("sha256")
+        .update(sessionKey)
+        .update("\0")
+        .update(itemId)
+        .digest("hex");
+      return `codex:${digest}`;
+    });
+    if (attentionKeys.length === 0) return;
+    const attention = await this.storage.recordEnvironmentAgentAttention(
+      environmentId,
+      attentionKeys,
+      new Date(this.now()).toISOString(),
+    );
+    if (attention.recorded) {
+      this.options.onAsyncQuestionAttention?.({ environmentId, sessionKey });
+    }
+  }
+
   protected cacheToolDetails(
     sessionKey: string,
     messageId: string,
@@ -1481,6 +1509,38 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           snapshot.messagesComplete !== false && !normalized.window.truncated,
         );
       }
+      if (input.agent === "codex") {
+        const attentionItemIds = renderedTranscript.messages.flatMap((message) => {
+          const record = message as { parts?: unknown };
+          if (!Array.isArray(record.parts)) return [];
+          return record.parts.flatMap((part) => {
+            if (!part || typeof part !== "object") return [];
+            const candidate = part as {
+              type?: unknown;
+              asyncQuestion?: { itemId?: unknown };
+            };
+            return candidate.type === "async-question" &&
+              typeof candidate.asyncQuestion?.itemId === "string"
+              ? [candidate.asyncQuestion.itemId]
+              : [];
+          });
+        });
+        try {
+          await this.recordAsyncQuestionAttention(
+            input.environmentId,
+            resolved.session.key,
+            attentionItemIds,
+          );
+        } catch (error) {
+          // Attention is auxiliary projection metadata. A deleted environment
+          // or transient persistence failure must not make its transcript
+          // unreadable.
+          console.warn(
+            `[native-agent] Could not record async-question attention for ${input.environmentId}:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        }
+      }
       // Reading the projection is the only moment a parked dispatch is
       // reliably revisited, so it is where the provider gets asked whether the
       // prompt landed after all. A record that outlived the backend generation
@@ -1501,6 +1561,43 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           resolved.provider,
         );
       }
+      const asyncQuestionResponses = new Map<string, NativeAgentAsyncQuestionResponse>();
+      const asyncQuestionResponsePriority: Record<
+        NativeAgentAsyncQuestionResponse["state"],
+        number
+      > = {
+        queued: 1,
+        failed: 2,
+        dispatching: 3,
+        sent: 4,
+      };
+      const recordAsyncQuestionResponse = (
+        requestId: unknown,
+        state: NativeAgentAsyncQuestionResponse["state"],
+      ) => {
+        if (typeof requestId !== "string") return;
+        const itemId = nativeAsyncQuestionItemId(requestId);
+        if (!itemId) return;
+        const existing = asyncQuestionResponses.get(itemId);
+        if (
+          existing &&
+          asyncQuestionResponsePriority[existing.state] >= asyncQuestionResponsePriority[state]
+        )
+          return;
+        asyncQuestionResponses.set(itemId, { itemId, requestId, state });
+      };
+      for (const requestId of resolved.session.dispatchedRequestIds ?? []) {
+        recordAsyncQuestionResponse(requestId, "sent");
+      }
+      for (const message of queue?.messages ?? []) {
+        recordAsyncQuestionResponse(
+          message && typeof message === "object" ? (message as { id?: unknown }).id : undefined,
+          "queued",
+        );
+      }
+      recordAsyncQuestionResponse(queue?.inFlight?.requestId, "dispatching");
+      recordAsyncQuestionResponse(queue?.dispatchError?.messageId, "failed");
+
       const projection: NativeAgentSessionProjection = {
         platform: input.agent,
         environmentId: input.environmentId,
@@ -1552,6 +1649,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                   : {}),
               },
             }
+          : {}),
+        ...(asyncQuestionResponses.size > 0
+          ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),

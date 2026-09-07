@@ -845,6 +845,11 @@ export class AppServerEngine implements CodexEngine {
               },
               "mcp_servers.orkestrator.required": false,
               "mcp_servers.orkestrator.startup_timeout_sec": 3,
+              // Mutating tools on this server would otherwise be refused
+              // outright whenever the thread is not sandboxed for full disk
+              // write; see `codexAppServerConfigOverrides` for why approving
+              // the backend's own control surface is safe.
+              "mcp_servers.orkestrator.default_tools_approval_mode": "approve",
             },
           }
         : {}),

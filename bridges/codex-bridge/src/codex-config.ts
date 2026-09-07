@@ -168,6 +168,23 @@ export function codexAppServerConfigOverrides(
         // ready. Codex 0.147 starts optional MCP servers in the background.
         overrides["mcp_servers.orkestrator.required"] = "false";
         overrides["mcp_servers.orkestrator.startup_timeout_sec"] = "3";
+        // MCP tool calls carry their own approval gate, separate from the
+        // command and file approvals answered in `server-request-router.ts`.
+        // Under `approvalPolicy: "never"` Codex auto-approves one only when the
+        // permission profile grants full disk write, so a coordinator's
+        // read-only managed profile falls through to the tool's annotations
+        // instead: everything not marked `readOnlyHint` — `launch_environment`
+        // among them — is refused outright with "MCP tool call requires
+        // approval, but approval policy is never". No approval request reaches
+        // the client, so there is nothing the bridge could answer.
+        //
+        // Approving this one server is not a widening of the coordinator
+        // boundary. It is the backend's own control surface, reached over a
+        // loopback URL with a per-session bearer token, and it scopes each
+        // caller's tool set server-side. The filesystem and network denials
+        // above are what keep the checkout read-only, and they are untouched.
+        overrides["mcp_servers.orkestrator.default_tools_approval_mode"] =
+          JSON.stringify("approve");
       }
     } catch {
       // Invalid injected configuration is ignored; user MCP config still loads.

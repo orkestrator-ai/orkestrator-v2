@@ -283,6 +283,7 @@ describe("thread lifecycle", () => {
         "mcp_servers.orkestrator.http_headers": { Authorization: "Bearer tab-secret" },
         "mcp_servers.orkestrator.required": false,
         "mcp_servers.orkestrator.startup_timeout_sec": 3,
+        "mcp_servers.orkestrator.default_tools_approval_mode": "approve",
       });
     }
   });

@@ -179,13 +179,38 @@ describe("providerAdvisoryNotices", () => {
     ]);
   });
 
-  test("deduplicates by message, so one repeated advisory is one row", () => {
+  test("deduplicates by message while preserving the highest severity", () => {
     expect(
       providerAdvisoryNotices([
         { message: "same", severity: "warning", method: "a" },
         { message: "same", severity: "error", method: "b" },
       ]),
-    ).toEqual([{ kind: "advisory", message: "same", severity: "warning" }]);
+    ).toEqual([{ kind: "advisory", message: "same", severity: "error" }]);
+  });
+
+  test("carries the latest occurrence identity into the tab notice", () => {
+    expect(
+      providerAdvisoryNotices([
+        {
+          message: "same",
+          method: "warning",
+          severity: "warning",
+          source: "provider",
+          count: 2,
+          occurrences: [
+            { receivedAt: "2026-09-07T10:00:00.000Z" },
+            { receivedAt: "2026-09-07T10:01:00.000Z" },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "advisory",
+        message: "same",
+        severity: "warning",
+        occurrenceId: "provider\u0000warning\u00002026-09-07T10:01:00.000Z\u00002",
+      },
+    ]);
   });
 
   test("is bounded, keeping the most recent", () => {

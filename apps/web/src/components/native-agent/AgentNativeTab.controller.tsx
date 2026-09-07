@@ -94,6 +94,7 @@ import {
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { FileCandidate } from "@/types";
 import {
@@ -126,6 +127,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
+const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
 
 export async function enqueueNativeAsyncQuestionResponse(input: {
   platform: string;
@@ -309,6 +311,13 @@ export function SharedNativeAgentController({
     isActive,
     enabled: !setupPending,
   });
+  const noticeSessionIdentity = `${platform}\u0000${data.environmentId}\u0000${projection?.sessionId ?? data.sessionId ?? sessionKey}`;
+  const dismissedNoticeIds = useNativeNoticeDismissalStore(
+    (state) =>
+      state.sessions.find((session) => session.sessionIdentity === noticeSessionIdentity)
+        ?.occurrenceIds ?? EMPTY_DISMISSED_NOTICE_IDS,
+  );
+  const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
@@ -1460,19 +1469,35 @@ export function SharedNativeAgentController({
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
-    ...(projection?.notices ?? []).map((notice, index) => (
-      <div
-        key={`notice:${notice.kind}:${index}`}
-        role="status"
-        className={
-          notice.kind === "error"
-            ? "rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            : "rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
-        }
-      >
-        {notice.message}
-      </div>
-    )),
+    ...(projection?.notices ?? []).flatMap((notice) => {
+      const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
+      const noticeId = `${notice.kind}\u0000${severity}\u0000${notice.occurrenceId ?? notice.message}`;
+      if (dismissedNoticeIds.includes(noticeId)) return [];
+
+      const isError = severity === "error";
+      return [
+        <div
+          key={`notice:${noticeId}`}
+          role="status"
+          className={
+            isError
+              ? "flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              : "flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
+          }
+        >
+          <span>{notice.message}</span>
+          <button
+            type="button"
+            aria-label={`Dismiss notice: ${notice.message}`}
+            title="Dismiss notice"
+            className="shrink-0 cursor-pointer rounded-sm opacity-40 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+            onClick={() => dismissNotice(noticeSessionIdentity, noticeId)}
+          >
+            <X aria-hidden="true" className="size-3.5" />
+          </button>
+        </div>,
+      ];
+    }),
     authenticationRequired ? (
       <div
         key="authentication-required"

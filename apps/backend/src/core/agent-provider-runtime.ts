@@ -443,16 +443,33 @@ export function providerAdvisoryNotices(
   notices: readonly NativeAgentRuntimeNotice[],
   limit = MAX_PROJECTION_ADVISORIES,
 ): NativeAgentNotice[] {
-  const seen = new Set<string>();
-  const advisories: NativeAgentNotice[] = [];
+  const advisories = new Map<
+    string,
+    NativeAgentNotice & { kind: "advisory"; severity: "warning" | "error" }
+  >();
+  const severityRank: Record<"warning" | "error", number> = { warning: 0, error: 1 };
   for (const notice of notices) {
     const severity = notice.severity ?? "warning";
     if (severity !== "warning" && severity !== "error") continue;
-    if (seen.has(notice.message)) continue;
-    seen.add(notice.message);
-    advisories.push({ kind: "advisory", message: notice.message, severity });
+    const latestOccurrence = notice.occurrences?.at(-1);
+    const occurrenceId = latestOccurrence?.receivedAt
+      ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000${latestOccurrence.receivedAt}\u0000${notice.count ?? 1}`
+      : notice.count !== undefined
+        ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000count:${notice.count}`
+        : undefined;
+    const advisory = {
+      kind: "advisory" as const,
+      message: notice.message,
+      severity,
+      ...(occurrenceId ? { occurrenceId } : {}),
+    };
+    const existing = advisories.get(notice.message);
+    if (existing && severityRank[existing.severity] > severityRank[severity]) continue;
+    // Reinsert replacements so the bound follows the most recent occurrence.
+    if (existing) advisories.delete(notice.message);
+    advisories.set(notice.message, advisory);
   }
-  return advisories.slice(-limit);
+  return [...advisories.values()].slice(-limit);
 }
 
 export function providerInventoryCount(value: unknown): number {

@@ -64,6 +64,62 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]?.occurrences).toHaveLength(2);
   });
 
+  test("preserves Codex notice severity so routine lifecycle updates stay out of the tab", () => {
+    const summary = bridgeRuntimeSummary({
+      engine: {},
+      notices: [
+        {
+          method: "mcpServer/startupStatus/updated",
+          message: "Codex reported mcpServer startupStatus updated",
+          severity: "info",
+        },
+        {
+          method: "warning",
+          message: "Codex reported warning",
+          severity: "warning",
+        },
+      ],
+    })!;
+
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toEqual([
+      { kind: "advisory", message: "Codex reported warning", severity: "warning" },
+    ]);
+  });
+
+  test("keeps lifecycle and failure occurrences in separate Codex groups", () => {
+    const summary = bridgeRuntimeSummary({
+      engine: {},
+      notices: [
+        {
+          method: "mcpServer/startupStatus/updated",
+          message: "Codex reported mcpServer startupStatus updated",
+          severity: "error",
+          receivedAt: "2026-09-07T10:00:00.000Z",
+        },
+        {
+          method: "mcpServer/startupStatus/updated",
+          message: "Codex reported mcpServer startupStatus updated",
+          severity: "info",
+          receivedAt: "2026-09-07T10:01:00.000Z",
+        },
+      ],
+    })!;
+
+    expect(summary.notices).toHaveLength(2);
+    expect(summary.notices?.find((notice) => notice.severity === "error")).toMatchObject({
+      severity: "error",
+    });
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toEqual([
+      {
+        kind: "advisory",
+        message: "Codex reported mcpServer startupStatus updated",
+        severity: "error",
+        occurrenceId:
+          "provider\u0000mcpServer/startupStatus/updated\u00002026-09-07T10:00:00.000Z\u00001",
+      },
+    ]);
+  });
+
   test("a body that is not an object at all is no summary", () => {
     expect(bridgeRuntimeSummary(null)).toBeUndefined();
     expect(bridgeRuntimeSummary("health")).toBeUndefined();

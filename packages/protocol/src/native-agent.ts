@@ -918,7 +918,14 @@ export interface NativeAgentAuthStatus {
   signOut?: boolean;
 }
 
-export type NativeAgentNotice =
+export type NativeAgentNotice = {
+  /**
+   * Stable identity for this occurrence while it remains authoritative.
+   * Renderers use it to distinguish a newly reported notice from one the user
+   * already dismissed, even when both occurrences have the same message.
+   */
+  occurrenceId?: string;
+} & (
   | { kind: "recovery"; message: string }
   | { kind: "incomplete-turn"; message: string }
   | { kind: "error"; message: string }
@@ -931,7 +938,8 @@ export type NativeAgentNotice =
    * is reading the transcript, not the panel, when the thing it is about
    * happens.
    */
-  | { kind: "advisory"; message: string; severity: NativeAgentNoticeSeverity };
+  | { kind: "advisory"; message: string; severity: NativeAgentNoticeSeverity }
+);
 
 export interface NativeAgentBackgroundTaskSummary {
   id: string;

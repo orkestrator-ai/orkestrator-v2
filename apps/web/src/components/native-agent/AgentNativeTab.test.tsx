@@ -26,6 +26,7 @@ import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -257,6 +258,7 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
   configSnapshot = useConfigStore.getState().config;
+  useNativeNoticeDismissalStore.getState().clear();
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
   useEnvironmentStore.setState({
     environments: [
@@ -329,6 +331,7 @@ afterEach(() => {
   });
   useNativeComposeStore.setState({ drafts: new Map() });
   useNativeAgentProjectionStore.getState().reset();
+  useNativeNoticeDismissalStore.getState().clear();
 });
 
 afterAll(() => {
@@ -4137,12 +4140,13 @@ describe("AgentNativeTab", () => {
         composerCapabilities?: Partial<NativeAgentSessionProjection["capabilities"]["composer"]>;
         contextUsage?: NativeAgentSessionProjection["contextUsage"];
         backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
+        sessionId?: string;
       } = {},
     ) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
         environmentId: input.environmentId,
-        sessionId: `${input.agent}-session`,
+        sessionId: overrides.sessionId ?? `${input.agent}-session`,
         connection: "connected" as const,
         turn: { phase: overrides.phase ?? "idle" },
         messages: overrides.messages ?? [
@@ -4960,6 +4964,83 @@ describe("AgentNativeTab", () => {
       const notice = await screen.findByText("Recovered provider notice");
       expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
+    });
+
+    test("dismisses only the native notice banner that is clicked", async () => {
+      seedProjection({
+        notices: [
+          { kind: "warning", message: "First provider notice" },
+          { kind: "advisory", message: "Second provider notice", severity: "error" },
+        ],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-dismissible-notices"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      const first = await screen.findByRole("button", {
+        name: "Dismiss notice: First provider notice",
+      });
+      const second = await screen.findByRole("button", {
+        name: "Dismiss notice: Second provider notice",
+      });
+      expect(second.closest('[role="status"]')?.className).toContain("border-destructive");
+
+      fireEvent.click(first);
+
+      expect(screen.queryByText("First provider notice") === null).toBe(true);
+      expect(screen.getByText("Second provider notice")).toBeTruthy();
+    });
+
+    test("persists a dismissed occurrence but shows a newer occurrence and another session", async () => {
+      const tabId = "tab-notice-lifecycle";
+      const notice = (occurrenceId: string) => [
+        {
+          kind: "advisory" as const,
+          message: "Codex reported warning",
+          severity: "warning" as const,
+          occurrenceId,
+        },
+      ];
+      seedProjection({ sessionId: "session-a", notices: notice("occurrence-1") });
+
+      let view = render(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
+      );
+      expect(screen.queryByText("Codex reported warning") === null).toBe(true);
+
+      view.unmount();
+      useNativeAgentProjectionStore.getState().reset();
+      getNativeAgentProjectionMock.mockClear();
+      view = render(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+      );
+      await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+      expect(screen.queryByText("Codex reported warning") === null).toBe(true);
+
+      seedProjection({ sessionId: "session-a", notices: notice("occurrence-2") });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
+      );
+
+      seedProjection({ sessionId: "session-b", notices: notice("occurrence-2") });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+      );
+      expect(
+        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
+      ).toBeTruthy();
     });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {

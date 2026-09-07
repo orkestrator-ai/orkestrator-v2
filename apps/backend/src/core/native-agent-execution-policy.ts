@@ -32,8 +32,14 @@ export function resolveNativeAgentExecutionPolicy(
       }
     : {
         id: pipeline ? "pipeline" : container ? "interactive-container" : "interactive-host",
-        sandbox: container ? "container" : "provider",
-        approvals: pipeline || container ? "auto-approve" : "ask",
+        // A container is its own boundary, so the isolation lives there and the
+        // vendor sandbox stays off. On a host we also run unsandboxed: every
+        // vendor sandbox holds `.git` read-only, which stalls ordinary Git work
+        // in a worktree on an approval the session then has to answer. No
+        // sandbox is the honest default for a checkout the user already trusts;
+        // tighten it per environment under Settings -> Execution policy.
+        sandbox: container ? "container" : "none",
+        approvals: "auto-approve",
         projectResources: container,
         networkAccess: environment.networkAccessMode,
       };

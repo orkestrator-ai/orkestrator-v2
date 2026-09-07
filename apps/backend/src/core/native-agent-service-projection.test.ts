@@ -1329,8 +1329,8 @@ describe("NativeAgentService", () => {
         await expect(resumed).resolves.toMatchObject({ sessionId: "provider-resumed" });
         expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls, {
           id: "interactive-host",
-          sandbox: "provider",
-          approvals: "ask",
+          sandbox: "none",
+          approvals: "auto-approve",
           projectResources: false,
           networkAccess: "restricted",
         });
@@ -1369,7 +1369,7 @@ describe("NativeAgentService", () => {
         });
 
         expect(stub.createSession.mock.calls[0]?.[2]).toMatchObject({
-          policy: { id: "interactive-host", approvals: "ask" },
+          policy: { id: "interactive-host", approvals: "auto-approve" },
         });
         expect(stub.createSession.mock.calls[1]?.[2]).toMatchObject({
           policy: { id: "interactive-host", approvals: "deny" },

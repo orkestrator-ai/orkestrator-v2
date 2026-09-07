@@ -10,7 +10,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
   };
 
   test.each([
-    [host, "interactive-native", "interactive-host", "provider", "ask", false, "full"],
+    [host, "interactive-native", "interactive-host", "none", "auto-approve", false, "full"],
     [
       container,
       "interactive-native",
@@ -20,9 +20,9 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       true,
       "restricted",
     ],
-    [host, "build-pipeline", "pipeline", "provider", "auto-approve", false, "full"],
+    [host, "build-pipeline", "pipeline", "none", "auto-approve", false, "full"],
     [container, "build-pipeline", "pipeline", "container", "auto-approve", true, "restricted"],
-    [host, "looped-review", "pipeline", "provider", "auto-approve", false, "full"],
+    [host, "looped-review", "pipeline", "none", "auto-approve", false, "full"],
     [container, "looped-review", "pipeline", "container", "auto-approve", true, "restricted"],
   ] as const)(
     "%s / %s",

@@ -225,6 +225,7 @@ export function SharedNativeAgentController({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
+  const [dismissedNoticeKeys, setDismissedNoticeKeys] = useState<Set<string>>(() => new Set());
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const transcriptConfirmedRequestIdRef = useRef<string | null>(null);
@@ -1460,19 +1461,41 @@ export function SharedNativeAgentController({
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
-    ...(projection?.notices ?? []).map((notice, index) => (
-      <div
-        key={`notice:${notice.kind}:${index}`}
-        role="status"
-        className={
-          notice.kind === "error"
-            ? "rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            : "rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
-        }
-      >
-        {notice.message}
-      </div>
-    )),
+    ...(projection?.notices ?? []).flatMap((notice) => {
+      const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
+      const noticeKey = `${notice.kind}\u0000${severity}\u0000${notice.message}`;
+      if (dismissedNoticeKeys.has(noticeKey)) return [];
+
+      const isError = severity === "error";
+      return [
+        <div key={`notice:${noticeKey}`} role="status">
+          <button
+            type="button"
+            aria-label={`Dismiss notice: ${notice.message}`}
+            title="Click to dismiss"
+            className={
+              isError
+                ? "group flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-left text-xs text-destructive"
+                : "group flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-left text-xs text-amber-100"
+            }
+            onClick={() => {
+              setDismissedNoticeKeys((current) => {
+                if (current.has(noticeKey)) return current;
+                const next = new Set(current);
+                next.add(noticeKey);
+                return next;
+              });
+            }}
+          >
+            <span>{notice.message}</span>
+            <X
+              aria-hidden="true"
+              className="size-3.5 shrink-0 opacity-40 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+            />
+          </button>
+        </div>,
+      ];
+    }),
     authenticationRequired ? (
       <div
         key="authentication-required"

@@ -64,6 +64,28 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]?.occurrences).toHaveLength(2);
   });
 
+  test("preserves Codex notice severity so routine lifecycle updates stay out of the tab", () => {
+    const summary = bridgeRuntimeSummary({
+      engine: {},
+      notices: [
+        {
+          method: "mcpServer/startupStatus/updated",
+          message: "Codex reported mcpServer startupStatus updated",
+          severity: "info",
+        },
+        {
+          method: "warning",
+          message: "Codex reported warning",
+          severity: "warning",
+        },
+      ],
+    })!;
+
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toEqual([
+      { kind: "advisory", message: "Codex reported warning", severity: "warning" },
+    ]);
+  });
+
   test("a body that is not an object at all is no summary", () => {
     expect(bridgeRuntimeSummary(null)).toBeUndefined();
     expect(bridgeRuntimeSummary("health")).toBeUndefined();

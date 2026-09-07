@@ -4962,6 +4962,37 @@ describe("AgentNativeTab", () => {
       expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
     });
 
+    test("dismisses only the native notice banner that is clicked", async () => {
+      seedProjection({
+        notices: [
+          { kind: "warning", message: "First provider notice" },
+          { kind: "advisory", message: "Second provider notice", severity: "error" },
+        ],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-dismissible-notices"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      const first = await screen.findByRole("button", {
+        name: "Dismiss notice: First provider notice",
+      });
+      const second = await screen.findByRole("button", {
+        name: "Dismiss notice: Second provider notice",
+      });
+      expect(second.className).toContain("border-destructive");
+
+      fireEvent.click(first);
+
+      expect(screen.queryByText("First provider notice") === null).toBe(true);
+      expect(screen.getByText("Second provider notice")).toBeTruthy();
+    });
+
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       render(<AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />);

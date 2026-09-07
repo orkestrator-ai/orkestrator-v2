@@ -1613,16 +1613,28 @@ describe("runtime health", () => {
 });
 
 describe("runtime notices", () => {
-  async function noticesFor(
-    notifications: Array<[string, unknown]>,
-  ): Promise<Array<{ method: string; message: string; detail?: string; receivedAt: string }>> {
+  async function noticesFor(notifications: Array<[string, unknown]>): Promise<
+    Array<{
+      method: string;
+      message: string;
+      severity: "info" | "warning" | "error";
+      detail?: string;
+      receivedAt: string;
+    }>
+  > {
     const h = harness();
     await h.engine.start();
     for (const [method, params] of notifications) h.child().notify(method, params);
     await settle();
     await h.engine.getSupervisor().notificationQueue.drainAll();
     const health = (await h.engine.getRuntimeHealth()) as {
-      notices: Array<{ method: string; message: string; detail?: string; receivedAt: string }>;
+      notices: Array<{
+        method: string;
+        message: string;
+        severity: "info" | "warning" | "error";
+        detail?: string;
+        receivedAt: string;
+      }>;
     };
     return health.notices;
   }
@@ -1648,6 +1660,25 @@ describe("runtime notices", () => {
       "model/rerouted",
       "mcpServer/startupStatus/updated",
     ]);
+    expect(captured.map((notice) => notice.severity)).toEqual([
+      "warning",
+      "warning",
+      "warning",
+      "warning",
+      "warning",
+      "info",
+    ]);
+  });
+
+  test("classifies only a failed MCP startup update as an error", async () => {
+    const captured = await noticesFor([
+      ["mcpServer/startupStatus/updated", { name: "docs", status: "starting" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", status: "ready" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", status: "cancelled" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", status: "failed" }],
+    ]);
+
+    expect(captured.map((notice) => notice.severity)).toEqual(["info", "info", "info", "error"]);
   });
 
   test("exposes only the selected provider detail fields", async () => {

@@ -30,7 +30,12 @@ export * from "./public.js";
 export * from "./http.js";
 export { server, shutdown, start } from "./server.js";
 
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { start } from "./server.js";
+
+// A dropped promise must not take this bridge — and every session it is
+// serving — down with it.
+installFatalRejectionGuard({ label: "[pi-bridge]" });
 
 // Importing this module from a test must not bind a port. The backend runs it
 // as a program; every other consumer imports it as a library.

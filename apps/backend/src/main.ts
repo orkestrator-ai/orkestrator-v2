@@ -8,10 +8,15 @@ import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 
 assertSupportedPlatform();
+// Before any other startup work: a rejection thrown while the backend is still
+// coming up would otherwise be fatal too, and this process is what the desktop
+// supervisor treats as the app itself.
+installFatalRejectionGuard({ label: "[Backend]" });
 fixPath();
 // Capture this before startup awaits. If Electron dies while the backend is
 // initializing, reading process.ppid later would see init and lose the only

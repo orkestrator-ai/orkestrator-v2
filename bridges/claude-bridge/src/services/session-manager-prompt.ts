@@ -645,7 +645,18 @@ export async function sendPrompt(
       testHooks?.afterAttachmentInitialValidation,
     );
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
-    closeSdkInput = heldSdkPrompt.close;
+    /**
+     * Closing stdin starts the CLI's exit. `session.queryControl` stays set
+     * until this turn's `finally`, so without this marker a read-only control
+     * request issued in between races the exit and comes back as
+     * "Query closed before response received". Wrapping the close in one place
+     * means a future close site cannot forget to mark it.
+     */
+    const closeTurnInput = () => {
+      if (queryIteratorControl) session.queryControlDraining = queryIteratorControl;
+      heldSdkPrompt.close();
+    };
+    closeSdkInput = closeTurnInput;
     let receivedResult = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
@@ -690,6 +701,9 @@ export async function sendPrompt(
       session.completionBlockedByBackgroundTasks = false;
       if (session.queryControl === queryIteratorControl) {
         session.queryControl = undefined;
+      }
+      if (session.queryControlDraining === queryIteratorControl) {
+        session.queryControlDraining = undefined;
       }
       if (dispatchRequestId) {
         recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
@@ -742,7 +756,7 @@ export async function sendPrompt(
         // parked snapshots are already absent from the live set, so dropping
         // them only releases metadata that now has nothing to attach to.
         forgetSettlingBackgroundTasksOwnedBy(session, queryIteratorControl);
-        heldSdkPrompt.close();
+        closeTurnInput();
         closeQueryControlIfUnused(session, queryIteratorControl);
       }, testHooks?.retainedContinuationTimeoutMs ?? RETAINED_CONTINUATION_TIMEOUT_MS);
     };
@@ -815,7 +829,7 @@ export async function sendPrompt(
       // Nothing is owed to this query any more, so it must stop being retained
       // or `closeQueryControlIfUnused` would keep treating it as referenced.
       stopWaitingForContinuation();
-      heldSdkPrompt.close();
+      closeTurnInput();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
@@ -2124,7 +2138,7 @@ export async function sendPrompt(
             // before taking ownership; never let this old turn overwrite it.
             recordInterruptedStructuredOutputIfCurrent();
           }
-          heldSdkPrompt.close();
+          closeTurnInput();
           return;
         }
         const streamedUsage =
@@ -2505,6 +2519,9 @@ export async function sendPrompt(
       );
       if (session.queryControl === queryIteratorControl) {
         session.queryControl = undefined;
+      }
+      if (session.queryControlDraining === queryIteratorControl) {
+        session.queryControlDraining = undefined;
       }
       closeQueryControlIfUnused(session, queryIteratorControl);
       if (settled) emitBackgroundTaskSnapshot(session);

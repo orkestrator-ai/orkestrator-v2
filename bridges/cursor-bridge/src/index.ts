@@ -22,10 +22,15 @@ export * from "./public.js";
 export * from "./http.js";
 export { server, shutdown, start } from "./server.js";
 
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { runLogin } from "./login-cli.js";
 import { start } from "./server.js";
 
 export { runLogin } from "./login-cli.js";
+
+// A dropped promise must not take this bridge — and every session it is
+// serving — down with it.
+installFatalRejectionGuard({ label: "[cursor-bridge]" });
 
 // `--login` runs the interactive sign-in and exits, instead of serving. The
 // backend uses it so a login needs no environment and no running session: the

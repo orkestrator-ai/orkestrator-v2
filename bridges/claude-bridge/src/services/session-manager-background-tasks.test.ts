@@ -249,6 +249,150 @@ describe("background task reducer", () => {
     expect(created.status).toBe("idle");
   });
 
+  test("keeps the released query alive when a TaskCompleted hook precedes its notification", async () => {
+    const created = createSession("task completed hook before notification");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run the survey in the background");
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    // The other arm of the same branch. `TaskCompleted` carries `task_id`
+    // where `SubagentStop` carries `agent_id`, but a backgrounded Bash task
+    // owes the same continuation and must survive the same gap.
+    await hooks.TaskCreated![0]!.hooks[0]!({
+      hook_event_name: "TaskCreated",
+      task_id: "task-survey-1",
+      task_subject: "Survey bridge permissions",
+      task_description: "Inspect the permission table",
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(
+      () =>
+        created.status === "idle" &&
+        created.backgroundTasks?.["task-survey-1"]?.status === "running",
+    );
+    expect(inputClosed).toBe(false);
+
+    await hooks.TaskCompleted![0]!.hooks[0]!({
+      hook_event_name: "TaskCompleted",
+      task_id: "task-survey-1",
+      task_subject: "Survey bridge permissions",
+    });
+    expect(created.backgroundTasks?.["task-survey-1"]?.status).toBe("completed");
+    expect(call.isClosed()).toBe(false);
+    expect(inputClosed).toBe(false);
+
+    // The edge that follows still writes the authoritative terminal status
+    // over the provisional `completed` the hook wrote.
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-survey-1",
+      status: "failed",
+      summary: "The survey command exited non-zero",
+    });
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-after-task-completed-hook",
+        role: "assistant",
+        content: [{ type: "text", text: "The survey failed; here is what it managed." }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() => created.status === "running");
+    expect(inputClosed).toBe(false);
+
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.backgroundTasks?.["task-survey-1"]).toMatchObject({
+      status: "failed",
+      description: "Survey bridge permissions",
+      error: "The survey command exited non-zero",
+    });
+  });
+
+  test("re-arms rather than expires while a second task this query owns is still running", async () => {
+    const created = createSession("stop hook with a sibling still running");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate two surveys", undefined, {
+      retainedContinuationTimeoutMs: 25,
+    });
+    const call = await nextQueryCall();
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    for (const agentId of ["agent-pair-first", "agent-pair-second"]) {
+      await hooks.SubagentStart![0]!.hooks[0]!({
+        hook_event_name: "SubagentStart",
+        agent_id: agentId,
+        agent_type: "Explore",
+      });
+    }
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-pair-first",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-pair-first.jsonl",
+    });
+    expect(created.backgroundTasks?.["agent-pair-first"]?.status).toBe("completed");
+    expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("running");
+
+    // Several watchdog windows with no frame at all. Expiry here would close
+    // held stdin and take the CLI child down with the second subagent still
+    // running inside it, so the bound has to keep deferring while this query
+    // owns live work rather than counting silence against it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(inputClosed).toBe(false);
+    expect(call.isClosed()).toBe(false);
+    expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("running");
+
+    await hooks.SubagentStop![0]!.hooks[0]!({
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-pair-second",
+      agent_type: "Explore",
+      stop_hook_active: false,
+      agent_transcript_path: "/tmp/agent-pair-second.jsonl",
+    });
+
+    // Nothing this query owns is live any more, so the next expiry is the one
+    // that releases it.
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    await waitFor(() => call.isClosed());
+    await promptPromise;
+    expect(created.status).toBe("idle");
+    expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("completed");
+  });
+
   test("drops unresolved Bash candidates past the bound without failing the turn", async () => {
     const created = createSession("bounded Bash candidates");
     track(created.id);

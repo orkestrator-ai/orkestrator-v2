@@ -2951,12 +2951,32 @@ alone do not supply the root cause and fix required for resolution.
 
 ## tmux generated blocking hooks under the aggregate run (`tests/unit/electron/tmux-commands.test.ts`)
 
-- **Status:** open — recurrence of the existing entries dated 2026-08-19 and 2026-08-24
+- **Status:** open — recurrence of the two entries dated 2026-08-14 that name this case,
+  `Electron tmux backend command registration` timeout cluster and
+  `Electron tmux backend command registration` agent MCP config and hook tests. Both were filed
+  against the pre-split `tests/unit/electron/tmux-backend.test.ts` and both were marked resolved by
+  the 2026-08-16 resolution sweep; the case moved to `tmux-commands.test.ts` in the split recorded
+  in the file-ownership table above.
 - **Date observed:** 2026-09-07
 - **Original command:** `bun run test` (full four-group concurrent suite) on `fix-session-wakeup-2275ef14bae5-r1`
 - **Worker configuration:** the aggregate root/agent-support group, `--parallel` with the planned root worker pool.
 - **Failure:** `Electron tmux backend command registration > generated blocking hooks use an integer timeout and fail closed on expiry` (1,603.43 ms). The duration is well inside Bun's outer budget, so this recurrence is not the 5,000 ms timeout shape the two earlier entries recorded.
-- **Suite counts:** root and agent-support group — 4,073 ran, 4,068 passed, 3 skipped, 2 failed. The run's other failure, `Electron backend command registry > rehydration resumes only persisted cleanup after a merge was already confirmed` in `tests/unit/electron/commands-registry-environments.test.ts`, fails identically when its owning file runs alone and with this change reverted, so it is a deterministic pre-existing failure rather than a flake and has no entry here.
+- **Suite counts:** root and agent-support group — 4,073 ran, 4,068 passed, 3 skipped, 2 failed. The run's other failure was `Electron backend command registry > rehydration resumes only persisted cleanup after a merge was already confirmed` in `tests/unit/electron/commands-registry-environments.test.ts`; it has its own entry below.
 - **Isolated rerun:** `bun test tests/unit/electron/tmux-commands.test.ts -t "generated blocking hooks use an integer timeout and fail closed on expiry"` → passed in 2.3 s.
+- **Aggregate rerun (2026-09-07, same tree at `d80bbd4c`):** `bun run test` did not reproduce this case at all. The root and agent-support group reported 4,067 passed, 3 skipped, 1 failed, 1 error across 189 files in 104.61 s, and its single failure was an unrelated module-load `ENOENT` in `tests/unit/bridge-packaging.test.ts` caused by an untracked `bridges/.claude/` directory the agent harness creates. So the aggregate group does not fail this case on every run, which is what keeps it classified as a flake.
 - **Attribution:** the change in flight touches `bridges/claude-bridge` only and cannot reach the Electron tmux command registry. The isolated rerun passed against the same working tree.
 - **Hypothesis:** unchanged from the earlier entries — real shim and tmux processes contend for host resources in the aggregate group. The sub-two-second duration here suggests an ordering or shim-availability race rather than budget exhaustion, so a recurrence should capture which shim invocation returned before asserting the fail-closed path.
+
+## `Electron backend command registry > rehydration resumes only persisted cleanup after a merge was already confirmed` (`tests/unit/electron/commands-registry-environments.test.ts`)
+
+- **Status:** open — observed once in an aggregate run, never reproduced since
+- **Date observed:** 2026-09-07
+- **Original command:** `bun run test` (full four-group concurrent suite) on `fix-session-wakeup-2275ef14bae5-r1`, the same run as the tmux entry above
+- **Worker configuration:** the aggregate root/agent-support group, `--parallel` with the planned root worker pool.
+- **Failure:** the case failed in the aggregate group; the run recorded no assertion text for it beyond the failure itself.
+- **Isolated rerun:** `bun test tests/unit/electron/commands-registry-environments.test.ts -t "rehydration resumes only persisted cleanup after a merge was already confirmed"` → passed three times in a row at `d80bbd4c` (1,057 ms, 941 ms, 1,075 ms).
+- **Owning file alone:** `bun test tests/unit/electron/commands-registry-environments.test.ts` → 136 passed, 8 failed in 19.20 s, and **this case passed**. All eight failures are worktree-creation cases failing on `fatal: could not create leading directories of '.../workspaces/remote-base-...': Read-only file system`, which is the agent sandbox denying writes outside the worktree rather than a defect. That run is therefore not evidence about this case either way.
+- **Aggregate rerun:** the 2026-09-07 `bun run test` recorded in the tmux entry above did not reproduce this case; the group's only failure was the unrelated `tests/unit/bridge-packaging.test.ts` module-load `ENOENT`.
+- **Retraction:** an earlier revision of the tmux entry above described this case as "a deterministic pre-existing failure rather than a flake" and used that to justify filing no entry. That is withdrawn — the case has not failed once outside the single aggregate run, so the determinism claim was unsupported.
+- **Attribution:** the change in flight touches `bridges/claude-bridge` only and cannot reach the Electron command registry.
+- **Hypothesis:** none yet. One aggregate-only observation with three clean isolated reruns is consistent with the contention pattern the tmux clusters show, but a recurrence needs to capture the assertion that actually failed before this can be attributed.

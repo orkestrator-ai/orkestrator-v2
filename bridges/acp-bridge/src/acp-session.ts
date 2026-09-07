@@ -31,6 +31,7 @@ import {
   activeSessionReservations,
   adjustAnonymousSessionCreations,
   clientSessionKeys,
+  configuredAcpMcpServers,
   externalSessionToken,
   isObject,
   isCursorTaskMethod,
@@ -43,7 +44,6 @@ import {
   setSessionListProbe,
   sessionResumes,
   sessions,
-  agentRuntime,
   saturatedText,
   shuttingDown,
   supportsSessionCapability,
@@ -263,7 +263,7 @@ export async function resumeSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: [],
+        mcpServers: configuredAcpMcpServers(),
         sessionId: acpSessionId,
       },
       RPC_TIMEOUT_MS,
@@ -348,7 +348,11 @@ export async function createSessionReserved(
     await child.initialize(signal);
     const created = await child.request(
       "session/new",
-      { cwd: workingDirectory, additionalDirectories: [], mcpServers: [] },
+      {
+        cwd: workingDirectory,
+        additionalDirectories: [],
+        mcpServers: configuredAcpMcpServers(),
+      },
       RPC_TIMEOUT_MS,
       signal,
     );
@@ -526,7 +530,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: [],
+        mcpServers: configuredAcpMcpServers(),
         sessionId: state.acpSessionId,
       },
       RPC_TIMEOUT_MS,
@@ -706,7 +710,24 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   }
   if (kind === "available_commands_update") {
     if (Array.isArray(update.availableCommands)) {
-      state.commandCount = update.availableCommands.length;
+      state.availableCommands = update.availableCommands.slice(0, 256).flatMap((candidate) => {
+        if (!isObject(candidate)) return [];
+        const rawName = boundedString(candidate.name, 256)?.trim().replace(/^\//, "");
+        if (!rawName) return [];
+        const description = boundedString(candidate.description, 2_048)?.trim();
+        const argumentHint =
+          boundedString(candidate.inputHint, 512)?.trim() ||
+          boundedString(candidate.argumentHint, 512)?.trim();
+        return [
+          {
+            name: `/${rawName}`,
+            description: description || rawName,
+            source: "builtin" as const,
+            scope: "session" as const,
+            ...(argumentHint ? { argumentHint } : {}),
+          },
+        ];
+      });
       state.revision += 1;
       schedulePersist();
     }
@@ -926,7 +947,9 @@ export function parseComposerPatch(body: JsonObject): AcpComposerPatch | undefin
       ? body.reasoningId.trim()
       : typeof body.reasoningEffort === "string"
         ? body.reasoningEffort.trim()
-        : "";
+        : isObject(body.parameterValues) && typeof body.parameterValues.reasoning === "string"
+          ? body.parameterValues.reasoning.trim()
+          : "";
   const patch: AcpComposerPatch = {
     ...(modelId ? { modelId } : {}),
     ...(reasoningId ? { reasoningId } : {}),
@@ -969,12 +992,18 @@ export async function applyComposerPatch(
 }
 
 export function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
-  const interjection = applyGrokInterjectionBroadcast(
-    state.grokInterjectionJournal,
-    state.acpSessionId,
-    method,
-    params,
-  );
+  // ACP v1 cannot bind an interjection to a run safely. Keep the experimental
+  // adapter inaccessible unless an operator explicitly accepts that risk; see
+  // the ACP v2 design discussion in docs/todo/steer/opus.md.
+  const interjection =
+    provider === "grok" && process.env.GROK_UNSAFE_EXPERIMENTAL_INTERJECTION === "1"
+      ? applyGrokInterjectionBroadcast(
+          state.grokInterjectionJournal,
+          state.acpSessionId,
+          method,
+          params,
+        )
+      : null;
   if (interjection) {
     // Grok wire is normalized at the bridge boundary. Downstream transcript
     // code sees an ordinary user message and never learns the extension shape.
@@ -1169,27 +1198,3 @@ export function rememberPendingLateTurnUsage(state: SessionState, promptSequence
  * the real inventory moments later. Reporting the handshake value would state
  * that an agent has no MCP servers when it is about to load several.
  */
-export function rememberAgentRuntime(initialized: JsonObject): void {
-  const meta = isObject(initialized._meta) ? initialized._meta : {};
-  const agentInfo = isObject(initialized.agentInfo) ? initialized.agentInfo : {};
-  const version =
-    typeof agentInfo.version === "string"
-      ? agentInfo.version
-      : typeof meta.agentVersion === "string"
-        ? meta.agentVersion
-        : undefined;
-  if (version) agentRuntime.version = version.slice(0, 64);
-}
-
-/** Vendor notifications that describe the agent process rather than a session. */
-export function rememberVendorRuntime(method: string, params: JsonObject): void {
-  // The count only. These entries carry launch commands and arguments, which is
-  // where an MCP server's API key lives.
-  if (!method.endsWith("/mcp/servers_updated") || !Array.isArray(params.mcpServers)) return;
-  if (agentRuntime.mcpServers === params.mcpServers.length) return;
-  agentRuntime.mcpServers = params.mcpServers.length;
-  // Every session reports this count, so every session's snapshot just changed.
-  // Without the bump a mounted tab would keep serving the previous inventory
-  // until something else happened to move its revision.
-  for (const state of sessions.values()) state.revision += 1;
-}

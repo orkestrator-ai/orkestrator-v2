@@ -112,6 +112,19 @@ export interface AgentModel {
   contextWindow?: number;
   /** False only when the provider explicitly says this model rejects images. */
   supportsImageInput?: boolean;
+  /** Alternate provider ids which select this same model. */
+  aliases?: string[];
+  /** Provider-neutral, model-specific controls rendered by the shared composer. */
+  parameters?: AgentModelParameter[];
+}
+
+export interface AgentModelParameter {
+  id: string;
+  label: string;
+  kind: "select" | "toggle";
+  options?: Array<{ id: string; label: string; description?: string }>;
+  defaultValue?: string | boolean;
+  scope: "session" | "turn";
 }
 
 export interface AgentModelRef {
@@ -300,6 +313,10 @@ export interface NativeAgentComposerState {
   selectedExecutionProfileId?: string;
   includeLocalSettings?: boolean;
   promptSuggestionsEnabled?: boolean;
+  /** Current values for the selected model's generic parameter descriptors. */
+  parameterValues?: Record<string, string | boolean>;
+  /** True when the provider can make the current selections its future defaults. */
+  persistedDefaults?: boolean;
 }
 
 export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
@@ -424,6 +441,8 @@ export interface NativeAgentCapabilities {
     share?: boolean;
     steer?: boolean;
     review?: boolean;
+    rewindMessages?: boolean;
+    branches?: boolean;
   };
   /**
    * The interaction kinds this platform can raise.
@@ -486,13 +505,13 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // blocks; neither takes files.
       attachments: { files: false, images: true },
       fork: false,
-      slashCommands: false,
+      slashCommands: agent === "grok",
       // `speed` and `mode` stay true because both agents really do own them:
       // Cursor drives fast through a `model_config` config option, Grok through
       // a sibling `…-fast` model id, and both announce session modes. They are
       // per-build, not per-platform, so the flag means "this platform may offer
       // it" and the live composer's `fastModeAvailable` / `modes` decides.
-      actions: {},
+      actions: agent === "cursor" ? { steer: true, rewindMessages: true } : {},
       // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
       // raises anything. Grok's ACP wire does: it answers
       // `session/request_permission` for tool calls. Reporting the empty set
@@ -513,7 +532,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         localSettings: true,
         promptSuggestions: true,
       },
-      actions: { compact: true, rewindFiles: true },
+      actions: { compact: true, rewindFiles: true, steer: true },
       // Questions through `AskUserQuestion`, plan approvals through
       // `ExitPlanMode`, tool approvals through `canUseTool`, and MCP
       // elicitations and host dialogs through the SDK's own callbacks.
@@ -564,7 +583,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         speed: false,
         mode: false,
       },
-      actions: { compact: true, steer: true },
+      actions: { compact: true, steer: true, rewindMessages: true, branches: true },
       // Pi's approval gate is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so
       // this is what the platform *may* raise. The live session reports the
       // empty set when the gate is off — see the bridge's status projection.
@@ -574,7 +593,7 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
   return {
     ...capabilities,
     attachments: { files: false, images: true },
-    actions: { compact: true, steer: true, review: true },
+    actions: { compact: true, steer: true, review: true, rewindMessages: true },
     // Codex: `item/tool/requestUserInput` questions, MCP elicitations in both
     // form and url modes, and command/file approvals through
     // `item/permissions/requestApproval`.
@@ -592,7 +611,9 @@ export type NativeAgentSessionAction =
   | { kind: "share" }
   | { kind: "unshare" }
   | { kind: "steer"; text: string }
-  | { kind: "review" };
+  | { kind: "review" }
+  | { kind: "rewind-messages"; messageId: string }
+  | { kind: "switch-branch"; entryId: string };
 
 export interface NativeAgentSessionActionOutcome {
   outcome: "applied" | "idle" | "mismatch" | "unknown";
@@ -746,6 +767,43 @@ export interface NativeAgentRuntimeSummary {
   version?: string;
   notices?: NativeAgentRuntimeNotice[];
   drift?: NativeAgentRuntimeDrift;
+  /** Live normalized MCP inventory; the numeric field remains the badge count. */
+  mcp?: NativeAgentMcpServer[];
+}
+
+export type NativeAgentMcpServerAction = "reconnect" | "enable" | "disable" | "sign-in";
+
+export interface NativeAgentMcpServer {
+  id: string;
+  name: string;
+  status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
+  scope?: "user" | "project" | "orkestrator" | "plugin";
+  transport?: "stdio" | "sse" | "http";
+  toolCount?: number;
+  tools?: string[];
+  /** Provider error text, redacted and bounded by the adapter. */
+  error?: string;
+  actions: NativeAgentMcpServerAction[];
+}
+
+export type NativeAgentAuthState =
+  | "signed-in"
+  | "signed-out"
+  | "needs-auth"
+  | "expired"
+  | "unknown";
+
+export interface NativeAgentAuthStatus {
+  state: NativeAgentAuthState;
+  account?: { label: string; plan?: string; expiresAt?: string };
+  providers?: Array<{
+    id: string;
+    label: string;
+    state: NativeAgentAuthState;
+    method?: "api-key" | "oauth" | "subscription";
+  }>;
+  signIn?: { kind: "browser-url" | "device-code" | "terminal" | "none"; hint?: string };
+  signOut?: boolean;
 }
 
 export type NativeAgentNotice =
@@ -754,6 +812,7 @@ export type NativeAgentNotice =
   | { kind: "error"; message: string }
   | { kind: "stopped"; message: string }
   | { kind: "warning"; message: string }
+  | { kind: "auth"; state: NativeAgentAuthState; message: string }
   /**
    * A provider advisory that belongs in the tab rather than only in the health
    * panel — a deprecation, a rerouted model, a configuration warning. The user
@@ -931,18 +990,36 @@ export interface NativeAgentResumeEntry {
   status?: "idle" | "running" | "error";
   /** Short trailing detail, e.g. "12 messages". Already bounded by the adapter. */
   detail?: string;
+  parentId?: string;
+  branchLabel?: string;
 }
 
 export interface NativeAgentForkOutcome {
   sessionId: string;
   title?: string;
+  /** Provider-selected editable prompt when a fork begins before a user entry. */
+  draft?: string;
 }
 
 export interface NativeAgentSlashCommand {
   name: string;
   description?: string;
   argumentHint?: string;
+  source: NativeAgentSlashCommandSource;
+  aliases?: string[];
+  scope?: "global" | "session";
 }
+
+export type NativeAgentSlashCommandSource =
+  | "builtin"
+  | "project"
+  | "user"
+  | "plugin"
+  | "skill"
+  | "template"
+  | "extension"
+  | "orkestrator"
+  | "unknown";
 
 /**
  * How much of a transcript the projection is carrying.
@@ -990,6 +1067,9 @@ export interface NativeAgentControlUpdate {
   executionProfileId?: string | null;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
+  parameterValues?: Record<string, string | boolean>;
+  /** Persist the supplied selections where the provider supports defaults. */
+  persistDefaults?: boolean;
 }
 
 /**
@@ -1026,6 +1106,7 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   /** Provider limits can arrive before the first token-usage snapshot. */
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
+  auth?: NativeAgentAuthStatus;
   notices?: NativeAgentNotice[];
   /** Content-free marker for an idempotent backend-owned retry. */
   recoverableDispatch?: NativeAgentRecoverableDispatch;

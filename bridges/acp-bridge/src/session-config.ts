@@ -2,6 +2,7 @@ import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import type {
   AgentConversationMode,
   AgentModel,
+  AgentModelParameter,
   AgentReasoningOption,
   NativeAgentComposerState,
 } from "@orkestrator/protocol/native-agent";
@@ -474,7 +475,7 @@ function composerFromConfigOptions(
       platform: provider,
       id: option.value,
       label: option.name || option.value,
-      description: option.description,
+      ...(option.description ? { description: option.description } : {}),
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
       defaultReasoningId: selectedReasoningId,
@@ -538,9 +539,29 @@ function composerFromGrokModels(
       platform: provider,
       id: entry.modelId,
       label: entry.name || entry.modelId,
-      description: entry.description,
+      ...(entry.description ? { description: entry.description } : {}),
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
+      parameters:
+        reasoning.length > 0
+          ? [
+              {
+                id: "reasoning",
+                label: "Reasoning",
+                kind: "select" as const,
+                options: reasoning.map((option) => ({
+                  id: option.id,
+                  label: option.label,
+                  ...(option.description ? { description: option.description } : {}),
+                })),
+                defaultValue:
+                  shared.options.length > 0
+                    ? (shared.selectedId ?? fallbackReasoningId(reasoning))
+                    : (entry.reasoningEffort ?? fallbackReasoningId(reasoning)),
+                scope: "turn" as const,
+              },
+            ]
+          : undefined,
       defaultReasoningId:
         shared.options.length > 0
           ? (shared.selectedId ?? fallbackReasoningId(reasoning))
@@ -835,6 +856,8 @@ function parsePersistedComposer(
     const description = optionalBoundedString(candidate.description, 4_096);
     const defaultReasoningId = optionalBoundedString(candidate.defaultReasoningId, 256);
     if (providerLabel === null || description === null || defaultReasoningId === null) return null;
+    const parameters = parsePersistedModelParameters(candidate.parameters);
+    if (parameters === null) return null;
     if (
       (candidate.supportsSpeed !== undefined && typeof candidate.supportsSpeed !== "boolean") ||
       (candidate.supportsMode !== undefined && typeof candidate.supportsMode !== "boolean")
@@ -849,6 +872,7 @@ function parsePersistedComposer(
       ...(providerLabel ? { providerLabel } : {}),
       ...(description ? { description } : {}),
       ...(reasoning ? { reasoning } : {}),
+      ...(parameters ? { parameters } : {}),
       ...(defaultReasoningId ? { defaultReasoningId } : {}),
       ...(typeof candidate.supportsSpeed === "boolean"
         ? { supportsSpeed: candidate.supportsSpeed }
@@ -880,6 +904,20 @@ function parsePersistedComposer(
   ) {
     return null;
   }
+  let parameterValues: Record<string, string | boolean> | undefined;
+  if (value.parameterValues !== undefined) {
+    if (!isObject(value.parameterValues) || Object.keys(value.parameterValues).length > 32)
+      return null;
+    parameterValues = {};
+    for (const [key, candidate] of Object.entries(value.parameterValues)) {
+      const id = boundedString(key, 256);
+      if (!id || (typeof candidate !== "string" && typeof candidate !== "boolean")) return null;
+      if (typeof candidate === "string" && Buffer.byteLength(candidate) > 1_024) return null;
+      parameterValues[id] = candidate;
+    }
+  }
+  if (value.persistedDefaults !== undefined && typeof value.persistedDefaults !== "boolean")
+    return null;
   return {
     models,
     ...(selectedModelId ? { selectedModelId } : {}),
@@ -888,7 +926,70 @@ function parsePersistedComposer(
     fastModeAvailable: value.fastModeAvailable,
     ...(value.selectedModeId ? { selectedModeId: value.selectedModeId } : {}),
     modes,
+    ...(parameterValues ? { parameterValues } : {}),
+    ...(typeof value.persistedDefaults === "boolean"
+      ? { persistedDefaults: value.persistedDefaults }
+      : {}),
   };
+}
+
+function parsePersistedModelParameters(value: unknown): AgentModelParameter[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 32) return null;
+  const parameters: AgentModelParameter[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (!isObject(candidate)) return null;
+    const id = boundedString(candidate.id, 256);
+    const label = boundedString(candidate.label, 1_024);
+    if (!id || !label || ids.has(id)) return null;
+    ids.add(id);
+    if (
+      (candidate.kind !== "select" && candidate.kind !== "toggle") ||
+      (candidate.scope !== "session" && candidate.scope !== "turn")
+    )
+      return null;
+    if (candidate.kind === "toggle") {
+      if (candidate.options !== undefined || typeof candidate.defaultValue !== "boolean")
+        return null;
+      parameters.push({
+        id,
+        label,
+        kind: "toggle",
+        defaultValue: candidate.defaultValue,
+        scope: candidate.scope,
+      });
+      continue;
+    }
+    if (!Array.isArray(candidate.options) || candidate.options.length > 64) return null;
+    const options: NonNullable<AgentModelParameter["options"]> = [];
+    const optionIds = new Set<string>();
+    for (const option of candidate.options) {
+      if (!isObject(option)) return null;
+      const optionId = boundedString(option.id, 256);
+      const optionLabel = boundedString(option.label, 1_024);
+      const optionDescription = optionalBoundedString(option.description, 4_096);
+      if (!optionId || !optionLabel || optionDescription === null || optionIds.has(optionId))
+        return null;
+      optionIds.add(optionId);
+      options.push({
+        id: optionId,
+        label: optionLabel,
+        ...(optionDescription ? { description: optionDescription } : {}),
+      });
+    }
+    if (typeof candidate.defaultValue !== "string" || !optionIds.has(candidate.defaultValue))
+      return null;
+    parameters.push({
+      id,
+      label,
+      kind: "select",
+      options,
+      defaultValue: candidate.defaultValue,
+      scope: candidate.scope,
+    });
+  }
+  return parameters;
 }
 
 function parsePersistedWire(value: Record<string, unknown>): AcpConfigWire | null {

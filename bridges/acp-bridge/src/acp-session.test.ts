@@ -233,6 +233,21 @@ describe("ACP bridge", () => {
       version: "9.9.9",
       state: "idle",
     });
+    const commands = await nativeFetch(`${first.base}/session/${created.id}/commands`, {
+      headers: first.headers,
+    }).then((response) => response.json() as Promise<{ commands: unknown[] }>);
+    expect(commands.commands).toEqual([
+      { name: "/review", description: "Review changes", source: "builtin", scope: "session" },
+      { name: "/commit", description: "Commit changes", source: "builtin", scope: "session" },
+      { name: "/test", description: "Run tests", source: "builtin", scope: "session" },
+    ]);
+    const mcp = await nativeFetch(`${first.base}/session/${created.id}/mcp`, {
+      headers: first.headers,
+    }).then((response) => response.json() as Promise<{ servers: unknown[] }>);
+    expect(mcp.servers).toEqual([
+      { id: "context7", name: "context7", status: "connected", actions: [] },
+      { id: "playwright", name: "playwright", status: "connected", actions: [] },
+    ]);
 
     expect(
       (
@@ -295,6 +310,10 @@ describe("ACP bridge", () => {
     // The command list belongs to the session and survives with it; the agent
     // version and MCP inventory come from a handshake this process has not had.
     expect(restored.runtime).toMatchObject({ commands: 3 });
+    const restoredCommands = await nativeFetch(`${second.base}/session/${created.id}/commands`, {
+      headers: second.headers,
+    }).then((response) => response.json() as Promise<{ commands: unknown[] }>);
+    expect(restoredCommands.commands).toHaveLength(3);
   });
 
   test("merges a usage carrier that arrives after its turn already resolved", async () => {

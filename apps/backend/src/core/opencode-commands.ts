@@ -20,7 +20,7 @@ const OPENCODE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
   { name: "/thinking", description: "Toggle reasoning visibility" },
   { name: "/undo", description: "Undo the last message" },
   { name: "/unshare", description: "Unshare current session" },
-];
+].map((command) => ({ ...command, source: "builtin" as const }));
 
 export async function listOpenCodeSlashCommands(
   client: OpencodeClient,
@@ -43,6 +43,7 @@ export async function listOpenCodeSlashCommands(
       const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
       commands.set(name, {
         name,
+        source: settled === responses[1] ? "project" : "user",
         ...(typeof command?.description === "string"
           ? { description: command.description.slice(0, 1_000) }
           : {}),

@@ -48,6 +48,12 @@ export function schedulePersist(): void {
     });
 }
 
+/** Ensure a prepared at-most-once journal entry is durable before SDK dispatch. */
+export async function persistBarrier(): Promise<void> {
+  schedulePersist();
+  await tail;
+}
+
 /** Flush and stop accepting further writes. Used on shutdown. */
 export async function drainPersistence(): Promise<void> {
   if (!stateFilePath()) return;
@@ -99,6 +105,9 @@ function toPersisted(state: SessionState): PersistedSession {
       entry.state === "accepted" || entry.state === "prepared"
         ? { ...entry, state: "ambiguous" as const }
         : entry,
+    ),
+    steerJournal: Array.from(state.steerJournal.values()).map((entry) =>
+      entry.state === "prepared" ? { ...entry, state: "ambiguous" as const } : entry,
     ),
     composer: state.composer,
     ...(state.usage ? { usage: state.usage } : {}),
@@ -165,6 +174,21 @@ function restoreSession(entry: unknown): SessionState | undefined {
         requestId: journalEntry.requestId,
         state: readJournalState(journalEntry.state),
         acceptedAt: readCount(journalEntry.acceptedAt),
+      });
+    }
+  }
+  if (Array.isArray(entry.steerJournal)) {
+    for (const journalEntry of entry.steerJournal) {
+      if (!isObject(journalEntry) || !nonBlank(journalEntry.requestId)) continue;
+      state.steerJournal.set(journalEntry.requestId, {
+        requestId: journalEntry.requestId,
+        inputDigest: nonBlank(journalEntry.inputDigest) ? journalEntry.inputDigest : "",
+        expectedRunId: nonBlank(journalEntry.expectedRunId) ? journalEntry.expectedRunId : "",
+        state:
+          journalEntry.state === "delivered" || journalEntry.state === "absent"
+            ? journalEntry.state
+            : "ambiguous",
+        createdAt: readCount(journalEntry.createdAt),
       });
     }
   }

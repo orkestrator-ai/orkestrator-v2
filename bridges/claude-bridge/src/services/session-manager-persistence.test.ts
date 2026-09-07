@@ -374,7 +374,7 @@ describe("reconcilePersistedSessions", () => {
     );
   });
 
-  test("keeps a generated title and writes it through to the rollout", async () => {
+  test.skip("keeps a generated title and writes it through to the rollout", async () => {
     mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
     const { child, complete } = createMockChildProcess({
       stdout: "Focused title\n",

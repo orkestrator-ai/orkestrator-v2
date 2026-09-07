@@ -6,15 +6,14 @@
  * product — `claude-opus-5` ships thirty-two of them, every one labelled
  * "Claude Opus 5" — so they make a useless picker. The parameters are the
  * meaningful axes, and two of them map exactly onto controls the shared
- * composer already has:
+ * composer already has. The shared protocol now also carries every remaining
+ * SDK parameter, so future Cursor axes do not require another bridge change:
  *
  *   `effort` → the reasoning axis, the same low/medium/high/xhigh/max the
  *              Codex picker shows, so an app-level effort default carries over
  *   `fast`   → the speed toggle
  *
- * Anything else (`thinking`, `context`, `cyber`) has no control to map onto, so
- * it is left at the provider's own default rather than folded into an axis
- * whose label would then be a lie.
+ * `thinking`, `context`, `cyber`, and variants are generic model parameters.
  */
 import { Cursor, type ModelListItem, type ModelSelection } from "@cursor/sdk";
 import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
@@ -85,6 +84,55 @@ const FAST_PARAMETER = "fast";
 function normalizeModel(item: ModelListItem): AgentModel {
   const reasoning = reasoningOptions(item);
   const supportsSpeed = item.parameters?.some((parameter) => parameter.id === FAST_PARAMETER);
+  const defaults = new Map(
+    item.variants
+      ?.find((variant) => variant.isDefault)
+      ?.params.map((param) => [param.id, param.value]),
+  );
+  const parameters: NonNullable<AgentModel["parameters"]> = (item.parameters ?? [])
+    .filter((parameter) => parameter.id !== EFFORT_PARAMETER && parameter.id !== FAST_PARAMETER)
+    .map((parameter) => {
+      const boolean =
+        parameter.values.length === 2 &&
+        parameter.values.every((value) => value.value === "true" || value.value === "false");
+      return {
+        id: parameter.id,
+        label: parameter.displayName?.trim() || parameter.id,
+        kind: boolean ? ("toggle" as const) : ("select" as const),
+        ...(boolean
+          ? {}
+          : {
+              options: parameter.values.map((value) => ({
+                id: value.value,
+                label: value.displayName?.trim() || value.value,
+              })),
+            }),
+        ...(defaults.has(parameter.id)
+          ? {
+              defaultValue: boolean
+                ? defaults.get(parameter.id) === "true"
+                : defaults.get(parameter.id),
+            }
+          : {}),
+        scope: "turn" as const,
+      };
+    });
+  if ((item.variants?.length ?? 0) > 1) {
+    parameters.push({
+      id: "variant",
+      label: "Variant",
+      kind: "select",
+      options: item.variants!.map((variant) => ({
+        id: encodeVariant(variant.params),
+        label: variant.displayName,
+        ...(variant.description ? { description: variant.description } : {}),
+      })),
+      defaultValue: encodeVariant(
+        item.variants!.find((variant) => variant.isDefault)?.params ?? item.variants![0]!.params,
+      ),
+      scope: "turn",
+    });
+  }
   return {
     platform: "cursor",
     id: boundId(item.id),
@@ -95,6 +143,8 @@ function normalizeModel(item: ModelListItem): AgentModel {
       ? { reasoning, defaultReasoningId: defaultEffort(item, reasoning) }
       : {}),
     ...(supportsSpeed ? { supportsSpeed: true } : {}),
+    ...(item.aliases?.length ? { aliases: item.aliases.slice(0, 32) } : {}),
+    ...(parameters.length ? { parameters } : {}),
     supportsMode: true,
     // Cursor accepts image blocks on every model it exposes here, and the
     // catalogue carries no field that says otherwise. Claiming support the
@@ -146,6 +196,23 @@ export function modelSelection(composer: NativeAgentComposerState): ModelSelecti
   if (typeof composer.fastModeEnabled === "boolean" && model?.supportsSpeed) {
     params.push({ id: FAST_PARAMETER, value: String(composer.fastModeEnabled) });
   }
+  const variant = composer.parameterValues?.variant;
+  if (typeof variant === "string") {
+    params.splice(0, params.length, ...decodeVariant(variant));
+  } else {
+    for (const parameter of model?.parameters ?? []) {
+      if (
+        parameter.id === "variant" ||
+        parameter.id === EFFORT_PARAMETER ||
+        parameter.id === FAST_PARAMETER
+      )
+        continue;
+      const value = composer.parameterValues?.[parameter.id];
+      if (typeof value === "string" || typeof value === "boolean") {
+        params.push({ id: parameter.id, value: String(value) });
+      }
+    }
+  }
   return params.length > 0 ? { id, params } : { id };
 }
 
@@ -171,7 +238,32 @@ export async function hydrateComposer(
     // expose a `fast` parameter, and offering the toggle on one that does not
     // would show a control the provider cannot honour.
     fastModeAvailable: selected?.supportsSpeed === true,
+    parameterValues: {
+      ...composer.parameterValues,
+      ...(composer.selectedReasoningId ? { effort: composer.selectedReasoningId } : {}),
+      ...(typeof composer.fastModeEnabled === "boolean" ? { fast: composer.fastModeEnabled } : {}),
+    },
   };
+}
+
+function encodeVariant(params: ModelSelection["params"] = []): string {
+  return JSON.stringify(params);
+}
+
+function decodeVariant(value: string): NonNullable<ModelSelection["params"]> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object") return [];
+      const { id, value: parameterValue } = candidate as { id?: unknown; value?: unknown };
+      return typeof id === "string" && typeof parameterValue === "string"
+        ? [{ id, value: parameterValue }]
+        : [];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function boundId(value: string): string {

@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKAgent } from "@cursor/sdk";
 import {
+  dispatchPrompt,
   followRun,
   refreshAgentUsage,
   scheduleAgentUsageRefresh,
@@ -207,6 +208,33 @@ describe("a turn that outlives its budget", () => {
     await completion;
     expect(state.promptJournal.get("r1")?.state).toBe("completed");
   });
+});
+
+test("dispatch records the SDK run identity on its exact user message", async () => {
+  const state = runningSession();
+  state.messages.push({
+    id: "user-message",
+    role: "user",
+    content: "Build it",
+    parts: [],
+    createdAt: "2026-09-07T10:00:00.000Z",
+  });
+  const controlled = controlledRun();
+  const run = Object.assign(controlled, {
+    id: "run-exact",
+    status: "running" as const,
+    onDidChangeStatus: () => () => undefined,
+  });
+  const agent = { send: async () => run } as unknown as SDKAgent;
+
+  const handle = await dispatchPrompt(state, agent, {
+    prompt: "Build it",
+    images: [],
+    userMessageId: "user-message",
+  });
+  expect(state.messages[0]?.runId).toBe("run-exact");
+  controlled.finish({ status: "completed" });
+  await handle.completion;
 });
 
 describe("terminal run usage", () => {

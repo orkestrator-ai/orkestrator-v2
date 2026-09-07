@@ -44,6 +44,8 @@ export interface DispatchInput {
   images: Array<{ mimeType: string; data: string }>;
   schema?: JsonObject;
   requestId?: string;
+  /** Transcript user message claimed before SDK dispatch. */
+  userMessageId?: string;
 }
 
 export interface DispatchHandle {
@@ -94,6 +96,18 @@ export async function dispatchPrompt(
     },
   );
 
+  if (input.userMessageId) {
+    const userMessage = state.messages.find((message) => message.id === input.userMessageId);
+    if (userMessage?.role === "user") userMessage.runId = run.id;
+  }
+
+  state.activeRun = run;
+  const unsubscribeStatus = run.onDidChangeStatus((status) => {
+    if (!turnStillOwned(state, promptSequence)) return;
+    if (status === "running") state.status = "running";
+    state.revision += 1;
+  });
+
   state.cancelTurn = async () => {
     await run.cancel().catch(() => undefined);
   };
@@ -108,7 +122,12 @@ export async function dispatchPrompt(
 
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
-  return { completion: followRun(state, run, promptSequence, input) };
+  return {
+    completion: followRun(state, run, promptSequence, input).finally(() => {
+      unsubscribeStatus();
+      if (state.activeRun === run) state.activeRun = undefined;
+    }),
+  };
 }
 
 export interface FollowableRun {
@@ -249,6 +268,7 @@ function finishTurn(
 ): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
+  state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;
 
   if (result.status === "error") {
@@ -283,6 +303,7 @@ function failTurn(
 ): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
+  state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;
   state.status = "error";
   state.error = errorText(error);

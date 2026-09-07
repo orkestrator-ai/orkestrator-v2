@@ -31,6 +31,130 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService", () => {
+  test("projects sign-in metadata without blocking a new unauthenticated session", async () => {
+    const stub = createProviderStub("cursor", {
+      authStatus: async () => ({
+        state: "signed-out",
+        signIn: { kind: "browser-url" },
+        signOut: false,
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-auth-bootstrap-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-auth-bootstrap",
+        };
+        await expect(service.ensureSession(identity)).resolves.toMatchObject({
+          providerSessionId: "provider-session",
+        });
+        await expect(service.getProjection(identity)).resolves.toMatchObject({
+          auth: { state: "signed-out", signIn: { kind: "browser-url" } },
+        });
+      },
+    );
+  });
+
+  test("caches authentication discovery across projection refreshes", async () => {
+    const stub = createProviderStub("cursor", {
+      authStatus: async () => ({ state: "signed-in", signOut: true }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-auth-cache-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-auth-cache",
+        };
+        await service.ensureSession(identity);
+        await service.getProjection(identity);
+        await service.getProjection(identity);
+        expect(stub.authStatus).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("replaces a Claude placeholder with the first user prompt title", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        title: "Session a1b2c3",
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Implement durable session titles",
+            parts: [{ type: "text", content: "Implement durable session titles" }],
+            createdAt: "2026-09-07T10:00:00.000Z",
+          },
+        ],
+      }),
+      setSessionTitle: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-title-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-title",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.title).toBe("Implement durable session titles");
+        await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+        expect(stub.setSessionTitle).toHaveBeenCalledWith(
+          "provider-session",
+          "Implement durable session titles",
+        );
+      },
+    );
+  });
+
+  test("combines provider-owned follow-ups with the durable backend queue", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        providerQueue: { items: [{ id: "pi-1", text: "Pi follow-up", mode: "follow-up" }] },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-provider-queue-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-provider-queue",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue(`pi\0${identity.logicalSessionKey}`, "env-1", [
+          { id: "backend-1", text: "Backend queue", planModeEnabled: false },
+        ]);
+
+        expect((await service.getProjection(identity))?.queue?.items).toEqual([
+          { id: "pi-1", text: "Pi follow-up", mode: "follow-up" },
+          expect.objectContaining({ id: "backend-1", text: "Backend queue" }),
+        ]);
+      },
+    );
+  });
+
   test("uses the provider's raw OpenCode catalogue for durable cache refreshes", async () => {
     const filtered = [{ platform: "opencode" as const, id: "opencode/a", label: "A" }];
     const raw = [...filtered, { platform: "opencode" as const, id: "openrouter/b", label: "B" }];
@@ -1157,6 +1281,7 @@ describe("NativeAgentService", () => {
           name: "/review",
           description: "Review the current changes",
           argumentHint: "[focus]",
+          source: "builtin",
         },
       ],
     });
@@ -1179,6 +1304,13 @@ describe("NativeAgentService", () => {
             name: "/review",
             description: "Review the current changes",
             argumentHint: "[focus]",
+            source: "builtin",
+          },
+          {
+            name: "/steer",
+            description: "Send instructions to the turn that is already running",
+            argumentHint: "<instructions>",
+            source: "orkestrator",
           },
         ]);
         await service.getProjection(identity);
@@ -1242,7 +1374,7 @@ describe("NativeAgentService", () => {
           await commandGate;
           commandRefreshFinished = true;
         }
-        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+        return [{ name: commandReads > 1 ? "/new" : "/old", source: "builtin" }];
       },
     });
     await withService(
@@ -1328,7 +1460,7 @@ describe("NativeAgentService", () => {
           await commandGate;
           staleCommandsSettled = true;
         }
-        return [{ name: commandReads > 2 ? "/new" : "/old" }];
+        return [{ name: commandReads > 2 ? "/new" : "/old", source: "builtin" }];
       },
       refreshCatalog: () => undefined,
     });
@@ -1425,7 +1557,7 @@ describe("NativeAgentService", () => {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
       slashCommands: async () => {
         commandReads += 1;
-        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+        return [{ name: commandReads > 1 ? "/new" : "/old", source: "builtin" }];
       },
       refreshCatalog: async () => {
         throw new ProviderUnavailableError("pi bridge is unavailable");
@@ -1480,7 +1612,7 @@ describe("NativeAgentService", () => {
       slashCommands: async () => {
         commandReads += 1;
         if (commandReads > 1) throw new Error("Command discovery is unavailable");
-        return [{ name: "/old" }];
+        return [{ name: "/old", source: "builtin" }];
       },
     });
     await withService(
@@ -1515,7 +1647,8 @@ describe("NativeAgentService", () => {
         await waitForCondition(
           () =>
             caches.modelCatalogCache.get("env-1")?.expiresAt === now + 5_000 &&
-            caches.slashCommandCache.get("env-1\0codex")?.expiresAt === now + 5_000,
+            caches.slashCommandCache.get("env-1\0codex\0provider-session")?.expiresAt ===
+              now + 5_000,
         );
         expect(catalogReads).toBe(2);
         expect(commandReads).toBe(2);
@@ -1540,7 +1673,9 @@ describe("NativeAgentService", () => {
   test("advertises runtime session-action commands beside provider discovery", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
-      slashCommands: async () => [{ name: "/review", description: "Review changes" }],
+      slashCommands: async () => [
+        { name: "/review", description: "Review changes", source: "builtin" },
+      ],
     });
     await withService(
       {

@@ -81,6 +81,7 @@ export function emptyComposer(): NativeAgentComposerState {
     // No plan/build split either: `nativeAgentCapabilities("pi")` reports
     // `mode: false`, and an empty list is what tells a live composer the same.
     modes: [],
+    persistedDefaults: true,
   };
 }
 

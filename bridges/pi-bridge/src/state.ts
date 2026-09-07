@@ -7,7 +7,7 @@
  * of the adapter: Pi's event vocabulary is translated here, once, so nothing
  * downstream needs to know which engine produced a transcript.
  */
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
@@ -238,8 +238,12 @@ export interface SessionState {
   /** Merge source for the next todo update; restored from the newest part. */
   todos: TodoItem[];
   composer: NativeAgentComposerState;
+  /** One-shot request from the config route; never persisted. */
+  persistComposerDefaults?: boolean;
   /** The attached Pi session, or null when this bridge session is detached. */
   session: AgentSession | null;
+  /** Production replacement runtime used for lifecycle-correct forks. Never persisted. */
+  runtime?: AgentSessionRuntime;
   /** Releases the SDK event subscription that feeds `translate.ts`. */
   unsubscribe?: () => void;
   /** The in-flight attach, shared by every caller that wants this attached. */

@@ -27,13 +27,11 @@ import {
 } from "./agent-provider-contract.js";
 import type {
   NativeAgentComposerState,
-  NativeAgentBackgroundTaskSummary,
   NativeAgentControlUpdate,
   NativeAgentForkOutcome,
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
   NativeAgentSessionActionOutcome,
-  NativeAgentSlashCommand,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
@@ -52,6 +50,8 @@ import {
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
+import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
 import {
   assertOk,
   assertOkWithErrorDetail,
@@ -62,96 +62,6 @@ import {
   resolvePromptAttachments,
   type HttpBridgeProviderDependencies,
 } from "./http-bridge-transport.js";
-
-function normalizeClaudeBackgroundTasks(
-  value: unknown,
-): NativeAgentBackgroundTaskSummary[] | undefined {
-  const tasks = asRecord(value);
-  if (!tasks) return undefined;
-  const allowed = new Set(["pending", "running", "completed", "failed", "killed", "paused"]);
-  return Object.entries(tasks)
-    .slice(0, 256)
-    .flatMap(([id, raw]) => {
-      const task = asRecord(raw);
-      if (!task || !allowed.has(String(task.status))) return [];
-      return [
-        {
-          id,
-          status: task.status as NativeAgentBackgroundTaskSummary["status"],
-          ...(typeof task.description === "string"
-            ? { description: task.description.slice(0, 1_000) }
-            : {}),
-          // Bounded like every other free-form provider string here: the renderer
-          // only ever compares it against a transcript `toolUseId`, so an
-          // over-long value can never match and must not be carried.
-          ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
-            ? { toolUseId: task.toolUseId }
-            : {}),
-          ...startedAtField(task.startedAt),
-          ...settledAtFromEndedAt(task.endedAt, task.status),
-        },
-      ];
-    });
-}
-
-/**
- * An epoch millisecond clock as an ISO timestamp, or nothing.
- *
- * These cross a process boundary, so a value that is not a real epoch has to be
- * survivable rather than throwing out of snapshot normalization: `toISOString`
- * rejects a date built from a non-finite or out-of-range number.
- */
-function isoFromEpoch(value: unknown): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
-}
-
-/**
- * The bridge's launch clock for a task.
- *
- * Unlike `settledAt` this is meaningful while the task is live: it is the only
- * clock a card the transcript cannot show has of its own, and a tab that
- * resumes into a running task has the snapshot before it has any transcript row
- * to borrow one from.
- */
-function startedAtField(startedAt: unknown): { startedAt?: string } {
-  const value = isoFromEpoch(startedAt);
-  return value ? { startedAt: value } : {};
-}
-
-/**
- * The bridge's terminal-edge clock, as the position-bearing `settledAt`.
- *
- * Only a terminal task carries one. A live task with a stale `endedAt` — a
- * paused task that ran before, a record the provider revived — would otherwise
- * hand the renderer a position for work that is running again, which is exactly
- * the state that belongs at the bottom of the transcript instead.
- */
-function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: string } {
-  const live = status === "pending" || status === "running" || status === "paused";
-  if (live) return {};
-  const settledAt = isoFromEpoch(endedAt);
-  return settledAt ? { settledAt } : {};
-}
-
-const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
-  { name: "/clear", description: "Clear conversation history" },
-  { name: "/compact", description: "Compact conversation to reduce tokens" },
-  { name: "/context", description: "Show current context" },
-  { name: "/cost", description: "Show token usage and cost" },
-  { name: "/doctor", description: "Check system health" },
-  { name: "/goal", description: "Set, view, or clear a completion goal" },
-  { name: "/help", description: "Show available commands" },
-  { name: "/init", description: "Re-initialize the session" },
-  { name: "/logout", description: "Log out of Claude" },
-  { name: "/memory", description: "Show memory usage" },
-  { name: "/model", description: "Show or change model" },
-  { name: "/permissions", description: "Manage permissions" },
-  { name: "/review", description: "Review recent changes" },
-  { name: "/status", description: "Show session status" },
-  { name: "/vim", description: "Toggle vim mode" },
-];
 
 /**
  * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
@@ -179,9 +89,10 @@ function bridgePromptAttachments(
 }
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
-  readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi";
+  readonly agent: HttpBridgeAgent;
   private readonly stageImages?: HttpBridgeProviderDependencies["stageImages"];
   private readonly interactionAdapter: HttpBridgeInteractionAdapter;
+  private readonly catalogAdapter: HttpBridgeCatalogAdapter;
   readonly interactions: AgentInteractionProviderCapability;
   /**
    * The Codex mode each session was last known to be in.
@@ -210,9 +121,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly fetchImpl: typeof fetch,
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
   ) {
-    this.agent = connection.agent as "claude" | "codex" | "cursor" | "grok" | "pi";
+    this.agent = connection.agent as HttpBridgeAgent;
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
+    this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.interactions = {
       listPendingInteractions: (sessionId) =>
         this.interactionAdapter.listPendingInteractions(sessionId),
@@ -254,6 +166,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   model: options.model ?? this.connection.model,
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
+                  agentMcp: options.agentMcp,
                   ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
                     : {}),
@@ -314,7 +227,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
-    if (this.agent !== "codex" && this.agent !== "pi") return { state: "unsupported" };
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/status`,
@@ -335,7 +247,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async steerSupported(sessionId: string): Promise<boolean> {
-    if (this.agent !== "codex" && this.agent !== "pi") return false;
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
@@ -351,7 +262,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {
-    if (this.agent !== "codex" && this.agent !== "pi") return "unknown";
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
@@ -389,6 +299,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             requestId: options.requestId,
             attachments,
             outputSchema: options.schema,
+            parameterValues: options.parameterValues,
+            persistDefaults: options.persistDefaults,
             ...(this.agent === "claude"
               ? {
                   model: options.model ?? this.connection.model,
@@ -398,7 +310,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
                   agentMcp: options.agentMcp,
-                  permissionMode: options.mode === "plan" ? "plan" : "bypassPermissions",
+                  permissionMode:
+                    options.mode === "plan"
+                      ? "plan"
+                      : typeof options.parameterValues?.permissionMode === "string"
+                        ? options.parameterValues.permissionMode
+                        : "bypassPermissions",
                 }
               : this.agent === "codex"
                 ? {
@@ -411,6 +328,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                       model: options.model ?? this.connection.model,
                       reasoningEffort: options.effort ?? this.connection.effort,
                       mode: options.mode,
+                      agentMcp: options.agentMcp,
                     }
                   : { fastMode: options.fastMode ?? this.connection.fastMode }),
           }),
@@ -750,7 +668,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       void this.refreshRuntimeMetadata(sessionId);
     }
     if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
-      const [response, transcript, health] = await Promise.all([
+      const [response, transcript, health, bridgeQueue] = await Promise.all([
         bridgeFetch(
           this.connection,
           `/session/${encodeURIComponent(sessionId)}/status`,
@@ -760,6 +678,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         this.readTranscript(sessionId),
         refreshMetadata && !cachedMetadata
           ? this.runtimeHealth(sessionId)
+          : Promise.resolve(undefined),
+        this.agent === "pi"
+          ? bridgeFetch(
+              this.connection,
+              `/session/${encodeURIComponent(sessionId)}/queue`,
+              {},
+              this.fetchImpl,
+            )
+              .then(async (queueResponse) =>
+                queueResponse.ok
+                  ? asRecord(await boundedJson(queueResponse, "Pi queue snapshot"))
+                  : undefined,
+              )
+              .catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
       if (response.status === 404) return { status: "missing", messages: [] };
@@ -820,6 +752,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const statusNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
+        ...(Array.isArray(bridgeQueue?.items)
+          ? { providerQueue: { items: bridgeQueue.items.slice(0, 512) } }
+          : {}),
       });
       return {
         status,
@@ -1045,17 +980,22 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined> {
     if (this.agent === "claude") {
-      if (update.mode === undefined) return undefined;
       const response = await bridgeFetch(
         this.connection,
-        `/session/${encodeURIComponent(sessionId)}/preferences`,
+        `/session/${encodeURIComponent(sessionId)}/config`,
         {
-          method: "PUT",
-          body: JSON.stringify({ planMode: update.mode === "plan" }),
+          method: "POST",
+          body: JSON.stringify({
+            ...(update.modelId ? { model: update.modelId } : {}),
+            ...(update.reasoningId ? { reasoningId: update.reasoningId } : {}),
+            ...(update.mode ? { mode: update.mode } : {}),
+            ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
+            ...(update.parameterValues ? { parameterValues: update.parameterValues } : {}),
+          }),
         },
         this.fetchImpl,
       );
-      assertOk(response, "Claude session preference update");
+      await assertOkWithErrorDetail(response, "Claude session config update");
       return undefined;
     }
     if (this.agent === "codex") {
@@ -1069,6 +1009,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(update.reasoningId ? { modelReasoningEffort: update.reasoningId } : {}),
             ...(update.mode ? { mode: update.mode } : {}),
             ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
+            ...(update.parameterValues ? { parameterValues: update.parameterValues } : {}),
           }),
         },
         this.fetchImpl,
@@ -1099,13 +1040,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     // same stale list it was asked to replace.
     this.runtimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
-    if (this.agent !== "pi") return;
-
-    // Pi's ModelRuntime owns a process-wide credential and availability
-    // snapshot. A `/login` in a separate Pi terminal changes auth.json behind
-    // that runtime, so clearing only the backend cache cannot discover the new
-    // provider. Ask the bridge to refresh its own authority before the backend
-    // re-lists the catalogue.
+    // Providers with live discovery state refresh their own authority here;
+    // older bridges answer 404 and remain compatible with the cache-only path.
     const response = await bridgeFetch(
       this.connection,
       "/global/refresh-catalog",
@@ -1113,14 +1049,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
       "catalog-refresh",
     );
-    // Compatibility with a Pi bridge from before the refresh route existed.
+    // Compatibility with bridges from before the refresh route existed.
     // Not an error: `refreshProjectionModels` has already dropped its own
     // caches, so re-listing still gets the best catalogue that older bridge can
     // provide. Any *other* failing status is reported, and the caller decides
     // what to do with it — today it logs and re-lists anyway rather than
     // failing the refresh the user asked for.
     if (response.status !== 404) {
-      await assertOkWithErrorDetail(response, "Pi model catalogue refresh");
+      await assertOkWithErrorDetail(response, `${this.agent} catalogue refresh`);
     }
   }
 
@@ -1151,6 +1087,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const messageCount = Number.isSafeInteger(session?.messageCount)
         ? (session!.messageCount as number)
         : undefined;
+      const parentId = nonEmptyString(session?.parentId);
+      const branchLabel = nonEmptyString(session?.branchLabel);
       return [
         {
           sessionId: id,
@@ -1161,45 +1099,43 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(messageCount === undefined
             ? {}
             : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
+          ...(parentId ? { parentId: parentId.slice(0, 512) } : {}),
+          ...(branchLabel ? { branchLabel: branchLabel.slice(0, 256) } : {}),
         },
       ];
     });
   }
 
-  async slashCommands(): Promise<NativeAgentSlashCommand[]> {
-    if (this.agent === "cursor" || this.agent === "grok") return [];
-    const response = await bridgeFetch(
-      this.connection,
-      this.agent === "codex" ? "/global/slash-commands" : "/plugins/commands",
-      {},
-      this.fetchImpl,
-    );
-    assertOk(response, `${this.agent} slash command list`);
-    const payload = asRecord(
-      await boundedJson(response, `${this.agent} slash command list`, { remaining: 512 * 1024 }),
-    );
-    const commands = new Map<string, NativeAgentSlashCommand>(
-      this.agent === "claude"
-        ? CLAUDE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command])
-        : [],
-    );
-    if (!payload || !Array.isArray(payload.commands)) return [...commands.values()];
-    for (const candidate of payload.commands.slice(0, 512)) {
-      const command = typeof candidate === "string" ? { name: candidate } : asRecord(candidate);
-      const rawName = nonEmptyString(command?.name);
-      if (!rawName) continue;
-      const name = rawName.startsWith("/") ? rawName : `/${rawName}`;
-      commands.set(name, {
-        name: name.slice(0, 256),
-        ...(typeof command?.description === "string"
-          ? { description: command.description.slice(0, 1_000) }
-          : {}),
-        ...(typeof command?.argumentHint === "string"
-          ? { argumentHint: command.argumentHint.slice(0, 512) }
-          : {}),
-      });
-    }
-    return [...commands.values()].slice(0, 512);
+  slashCommands(sessionId?: string) {
+    return this.catalogAdapter.slashCommands(sessionId);
+  }
+
+  mcpServers(sessionId: string) {
+    return this.catalogAdapter.mcpServers(sessionId);
+  }
+
+  mcpServerAction(
+    sessionId: string,
+    serverId: string,
+    action: Parameters<HttpBridgeCatalogAdapter["mcpServerAction"]>[2],
+  ) {
+    return this.catalogAdapter.mcpServerAction(sessionId, serverId, action);
+  }
+
+  authStatus() {
+    return this.catalogAdapter.authStatus();
+  }
+
+  beginSignIn() {
+    return this.catalogAdapter.beginSignIn();
+  }
+
+  signOut() {
+    return this.catalogAdapter.signOut();
+  }
+
+  setSessionTitle(sessionId: string, title: string) {
+    return this.catalogAdapter.setSessionTitle(sessionId, title);
   }
 
   async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {
@@ -1243,6 +1179,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(controls?.reasoningId ? { reasoningId: controls.reasoningId } : {}),
             ...(controls?.mode ? { mode: controls.mode } : {}),
             ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
+            ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
           }),
         },
         this.fetchImpl,
@@ -1276,6 +1213,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(controls?.reasoningId ? { modelReasoningEffort: controls.reasoningId } : {}),
           ...(controls?.mode ? { mode: controls.mode } : {}),
           ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
+          ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
         }),
       },
       this.fetchImpl,
@@ -1310,6 +1248,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return {
       sessionId: forkedId,
       ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
+      ...(typeof payload?.draft === "string" ? { draft: payload.draft } : {}),
     };
   }
 
@@ -1317,7 +1256,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "grok") {
       throw new PromptRejectedError(`${this.agent} does not support session actions`);
     }
     const base = `/session/${encodeURIComponent(sessionId)}`;
@@ -1357,7 +1296,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       await assertOkWithErrorDetail(response, "Codex native review");
       return { outcome: "applied" };
     }
-    if (this.agent === "pi" && action.kind === "steer") {
+    if (
+      (this.agent === "claude" || this.agent === "pi" || this.agent === "cursor") &&
+      action.kind === "steer"
+    ) {
       let response: Response;
       try {
         response = await bridgeFetch(
@@ -1376,14 +1318,43 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       } catch {
         return { outcome: "unknown", requestId: action.requestId };
       }
-      if (response.status === 404) throw new PromptRejectedError("Pi session was not found");
-      const payload = asRecord(await boundedJson(response, "Pi steer").catch(() => ({})));
+      if (response.status === 404)
+        throw new PromptRejectedError(`${this.agent} session was not found`);
+      const payload = asRecord(
+        await boundedJson(response, `${this.agent} steer`).catch(() => ({})),
+      );
       if (payload?.outcome === "unknown") {
         return { outcome: "unknown", requestId: action.requestId };
       }
       if (payload?.outcome === "idle") return { outcome: "idle" };
       if (payload?.outcome === "mismatch") return { outcome: "mismatch" };
-      await assertOkWithErrorDetail(response, "Pi steer");
+      await assertOkWithErrorDetail(response, `${this.agent} steer`);
+      return { outcome: "applied" };
+    }
+    if (
+      (this.agent === "codex" || this.agent === "cursor" || this.agent === "pi") &&
+      action.kind === "rewind-messages"
+    ) {
+      const response = await bridgeFetch(
+        this.connection,
+        `${base}/rewind-messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ messageId: action.messageId }),
+        },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, `${this.agent} message rewind`);
+      return { outcome: "applied" };
+    }
+    if (this.agent === "pi" && action.kind === "switch-branch") {
+      const response = await bridgeFetch(
+        this.connection,
+        `${base}/branches/${encodeURIComponent(action.entryId)}`,
+        { method: "POST" },
+        this.fetchImpl,
+      );
+      await assertOkWithErrorDetail(response, "Pi branch switch");
       return { outcome: "applied" };
     }
     if (this.agent === "codex" && action.kind === "steer") {
@@ -1441,6 +1412,17 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     assertOk(response, `${this.agent} abort`);
+  }
+
+  async hardAbort(sessionId: string): Promise<void> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/hard-abort`,
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    if (response.status === 404) return this.abort(sessionId);
+    assertOk(response, `${this.agent} hard abort`);
   }
 
   async closeSession(sessionId: string): Promise<void> {

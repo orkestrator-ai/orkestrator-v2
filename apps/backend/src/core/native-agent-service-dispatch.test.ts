@@ -77,6 +77,7 @@ function createProviderStub(
     modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
     rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
     abort?: (sessionId: string) => Promise<void>;
+    hardAbort?: (sessionId: string) => Promise<void>;
     stopBackgroundTask?: NativeAgentRuntimeProvider["stopBackgroundTask"];
     dismissSuggestedPrompt?: NativeAgentRuntimeProvider["dismissSuggestedPrompt"];
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
@@ -98,6 +99,7 @@ function createProviderStub(
   const registerSession = mock((_sessionId: string) => undefined);
   const dispose = mock(async () => undefined);
   const abort = mock(behaviour.abort ?? (async () => undefined));
+  const hardAbort = behaviour.hardAbort ? mock(behaviour.hardAbort) : undefined;
   const stopBackgroundTask = behaviour.stopBackgroundTask
     ? mock(behaviour.stopBackgroundTask)
     : undefined;
@@ -144,6 +146,7 @@ function createProviderStub(
     refreshCatalog,
     structured: async () => null,
     abort,
+    hardAbort,
     stopBackgroundTask,
     dismissSuggestedPrompt,
     prepareDispatch,
@@ -169,6 +172,7 @@ function createProviderStub(
     activity,
     activityBatch,
     abort,
+    hardAbort,
     stopBackgroundTask,
     dismissSuggestedPrompt,
     interactiveSnapshot,
@@ -250,6 +254,7 @@ async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    abortGraceMs?: number;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -294,6 +299,7 @@ async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
   });
   try {
     await run({ storage, service });
@@ -2558,6 +2564,97 @@ describe("NativeAgentService", () => {
           } finally {
             storage.getPromptQueue = readQueue;
           }
+        },
+      );
+    });
+  });
+
+  describe("two-stage stop", () => {
+    const identity = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "env-env-1:tab-stop",
+    };
+
+    test("stops after a graceful interrupt when the provider becomes idle", async () => {
+      let interrupted = false;
+      const stub = createProviderStub("codex", {
+        abort: async () => {
+          interrupted = true;
+        },
+        status: async () => (interrupted ? "idle" : "running"),
+        hardAbort: async () => undefined,
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-graceful-stop-",
+          provider: async () => stub.provider,
+          abortGraceMs: 0,
+        },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const projection = await service.stopProjectionSession(identity);
+
+          expect(stub.abort).toHaveBeenCalledWith("provider-session");
+          expect(stub.hardAbort).not.toHaveBeenCalled();
+          expect(projection?.messages).toContainEqual(
+            expect.objectContaining({ content: "The turn stopped after a graceful interrupt." }),
+          );
+          expect((await service.getProjection(identity))?.messages).not.toContainEqual(
+            expect.objectContaining({ content: "The turn stopped after a graceful interrupt." }),
+          );
+        },
+      );
+    });
+
+    test("force-stops a provider that remains active after the grace period", async () => {
+      const stub = createProviderStub("codex", {
+        status: async () => "running",
+        hardAbort: async () => undefined,
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-hard-stop-",
+          provider: async () => stub.provider,
+          abortGraceMs: 0,
+        },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const projection = await service.stopProjectionSession(identity);
+
+          expect(stub.abort).toHaveBeenCalledWith("provider-session");
+          expect(stub.hardAbort).toHaveBeenCalledWith("provider-session");
+          expect(projection?.messages).toContainEqual(
+            expect.objectContaining({
+              content:
+                "The turn did not stop within the grace period and a force-stop was requested.",
+            }),
+          );
+          expect((await service.getProjection(identity))?.messages).not.toContainEqual(
+            expect.objectContaining({ content: expect.stringContaining("force-stop") }),
+          );
+        },
+      );
+    });
+
+    test("does not claim a force-stop when the provider has no hard abort", async () => {
+      const stub = createProviderStub("codex", { status: async () => "running" });
+      delete (stub.provider as { hardAbort?: unknown }).hardAbort;
+      await withService(
+        {
+          prefix: "orkestrator-native-no-hard-stop-",
+          provider: async () => stub.provider,
+          abortGraceMs: 0,
+        },
+        async ({ service }) => {
+          await service.ensureSession(identity);
+          const projection = await service.stopProjectionSession(identity);
+          expect(projection?.messages).toContainEqual(
+            expect.objectContaining({
+              content:
+                "The turn did not stop within the grace period; this provider has no force-stop action.",
+            }),
+          );
         },
       );
     });

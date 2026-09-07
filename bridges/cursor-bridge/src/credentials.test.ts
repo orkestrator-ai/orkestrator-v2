@@ -28,6 +28,7 @@ interface StoredCredential {
 let stored: StoredCredential | undefined;
 let loadFails = false;
 let logouts = 0;
+let meCalls = 0;
 const loginCalls: Array<Record<string, unknown>> = [];
 let loginBehaviour: (options: Record<string, unknown>) => Promise<void> = async () => undefined;
 
@@ -60,6 +61,10 @@ mock.module("@cursor/sdk", () => ({
         stored = undefined;
       },
     },
+    me: async () => {
+      meCalls += 1;
+      return undefined;
+    },
   },
 }));
 
@@ -72,6 +77,7 @@ beforeEach(() => {
   stored = undefined;
   loadFails = false;
   logouts = 0;
+  meCalls = 0;
   loginCalls.length = 0;
   loginBehaviour = async () => undefined;
   delete process.env.CURSOR_API_KEY;
@@ -132,9 +138,10 @@ describe("authStatus", () => {
     stored = { apiKey: "super-secret", email: "dev@example.com" };
     const status = await authStatus();
     expect(status).toEqual({
-      authenticated: true,
-      source: "stored-login",
-      email: "dev@example.com",
+      state: "signed-in",
+      account: { label: "dev@example.com" },
+      signIn: { kind: "browser-url" },
+      signOut: true,
     });
     expect(JSON.stringify(status)).not.toContain("super-secret");
   });
@@ -142,21 +149,37 @@ describe("authStatus", () => {
   test("reports an inherited environment key without reading the store", async () => {
     process.env.CURSOR_API_KEY = "env-key";
     loadFails = true;
-    expect(await authStatus()).toEqual({ authenticated: true, source: "api-key-env" });
+    expect(await authStatus()).toEqual({
+      state: "signed-in",
+      account: { label: "Cursor account" },
+      signIn: { kind: "none", hint: "Remove CURSOR_API_KEY to sign out." },
+      signOut: false,
+    });
   });
 
   test("surfaces the expiry as an ISO timestamp the UI can render", async () => {
     const expiresAtMs = Date.now() + 86_400_000;
     stored = { apiKey: "k", apiKeyExpiresAtMs: expiresAtMs };
     expect(await authStatus()).toMatchObject({
-      authenticated: true,
-      expiresAt: new Date(expiresAtMs).toISOString(),
+      state: "signed-in",
+      account: { expiresAt: new Date(expiresAtMs).toISOString() },
     });
+  });
+
+  test("caches the remote account lookup for repeated status reads", async () => {
+    stored = { apiKey: "cache-test-key", email: "cache@example.com" };
+    await authStatus();
+    await authStatus();
+    expect(meCalls).toBe(1);
   });
 
   test("an expired login reads as signed out, so the UI offers the fix", async () => {
     stored = { apiKey: "k", apiKeyExpiresAtMs: Date.now() - 1 };
-    expect(await authStatus()).toEqual({ authenticated: false, source: "none" });
+    expect(await authStatus()).toEqual({
+      state: "expired",
+      signIn: { kind: "browser-url" },
+      signOut: true,
+    });
   });
 });
 
@@ -177,9 +200,8 @@ describe("beginLogin", () => {
 
     finish();
     expect(await handle.completion).toMatchObject({
-      authenticated: true,
-      source: "stored-login",
-      email: "dev@example.com",
+      state: "signed-in",
+      account: { label: "dev@example.com" },
     });
   });
 
@@ -258,7 +280,7 @@ describe("runLogin", () => {
     expect(await runLogin(emit)).toBe(0);
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       { loginUrl: "https://cursor.com/login/abc" },
-      { ok: true, email: "dev@example.com" },
+      { ok: true, account: "dev@example.com" },
     ]);
     // The minted key goes only to the credential store.
     expect(lines.join("")).not.toContain("minted");

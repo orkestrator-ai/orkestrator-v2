@@ -45,6 +45,20 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("sendPrompt", () => {
+  test("ignores the 1M-context parameter on a model that does not declare it", async () => {
+    const session = createSession();
+    track(session.id);
+    const prompt = sendPrompt(session.id, "Use the selected model", {
+      model: "claude-haiku-test",
+      parameterValues: { context1m: true },
+    });
+    const call = await nextQueryCall();
+    expect(call.options.betas).toBeUndefined();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
   test("passes the current managed GitHub credential only to the SDK query", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-query-github-env-"));
     const credentialFile = join(directory, "github-token");
@@ -3082,21 +3096,21 @@ describe("sendPrompt", () => {
     expect(JSON.stringify(drift)).not.toContain("private prompt");
   });
 
-  test("counts a known type this bridge has not consumed yet, distinguishably", async () => {
+  test("consumes SDK authentication status without recording protocol drift", async () => {
     const session = createSession("drift-unconsumed-type");
     track(session.id);
 
     const promptPromise = sendPrompt(session.id, "hello");
     const call = await nextQueryCall();
-    // `auth_status` is the remaining documented gap: plan 08 renders it.
     call.push({ type: "auth_status", authenticated: true });
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
 
-    expect(getSession(session.id)?.health?.drift()?.unknownKinds).toEqual([
-      "unconsumed:auth_status",
-    ]);
+    expect(getSession(session.id)?.health?.drift()?.unknownKinds).toBeUndefined();
+    expect(getSession(session.id)?.messages).toContainEqual(
+      expect.objectContaining({ content: "Claude authentication state changed." }),
+    );
   });
 
   test("records an unbranched system subtype as a bounded provider notice", async () => {

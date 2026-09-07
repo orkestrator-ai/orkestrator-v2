@@ -50,18 +50,18 @@ describe("authStatus", () => {
     );
 
     expect(await authStatus()).toEqual({
-      authenticated: true,
+      state: "signed-in",
       providers: [
         {
           id: "anthropic",
           label: "Anthropic",
-          authenticated: true,
-          source: "environment",
-          type: "api_key",
-          modelCount: 1,
+          state: "signed-in",
+          method: "api-key",
         },
-        { id: "openai", label: "OpenAI", authenticated: false, modelCount: 0 },
+        { id: "openai", label: "OpenAI", state: "signed-out", method: "api-key" },
       ],
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+      signOut: false,
     });
   });
 
@@ -76,12 +76,14 @@ describe("authStatus", () => {
     );
 
     expect(await authStatus()).toEqual({
-      authenticated: false,
-      providers: [{ id: "anthropic", label: "Anthropic", authenticated: false, modelCount: 0 }],
+      state: "needs-auth",
+      providers: [{ id: "anthropic", label: "Anthropic", state: "signed-out", method: "api-key" }],
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+      signOut: false,
     });
   });
 
-  test("bounds stalled auth and model probes and fails closed", async () => {
+  test("bounds stalled auth and model probes without claiming the user is signed out", async () => {
     setAuthProbeTimeoutForTests(5);
     install(
       fakeRuntime({
@@ -96,8 +98,29 @@ describe("authStatus", () => {
     const status = await authStatus();
     expect(performance.now() - started).toBeLessThan(250);
     expect(status).toEqual({
-      authenticated: false,
-      providers: [{ id: "slow", label: "Slow Provider", authenticated: false, modelCount: 0 }],
+      state: "unknown",
+      providers: [{ id: "slow", label: "Slow Provider", state: "unknown", method: "api-key" }],
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+      signOut: false,
+    });
+  });
+
+  test("does not turn a successful auth check into needs-auth when model discovery times out", async () => {
+    setAuthProbeTimeoutForTests(5);
+    install(
+      fakeRuntime({
+        providers: [{ id: "anthropic", name: "Anthropic" }],
+        configured: new Set(["anthropic"]),
+        checkAuth: async () => ({ source: "environment", type: "api_key" }),
+        getAvailable: () => new Promise(() => undefined),
+      }),
+    );
+
+    expect(await authStatus()).toEqual({
+      state: "unknown",
+      providers: [{ id: "anthropic", label: "Anthropic", state: "signed-in", method: "api-key" }],
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+      signOut: false,
     });
   });
 

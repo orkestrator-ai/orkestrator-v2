@@ -215,9 +215,9 @@ export function publicQueue(state: SessionState): JsonObject {
     // Steering runs before the next model call, follow-ups after the run ends.
     // Both are pending prompts as far as the composer is concerned, so they are
     // reported in the order they will be delivered.
-    items: [...state.queue.steering, ...state.queue.followUp].map((text, index) => ({
-      id: `queued:${index}`,
-      text,
-    })),
+    items: [
+      ...state.queue.steering.map((text) => ({ text, mode: "steer" })),
+      ...state.queue.followUp.map((text) => ({ text, mode: "follow-up" })),
+    ].map((item, index) => ({ id: `queued:${index}`, ...item })),
   };
 }

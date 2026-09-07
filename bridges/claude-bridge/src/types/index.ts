@@ -55,8 +55,8 @@ export const HANDLED_SDK_MESSAGE_TYPES: Record<SDKMessage["type"], boolean> = {
   // Clears the bridge transcript and says so, because the model no longer has
   // the history the old messages showed.
   conversation_reset: true,
-  // Sign-in state changing mid-session. Surfaced by plan 08.
-  auth_status: false,
+  // Sign-in state changing mid-session is a visible, actionable notice.
+  auth_status: true,
 };
 
 export function isHandledSdkMessageType(type: unknown): boolean {
@@ -261,6 +261,23 @@ export interface NormalizedMessage {
 }
 
 export interface ClaudeQueryControl {
+  interrupt?: () => Promise<{ still_queued: string[]; cancelled?: string[] } | undefined>;
+  pushInput?: (message: import("@anthropic-ai/claude-agent-sdk").SDKUserMessage) => boolean;
+  setPermissionMode?: (mode: PermissionMode) => Promise<void>;
+  setModel?: (model?: string) => Promise<void>;
+  setMaxThinkingTokens?: (
+    tokens: number | null,
+    display?: "summarized" | "omitted" | null,
+  ) => Promise<void>;
+  applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
+  supportedCommands?: () => Promise<import("@anthropic-ai/claude-agent-sdk").SlashCommand[]>;
+  initializationResult?: () => Promise<unknown>;
+  reloadSkills?: () => Promise<{ skills: import("@anthropic-ai/claude-agent-sdk").SlashCommand[] }>;
+  reloadPlugins?: () => Promise<unknown>;
+  mcpServerStatus?: () => Promise<import("@anthropic-ai/claude-agent-sdk").McpServerStatus[]>;
+  reconnectMcpServer?: (name: string) => Promise<void>;
+  toggleMcpServer?: (name: string, enabled: boolean) => Promise<void>;
+  accountInfo?: () => Promise<import("@anthropic-ai/claude-agent-sdk").AccountInfo>;
   stopTask?: (taskId: string) => Promise<void>;
   backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
   getContextUsage?: () => Promise<unknown>;
@@ -300,6 +317,8 @@ export interface SessionState {
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */
   initData?: SessionInitData;
+  /** Last bounded MCP inventory, retained while no turn query is attached. */
+  mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
   /** Last completed schema-constrained turn, authoritative across UI remounts. */
   structuredOutput?: StructuredOutputResult;
   /** Request id of the structured turn currently running or last completed. */
@@ -619,7 +638,9 @@ export type SSEEventType =
 /** MCP server status from SDK init message */
 export interface McpServerRuntimeStatus {
   name: string;
-  status: "connected" | "failed";
+  status: "connected" | "connecting" | "failed" | "needs-auth" | "disabled" | "unknown";
+  scope?: "user" | "project" | "orkestrator" | "plugin";
+  transport?: "stdio" | "sse" | "http";
   error?: string;
   tools?: string[];
 }
@@ -637,6 +658,8 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  skills?: string[];
+  apiKeySource?: string;
   agents?: Array<{
     name: string;
     description?: string;
@@ -710,6 +733,9 @@ export interface PromptOptions {
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
   agentMcp?: { url: string; token: string };
+  parameterValues?: Record<string, string | boolean>;
+  /** Optional backend-owned budget cap for this session. */
+  maxBudgetUsd?: number;
   attachments?: Array<{
     type: "file" | "image";
     path: string;

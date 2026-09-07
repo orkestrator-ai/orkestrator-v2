@@ -146,9 +146,14 @@ describe("slash command parsing and metadata", () => {
       name: "/review",
       description: "Review",
       argumentHint: "<path>",
-      source: "prompt",
+      source: "user",
+      scope: "global",
     });
-    expect(serializeSlashCommand(BUILTIN_SLASH_COMMANDS[0]!)).toEqual(BUILTIN_SLASH_COMMANDS[0]);
+    expect(serializeSlashCommand(BUILTIN_SLASH_COMMANDS[0]!)).toEqual({
+      ...BUILTIN_SLASH_COMMANDS[0],
+      argumentHint: undefined,
+      scope: "global",
+    });
   });
 });
 

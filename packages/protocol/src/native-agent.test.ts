@@ -70,6 +70,7 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("claude").actions).toEqual({
       compact: true,
       rewindFiles: true,
+      steer: true,
     });
 
     expect(nativeAgentCapabilities("codex").attachments).toEqual({
@@ -80,6 +81,7 @@ describe("native agent capability table", () => {
       compact: true,
       steer: true,
       review: true,
+      rewindMessages: true,
     });
 
     expect(nativeAgentCapabilities("opencode").composer.speed).toBe(false);
@@ -103,7 +105,7 @@ describe("native agent capability table", () => {
         mode: false,
         executionProfile: false,
       },
-      actions: { compact: true, steer: true },
+      actions: { compact: true, steer: true, rewindMessages: true, branches: true },
     });
 
     // Only Claude reports execution profiles, local settings or prompt
@@ -126,7 +128,7 @@ describe("native agent capability table", () => {
       });
       expect(nativeAgentCapabilities(platform).resume).toBe(true);
       expect(nativeAgentCapabilities(platform).fork).toBe(false);
-      expect(nativeAgentCapabilities(platform).slashCommands).toBe(false);
+      expect(nativeAgentCapabilities(platform).slashCommands).toBe(platform === "grok");
       expect(nativeAgentCapabilities(platform).backgroundTasks).toBe(false);
       // Cursor drives fast through an SDK model parameter, Grok through a
       // sibling `…-fast` model id, and both announce
@@ -134,7 +136,9 @@ describe("native agent capability table", () => {
       // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
-      expect(nativeAgentCapabilities(platform).actions).toEqual({});
+      expect(nativeAgentCapabilities(platform).actions).toEqual(
+        platform === "cursor" ? { steer: true, rewindMessages: true } : {},
+      );
     }
   });
 });

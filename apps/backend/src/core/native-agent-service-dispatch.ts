@@ -30,6 +30,7 @@ type NativeAgentControlUpdate = shared.NativeAgentControlUpdate;
 type NativeAgentDispatchOutcome = shared.NativeAgentDispatchOutcome;
 type NativeAgentForkOutcome = shared.NativeAgentForkOutcome;
 type NativeAgentMessageWindow = shared.NativeAgentMessageWindow;
+type NativeAgentMcpServerAction = shared.NativeAgentMcpServerAction;
 type NativeAgentResumeEntry = shared.NativeAgentResumeEntry;
 type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
@@ -500,7 +501,39 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   ): Promise<NativeAgentSessionProjection | null> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
-    await resolved.provider.abort(resolved.session.providerSessionId);
+    const providerSessionId = resolved.session.providerSessionId;
+    await resolved.provider.abort(providerSessionId);
+    const graceMs = Math.max(0, this.options.abortGraceMs ?? 5_000);
+    const deadline = this.now() + graceMs;
+    let status = await resolved.provider.status(providerSessionId).catch(() => "running" as const);
+    while ((status === "running" || status === "blocked") && this.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - this.now())));
+      status = await resolved.provider.status(providerSessionId).catch(() => "running" as const);
+    }
+    const stoppedGracefully = status !== "running" && status !== "blocked";
+    let hardAbortAttempted = false;
+    if (!stoppedGracefully && resolved.provider.hardAbort) {
+      hardAbortAttempted = true;
+      await resolved.provider.hardAbort(providerSessionId);
+    }
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    this.stopNotices.set(
+      sessionKey,
+      stoppedGracefully
+        ? "The turn stopped after a graceful interrupt."
+        : hardAbortAttempted
+          ? "The turn did not stop within the grace period and a force-stop was requested."
+          : "The turn did not stop within the grace period; this provider has no force-stop action.",
+    );
+    while (this.stopNotices.size > 256) {
+      const oldest = this.stopNotices.keys().next().value as string | undefined;
+      if (oldest) this.stopNotices.delete(oldest);
+      else break;
+    }
     return this.refreshProjection(input, true);
   }
 
@@ -625,6 +658,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       unshare: "share",
       steer: "steer",
       review: "review",
+      "rewind-messages": "rewindMessages",
+      "switch-branch": "branches",
     }[input.action.kind] as keyof NonNullable<NativeAgentCapabilities["actions"]>;
     if (!nativeCapabilities(input.agent).actions?.[capability]) {
       throw new Error(`${input.agent} does not support ${input.action.kind}`);
@@ -641,6 +676,50 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     );
     this.invalidateProjection(resolved.key);
     return outcome;
+  }
+
+  async performProjectionMcpAction(
+    input: NativeAgentProjectionInput & {
+      serverId: string;
+      action: NativeAgentMcpServerAction;
+    },
+  ): Promise<{ url?: string }> {
+    if (!nonBlank(input.serverId)) throw new Error("MCP server ID must not be blank");
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) throw new Error("Native agent session was not found");
+    if (!resolved.provider.mcpServerAction) {
+      throw new Error(`${input.agent} does not support MCP server actions`);
+    }
+    const outcome = await resolved.provider.mcpServerAction(
+      resolved.session.providerSessionId,
+      input.serverId,
+      input.action,
+    );
+    this.invalidateProjection(resolved.key);
+    return outcome;
+  }
+
+  async beginProjectionSignIn(
+    input: NativeAgentProjectionInput,
+  ): Promise<{ url?: string; code?: string }> {
+    const provider = await this.provider(input);
+    if (!provider.beginSignIn) throw new Error(`${input.agent} does not support sign-in here`);
+    const outcome = await provider.beginSignIn();
+    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
+    this.invalidateProjection(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
+    return outcome;
+  }
+
+  async signOutProjectionProvider(input: NativeAgentProjectionInput): Promise<void> {
+    const provider = await this.provider(input);
+    if (!provider.signOut) throw new Error(`${input.agent} does not support sign-out here`);
+    await provider.signOut();
+    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
+    this.invalidateProjection(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+    );
   }
 
   private async performProjectionSteer(
@@ -782,6 +861,27 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       ) {
         throw new Error("Native agent reasoning selection is invalid");
       }
+    }
+    if (input.update.parameterValues !== undefined) {
+      const modelId = input.update.modelId ?? composer?.selectedModelId;
+      const model = composer?.models.find(
+        (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
+      );
+      for (const [parameterId, value] of Object.entries(input.update.parameterValues)) {
+        const parameter = model?.parameters?.find((candidate) => candidate.id === parameterId);
+        if (!parameter || typeof value !== (parameter.kind === "toggle" ? "boolean" : "string")) {
+          throw new Error(`Native agent parameter ${parameterId} is invalid`);
+        }
+        if (
+          parameter.kind === "select" &&
+          !parameter.options?.some((option) => option.id === value)
+        ) {
+          throw new Error(`Native agent parameter ${parameterId} selection is invalid`);
+        }
+      }
+    }
+    if (input.update.persistDefaults && composer?.persistedDefaults !== true) {
+      throw new Error("This provider cannot persist composer defaults");
     }
     if (input.update.fastMode !== undefined && composer?.fastModeAvailable !== true) {
       throw new Error("Native agent fast mode is unavailable");

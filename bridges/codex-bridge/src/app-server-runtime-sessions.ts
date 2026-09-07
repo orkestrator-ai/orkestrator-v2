@@ -922,6 +922,70 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     return this.options.engine.getRuntimeHealth(session.threadId ?? null);
   }
 
+  async listMcpServers(sessionId: string): Promise<unknown | null> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    return this.options.engine.listMcpServers(session.threadId);
+  }
+
+  async performMcpAction(
+    sessionId: string,
+    name: string,
+    action: "reconnect" | "sign-in",
+  ): Promise<{ authorizationUrl?: string } | null> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    if (action === "sign-in") {
+      return this.options.engine.beginMcpOauth(name, session.threadId);
+    }
+    await this.options.engine.reconnectMcpServers();
+    return {};
+  }
+
+  readAuthStatus(): Promise<unknown> {
+    return this.options.engine.readAccount();
+  }
+
+  beginAuthLogin(): Promise<unknown> {
+    return this.options.engine.beginAccountLogin();
+  }
+
+  logoutAuth(): Promise<void> {
+    return this.options.engine.logoutAccount();
+  }
+
+  async rewindMessages(
+    sessionId: string,
+    messageId: string,
+  ): Promise<"rewound" | "not-found" | "running" | "unavailable"> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return "not-found";
+    const context = this.registry.getThreadForSession(sessionId);
+    if (!context || !session.threadId) return "unavailable";
+    if (phaseToExternalStatus(context.phase) === "running") return "running";
+    const index = context.messages.findIndex((message) => message.id === messageId);
+    const beforeTurnId = context.messages[index]?.turnId;
+    if (index < 0 || !beforeTurnId) return "unavailable";
+    await this.options.engine.revertThread(session.threadId, beforeTurnId);
+    context.messages.splice(index);
+    context.error = undefined;
+    this.registry.setPhase(context, "idle");
+    this.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.options.emit({ type: "session.reconcile-required", sessionId: id });
+    }
+    return "rewound";
+  }
+
+  async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return false;
+    session.title = title;
+    session.titleSource = "explicit";
+    if (session.threadId) await this.options.engine.setThreadName(session.threadId, title);
+    return true;
+  }
+
   /**
    * Applies a configuration change to the engine, memory and disk.
    *

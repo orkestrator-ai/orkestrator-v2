@@ -7,7 +7,7 @@
  * of the adapter: the Cursor SDK's event vocabulary is translated here, once,
  * so nothing downstream needs to know which engine produced a transcript.
  */
-import type { SDKAgent } from "@cursor/sdk";
+import type { Run, SDKAgent } from "@cursor/sdk";
 import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 
@@ -30,6 +30,8 @@ export interface BridgeMessage {
   createdAt: string;
   /** Model selected when this assistant response began. */
   modelId?: string;
+  /** Exact SDK run that originated this user turn, used by destructive rewind. */
+  runId?: string;
 }
 
 export interface BridgeTextPart {
@@ -148,6 +150,14 @@ export interface PromptJournalEntry {
   acceptedAt: number;
 }
 
+export interface SteerJournalEntry {
+  requestId: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "prepared" | "delivered" | "absent" | "ambiguous";
+  createdAt: number;
+}
+
 export interface TurnUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -219,6 +229,7 @@ export interface SessionState {
   revision: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  steerJournal: Map<string, SteerJournalEntry>;
   /** Live background children, maintained incrementally for `/activity`. */
   activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
   /** Fatal latch: once the bound trips, later frames cannot reopen work. */
@@ -232,6 +243,10 @@ export interface SessionState {
   attaching?: Promise<SDKAgent>;
   /** Cancels the turn in flight. Never persisted. */
   cancelTurn?: () => Promise<void>;
+  /** Current SDK run, retained only while it can accept steering. */
+  activeRun?: Run;
+  /** MCP names only. Launch configuration can contain credentials and is never persisted. */
+  mcpServerNames?: string[];
   /**
    * A turn the user cancelled before its run handle existed.
    *
@@ -327,6 +342,7 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  steerJournal?: SteerJournalEntry[];
   composer?: NativeAgentComposerState;
   usage?: PersistedUsage;
   subagentLimitExceeded?: boolean;

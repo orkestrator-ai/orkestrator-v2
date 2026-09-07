@@ -59,6 +59,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import {
   buildTranscriptCatalog,
   createSharedTranscriptMetaLoader,
@@ -1933,6 +1934,10 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 
 // A dead backend can no longer signal us, so watch for it and run the same
 // graceful drain a SIGTERM would have triggered.
+// A dropped promise must not take this bridge — and every session it is
+// serving — down with it.
+installFatalRejectionGuard({ label: "[codex-bridge]" });
+
 const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {
   startParentWatchdog({

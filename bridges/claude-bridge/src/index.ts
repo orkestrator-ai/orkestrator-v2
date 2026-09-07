@@ -17,9 +17,25 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { serve } from "@hono/node-server";
 
 export const app = new Hono();
+
+/**
+ * One readable line per uncaught route error.
+ *
+ * Hono's default handler passes the raw `Error` to `console.error`, which under
+ * Bun prints a source-context dump of whichever minified vendor file threw —
+ * hundreds of columns of bundled SDK, with the actual message buried in it and
+ * no indication of which request produced it. The response is the same 500
+ * either way; only the log improves.
+ */
+app.onError((error, c) => {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  console.error(`[claude-bridge] ${c.req.method} ${c.req.path} failed: ${detail}`);
+  return c.json({ error: "Internal Server Error" }, 500);
+});
 
 const BRIDGE_TOKEN_ENV = "CLAUDE_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
@@ -176,6 +192,10 @@ app.get("/", (c) => {
 // A dead backend can no longer terminate this process tree. Exiting is enough
 // cleanup here: SDK-spawned Claude CLI children read stdio pipes from this
 // process and exit on EOF when it goes away.
+// A dropped promise must not take this bridge — and every session it is
+// serving — down with it.
+installFatalRejectionGuard({ label: "[claude-bridge]" });
+
 const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {
   startParentWatchdog({

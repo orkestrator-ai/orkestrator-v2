@@ -12,7 +12,11 @@ import type {
   NativeAgentMcpServerAction,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
-import { claudeExecutableOptions, sessions } from "./session-manager-core.js";
+import {
+  claudeExecutableOptions,
+  sessionOperationError,
+  sessions,
+} from "./session-manager-core.js";
 import type { PermissionMode, SessionState } from "../types/index.js";
 
 const CATALOG_LIMIT = 512;
@@ -22,6 +26,39 @@ const steerDispatches = new Map<string, "dispatched" | "absent" | "unknown">();
 
 export function resetClaudeCatalogCachesForTesting(): void {
   authCache = undefined;
+}
+
+/**
+ * The turn query, unless it is shutting down.
+ *
+ * A control whose stdin is closed still answers `supportedCommands` and friends
+ * on paper, but the CLI is on its way out and the SDK rejects the pending
+ * request the moment stdout ends. Read-only callers are better served by a
+ * cached answer than by a request that cannot land.
+ */
+function readableControl(session: SessionState | undefined): SessionState["queryControl"] {
+  if (!session?.queryControl) return undefined;
+  return session.queryControl === session.queryControlDraining ? undefined : session.queryControl;
+}
+
+/**
+ * A control request that lost a race with its own CLI exiting.
+ *
+ * The SDK rejects every in-flight control request with this message when the
+ * transport closes. It is not a fault: the answer is simply unavailable from
+ * that query, and the caller should fall back rather than surface an error.
+ */
+export function isClosedTransportError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("Query closed before response received") ||
+    message.includes("Query is closed") ||
+    message.includes("Query has been closed")
+  );
+}
+
+function rethrowUnlessClosedTransport(error: unknown): void {
+  if (!isClosedTransportError(error)) throw error;
 }
 
 function steerKey(sessionId: string, requestId: string): string {
@@ -106,19 +143,36 @@ export async function readSessionCommands(
   refresh = false,
 ): Promise<NativeAgentSlashCommand[]> {
   const session = sessions.get(sessionId);
-  const control = session?.queryControl;
+  const control = readableControl(session);
   if (control?.supportedCommands) {
     if (refresh) {
       await Promise.allSettled([control.reloadSkills?.(), control.reloadPlugins?.()]);
     }
-    return normalizeCommands(await control.supportedCommands(), session?.initData?.skills);
+    try {
+      const commands = normalizeCommands(
+        await control.supportedCommands(),
+        session?.initData?.skills,
+      );
+      if (session) session.commandInventory = commands;
+      return commands;
+    } catch (error) {
+      // The turn query died mid-request. Fall through to the cache or a probe
+      // rather than failing a read the caller only wanted for display.
+      rethrowUnlessClosedTransport(error);
+    }
   }
+  // Spawning a probe costs a whole Claude CLI process, so a previous answer is
+  // strictly better whenever one exists: this catalogue changes only when the
+  // user edits commands, plugins or skills, and `refresh` forces a real read.
+  if (!refresh && session?.commandInventory) return session.commandInventory;
   let probe: Query | undefined;
   try {
     probe = createProbe();
-    return normalizeCommands(await probe.supportedCommands(), session?.initData?.skills);
+    const commands = normalizeCommands(await probe.supportedCommands(), session?.initData?.skills);
+    if (session) session.commandInventory = commands;
+    return commands;
   } catch {
-    return [];
+    return session?.commandInventory ?? [];
   } finally {
     await Promise.resolve(probe?.close()).catch(() => undefined);
   }
@@ -181,9 +235,15 @@ function normalizeMcp(status: McpServerStatus): NativeAgentMcpServer {
 export async function readSessionMcpServers(sessionId: string): Promise<NativeAgentMcpServer[]> {
   const session = sessions.get(sessionId);
   if (!session) return [];
-  const control = session.queryControl;
+  const control = readableControl(session);
   if (control?.mcpServerStatus) {
-    session.mcpInventory = (await control.mcpServerStatus()).slice(0, 128).map(normalizeMcp);
+    try {
+      session.mcpInventory = (await control.mcpServerStatus()).slice(0, 128).map(normalizeMcp);
+    } catch (error) {
+      // Keep the last inventory rather than failing the read; the turn query
+      // exited before it could answer.
+      rethrowUnlessClosedTransport(error);
+    }
   } else if (!session.mcpInventory && session.initData?.mcpServers) {
     session.mcpInventory = session.initData.mcpServers.slice(0, 128).map((server) => ({
       id: server.name,
@@ -315,20 +375,32 @@ export async function configureClaudeSession(
 ): Promise<void> {
   const control = session.queryControl;
   if (!control) return;
-  if (input.model !== undefined) await control.setModel?.(input.model);
-  if (input.permissionMode !== undefined) await control.setPermissionMode?.(input.permissionMode);
-  const settings: Record<string, unknown> = {};
-  if (input.effort !== undefined) settings.effortLevel = input.effort;
-  if (input.fastMode !== undefined) settings.fastMode = input.fastMode;
-  if (Object.keys(settings).length > 0) await control.applyFlagSettings?.(settings);
-  const thinking = input.parameterValues?.thinking;
-  if (thinking === "disabled") await control.setMaxThinkingTokens?.(0, "omitted");
-  else if (thinking === "adaptive") await control.setMaxThinkingTokens?.(null, "summarized");
-  else if (typeof thinking === "string" && thinking.startsWith("budget-")) {
-    const tokens = Number(thinking.slice("budget-".length));
-    if (Number.isSafeInteger(tokens) && tokens > 0) {
-      await control.setMaxThinkingTokens?.(tokens, "summarized");
+  try {
+    if (input.model !== undefined) await control.setModel?.(input.model);
+    if (input.permissionMode !== undefined) await control.setPermissionMode?.(input.permissionMode);
+    const settings: Record<string, unknown> = {};
+    if (input.effort !== undefined) settings.effortLevel = input.effort;
+    if (input.fastMode !== undefined) settings.fastMode = input.fastMode;
+    if (Object.keys(settings).length > 0) await control.applyFlagSettings?.(settings);
+    const thinking = input.parameterValues?.thinking;
+    if (thinking === "disabled") await control.setMaxThinkingTokens?.(0, "omitted");
+    else if (thinking === "adaptive") await control.setMaxThinkingTokens?.(null, "summarized");
+    else if (typeof thinking === "string" && thinking.startsWith("budget-")) {
+      const tokens = Number(thinking.slice("budget-".length));
+      if (Number.isSafeInteger(tokens) && tokens > 0) {
+        await control.setMaxThinkingTokens?.(tokens, "summarized");
+      }
     }
+  } catch (error) {
+    // Unlike the read paths, a settings change that did not reach the CLI must
+    // not look like it succeeded. A conflict is the honest answer: the turn
+    // this control belonged to is over, and the next one will start from the
+    // session's stored preferences.
+    rethrowUnlessClosedTransport(error);
+    throw sessionOperationError(
+      "conflict",
+      "The Claude turn ended before the settings change was applied",
+    );
   }
 }
 
@@ -337,6 +409,14 @@ export async function gracefulInterruptClaudeSession(
 ): Promise<{ interrupted: boolean; stillQueued: string[] }> {
   const control = sessions.get(sessionId)?.queryControl;
   if (!control?.interrupt) return { interrupted: false, stillQueued: [] };
-  const receipt = await control.interrupt();
-  return { interrupted: true, stillQueued: receipt?.still_queued ?? [] };
+  try {
+    const receipt = await control.interrupt();
+    return { interrupted: true, stillQueued: receipt?.still_queued ?? [] };
+  } catch (error) {
+    // The turn ended on its own before the interrupt landed. That is the
+    // outcome the caller wanted, so report it as done with nothing queued
+    // rather than as a bridge fault.
+    rethrowUnlessClosedTransport(error);
+    return { interrupted: true, stillQueued: [] };
+  }
 }

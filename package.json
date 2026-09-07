@@ -208,5 +208,8 @@
       "executableName": "orkestrator-v2",
       "icon": "icons"
     }
+  },
+  "patchedDependencies": {
+    "@opencode-ai/sdk@1.18.28": "patches/@opencode-ai%2Fsdk@1.18.28.patch"
   }
 }

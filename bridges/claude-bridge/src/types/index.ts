@@ -314,6 +314,16 @@ export interface SessionState {
   initData?: SessionInitData;
   /** Last bounded MCP inventory, retained while no turn query is attached. */
   mcpInventory?: import("@orkestrator/protocol/native-agent").NativeAgentMcpServer[];
+  /**
+   * Last bounded slash-command catalogue, retained for the same reason as
+   * `mcpInventory`.
+   *
+   * Without it, a read that cannot use the turn query falls through to
+   * `createProbe()`, which spawns a whole Claude CLI process. Projections run
+   * on every turn boundary, so that is a process spawn per turn to answer a
+   * question whose answer almost never changes.
+   */
+  commandInventory?: import("@orkestrator/protocol/native-agent").NativeAgentSlashCommand[];
   /** Last completed schema-constrained turn, authoritative across UI remounts. */
   structuredOutput?: StructuredOutputResult;
   /** Request id of the structured turn currently running or last completed. */
@@ -435,6 +445,18 @@ export interface SessionState {
   >;
   /** Control for the currently executing (or most recently completed) turn. */
   queryControl?: ClaudeQueryControl;
+  /**
+   * The turn query whose stdin has been closed and which is now shutting down.
+   *
+   * `queryControl` stays set from turn start until the turn's `finally`, but
+   * the CLI's stdin closes earlier, at the result boundary. Any control request
+   * issued in that window races the process exit and is rejected by the SDK
+   * with "Query closed before response received". Marking the control lets
+   * read-only catalogue calls skip a request that cannot be answered and serve
+   * a cached answer instead; writes still attempt it, because a caller asking
+   * to change state deserves the real error.
+   */
+  queryControlDraining?: ClaudeQueryControl;
   /**
    * Re-evaluate whether the current streaming prompt may close its input.
    *

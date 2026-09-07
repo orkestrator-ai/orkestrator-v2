@@ -382,13 +382,20 @@ session.post("/:id/config", async (c) => {
         : body.mode === "build"
           ? "bypassPermissions"
           : undefined;
-  await configureClaudeSession(sessionData, {
-    ...(typeof body.model === "string" ? { model: body.model } : {}),
-    ...(typeof body.reasoningId === "string" ? { effort: body.reasoningId } : {}),
-    ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
-    ...(permissionMode ? { permissionMode } : {}),
-    ...(parameterValues ? { parameterValues } : {}),
-  });
+  try {
+    await configureClaudeSession(sessionData, {
+      ...(typeof body.model === "string" ? { model: body.model } : {}),
+      ...(typeof body.reasoningId === "string" ? { effort: body.reasoningId } : {}),
+      ...(typeof body.fastMode === "boolean" ? { fastMode: body.fastMode } : {}),
+      ...(permissionMode ? { permissionMode } : {}),
+      ...(parameterValues ? { parameterValues } : {}),
+    });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Failed to configure session" },
+      sessionErrorStatus(error),
+    );
+  }
   const nextPolicy = effectiveExecutionPolicy(
     isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
   );

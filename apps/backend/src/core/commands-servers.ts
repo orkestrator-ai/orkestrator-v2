@@ -113,6 +113,17 @@ import {
 
 /** Provider-neutral process authority every coordinator bridge honours. */
 export const ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
+/**
+ * The one directory outside the workspace a bridge may read attachments from.
+ *
+ * Every bridge confines an attachment path to its session's workspace, because
+ * the path arrives over HTTP. A coordinator's attachments cannot live there:
+ * the workspace is the user's own checkout and a read-only coordinator must not
+ * write to it, so they are staged under application data instead. Naming that
+ * directory in the process environment keeps the boundary process
+ * configuration — a request body still cannot widen it.
+ */
+export const ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 import { realpath } from "node:fs/promises";
 import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -965,6 +976,10 @@ export async function startLocalServerUnlocked(
         }
       : {}),
   };
+  // A widened attachment boundary is inherited, not requested: a backend
+  // started with this variable in its own environment would otherwise hand it
+  // to every worker bridge. Only the branch below may name a root.
+  delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -975,6 +990,15 @@ export async function startLocalServerUnlocked(
     // to run any session under a weaker policy, whatever a request body or a
     // persisted record says, so a permissive record cannot survive a restart.
     env[ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV] = COORDINATOR_EXECUTION_POLICY;
+    // Created here rather than on first paste: a bridge canonicalizes this root
+    // before it reads through it, and a directory that does not exist yet is
+    // indistinguishable from one that is not allowed.
+    const attachmentRoot = context.storage.coordinatorAttachmentDirectory(
+      coordinatorId,
+      coordinatorConversationId!,
+    );
+    await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+    env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV] = attachmentRoot;
   }
 
   if (kind === "opencode") {

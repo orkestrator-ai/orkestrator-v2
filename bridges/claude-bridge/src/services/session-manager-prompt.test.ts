@@ -2751,6 +2751,72 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("reads disk images from the launcher's coordinator attachment root", async () => {
+    // A read-only coordinator's workspace is the user's own checkout, so its
+    // attachments are staged outside it and would otherwise be refused.
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-coordinator-"));
+    const workspace = join(directory, "workspace");
+    const attachmentRoot = join(directory, "attachments");
+    const imagePath = join(attachmentRoot, "pasted.gif");
+    await mkdir(workspace);
+    await mkdir(attachmentRoot);
+    await writeFile(imagePath, Buffer.from("gif-data"));
+    const previousRoot = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachmentRoot;
+    try {
+      const { call } = await withWorkspaceCwd(workspace, () =>
+        runPromptWithMessages([{ type: "result", subtype: "success" }], {
+          attachments: [{ type: "image", path: imagePath }],
+        }),
+      );
+      const sdkMessages = (await readSdkPrompt(call)) as Array<{
+        message: {
+          content: Array<{ type: string; source?: { media_type: string; data: string } }>;
+        };
+      }>;
+      expect(sdkMessages[0].message.content[1]?.source).toEqual({
+        type: "base64",
+        media_type: "image/gif",
+        data: Buffer.from("gif-data").toString("base64"),
+      });
+    } finally {
+      if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+      else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("still refuses a disk image outside both the workspace and the attachment root", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-coordinator-boundary-"));
+    const workspace = join(directory, "workspace");
+    const attachmentRoot = join(directory, "attachments");
+    const outsideImage = join(directory, "outside.png");
+    await mkdir(workspace);
+    await mkdir(attachmentRoot);
+    await writeFile(outsideImage, "outside");
+    const previousRoot = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachmentRoot;
+    try {
+      const session = createSession("outside-both-roots");
+      track(session.id);
+      await withWorkspaceCwd(workspace, async () => {
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: outsideImage }],
+          }),
+        ).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_outside_workspace",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+      else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects disk images outside the SDK workspace root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-bridge-boundary-"));
     const workspace = join(directory, "workspace");

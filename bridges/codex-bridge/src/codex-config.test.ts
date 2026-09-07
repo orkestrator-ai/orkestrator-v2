@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  BRIDGE_ATTACHMENT_ROOT_ENV,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
@@ -123,6 +124,36 @@ describe("Codex app-server configuration", () => {
       '"/opt/orkestrator/codex" = "read"',
     );
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
+  });
+
+  test("grants read on the conversation's attachment directory, and only when one is named", () => {
+    // A coordinator's attachments are staged outside the checkout, so without
+    // this grant a pasted image resolves to a path the profile denies.
+    const withAttachments = codexAppServerConfigOverrides({
+      ...COORDINATOR_ENV,
+      [BRIDGE_ATTACHMENT_ROOT_ENV]: "/data/coordinator-attachments/c1/conv1",
+    });
+    expect(withAttachments["permissions.coordinator-conversation-1.filesystem"]).toContain(
+      '"/data/coordinator-attachments/c1/conv1" = "read"',
+    );
+    expect(withAttachments["permissions.coordinator-conversation-1.filesystem"]).not.toContain(
+      '"write"',
+    );
+
+    // A relative value is launcher misconfiguration, not a root: Codex would
+    // resolve it against its own working directory.
+    const relative = codexAppServerConfigOverrides({
+      ...COORDINATOR_ENV,
+      [BRIDGE_ATTACHMENT_ROOT_ENV]: "attachments",
+    });
+    expect(relative["permissions.coordinator-conversation-1.filesystem"]).not.toContain(
+      "attachments",
+    );
+    expect(
+      codexAppServerConfigOverrides(COORDINATOR_ENV)[
+        "permissions.coordinator-conversation-1.filesystem"
+      ],
+    ).toBe(relative["permissions.coordinator-conversation-1.filesystem"]);
   });
 
   test("leaves the code-mode host enabled so coordinator tool calls can dispatch", () => {

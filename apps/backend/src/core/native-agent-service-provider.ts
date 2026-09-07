@@ -110,6 +110,7 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceReconciliation } from "./native-agent-service-reconciliation.ts";
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
+import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
@@ -276,6 +277,34 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     environmentId: string,
     images: readonly TaskSnapshotImage[],
   ): Promise<PromptAttachment[]> {
+    // A coordinator's workspace is the user's own checkout, and the synthesized
+    // environment behind it carries that path like any other worktree. Staging
+    // there would have a read-only session write files into the repository it
+    // exists not to touch, so its images go to the same application-data
+    // directory a pasted attachment uses — the one root the bridge is
+    // launched able to read besides the checkout.
+    const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    if (coordinator.status === "ready") {
+      const staged: PromptAttachment[] = [];
+      for (const image of assertValidPromptImages(images)) {
+        const path = await this.storage.writeCoordinatorAttachment(
+          coordinator.coordinatorId,
+          coordinator.conversationId,
+          image.filename,
+          image.data,
+        );
+        staged.push({
+          type: "image",
+          path,
+          filename: image.filename,
+          dataUrl: `data:${mimeTypeForImageData(image.filename, image.data)};base64,${image.data}`,
+        });
+      }
+      return staged;
+    }
     const environment = await this.assertEnvironmentLive(environmentId);
     return stagePromptImages(this.invoke, environment, images, INITIAL_PROMPT_STAGING_DIRECTORY);
   }

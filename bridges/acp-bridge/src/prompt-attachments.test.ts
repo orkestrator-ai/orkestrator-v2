@@ -206,3 +206,46 @@ describe("assertStableRead", () => {
     ).toEqual(cases.map(([label]) => [label, "attachment_changed"]));
   });
 });
+
+describe("the launcher's coordinator attachment root", () => {
+  // A read-only coordinator's workspace is the user's own checkout, so its
+  // attachments are staged under application data instead. That directory is
+  // named by the process environment, never by a request.
+  const previous = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previous;
+  });
+
+  test("reads an image staged outside the workspace", async () => {
+    const root = await workspace();
+    const attachments = await workspace();
+    await fs.writeFile(resolve(attachments, "pasted.png"), ONE_PIXEL_PNG);
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
+
+    await expect(
+      readPromptImages([image(resolve(attachments, "pasted.png"))], root),
+    ).resolves.toEqual([
+      {
+        data: ONE_PIXEL_PNG.toString("base64"),
+        mimeType: "image/png",
+        path: resolve(attachments, "pasted.png"),
+        absolutePath: resolve(attachments, "pasted.png"),
+      },
+    ]);
+  });
+
+  test("still refuses a path outside both roots, and a symlink out of the extra root", async () => {
+    const root = await workspace();
+    const attachments = await workspace();
+    const elsewhere = await workspace();
+    await fs.writeFile(resolve(elsewhere, "secret.png"), ONE_PIXEL_PNG);
+    await fs.symlink(resolve(elsewhere, "secret.png"), resolve(attachments, "link.png"));
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
+
+    for (const path of [resolve(elsewhere, "secret.png"), resolve(attachments, "link.png")]) {
+      await expect(readPromptImages([image(path)], root)).rejects.toThrow(PromptAttachmentError);
+    }
+  });
+});

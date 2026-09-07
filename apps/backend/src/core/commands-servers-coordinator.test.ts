@@ -82,7 +82,7 @@ describe("Coordinator Codex server", () => {
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -151,10 +151,23 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
         policy: "coordinator-read-only",
+        // Attachments are staged outside the checkout, so the bridge is told
+        // the one directory besides the workspace it may read them from.
+        attachmentRoot: storage.coordinatorAttachmentDirectory(
+          snapshot.workspace.id,
+          conversation.id,
+        ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
       },
     );
+    expect(
+      (
+        await fs.stat(
+          storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
+        )
+      ).isDirectory(),
+    ).toBe(true);
     // The conversation's bridge identity is stored in the neutral fields, not
     // Codex's, so the reaper can find a Claude coordinator child too.
     expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
@@ -167,7 +180,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -232,6 +245,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,
         readableRuntimeRoot: path.join(root, "bin"),
+        attachmentRoot: storage.coordinatorAttachmentDirectory(
+          snapshot.workspace.id,
+          conversation.id,
+        ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
       },
@@ -467,6 +484,49 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     expect(await fs.readFile(path.join(secondCheckout, "bridge-cwd.txt"), "utf8")).toBe(
       secondCheckout,
     );
+  });
+
+  test("a worker bridge never inherits an attachment root from the backend's own environment", async () => {
+    // The variable widens where a bridge may read attachments from, so an
+    // inherited one would quietly extend a worker's boundary too.
+    const bridge = path.join(root, "bridges", "codex-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null }));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    const project = await storage.addProject(createProject("remote", checkout));
+    const environment = createEnvironment(project.id, {
+      name: "local worker",
+      environmentType: "local",
+    });
+    environment.status = "running";
+    environment.worktreePath = checkout;
+    await storage.addEnvironment(environment);
+    const context = {
+      storage,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+    } as CommandContext;
+    cleanupContext = context;
+    cleanupRuntimeId = environment.id;
+    const previousRoot = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = path.join(root, "inherited");
+    try {
+      await startLocalServerUnlocked(environment.id, context, "codex");
+      expect(JSON.parse(await fs.readFile(path.join(checkout, "captured.json"), "utf8"))).toEqual({
+        attachmentRoot: null,
+      });
+    } finally {
+      if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+      else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
+    }
   });
 
   test("a coordinator runtime refuses a bridge that is not its own platform", async () => {

@@ -263,3 +263,45 @@ describe("promptFileReferences", () => {
     ).toBe("\n\nAttached files:\n- /w/a.ts\n- /w/b.ts\n- /w/c.ts (Report.ts)");
   });
 });
+
+describe("the launcher's coordinator attachment root", () => {
+  // A read-only coordinator's workspace is the user's own checkout, so its
+  // attachments are staged under application data instead. That directory is
+  // named by the process environment, never by a request.
+  const previous = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previous;
+  });
+
+  test("reads an image and resolves a file staged outside the workspace", async () => {
+    const attachments = join(outside, "coordinator-attachments");
+    await mkdir(attachments, { recursive: true });
+    await writeFile(join(attachments, "pasted.png"), PNG);
+    await writeFile(join(attachments, "notes.txt"), "notes");
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
+
+    const images = await readPromptImages(
+      [{ type: "image", path: join(attachments, "pasted.png") }],
+      workspace,
+    );
+    expect(images[0]?.data).toBe(PNG.toString("base64"));
+    await expect(
+      resolvePromptFiles([{ type: "file", path: join(attachments, "notes.txt") }], workspace),
+    ).resolves.toMatchObject([{ absolutePath: join(attachments, "notes.txt") }]);
+  });
+
+  test("still refuses a path outside both roots", async () => {
+    const attachments = join(outside, "coordinator-attachments");
+    await mkdir(attachments, { recursive: true });
+    await writeFile(join(outside, "secret.png"), PNG);
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
+
+    expect(
+      await codeOf(
+        readPromptImages([{ type: "image", path: join(outside, "secret.png") }], workspace),
+      ),
+    ).toBe("attachment_outside_workspace");
+  });
+});

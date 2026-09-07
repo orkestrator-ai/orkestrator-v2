@@ -4,6 +4,8 @@ export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PE
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
+/** The launcher-supplied directory a coordinator's attachments are staged in. */
+export const BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 /**
  * Multi-agent V2 counts the root thread in its limit, while Orkestrator's
  * setting and the legacy `agents` key count only spawned children. Leave room
@@ -54,6 +56,12 @@ export function codexAppServerConfigOverrides(
     const permissionProfile = env.CODEX_BRIDGE_PERMISSION_PROFILE?.trim();
     const readableRuntimeRoot = env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT?.trim();
     const projectRoot = env.CWD?.trim();
+    // A coordinator's prompt attachments are staged outside the checkout, so
+    // the path Codex is handed for a `local_image` resolves through neither the
+    // workspace root nor the runtime root. Granting read on that one
+    // conversation-scoped directory is what makes an attached image legible;
+    // it contains nothing but images the user attached to this conversation.
+    const attachmentRoot = env[BRIDGE_ATTACHMENT_ROOT_ENV]?.trim();
     if (
       !permissionProfile ||
       !/^[A-Za-z0-9_-]+$/.test(permissionProfile) ||
@@ -71,6 +79,9 @@ export function codexAppServerConfigOverrides(
     overrides[`permissions.${permissionProfile}.filesystem`] =
       `{ ":root" = "deny", ":minimal" = "read", ":tmpdir" = "deny", ` +
       `":slash_tmp" = "deny", ${JSON.stringify(readableRuntimeRoot)} = "read", ` +
+      (attachmentRoot && isAbsolute(attachmentRoot)
+        ? `${JSON.stringify(attachmentRoot)} = "read", `
+        : "") +
       `":workspace_roots" = { "." = "read" } }`;
     overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
     // A coordinator checkout is data, not trusted runtime configuration.

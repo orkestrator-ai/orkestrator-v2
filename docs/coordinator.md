@@ -79,6 +79,19 @@ authority: the bridge replaces whatever policy a request body or a persisted
 record carries, so a permissive record cannot survive a restart and widen a live
 conversation.
 
+## Attachments
+
+Pasted images and other prompt attachments are staged under application data, in
+a per-conversation directory, never in the checkout a coordinator may not write
+to. A bridge otherwise confines an attachment path to its session's workspace,
+so each coordinator bridge is launched with
+`ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT` naming that one directory as a second
+readable root; Codex additionally grants it `read` in the conversation's
+permission profile. Like the execution policy, this is process configuration —
+a request body cannot name a root of its own — and it is scoped to the one
+conversation, so a bridge cannot read another's attachments. Deleting the
+project removes them with the rest of the coordinator runtime.
+
 ## Worker delegation
 
 Delegation is a round trip, not one outbound call. `launch_environment` goes out

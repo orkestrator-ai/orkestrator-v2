@@ -35,6 +35,7 @@ import { GLOBAL_SETTINGS_REQUEST_EVENT } from "@/lib/settings-navigation";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 // Snapshot before installing the stubs so the real modules are restored for
@@ -42,6 +43,7 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
 let renderVirtualizedMessages = false;
 let latestTranscriptAnnotationProps:
   | {
@@ -214,6 +216,23 @@ const stopNativeAgentBackgroundTaskMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
 const getLocalFileTreeMock = mock(async (_worktreePath: string) => []);
+const writeCoordinatorAttachmentMock = mock(
+  async (environmentId: string, filename: string, _base64Data: string) =>
+    `/data/coordinator-attachments/${environmentId}/${filename}`,
+);
+
+// The paste handler itself needs a canvas the test environment does not have.
+// What broke for coordinators was the wiring into it, so that is what this
+// captures: which staging route a composer hands the hook.
+let latestPasteOptions: {
+  worktreePath?: string | null;
+  writeImage?: (filename: string, base64Data: string) => Promise<string>;
+} | null = null;
+mock.module("@/hooks/useNativeComposeBarPaste", () => ({
+  useNativeComposeBarPaste: (options: typeof latestPasteOptions) => {
+    latestPasteOptions = options;
+  },
+}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -233,6 +252,7 @@ mock.module("@/lib/backend", () => ({
   stopNativeAgentBackgroundTask: stopNativeAgentBackgroundTaskMock,
   getFileTree: async () => [],
   getLocalFileTree: getLocalFileTreeMock,
+  writeCoordinatorAttachment: writeCoordinatorAttachmentMock,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
@@ -319,6 +339,8 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockClear();
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   getLocalFileTreeMock.mockClear();
+  writeCoordinatorAttachmentMock.mockClear();
+  latestPasteOptions = null;
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
     enabledAgentPlatforms: ["claude", "codex", "opencode"],
@@ -338,6 +360,7 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
   mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
+  mock.module("@/hooks/useNativeComposeBarPaste", () => realNativeComposeBarPasteSnapshot);
 });
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
@@ -1022,6 +1045,43 @@ describe("AgentNativeTab", () => {
     // The pane store owns a normal tab's lock; a coordinator conversation is
     // backend state and must not be locked locally.
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("an unassigned coordinator composer searches the checkout and stages pastes outside it", async () => {
+    // Before its first prompt a conversation has no Environment record, so the
+    // composer used to have no workspace to search and nowhere to put a pasted
+    // image — and the one path it must never take is writing into the checkout.
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+
+    render(
+      <AgentNativeTab
+        tabId="coordinator-tab-attachments"
+        data={{ environmentId: "coordinator:workspace-1:conversation-5", isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        coordinatorWorkspacePath="/tmp/project"
+        onAssignPlatform={async () => undefined}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    await waitFor(() => expect(getLocalFileTreeMock).toHaveBeenCalledWith("/tmp/project"));
+    await waitFor(() => expect(latestPasteOptions).not.toBeNull());
+    expect(latestPasteOptions?.worktreePath ?? null).toBeNull();
+    expect(await latestPasteOptions?.writeImage?.("clipboard.png", "cG5n")).toBe(
+      "/data/coordinator-attachments/coordinator:workspace-1:conversation-5/clipboard.png",
+    );
+    expect(writeCoordinatorAttachmentMock).toHaveBeenCalledWith(
+      "coordinator:workspace-1:conversation-5",
+      "clipboard.png",
+      "cG5n",
+    );
   });
 
   test("a failed coordinator assignment is reported and leaves the composer usable", async () => {

@@ -329,6 +329,8 @@ export function UnassignedNativeAgentComposer({
   platformNotes,
   placeholder,
   emptyPlatformsMessage,
+  workspacePath,
+  writeImage,
 }: {
   tabId: string;
   environmentId: string;
@@ -366,6 +368,19 @@ export function UnassignedNativeAgentComposer({
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
+  /**
+   * The workspace to search and attach files from when no Environment record
+   * exists. A coordinator runtime has none, and without this its opening
+   * composer would offer neither file mentions nor workspace attachments.
+   */
+  workspacePath?: string;
+  /**
+   * Trusted writer for a runtime whose attachments live outside a workspace.
+   *
+   * Supplying it also stops a pasted image being written into `workspacePath`:
+   * a read-only coordinator's workspace is the user's own checkout.
+   */
+  writeImage?: (filename: string, base64Data: string) => Promise<string>;
 }) {
   const sessionKey = createSessionKey(environmentId, tabId);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -375,7 +390,7 @@ export function UnassignedNativeAgentComposer({
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
   const config = useConfigStore((state) => state.config);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
-  const worktreePath = environment?.worktreePath;
+  const worktreePath = environment?.worktreePath ?? workspacePath;
   const {
     favorites,
     enabledPlatforms: allEnabledPlatforms,
@@ -641,7 +656,8 @@ export function UnassignedNativeAgentComposer({
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: containerId ?? null,
-    worktreePath,
+    worktreePath: writeImage ? undefined : worktreePath,
+    writeImage,
     onAttach: handlePastedImage,
     canAttachImage,
     onImageRejected: handleImageRejected,

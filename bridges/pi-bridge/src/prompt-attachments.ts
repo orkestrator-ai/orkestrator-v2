@@ -211,6 +211,39 @@ function attachmentErrorForFsFailure(error: unknown): PromptAttachmentError {
   );
 }
 
+/**
+ * A second trusted root an attachment may be read from, named by the launcher.
+ *
+ * A read-only coordinator session runs against the user's own checkout and must
+ * never write to it, so its attachments are staged under application data
+ * instead — outside the workspace this reader otherwise confines them to. The
+ * root arrives in the process environment, never in a request, so a caller
+ * still cannot name a directory of its own.
+ */
+export const BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
+
+export function configuredAttachmentRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env[BRIDGE_ATTACHMENT_ROOT_ENV]?.trim();
+  return value && isAbsolute(value) ? resolve(value) : undefined;
+}
+
+/**
+ * The root an attachment is confined to: the extra root when the path names a
+ * file inside it, and the workspace in every other case. Selecting rather than
+ * unioning keeps one containment check per read, so the symlink, identity and
+ * canonical-path rules still apply whole against whichever root won.
+ */
+export function attachmentContainmentRoot(
+  filePath: string,
+  workspaceRoot: string,
+  extraRoot = configuredAttachmentRoot(),
+): string {
+  if (extraRoot && isAbsolute(filePath) && isPathWithin(extraRoot, resolve(filePath))) {
+    return extraRoot;
+  }
+  return resolve(workspaceRoot);
+}
+
 function isPathWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
   const childPath = relative(root, candidate);
@@ -327,7 +360,7 @@ async function readWorkspaceImage(
   filePath: string,
   workspaceRoot: string,
 ): Promise<{ bytes: Buffer; absolutePath: string; mimeType: string }> {
-  const lexicalRoot = resolve(workspaceRoot);
+  const lexicalRoot = attachmentContainmentRoot(filePath, workspaceRoot);
   const targetPath = isAbsolute(filePath) ? resolve(filePath) : resolve(lexicalRoot, filePath);
   if (!isPathWithin(lexicalRoot, targetPath)) {
     throw new PromptAttachmentError(
@@ -433,7 +466,7 @@ export async function resolvePromptFiles(
 }
 
 async function resolveWorkspaceFile(filePath: string, workspaceRoot: string): Promise<string> {
-  const lexicalRoot = resolve(workspaceRoot);
+  const lexicalRoot = attachmentContainmentRoot(filePath, workspaceRoot);
   const targetPath = isAbsolute(filePath) ? resolve(filePath) : resolve(lexicalRoot, filePath);
   if (!isPathWithin(lexicalRoot, targetPath)) {
     throw new PromptAttachmentError(

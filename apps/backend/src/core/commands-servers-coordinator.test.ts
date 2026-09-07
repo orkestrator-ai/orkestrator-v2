@@ -161,13 +161,11 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpToken: "scoped-token",
       },
     );
-    expect(
-      (
-        await fs.stat(
-          storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
-        )
-      ).isDirectory(),
-    ).toBe(true);
+    const attachmentRootStats = await fs.stat(
+      storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
+    );
+    expect(attachmentRootStats.isDirectory()).toBe(true);
+    expect(attachmentRootStats.mode & 0o777).toBe(0o700);
     // The conversation's bridge identity is stored in the neutral fields, not
     // Codex's, so the reaper can find a Claude coordinator child too.
     expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({

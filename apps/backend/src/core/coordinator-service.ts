@@ -238,6 +238,10 @@ export class CoordinatorService {
         };
       });
       if (!workspace) throw new Error("Coordinator workspace disappeared");
+      await this.storage.pruneCoordinatorAttachmentDirectories(
+        workspace.id,
+        new Set(workspace.conversations.map((item) => item.id)),
+      );
       return this.snapshot(workspace, projectPath);
     });
   }

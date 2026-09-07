@@ -296,6 +296,7 @@ describe("the launcher's coordinator attachment root", () => {
     const attachments = join(outside, "coordinator-attachments");
     await mkdir(attachments, { recursive: true });
     await writeFile(join(outside, "secret.png"), PNG);
+    await writeFile(join(outside, "secret.txt"), "secret");
     process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
 
     expect(
@@ -303,5 +304,33 @@ describe("the launcher's coordinator attachment root", () => {
         readPromptImages([{ type: "image", path: join(outside, "secret.png") }], workspace),
       ),
     ).toBe("attachment_outside_workspace");
+    expect(
+      await codeOf(
+        resolvePromptFiles([{ type: "file", path: join(outside, "secret.txt") }], workspace),
+      ),
+    ).toBe("attachment_outside_workspace");
+  });
+
+  test("refuses image and file symlinks that escape the coordinator attachment root", async () => {
+    const attachments = join(outside, "coordinator-attachments");
+    const secrets = join(outside, "secrets");
+    await mkdir(attachments, { recursive: true });
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, "secret.png"), PNG);
+    await writeFile(join(secrets, "secret.txt"), "secret");
+    await symlink(join(secrets, "secret.png"), join(attachments, "linked.png"));
+    await symlink(join(secrets, "secret.txt"), join(attachments, "linked.txt"));
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachments;
+
+    expect(
+      await codeOf(
+        readPromptImages([{ type: "image", path: join(attachments, "linked.png") }], workspace),
+      ),
+    ).toBe("attachment_symlink_not_allowed");
+    expect(
+      await codeOf(
+        resolvePromptFiles([{ type: "file", path: join(attachments, "linked.txt") }], workspace),
+      ),
+    ).toBe("attachment_symlink_not_allowed");
   });
 });

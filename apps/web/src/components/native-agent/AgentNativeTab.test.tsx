@@ -1006,6 +1006,29 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
+  test("an ordinary unassigned local tab keeps its worktree paste destination", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Local worker",
+          order: 0,
+          setupPhase: "ready",
+          worktreePath: "/tmp/local-worker",
+        } as never,
+      ],
+    });
+
+    render(
+      <AgentNativeTab tabId="tab-local-unassigned" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await waitFor(() => expect(latestPasteOptions).not.toBeNull());
+    expect(latestPasteOptions?.worktreePath).toBe("/tmp/local-worker");
+    expect(latestPasteOptions?.writeImage).toBeUndefined();
+  });
+
   test("a coordinator tab assigns through the backend instead of locking a pane", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({
@@ -2121,6 +2144,84 @@ describe("AgentNativeTab", () => {
           filename: "layout.png",
         },
       ],
+    });
+  });
+
+  test("carries a coordinator-staged image through assignment as a structured attachment", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    useEnvironmentStore.setState({ environments: [] });
+    const tabId = "coordinator-tab-first-attachment";
+    const environmentId = "coordinator:workspace-1:conversation-7";
+    const sessionKey = createSessionKey(environmentId, tabId);
+    const attachmentPath = "/data/coordinator-attachments/workspace-1/conversation-7/layout.png";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "claude",
+      text: "Review the layout",
+      attachments: [
+        {
+          id: "coordinator-image-1",
+          type: "image",
+          name: "layout.png",
+          path: attachmentPath,
+          previewUrl: "data:image/png;base64,abc",
+        },
+      ],
+    });
+    const onAssignPlatform = mock<
+      (
+        platform: AgentPlatform,
+        prompt: string,
+        options: {
+          modelId?: string;
+          reasoningId?: string;
+          fastMode: boolean;
+          mode?: "build" | "plan";
+          executionProfileId?: string;
+        },
+      ) => Promise<void>
+    >(async () => undefined);
+    const view = render(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ environmentId, isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        coordinatorWorkspacePath="/tmp/project"
+        onAssignPlatform={onAssignPlatform}
+        availablePlatforms={["claude", "codex"]}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Start agent" }));
+    await waitFor(() => expect(onAssignPlatform).toHaveBeenCalledTimes(1));
+    const [, prompt, options] = onAssignPlatform.mock.calls[0]!;
+
+    view.rerender(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ platform: "claude", environmentId, isLocal: true }}
+        isActive
+        executionPolicy="coordinator-read-only"
+        coordinatorProjectId="project-1"
+        coordinatorWorkspacePath="/tmp/project"
+        initialPrompt={prompt}
+        initialAgentModel={options.modelId}
+        initialReasoningEffort={options.reasoningId}
+        initialConversationMode={options.mode}
+        initialFastMode={options.fastMode}
+        initialExecutionProfileId={options.executionProfileId}
+      />,
+    );
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      agent: "claude",
+      attachments: [{ type: "image", path: attachmentPath, filename: "layout.png" }],
     });
   });
 

@@ -373,6 +373,31 @@ export class StorageService extends StorageKanban {
     return path.join(this.dataDir, "coordinator-attachments", coordinatorId, conversationId);
   }
 
+  /**
+   * Reclaim attachment directories after closed conversations leave the
+   * durable retention window.
+   *
+   * This sweeps the coordinator directory rather than deleting only the ids
+   * pruned by one mutation. A cleanup interrupted after the store write is
+   * therefore retried by the next retention pass instead of becoming a
+   * permanent orphan.
+   */
+  async pruneCoordinatorAttachmentDirectories(
+    coordinatorId: string,
+    retainedConversationIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const root = path.join(this.dataDir, "coordinator-attachments", coordinatorId);
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    await Promise.all(
+      entries
+        .filter((entry) => !retainedConversationIds.has(entry.name))
+        .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true })),
+    );
+  }
+
   async writeCoordinatorAttachment(
     coordinatorId: string,
     conversationId: string,

@@ -2817,6 +2817,39 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("refuses a symlink that escapes the launcher's coordinator attachment root", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-coordinator-symlink-"));
+    const workspace = join(directory, "workspace");
+    const attachmentRoot = join(directory, "attachments");
+    const outsideImage = join(directory, "outside.png");
+    const linkedImage = join(attachmentRoot, "linked.png");
+    await mkdir(workspace);
+    await mkdir(attachmentRoot);
+    await writeFile(outsideImage, "outside");
+    await symlink(outsideImage, linkedImage);
+    const previousRoot = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = attachmentRoot;
+    try {
+      const session = createSession("coordinator-symlink-image");
+      track(session.id);
+      await withWorkspaceCwd(workspace, async () => {
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: linkedImage }],
+          }),
+        ).rejects.toMatchObject({
+          name: "ClaudeAttachmentError",
+          code: "attachment_symlink_not_allowed",
+        });
+      });
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
+      else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects disk images outside the SDK workspace root", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-bridge-boundary-"));
     const workspace = join(directory, "workspace");

@@ -91,6 +91,71 @@ describe("project coordinator", () => {
     ).toBe(true);
   });
 
+  test("retention removes attachment directories only after closed conversations are pruned", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const coordinatorId = initial.workspace.id;
+    const closedConversationId = initial.workspace.conversations[0]!.id;
+    const closedAttachment = await storage.writeCoordinatorAttachment(
+      coordinatorId,
+      closedConversationId,
+      "closed.png",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    );
+    await service.closeConversation(project.id, closedConversationId);
+
+    const firstOpen = await service.createConversation(project.id, "Open");
+    const openConversationId = firstOpen.workspace.selectedConversationId!;
+    const openAttachment = await storage.writeCoordinatorAttachment(
+      coordinatorId,
+      openConversationId,
+      "open.png",
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    );
+
+    // Populate the durable boundary in one mutation. Running 63 complete
+    // create/close cycles here makes this filesystem test exceed Bun's 5s
+    // limit when the aggregate suite is under load, while the behavior under
+    // test is the single retention pass on the next create.
+    await storage.mutateCoordinatorWorkspace(project.id, (current) => {
+      if (!current) throw new Error("Coordinator workspace disappeared");
+      const closed = current.conversations.find((item) => item.id === closedConversationId)!;
+      const open = current.conversations.find((item) => item.id === openConversationId)!;
+      return {
+        ...current,
+        conversations: [
+          closed,
+          open,
+          ...Array.from({ length: 62 }, (_, index) => ({
+            ...closed,
+            id: `closed-${index}`,
+            tabId: `closed-tab-${index}`,
+            logicalSessionKey: `closed-session-${index}`,
+            mailboxIncarnationId: `closed-mailbox-${index}`,
+          })),
+        ],
+      };
+    });
+    await service.createConversation(project.id, "Trigger retention");
+
+    const retained = await service.get(project.id);
+    expect(retained!.workspace.conversations.some((item) => item.id === closedConversationId)).toBe(
+      false,
+    );
+    expect(retained!.workspace.conversations.some((item) => item.id === openConversationId)).toBe(
+      true,
+    );
+    await expect(fs.access(closedAttachment)).rejects.toThrow();
+    expect((await fs.stat(openAttachment)).isFile()).toBe(true);
+  });
+
   test("ensure retries a transient startup error without replacing materialized conversations", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),

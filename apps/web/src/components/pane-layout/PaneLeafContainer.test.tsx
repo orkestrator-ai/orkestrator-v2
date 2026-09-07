@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { PaneLeaf } from "@/types/paneLayout";
@@ -397,6 +398,7 @@ describe("PaneLeafContainer", () => {
       },
     }));
     useMultiReviewStore.setState({ workflows: new Map() });
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
     clearPersistedVirtuosoState.mockClear();
     multiReviewTabFailure = null;
     multiReviewMountCount = 0;
@@ -478,6 +480,116 @@ describe("PaneLeafContainer", () => {
 
     expect(await screen.findByTestId("claude-tmux-tab")).toBeDefined();
     expect(screen.getByText("tmux:tab-tmux")).toBeDefined();
+  });
+
+  test("renders authoritative mail banners above native and tmux chat tabs", async () => {
+    const chatPane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane-mail",
+      tabs: [
+        {
+          id: "tab-native",
+          type: "agent-native",
+          nativeAgentData: { environmentId: "env-visible", platform: "claude" },
+        },
+        {
+          id: "tab-tmux",
+          type: "claude-tmux",
+          claudeTmuxData: { environmentId: "env-visible" },
+        },
+      ],
+      activeTabId: "tab-native",
+    };
+    const summaries = new Map();
+    const mailboxes = new Map();
+    for (const [tabId, kind, tabType] of [
+      ["tab-native", "native", "agent-native"],
+      ["tab-tmux", "tmux", "claude-tmux"],
+    ] as const) {
+      const mailboxId = `env-visible\0${tabId}`;
+      const message = {
+        version: 1 as const,
+        id: `message-${tabId}`,
+        threadId: `message-${tabId}`,
+        requestId: `request-${tabId}`,
+        createdAt: new Date(0).toISOString(),
+        from: { kind: "user" as const },
+        toEnvironmentId: "env-visible",
+        toTabId: tabId,
+        toIncarnationId: `incarnation-${tabId}`,
+        bodyBytes: 5,
+        trust: "user" as const,
+        injectDepth: 0,
+        threadDepth: 0,
+        placement: "stored" as const,
+        revision: 1,
+      };
+      const descriptor = {
+        mailboxId,
+        incarnationId: `incarnation-${tabId}`,
+        projectId: "project-1",
+        projectName: "Project",
+        environmentId: "env-visible",
+        environmentName: "Visible",
+        environmentStatus: "running" as const,
+        tabId,
+        tabType,
+        title: "Claude",
+        displayName: "Claude",
+        tabOrdinal: 1,
+        agent: "claude" as const,
+        kind,
+        presence: "idle" as const,
+        injectPolicy: "off" as const,
+        injectOverride: "off" as const,
+        mutedInbound: false,
+        mutedOutbound: false,
+        unreadCount: 1,
+        userUnseenCount: 1,
+        agentUnackedCount: 1,
+        pendingInjectCount: 0,
+        failedInjectCount: 0,
+        capabilities: { canPull: true, canSend: true, canInject: true },
+      };
+      summaries.set(mailboxId, {
+        mailboxId,
+        projectId: "project-1",
+        environmentId: "env-visible",
+        tabId,
+        unreadCount: 1,
+        userUnseenCount: 1,
+        agentUnackedCount: 1,
+        pendingInjectCount: 0,
+        failedInjectCount: 0,
+        revision: 1,
+      });
+      mailboxes.set(mailboxId, {
+        descriptor,
+        messages: [message],
+        total: 1,
+        offset: 0,
+        limit: 100,
+        revision: 1,
+      });
+    }
+    useAgentMailStore.setState({
+      revision: 1,
+      summary: summaries,
+      mailboxes,
+      refreshSummary: mock(async () => undefined),
+      refreshMailbox: mock(async () => undefined),
+    });
+
+    render(
+      <PaneLeafContainer
+        pane={chatPane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+
+    expect(await screen.findAllByText("1 message in inbox · pull only")).toHaveLength(2);
   });
 
   test("forwards the owning environment to file draft recovery", async () => {

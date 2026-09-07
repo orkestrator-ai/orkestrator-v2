@@ -75,7 +75,8 @@ export class OrkestratorBackend {
   private readonly agentTools: Pick<
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
-  >;
+  > &
+    Partial<Pick<AgentToolsServer, "revokeTab">>;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -102,7 +103,8 @@ export class OrkestratorBackend {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
-    agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop">;
+    agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop"> &
+      Partial<Pick<AgentToolsServer, "revokeTab">>;
     controlMcp?: Pick<
       ControlMcpServer,
       | "getInfo"
@@ -208,6 +210,8 @@ export class OrkestratorBackend {
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginCoordinatorTurn(projectId);
         },
+        resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
+          this.agentTools.connection(environmentId, projectId, target, tabId),
         coordinatorDelegationAvailable: () => this.controlMcp.getSettings().running,
       },
     );
@@ -310,6 +314,7 @@ export class OrkestratorBackend {
       },
     );
     this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
+    context.drainAgentMail = () => this.agentMail.drainInjects();
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
       options.startupReapers?.claudeTmuxRuntimes ?? reapOrphanedClaudeTmuxRuntimes;
@@ -573,6 +578,9 @@ export class OrkestratorBackend {
         console.warn("[backend] Failed to restore Claude terminal activity:", error);
       });
     }
+    await this.agentMail.refreshPresence().catch((error) => {
+      console.warn("[backend] Failed to refresh agent mail presence:", error);
+    });
     // Queued tmux prompts left behind by a quit or crash drain from here, with
     // no renderer involved. NativeAgentService drains its own queues on its own
     // sweep; this one shares the activity sweep rather than adding a third
@@ -635,6 +643,9 @@ export class OrkestratorBackend {
       }
       void this.promptQueues.drainAll().catch((error) => {
         console.warn("[backend] Failed to drain tmux prompt queues:", error);
+      });
+      void this.agentMail.refreshPresence().catch((error) => {
+        console.warn("[backend] Failed to refresh agent mail presence:", error);
       });
       void this.agentMail.drainInjects().catch((error) => {
         console.warn("[backend] Failed to drain agent mail:", error);
@@ -770,6 +781,11 @@ export class OrkestratorBackend {
           await this.promptQueues.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain tmux prompt queues:", error);
+        }
+        try {
+          await this.agentMail.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain agent mail:", error);
         }
         await lifecycleDrain;
         await flushTerminalHistories(true);

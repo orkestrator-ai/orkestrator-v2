@@ -445,11 +445,12 @@ export class BridgeSessionStore {
     confirmedModelsByTurn?: Record<string, string>;
     asyncQuestionItemIds?: string[];
   }): PersistedBridgeSession {
+    const { agentMcp: _agentMcp, ...persistedConfig } = options.config;
     return {
       bridgeSessionId: options.bridgeSessionId,
       threadId: options.threadId,
       cwdHash: hashCwd(options.cwd),
-      config: options.config,
+      config: persistedConfig,
       title: options.title,
       titleSource: options.titleSource,
       lastAcceptedRequestId: options.lastAcceptedRequestId,

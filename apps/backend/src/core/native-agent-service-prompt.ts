@@ -1,5 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
-import { coordinatorConversationIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import {
   INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
@@ -130,6 +134,59 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
     );
     return observed?.state ?? "unknown";
+  }
+
+  sessionPresentationSnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): { presence: AgentActivityState | "unknown"; title?: string } {
+    const sessionKey = nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey);
+    const projection =
+      this.projectionCache.get(`${sessionKey}\0sync-v1`)?.projection ??
+      this.projectionCache.get(sessionKey)?.projection;
+    return {
+      presence: this.sessionActivitySnapshot(environmentId, agent, logicalSessionKey),
+      ...(projection?.title ? { title: projection.title } : {}),
+    };
+  }
+
+  /** Read-only delivery gate used before agent mail claims a durable message. */
+  async mailInjectPresence(input: NativeAgentProjectionInput): Promise<MailboxPresence> {
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
+    const draftKey = `${input.agent}:${input.environmentId}:${encodeURIComponent(input.logicalSessionKey)}`;
+    const [environment, session, queue, draft] = await Promise.all([
+      this.storage.getEnvironment(input.environmentId),
+      this.storage.getNativeAgentSession(sessionKey),
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (!coordinatorIdFromRuntimeId(input.environmentId)) {
+      if (!environment || environment.deletionRequestedAt || environment.status !== "running") {
+        return "environment_stopped";
+      }
+      if (!isEnvironmentReadyForAgents(environment)) return "environment_unready";
+    }
+    if (this.composeDraftHoldsQueue(draft?.value)) return "draft";
+    if (
+      session?.pendingDispatch ||
+      (queue && (queue.inFlight !== undefined || queue.messages.length > 0))
+    ) {
+      return "working";
+    }
+    const activity = this.sessionActivitySnapshot(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    return activity === "idle" || activity === "working" || activity === "waiting"
+      ? activity
+      : "unknown";
   }
 
   async reconcileMailInject(
@@ -303,6 +360,28 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
               };
             }
+            let agentMcp: { url: string; token: string } | undefined;
+            if (
+              (durable.agent === "claude" || durable.agent === "codex") &&
+              durable.owner?.kind === "environment" &&
+              this.options.resolveAgentToolConnection
+            ) {
+              const prefix = `env-${durable.environmentId}:`;
+              const tabId = durable.logicalSessionKey.startsWith(prefix)
+                ? durable.logicalSessionKey.slice(prefix.length)
+                : "";
+              const environment = tabId
+                ? await this.storage.getEnvironment(durable.environmentId)
+                : null;
+              if (environment) {
+                agentMcp = this.options.resolveAgentToolConnection(
+                  durable.environmentId,
+                  durable.owner.projectId,
+                  tabId,
+                  environment.environmentType === "local" ? "host" : "container",
+                );
+              }
+            }
             await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
               requestId: input.requestId,
               // Only a person typing into the composer can mean "run this
@@ -320,6 +399,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
               promptSuggestions: input.promptSuggestions,
               model: preparation.model ?? input.model,
               effort: preparation.effort ?? input.reasoningEffort,
+              agentMcp,
             });
             // Provider acceptance is the authoritative working edge. Record it
             // before the durable dispatch bookkeeping completes so a newer

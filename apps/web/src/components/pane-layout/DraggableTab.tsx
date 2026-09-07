@@ -25,9 +25,13 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
-import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
+import { AgentMailButton, openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
+import { useConfigStore } from "@/stores/configStore";
 
 /** Every agent brand mark in the tab strip is drawn at this size. */
 const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
@@ -100,6 +104,25 @@ export function DraggableTab({
   const sessions = useSessionStore((state) => state.sessions);
   const session = Array.from(sessions.values()).find((s) => s.tabId === tab.id);
   const nativeAgentData = getNativeAgentData(tab);
+  const owningEnvironmentId = environmentId ?? nativeAgentData?.environmentId;
+  const tabOrdinal = usePaneLayoutStore((state) => {
+    const paneState = owningEnvironmentId ? state.environments.get(owningEnvironmentId) : undefined;
+    if (!paneState) return index + 1;
+    const allTabs = getAllLeaves(paneState.root).flatMap((leaf) => leaf.tabs);
+    const ordinal = allTabs.findIndex((candidate) => candidate.id === tab.id) + 1;
+    return ordinal || index + 1;
+  });
+  const mailAgent = nativeAgentData?.platform
+    ? nativeAgentData.platform
+    : isAgentPlatform(tab.type)
+      ? tab.type
+      : tab.type === "claude-tmux"
+        ? "claude"
+        : null;
+  const mailCapabilities = agentMailCapabilities(tab.type, mailAgent, Boolean(mailAgent));
+  const messagingEnabled = useConfigStore(
+    (state) => state.config.global.agentMessaging?.enabled === true,
+  );
 
   /*
    * Agent-assigned session title.
@@ -151,7 +174,6 @@ export function DraggableTab({
   const isDirty = useFileDirtyStore((state) =>
     tab.type === "file" ? state.isDirty(tab.id) : false,
   );
-  const owningEnvironmentId = environmentId ?? nativeAgentData?.environmentId;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -166,13 +188,28 @@ export function DraggableTab({
     }
 
     // For terminal tabs, include session name if set
-    const tabNumber = index + 1;
+    const tabNumber = tabOrdinal;
 
     // Workflow tabs keep a stable numbered label instead of adopting the
     // agent-generated session title. "Conflict" supports restored tabs created
     // before the conflict-resolution label changed to "Resolve".
     if (workflowTitle) {
-      return `${workflowTitle} ${tabNumber}`;
+      return resolveTabDisplayName({
+        tabType: tab.type,
+        tabOrdinal,
+        workflowLabel: workflowTitle,
+      });
+    }
+
+    if (mailCapabilities.canPull) {
+      return resolveTabDisplayName({
+        tabType: tab.type,
+        tabOrdinal,
+        agent: mailAgent,
+        customSessionName: session?.name,
+        nativeSessionTitle,
+        displayTitle: tab.displayTitle,
+      });
     }
 
     if (session?.name) {
@@ -356,6 +393,21 @@ export function DraggableTab({
       )}
 
       <ContextMenuContent>
+        {owningEnvironmentId && messagingEnabled && mailCapabilities.canPull && (
+          <>
+            <ContextMenuItem
+              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "compose")}
+            >
+              Message this tab…
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => openAgentMailForTab(owningEnvironmentId, tab.id, "settings")}
+            >
+              Inbox settings…
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         {onRefresh && (
           <>
             <ContextMenuItem onClick={onRefresh}>Refresh</ContextMenuItem>

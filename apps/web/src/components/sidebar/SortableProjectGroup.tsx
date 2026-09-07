@@ -134,10 +134,17 @@ export function SortableProjectGroup({
     if (!messagingEnabled) return 0;
     let count = 0;
     for (const mailbox of state.summary.values()) {
-      if (mailbox.projectId === project.id) count += mailbox.unreadCount;
+      if (mailbox.projectId === project.id) count += mailbox.userUnseenCount ?? mailbox.unreadCount;
     }
     return count;
   });
+  const hasFailedMail = useAgentMailStore(
+    (state) =>
+      messagingEnabled &&
+      Array.from(state.summary.values()).some(
+        (mailbox) => mailbox.projectId === project.id && mailbox.failedInjectCount > 0,
+      ),
+  );
 
   return (
     <>
@@ -210,6 +217,12 @@ export function SortableProjectGroup({
                     >
                       {unreadMail > 99 ? "99+" : unreadMail}
                     </span>
+                  )}
+                  {hasFailedMail && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full bg-amber-400"
+                      aria-label="Agent message delivery failed"
+                    />
                   )}
                 </button>
               </ContextMenuTrigger>

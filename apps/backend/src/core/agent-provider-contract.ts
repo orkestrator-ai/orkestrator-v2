@@ -184,6 +184,8 @@ export interface ProviderCreateSessionOptions {
   model?: string;
   effort?: string;
   fastMode?: boolean;
+  /** Tab-scoped Orkestrator MCP credential for bridges with per-session config. */
+  agentMcp?: { url: string; token: string };
   interaction?: ProviderSessionRegistration;
 }
 
@@ -201,6 +203,8 @@ export interface ProviderSendOptions {
   model?: string;
   effort?: string;
   allowProviderCommands?: boolean;
+  /** Per-session Orkestrator MCP credential; consumed by Claude and Codex. */
+  agentMcp?: { url: string; token: string };
 }
 
 export interface ProviderInteractiveSnapshot {

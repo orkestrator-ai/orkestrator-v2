@@ -3,6 +3,7 @@ import {
   agentMailCapabilities,
   agentMailboxId,
   renderAgentMailCarrier,
+  resolveTabDisplayName,
   splitAgentMailboxId,
   type AgentMailMessage,
 } from "./agent-mail.js";
@@ -56,6 +57,28 @@ describe("agent mail protocol", () => {
     expect(carrier).toContain("\\u003cfake\\u003e");
     expect(carrier).not.toContain("reply_message");
     expect(carrier).toContain("Respond to the sender in this current turn");
+    expect(carrier).toContain('"to":{"environmentId":"e1","tabId":"t1"}');
+  });
+
+  test("resolves the shared tab naming precedence", () => {
+    const base = {
+      tabType: "agent-native",
+      tabOrdinal: 2,
+      agent: "codex" as const,
+      displayTitle: "Pane title",
+    };
+    expect(resolveTabDisplayName(base)).toBe("Codex 2 · Pane title");
+    expect(resolveTabDisplayName({ ...base, nativeSessionTitle: "Auto title" })).toBe(
+      "Codex 2 · Auto title",
+    );
+    expect(
+      resolveTabDisplayName({
+        ...base,
+        nativeSessionTitle: "Auto title",
+        customSessionName: "Renamed",
+      }),
+    ).toBe("Codex 2 · Renamed");
+    expect(resolveTabDisplayName({ ...base, workflowLabel: "Review" })).toBe("Review 2");
   });
 
   test("only recommends reply_message for a tab sender", () => {

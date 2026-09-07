@@ -244,6 +244,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 modelReasoningEffort: options.effort ?? this.connection.effort,
                 mode,
                 clientSessionKey,
+                agentMcp: options.agentMcp,
               }
             : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
               ? {
@@ -256,7 +257,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
                     : {}),
                 }
-              : { title: label, clientSessionKey },
+              : { title: label, clientSessionKey, agentMcp: options.agentMcp },
         ),
       },
       this.fetchImpl,
@@ -272,16 +273,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return body.sessionId;
   }
 
-  /**
-   * Attach the bridge's agent process before the dispatch window opens.
-   *
-   * Only the bridges with a real cold start expose this. The ACP bridges spawn
-   * a CLI child and run `initialize` plus `session/load`; the Pi bridge builds
-   * a model runtime, loads its resources and opens a session file. Either way
-   * that is work which used to run inside the at-most-once window and abort the
-   * caller mid-flight. A bridge that predates the route answers 404 and the
-   * prompt request does the work itself, exactly as before.
-   */
+  /** Best-effort bridge cold-start outside the at-most-once dispatch window. */
   async prepareDispatch(sessionId: string): Promise<void> {
     if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") return;
     const response = await bridgeFetch(
@@ -404,16 +396,22 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   agent: options.subAgent,
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
+                  agentMcp: options.agentMcp,
                   permissionMode: options.mode === "plan" ? "plan" : "bypassPermissions",
                 }
-              : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
+              : this.agent === "codex"
                 ? {
                     fastMode: options.fastMode ?? this.connection.fastMode,
-                    model: options.model ?? this.connection.model,
-                    reasoningEffort: options.effort ?? this.connection.effort,
-                    mode: options.mode,
+                    agentMcp: options.agentMcp,
                   }
-                : { fastMode: options.fastMode ?? this.connection.fastMode }),
+                : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
+                  ? {
+                      fastMode: options.fastMode ?? this.connection.fastMode,
+                      model: options.model ?? this.connection.model,
+                      reasoningEffort: options.effort ?? this.connection.effort,
+                      mode: options.mode,
+                    }
+                  : { fastMode: options.fastMode ?? this.connection.fastMode }),
           }),
         },
         this.fetchImpl,

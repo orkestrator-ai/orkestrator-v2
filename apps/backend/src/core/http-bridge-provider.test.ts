@@ -40,6 +40,19 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("forwards tab-scoped MCP credentials only in Claude and Codex request bodies", async () => {
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    for (const connection of [claudeConnection, codexConnection]) {
+      const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
+      await created.provider.createSession("build", "Scoped", { agentMcp });
+      expect(JSON.parse(String(created.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "work", { requestId: "request-1", agentMcp });
+      expect(JSON.parse(String(sent.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
+    }
+  });
+
   test("uses the connection speed default for session creation and prompt dispatch", async () => {
     const cursor = httpProvider(() => Response.json({ sessionId: "cursor-session" }), {
       ...cursorConnection,

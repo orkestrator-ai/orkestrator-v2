@@ -27,6 +27,7 @@ export const RESOURCE_KINDS = [
   "file-draft",
   "agent-mail",
   "agent-mail-summary",
+  "coordinator",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

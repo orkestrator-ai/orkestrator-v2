@@ -509,7 +509,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
     const [{ servers: mcpServers, names: mcpServerNames }, plugins] = await Promise.all([
-      getMcpRuntimeConfig(cwd),
+      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp),
       getPluginsForSdk(cwd),
     ]);
 

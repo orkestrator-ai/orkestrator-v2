@@ -101,6 +101,272 @@ async function replaceRecipientTab(storage: StorageService, type: "agent-native"
 }
 
 describe("AgentMailService", () => {
+  test("synchronizes within a bounded delay during sustained resource changes", async () => {
+    const { storage, dataDir } = await fixture();
+    let listener: Parameters<StorageService["addResourceChangeListener"]>[0] | undefined;
+    let syncs = 0;
+    let unsubscribed = false;
+    storage.synchronizeAgentMailboxes = async () => {
+      syncs += 1;
+    };
+    storage.addResourceChangeListener = (next) => {
+      listener = next;
+      return () => {
+        unsubscribed = true;
+      };
+    };
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "unknown",
+        sessionActivitySnapshot: () => "idle",
+        dispatchMailInject: async (input) => ({
+          outcome: "accepted",
+          requestId: input.requestId,
+        }),
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+    );
+    try {
+      await service.init();
+      listener?.({ resource: "agent-mail", id: "recipient\0agent", revision: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(syncs).toBe(1);
+      const interval = setInterval(
+        () =>
+          listener?.({
+            resource: "native-agent-session",
+            id: "recipient",
+            revision: Date.now(),
+          }),
+        50,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      clearInterval(interval);
+      expect(syncs).toBeGreaterThanOrEqual(2);
+
+      listener?.({ resource: "pane-layout", id: "recipient", revision: Date.now() });
+      await service.shutdown();
+      const stoppedAt = syncs;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(syncs).toBe(stoppedAt);
+      expect(unsubscribed).toBe(true);
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("converges the mailbox directory after tabs open and close", async () => {
+    const { storage, dataDir } = await fixture();
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "unknown",
+        sessionActivitySnapshot: () => "idle",
+        dispatchMailInject: async (input) => ({
+          outcome: "accepted",
+          requestId: input.requestId,
+        }),
+      },
+      { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+    );
+    try {
+      await service.init();
+      const opened = await storage.getPaneLayout("recipient");
+      if (!opened) throw new Error("recipient layout missing");
+      await storage.savePaneLayout(
+        "recipient",
+        {
+          version: opened.version,
+          containerId: opened.containerId,
+          activePaneId: "pane",
+          root: {
+            kind: "leaf",
+            id: "pane",
+            tabs: [
+              {
+                id: "agent",
+                type: "agent-native",
+                nativeAgentData: { environmentId: "recipient", platform: "claude" },
+              },
+              {
+                id: "agent-2",
+                type: "agent-native",
+                nativeAgentData: { environmentId: "recipient", platform: "codex" },
+              },
+            ],
+            activeTabId: "agent",
+          },
+        },
+        opened.revision,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 325));
+      expect(
+        (await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.map(
+          ({ tabId }) => tabId,
+        ),
+      ).toContain("agent-2");
+
+      const closed = await storage.getPaneLayout("recipient");
+      if (!closed) throw new Error("recipient layout missing");
+      await storage.savePaneLayout(
+        "recipient",
+        {
+          version: closed.version,
+          containerId: closed.containerId,
+          activePaneId: "pane",
+          root: {
+            kind: "leaf",
+            id: "pane",
+            tabs: [
+              {
+                id: "agent",
+                type: "agent-native",
+                nativeAgentData: { environmentId: "recipient", platform: "claude" },
+              },
+            ],
+            activeTabId: "agent",
+          },
+        },
+        closed.revision,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 325));
+      expect(
+        (await storage.listAgentMailboxes({ environmentId: "recipient" })).mailboxes.map(
+          ({ tabId }) => tabId,
+        ),
+      ).not.toContain("agent-2");
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("expires observed presence and falls back to the live presentation", async () => {
+    const { storage, dataDir } = await fixture();
+    const originalNow = Date.now;
+    let now = 1_000;
+    Date.now = () => now;
+    try {
+      await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "presence-ttl",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Wait until idle.",
+        },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "working",
+          sessionPresentationSnapshot: () => ({ presence: "idle" }),
+          mailInjectPresence: async () => "working",
+          dispatchMailInject: async (input) => ({
+            outcome: "accepted",
+            requestId: input.requestId,
+          }),
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      expect((await storage.getAgentMailMailbox("recipient", "agent")).descriptor.presence).toBe(
+        "working",
+      );
+
+      now += 4_001;
+      expect((await storage.getAgentMailMailbox("recipient", "agent")).descriptor.presence).toBe(
+        "idle",
+      );
+      await service.shutdown();
+    } finally {
+      Date.now = originalNow;
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("refreshes tmux presence even when the mailbox has no pending delivery", async () => {
+    const { storage, dataDir } = await fixture();
+    let presence: "draft" | "idle" = "draft";
+    const service = new AgentMailService(
+      storage,
+      {
+        reconcileMailInject: async () => "unknown",
+        sessionActivitySnapshot: () => "unknown",
+        dispatchMailInject: async (input) => ({
+          outcome: "accepted",
+          requestId: input.requestId,
+        }),
+      },
+      {
+        mailInjectPresence: async () => presence,
+        dispatchMailInject: async () => ({ outcome: "accepted" }),
+      },
+    );
+    try {
+      await replaceRecipientTab(storage, "claude-tmux");
+      await service.init();
+      expect((await storage.getAgentMailMailbox("recipient", "agent")).descriptor.presence).toBe(
+        "draft",
+      );
+      presence = "idle";
+      await service.refreshPresence();
+      expect((await storage.getAgentMailMailbox("recipient", "agent")).descriptor.presence).toBe(
+        "idle",
+      );
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rechecks deferred delivery and injects as soon as the recipient is idle", async () => {
+    const { storage, dataDir } = await fixture();
+    let dispatches = 0;
+    try {
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "idle-before-backoff",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Deliver on the next idle sweep.",
+        },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            dispatches += 1;
+            return dispatches === 1
+              ? { outcome: "held", reason: "busy" }
+              : { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+
+      await service.drainInjects();
+      expect(dispatches).toBe(2);
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "injected",
+      });
+      await service.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("delivers an idle native message once without renderer involvement", async () => {
     const { storage, dataDir } = await fixture();
     const dispatches: Array<Record<string, unknown>> = [];
@@ -218,7 +484,7 @@ describe("AgentMailService", () => {
     }
   });
 
-  test("keeps a message pending while a user queue has priority", async () => {
+  test("pre-checks a busy native queue without claiming or rewriting mail", async () => {
     const { storage, dataDir } = await fixture();
     let dispatches = 0;
     try {
@@ -239,6 +505,7 @@ describe("AgentMailService", () => {
         {
           reconcileMailInject: async () => "unknown",
           sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "working",
           dispatchMailInject: async () => {
             dispatches += 1;
             return { outcome: "held", reason: "queue" };
@@ -248,13 +515,73 @@ describe("AgentMailService", () => {
       );
 
       await service.init();
+      const mailPath = path.join(dataDir, "agent-mail.json");
+      const before = await fs.stat(mailPath);
       await service.drainInjects();
+      await service.drainInjects();
+      const after = await fs.stat(mailPath);
 
-      expect(dispatches).toBe(1);
+      expect(dispatches).toBe(0);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
         placement: "pending-inject",
-        placementReason: "queue",
       });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("pre-checks tmux draft and busy state without claiming", async () => {
+    const { storage, dataDir } = await fixture();
+    let dispatches = 0;
+    try {
+      await replaceRecipientTab(storage, "claude-tmux");
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "tmux-busy",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Wait for the terminal.",
+        },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "unknown",
+          dispatchMailInject: async (input) => ({
+            outcome: "accepted",
+            requestId: input.requestId,
+          }),
+        },
+        {
+          mailInjectPresence: async () => "draft",
+          dispatchMailInject: async () => {
+            dispatches += 1;
+            return { outcome: "accepted" };
+          },
+        },
+      );
+      await service.init();
+      const mailChanges: string[] = [];
+      const unsubscribe = storage.addResourceChangeListener((change) => {
+        if (change.resource === "agent-mail") mailChanges.push(change.id);
+      });
+      const before = await fs.stat(path.join(dataDir, "agent-mail.json"));
+      for (let sweep = 0; sweep < 30; sweep += 1) await service.drainInjects();
+      const after = await fs.stat(path.join(dataDir, "agent-mail.json"));
+      unsubscribe();
+
+      expect(dispatches).toBe(0);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(mailChanges).toEqual([]);
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "pending-inject",
+      });
+      expect((await storage.getAgentMailMailbox("recipient", "agent")).descriptor.presence).toBe(
+        "draft",
+      );
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

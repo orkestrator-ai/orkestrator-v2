@@ -67,6 +67,16 @@ into an agent turn. The destination's user can inspect and acknowledge them in
 the global inbox. `send_message` requires a stable `requestId`; retrying the
 same request with different content is rejected.
 
+## Agent mailbox credential boundary
+
+An agent-tools credential is scoped either to one tab or to one environment.
+A tab credential can act only as that tab. An environment credential authorizes
+the agent mailboxes inside that environment: when there is one pull-capable tab
+the backend resolves it automatically; when there are several, the caller must
+claim a live pull-capable tab id on each messaging call. This does not widen the
+trust boundary—sibling tabs already share the project, environment, worktree,
+and user—and claims outside the environment or for non-agent tabs are denied.
+
 ## Project coordinator credentials
 
 The project Coordinator uses the same HTTP endpoint with a separate,

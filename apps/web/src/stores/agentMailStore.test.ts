@@ -37,6 +37,8 @@ function mailbox(revision: number, messageRevision = 1): AgentMailMailboxSnapsho
       tabId: "tab-1",
       tabType: "agent-native",
       title: "Agent",
+      displayName: "Claude 1 · Agent",
+      tabOrdinal: 1,
       agent: "claude",
       kind: "native",
       presence: "unknown",
@@ -44,6 +46,10 @@ function mailbox(revision: number, messageRevision = 1): AgentMailMailboxSnapsho
       mutedInbound: false,
       mutedOutbound: false,
       unreadCount: 1,
+      userUnseenCount: 1,
+      agentUnackedCount: 1,
+      pendingInjectCount: 0,
+      failedInjectCount: 0,
       capabilities: { canPull: true, canSend: true, canInject: true },
     },
     messages: [summary],
@@ -67,6 +73,8 @@ describe("agentMailStore authoritative adoption", () => {
           environmentId: "env-1",
           tabId: "tab-1",
           unreadCount: 1,
+          userUnseenCount: 1,
+          agentUnackedCount: 1,
           pendingInjectCount: 0,
           failedInjectCount: 0,
           revision: 5,
@@ -91,5 +99,52 @@ describe("agentMailStore authoritative adoption", () => {
     useAgentMailStore.getState().setSummary({ revision: 3, mailboxes: [] });
     expect(useAgentMailStore.getState().mailboxes.size).toBe(0);
     expect(useAgentMailStore.getState().bodies.size).toBe(0);
+  });
+
+  test("reports a later injection failure for a message sent by this client", () => {
+    const sent = { ...message(1), placement: "pending-inject" as const };
+    useAgentMailStore.getState().trackSent(sent);
+    const failed = mailbox(2, 2);
+    failed.messages[0] = {
+      ...failed.messages[0]!,
+      placement: "inject_failed",
+      placementReason: "rejected",
+    };
+    useAgentMailStore.getState().setMailbox(failed);
+
+    expect(useAgentMailStore.getState().failedSent.get(sent.id)).toMatchObject({
+      id: sent.id,
+      body: sent.body,
+    });
+    expect(useAgentMailStore.getState().sent.has(sent.id)).toBe(false);
+  });
+
+  test("reports failure after an intermediate revision invalidates the body cache", () => {
+    const sent = { ...message(1), placement: "pending-inject" as const };
+    useAgentMailStore.getState().setMailbox(mailbox(1, 1));
+    useAgentMailStore.getState().trackSent(sent);
+    const held = mailbox(2, 2);
+    held.messages[0] = {
+      ...held.messages[0]!,
+      placement: "pending-inject",
+      placementReason: "busy",
+    };
+    useAgentMailStore.getState().setMailbox(held);
+    expect(useAgentMailStore.getState().bodies.has(sent.id)).toBe(false);
+
+    const failed = mailbox(3, 3);
+    failed.messages[0] = {
+      ...failed.messages[0]!,
+      placement: "inject_failed",
+      placementReason: "rejected",
+    };
+    useAgentMailStore.getState().setMailbox(failed);
+
+    expect(useAgentMailStore.getState().failedSent.get(sent.id)).toMatchObject({
+      id: sent.id,
+      body: sent.body,
+      placement: "inject_failed",
+      placementReason: "rejected",
+    });
   });
 });

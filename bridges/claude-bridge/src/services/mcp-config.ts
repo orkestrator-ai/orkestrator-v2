@@ -53,12 +53,24 @@ const AGENT_MCP_SERVER_NAME = "orkestrator";
 const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
 
+export type AgentMcpConnection = { url: string; token: string };
+
+export function getOrkestratorAgentMcpServerFromConnection(
+  connection: AgentMcpConnection | undefined,
+): SdkMcpHttpServerConfig | null {
+  if (!connection?.url?.trim() || !connection.token?.trim()) return null;
+  return getOrkestratorAgentMcpServer({
+    [AGENT_MCP_URL_ENV]: connection.url,
+    [AGENT_MCP_TOKEN_ENV]: connection.token,
+  });
+}
+
 export function getOrkestratorAgentMcpServer(
   env: NodeJS.ProcessEnv = process.env,
 ): SdkMcpHttpServerConfig | null {
   const rawUrl = env[AGENT_MCP_URL_ENV]?.trim();
   const token = env[AGENT_MCP_TOKEN_ENV]?.trim();
-  if (!rawUrl || !token) return null;
+  if (!rawUrl || !token || Buffer.byteLength(token, "utf8") > 1024) return null;
   try {
     const url = new URL(rawUrl);
     if (
@@ -272,12 +284,14 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
 export async function getMcpRuntimeConfig(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  connection?: AgentMcpConnection,
 ): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
 }> {
   const configs = await getMergedMcpServers(cwd);
-  const agentServer = getOrkestratorAgentMcpServer(env);
+  const agentServer =
+    getOrkestratorAgentMcpServerFromConnection(connection) ?? getOrkestratorAgentMcpServer(env);
   const servers = toSdkServers(configs);
   // Backend-provided credentials are authoritative for this reserved name.
   // A project-local config must not be able to redirect the trusted ticket

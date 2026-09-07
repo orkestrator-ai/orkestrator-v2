@@ -158,6 +158,7 @@ export class StorageService extends StorageKanban {
       else delete store.workspaces[projectId];
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      this.announce("coordinator", projectId, projectId);
       return next;
     });
   }

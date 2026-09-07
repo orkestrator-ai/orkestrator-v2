@@ -236,6 +236,35 @@ describe("thread lifecycle", () => {
     });
   });
 
+  test("passes a tab-scoped Orkestrator MCP authorization header per thread and turn", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+    };
+    await h.engine.start();
+    const started = await h.engine.startThread({ config });
+    await h.engine.startTurn({
+      handle: started.handle,
+      input: [{ type: "text", text: "work" }],
+      config,
+    });
+
+    for (const method of ["thread/start", "turn/start"]) {
+      expect(
+        h.child().requests.find((request) => request.method === method)?.params.config,
+      ).toEqual({
+        "mcp_servers.orkestrator.url": "http://127.0.0.1:4567/mcp",
+        "mcp_servers.orkestrator.http_headers": { Authorization: "Bearer tab-secret" },
+        "mcp_servers.orkestrator.required": false,
+        "mcp_servers.orkestrator.startup_timeout_sec": 3,
+      });
+    }
+  });
+
   test("plan mode resolves to a read-only sandbox", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();

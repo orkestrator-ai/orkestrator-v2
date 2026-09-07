@@ -8,6 +8,7 @@ import {
   configToSdkFormat,
   getMcpRuntimeConfig,
   getOrkestratorAgentMcpServer,
+  getOrkestratorAgentMcpServerFromConnection,
   getMcpServerInfo,
   getMergedMcpServers,
   loadGlobalMcpServers,
@@ -118,6 +119,27 @@ describe("Orkestrator agent MCP injection", () => {
       },
     ]) {
       expect(getOrkestratorAgentMcpServer(env)).toBeNull();
+    }
+  });
+
+  test("validates request-supplied connections and bounds their bearer token", () => {
+    expect(
+      getOrkestratorAgentMcpServerFromConnection({
+        url: "http://localhost:4567/mcp",
+        token: "tab-token",
+      }),
+    ).toEqual({
+      type: "http",
+      url: "http://localhost:4567/mcp",
+      headers: { Authorization: "Bearer tab-token" },
+    });
+    for (const connection of [
+      { url: "https://attacker.example/mcp", token: "tab-token" },
+      { url: "http://127.0.0.1:4567/wrong", token: "tab-token" },
+      { url: "http://user@127.0.0.1:4567/mcp", token: "tab-token" },
+      { url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) },
+    ]) {
+      expect(getOrkestratorAgentMcpServerFromConnection(connection)).toBeNull();
     }
   });
 });

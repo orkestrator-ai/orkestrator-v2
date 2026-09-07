@@ -1666,6 +1666,32 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         : undefined;
     const reasoningEffort =
       typeof body.modelReasoningEffort === "string" ? body.modelReasoningEffort : undefined;
+    const rawAgentMcp = body.agentMcp;
+    let agentMcp: EngineTurnConfig["agentMcp"];
+    if (rawAgentMcp && typeof rawAgentMcp === "object" && !Array.isArray(rawAgentMcp)) {
+      const candidate = rawAgentMcp as Record<string, unknown>;
+      if (
+        typeof candidate.url === "string" &&
+        typeof candidate.token === "string" &&
+        candidate.token.length > 0 &&
+        candidate.token.length <= 1_024
+      ) {
+        try {
+          const url = new URL(candidate.url);
+          if (
+            url.protocol === "http:" &&
+            ["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname) &&
+            url.pathname === "/mcp" &&
+            !url.username &&
+            !url.password
+          ) {
+            agentMcp = { url: url.toString(), token: candidate.token };
+          }
+        } catch {
+          // Ignore malformed injected configuration; process-level MCP remains available.
+        }
+      }
+    }
     return {
       mode,
       model,
@@ -1679,6 +1705,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // and re-applied for create, resume, config updates, forks and every turn.
       sandbox: coordinatorReadOnly || mode === "plan" ? "read-only" : "danger-full-access",
       networkAccessEnabled: coordinatorReadOnly ? false : true,
+      ...(agentMcp ? { agentMcp } : {}),
       ...(coordinatorReadOnly ? { permissionProfile: requiredCoordinatorPermissionProfile() } : {}),
     };
   }

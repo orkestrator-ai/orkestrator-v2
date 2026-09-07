@@ -1224,9 +1224,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       if (!persisted) return false;
       // Round-tripped so both sides drop `undefined` members identically; key
       // order is the store's own serialization of this same object.
+      const { agentMcp: _agentMcp, ...persistableConfig } = session.config;
       return (
         JSON.stringify(persisted.config) ===
-        JSON.stringify(JSON.parse(JSON.stringify(session.config)))
+        JSON.stringify(JSON.parse(JSON.stringify(persistableConfig)))
       );
     } catch {
       return false;

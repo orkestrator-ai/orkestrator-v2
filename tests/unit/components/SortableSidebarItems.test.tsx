@@ -5,6 +5,8 @@ import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
 import * as realBackend from "@/lib/backend";
 import * as realSonner from "sonner";
+import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 
 const realSortableSnapshot = { ...realSortable };
 const realEnvironmentItemSnapshot = { ...realEnvironmentItem };
@@ -92,6 +94,7 @@ describe("sortable sidebar items", () => {
     openInBrowser.mockClear();
     openInBrowser.mockImplementation(async () => {});
     toastError.mockClear();
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
   });
 
   afterAll(() => {
@@ -197,6 +200,54 @@ describe("sortable sidebar items", () => {
 
     fireEvent.click(projectButton);
     expect(onSelectProject).toHaveBeenCalled();
+  });
+
+  test("SortableProjectGroup aggregates unseen and failed agent mail", () => {
+    const config = structuredClone(useConfigStore.getInitialState().config);
+    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
+    useConfigStore.setState({ config });
+    useAgentMailStore.setState({
+      summary: new Map([
+        [
+          "env-1\0agent",
+          {
+            mailboxId: "env-1\0agent",
+            projectId: "project-1",
+            environmentId: "env-1",
+            tabId: "agent",
+            unreadCount: 3,
+            userUnseenCount: 3,
+            agentUnackedCount: 3,
+            pendingInjectCount: 0,
+            failedInjectCount: 1,
+            revision: 1,
+          },
+        ],
+      ]),
+    });
+
+    render(
+      <SortableProjectGroup
+        project={project}
+        environments={[environment]}
+        isCollapsed={false}
+        isSelected={false}
+        onToggleCollapse={() => {}}
+        selectedEnvironmentId={null}
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+        onDeleteProject={() => {}}
+        onOpenSettings={() => {}}
+        onDeleteEnvironment={() => {}}
+        onStartEnvironment={() => {}}
+        onStopEnvironment={() => {}}
+        onRestartEnvironment={() => {}}
+        onCreateEnvironment={() => {}}
+      />,
+    );
+
+    expect(screen.getByLabelText("3 unread agent messages")).toBeTruthy();
+    expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
   });
 
   test("SortableProjectGroup highlights the header only when isSelected is true", () => {

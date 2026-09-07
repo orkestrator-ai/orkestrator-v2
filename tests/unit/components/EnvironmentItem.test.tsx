@@ -148,6 +148,8 @@ import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivit
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
@@ -239,6 +241,10 @@ beforeEach(() => {
   useEnvironmentStore.setState({ deletingEnvironments: new Set<string>() });
   useEnvironmentDiffStore.setState({ stats: new Map() });
   useBuildPipelineStore.setState({ buildEnvironmentIds: new Set<string>() });
+  useAgentMailStore.setState(useAgentMailStore.getInitialState());
+  const config = structuredClone(useConfigStore.getInitialState().config);
+  config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
+  useConfigStore.setState({ config });
 });
 
 afterEach(() => {
@@ -258,6 +264,32 @@ test("memoizes stable row props", () => {
   } finally {
     Date.prototype.toLocaleDateString = originalToLocaleDateString;
   }
+});
+
+test("shows authoritative unseen and failed agent-mail badges", () => {
+  useAgentMailStore.setState({
+    summary: new Map([
+      [
+        "env-1\0agent",
+        {
+          mailboxId: "env-1\0agent",
+          projectId: "project-1",
+          environmentId: "env-1",
+          tabId: "agent",
+          unreadCount: 2,
+          userUnseenCount: 2,
+          agentUnackedCount: 2,
+          pendingInjectCount: 0,
+          failedInjectCount: 1,
+          revision: 1,
+        },
+      ],
+    ]),
+  });
+
+  renderItem(makeEnvironment());
+  expect(screen.getByLabelText("2 unread agent messages")).toBeTruthy();
+  expect(screen.getByLabelText("Agent message delivery failed")).toBeTruthy();
 });
 
 test("only reacts to its own resolved activity state", () => {

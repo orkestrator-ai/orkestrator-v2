@@ -1209,6 +1209,7 @@ app.post("/session/:id/prompt", async (c) => {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;
+  const agentMcp = body.agentMcp;
   const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
   if (
     rawAttachments.some(
@@ -1246,6 +1247,9 @@ app.post("/session/:id/prompt", async (c) => {
     requestId,
     attachments,
     outputSchema,
+    ...(agentMcp && typeof agentMcp === "object" && !Array.isArray(agentMcp)
+      ? { agentMcp: agentMcp as { url: string; token: string } }
+      : {}),
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json(outcome.result, 202);

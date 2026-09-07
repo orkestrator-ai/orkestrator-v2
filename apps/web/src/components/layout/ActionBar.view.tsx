@@ -215,8 +215,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     selectedEnvironmentId,
     selectedProjectId,
     projectBoardTab,
-    setProjectBoardTab,
-    setProjectBoardNotesOpen,
+    openProjectBoardTab,
+    openProjectNotes,
     updateEnvironment,
     selectedEnvironment,
     workspaceReady,
@@ -1263,19 +1263,23 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       variant={isGrid ? "ghost" : "outline"}
                       size={isGrid ? "icon" : "sm"}
                       className="gap-1.5"
-                      onClick={() => setProjectBoardNotesOpen(true)}
+                      onClick={openProjectNotes}
                       aria-label="Project notes"
-                      disabled={!isProjectBoardView || projectBoardTab !== "kanban"}
+                      disabled={!selectedProject}
                     >
                       <StickyNote className="h-3.5 w-3.5" />
-                      {!isGrid && "Project Notes"}
+                      {isGrid ? (
+                        <span className="truncate text-xs">Project notes</span>
+                      ) : (
+                        "Project Notes"
+                      )}
                     </Button>
                   )}
                   <SegmentedSelector
                     value={projectBoardTab}
-                    onValueChange={setProjectBoardTab}
-                    disabled={!isProjectBoardView}
-                    semantics="tabs"
+                    onValueChange={openProjectBoardTab}
+                    disabled={!selectedProject}
+                    semantics={isProjectBoardView ? "tabs" : "buttons"}
                     ariaLabel="Project navigation"
                     className={cn(
                       "max-w-[min(100%,36rem)] overflow-x-auto bg-zinc-900/80",

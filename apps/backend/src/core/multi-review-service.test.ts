@@ -850,6 +850,78 @@ test("MultiReviewService dispatches a durable address intent without a renderer"
   );
 });
 
+test("MultiReviewService persists a seeded replacement for a missing interactive Fix session", async () => {
+  const provider = new Provider();
+  const recoverAddressSession = jest.fn(
+    async (workflow: MultiReviewWorkflow, replacement: { tabId: string }) => ({
+      tabId: replacement.tabId,
+      fixSession: {
+        ...workflow.fixSession!,
+        sessionKey: workflow.fixSession!.sessionKey.startsWith(
+          `multi-review:${workflow.id}:interactive`,
+        )
+          ? workflow.fixSession!.sessionKey
+          : `multi-review:${workflow.id}:interactive`,
+        providerSessionId: "provider-replacement",
+        requestIds: [...workflow.fixSession!.requestIds, "replacement-request"],
+        status: "idle" as const,
+      },
+    }),
+  );
+  await withService(
+    "env-address-replacement",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      const interactive = (await snapshot(started.id))!;
+
+      const recovered = await service.recoverFixSession("env-address-replacement", {
+        tabId: interactive.fixTabId!,
+        expectedProviderSessionId: ready.fixSession!.providerSessionId,
+        replacementProviderSessionId: "provider-replacement",
+      });
+
+      expect(recoverAddressSession).toHaveBeenCalledTimes(1);
+      expect(recovered.fixSession).toMatchObject({
+        providerSessionId: "provider-replacement",
+        sessionKey: `multi-review:${started.id}:interactive`,
+        status: "idle",
+      });
+      expect(recovered.fixSessionKey).toBe(`multi-review:${started.id}:interactive`);
+      expect(recovered.presentationError).toContain(
+        "fresh Fix session was created and seeded with the consolidated findings",
+      );
+
+      await expect(
+        service.recoverFixSession("env-address-replacement", {
+          tabId: interactive.fixTabId!,
+          expectedProviderSessionId: ready.fixSession!.providerSessionId,
+          replacementProviderSessionId: "provider-replacement",
+        }),
+      ).resolves.toMatchObject({
+        fixSession: { providerSessionId: "provider-replacement" },
+      });
+      expect(recoverAddressSession).toHaveBeenCalledTimes(1);
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          fixSession: workflow.fixSession!,
+          tabId: workflow.addressTabId!,
+        }),
+        recoverAddressSession,
+      },
+    },
+  );
+});
+
 test("MultiReviewService owns a custom-fix launch after the renderer records intent", async () => {
   const provider = new Provider();
   let releaseDispatch!: () => void;

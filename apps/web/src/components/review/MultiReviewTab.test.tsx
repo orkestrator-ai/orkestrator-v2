@@ -577,7 +577,6 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           tabId: "multi-review-fix:multi-1",
           activateExistingTab: true,
           resumeSessionId: "provider-fix",
-          requireExistingResumeSession: true,
           agentLaunchMode: "native",
           initialConversationMode: "build",
         }),
@@ -1241,14 +1240,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(await screen.findByText(/cannot open agent tabs right now/i)).toBeTruthy();
   });
 
-  test("builds native tab options that resume the consolidation session", () => {
+  test("resumes the consolidation session but allows a missing session to be recovered", () => {
     const ready = readyWorkflow();
     expect(multiReviewFixSessionTabOptions(ready)).toEqual({
       tabId: "multi-review-fix:multi-1",
       activateExistingTab: true,
       agentLaunchMode: "native",
       resumeSessionId: "provider-fix",
-      requireExistingResumeSession: true,
       displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
       isReviewTab: true,
       initialAgentModel: "gpt-5.6",
@@ -1256,6 +1254,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       initialConversationMode: "build",
     });
     expect(multiReviewFixSessionTabOptions(ready)).not.toHaveProperty("initialPrompt");
+    expect(multiReviewFixSessionTabOptions(ready)).not.toHaveProperty(
+      "requireExistingResumeSession",
+    );
     const defaultModel = multiReviewFixSessionTabOptions({
       ...ready,
       fixModel: { agent: "codex", model: "default" },

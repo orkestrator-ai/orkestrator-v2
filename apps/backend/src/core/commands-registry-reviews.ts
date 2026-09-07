@@ -233,6 +233,28 @@ export function registerReviewWorkflowCommands(
       .retry(asNonBlankString(workflowId, "workflowId"))
       .then(stripLoopedReviewSnapshotSecrets);
   });
+  register(
+    "recover_multi_review_fix_session",
+    (
+      { environmentId, tabId, expectedProviderSessionId, replacementProviderSessionId },
+      context,
+    ) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      return context.multiReviews
+        .recoverFixSession(asNonBlankString(environmentId, "environmentId"), {
+          tabId: asNonBlankString(tabId, "tabId"),
+          expectedProviderSessionId: asNonBlankString(
+            expectedProviderSessionId,
+            "expectedProviderSessionId",
+          ),
+          replacementProviderSessionId: asNonBlankString(
+            replacementProviderSessionId,
+            "replacementProviderSessionId",
+          ),
+        })
+        .then(stripLoopedReviewSnapshotSecrets);
+    },
+  );
   register("stop_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews

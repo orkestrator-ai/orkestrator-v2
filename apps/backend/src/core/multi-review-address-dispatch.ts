@@ -7,10 +7,12 @@ import {
   type MultiReviewFixSession,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { createHash } from "node:crypto";
 import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
 } from "./native-agent-service.js";
+import { addressPrompt } from "./build-pipeline-prompts.js";
 
 export class MissingMultiReviewAddressSessionError extends Error {
   constructor() {
@@ -42,10 +44,98 @@ export interface MultiReviewAddressDispatchResult {
   presentationError?: string;
 }
 
+export interface MultiReviewFixSessionReplacement {
+  expectedProviderSessionId: string;
+  replacementProviderSessionId: string;
+  tabId: string;
+}
+
 type AddressNativeAgents = Pick<
   NativeAgentService,
   "adoptSession" | "ensureSession" | "dispatchIntent"
 >;
+
+function replacementRequestId(workflow: MultiReviewWorkflow, providerSessionId: string): string {
+  const replacement = createHash("sha256").update(providerSessionId).digest("hex").slice(0, 24);
+  return `multi-review-address-replacement:${workflow.id}:${replacement}`;
+}
+
+/**
+ * Rebind a Fix tab whose provider rollout disappeared and seed the replacement
+ * with the authoritative consolidated report before the renderer can use it.
+ */
+export async function recoverMissingMultiReviewFixSession(
+  nativeAgents: AddressNativeAgents,
+  workflow: MultiReviewWorkflow,
+  replacement: MultiReviewFixSessionReplacement,
+): Promise<MultiReviewAddressDispatchResult> {
+  const session = workflow.fixSession;
+  if (
+    workflow.phase !== "interactive" ||
+    !workflow.consolidatedReport ||
+    !session ||
+    session.providerSessionId !== replacement.expectedProviderSessionId
+  ) {
+    throw new InvalidMultiReviewAddressStateError(
+      "The Multi Review Fix session replacement no longer matches the workflow",
+    );
+  }
+  const expectedTabId =
+    workflow.fixTabId ?? workflow.addressTabId ?? `multi-review-fix:${workflow.id}`;
+  if (replacement.tabId !== expectedTabId) {
+    throw new InvalidMultiReviewAddressStateError(
+      "The Multi Review Fix session replacement targeted an unexpected tab",
+    );
+  }
+  const interactiveSessionKeyPrefix = `multi-review:${workflow.id}:interactive`;
+  const logicalSessionKey =
+    workflow.addressSessionKey ??
+    (session.sessionKey.startsWith(interactiveSessionKeyPrefix)
+      ? session.sessionKey
+      : interactiveSessionKeyPrefix);
+  const model = workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model;
+  const identity = {
+    environmentId: workflow.environmentId,
+    agent: workflow.fixModel.agent,
+    logicalSessionKey,
+    origin: "interactive-native" as const,
+    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+    model,
+    reasoningEffort: workflow.fixModel.reasoningEffort,
+    phase: "fix" as const,
+    sessionMode: "build" as const,
+  };
+  await nativeAgents.adoptSession({
+    ...identity,
+    providerSessionId: replacement.replacementProviderSessionId,
+    expectedProviderSessionId: replacement.expectedProviderSessionId,
+  });
+  const requestId = replacementRequestId(workflow, replacement.replacementProviderSessionId);
+  const outcome = await nativeAgents.dispatchIntent({
+    ...identity,
+    prompt: addressPrompt(workflow.consolidatedReport),
+    requestId,
+    mode: "build",
+  });
+  if (outcome.outcome !== "accepted") {
+    throw new MultiReviewAddressDispatchError(
+      outcome.error ?? "The replacement Fix session prompt was not confirmed",
+    );
+  }
+  return {
+    tabId: replacement.tabId,
+    fixSession: {
+      ...session,
+      sessionKey: logicalSessionKey,
+      providerSessionId: replacement.replacementProviderSessionId,
+      requestIds: session.requestIds.includes(requestId)
+        ? session.requestIds
+        : [...session.requestIds.slice(-255), requestId],
+      status: "idle",
+    },
+  };
+}
 
 interface AddressTabPublisher {
   ensureNativeAgentJobTab(input: {

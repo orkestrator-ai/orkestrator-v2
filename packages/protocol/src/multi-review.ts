@@ -40,6 +40,8 @@ export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
 /** Former pane title retained for restored layouts and backend session metadata. */
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
+export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
+  "The original consolidation conversation was no longer available. A fresh Fix session was created and seeded with the consolidated findings.";
 
 /** JSON evidence cannot synthesize the frame's XML-like boundary markers. */
 function promptCarrierJson(value: unknown): string {

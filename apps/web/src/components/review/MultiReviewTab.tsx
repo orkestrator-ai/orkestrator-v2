@@ -88,7 +88,11 @@ function phaseCopy(phase: MultiReviewPhase): string {
   return labels[phase];
 }
 
-/** Opens the idle consolidation session as a normal native agent tab. */
+/**
+ * Opens the idle consolidation session as a normal native agent tab. If that
+ * provider session was deleted, the native tab asks the backend to seed and
+ * record a fresh replacement before exposing it to the user.
+ */
 export function multiReviewFixSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
@@ -99,7 +103,6 @@ export function multiReviewFixSessionTabOptions(
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
-    requireExistingResumeSession: true,
     displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,

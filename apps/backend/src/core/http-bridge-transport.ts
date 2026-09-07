@@ -5,6 +5,7 @@ import {
   type BridgeConnection,
   PromptRejectedError,
   type ProviderActivityObservation,
+  type ProviderAgent,
   type ProviderSendOptions,
   ProviderUnavailableError,
   ProviderUnreachableError,
@@ -143,6 +144,45 @@ export function normalizeProviderReadiness(value: unknown): NativeAgentReadiness
   const message = nonEmptyString(readiness.message)?.trim();
   if (!message) return undefined;
   return { state: "authentication-required", message: message.slice(0, 500) };
+}
+
+/**
+ * The route that serves an agent's session snapshot — the `status`/`turnId`
+ * pair every steer and status read needs.
+ *
+ * Claude has no `/status` child route; it serves the snapshot from the session
+ * resource itself. Asking Claude for `/status` 404s, and callers read a 404
+ * here as "the session vanished", so the wrong path turns a live turn into a
+ * lost-session rejection rather than a missing-route error.
+ */
+export function sessionSnapshotPath(agent: ProviderAgent, sessionId: string): string {
+  const base = `/session/${encodeURIComponent(sessionId)}`;
+  return agent === "claude" ? base : `${base}/status`;
+}
+
+/** Read the session snapshot from whichever route this bridge serves it on. */
+export function fetchSessionSnapshot(
+  connection: BridgeConnection,
+  sessionId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Response> {
+  return bridgeFetch(connection, sessionSnapshotPath(connection.agent, sessionId), {}, fetchImpl);
+}
+
+/**
+ * Byte budget for a `sessionSnapshotPath` read.
+ *
+ * Claude's snapshot is the whole session resource, so alongside the status pair
+ * it carries `structuredOutput` (arbitrary agent-authored JSON) and
+ * `backgroundTasks`, neither of which the dedicated `/status` responses return.
+ * Those have no useful small bound, so Claude gets the same allowance the
+ * transcript read uses; every other bridge keeps the default.
+ */
+export function sessionSnapshotBudget(agent: ProviderAgent): { remaining: number } {
+  return {
+    remaining:
+      agent === "claude" ? 16 * 1024 * 1024 : AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
+  };
 }
 
 export async function boundedJson(

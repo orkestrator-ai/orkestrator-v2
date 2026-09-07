@@ -63,8 +63,10 @@ import {
   boundedJson,
   bridgeFetch,
   normalizeProviderReadiness,
+  fetchSessionSnapshot,
   readProviderActivityObservation,
   resolvePromptAttachments,
+  sessionSnapshotBudget,
   type HttpBridgeProviderDependencies,
 } from "./http-bridge-transport.js";
 
@@ -245,16 +247,17 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/status`,
-      {},
-      this.fetchImpl,
-    );
+    const response = await fetchSessionSnapshot(this.connection, sessionId, this.fetchImpl);
     if (response.status === 404)
       throw new PromptRejectedError(`${this.agent} session was not found`);
     await assertOkWithErrorDetail(response, `${this.agent} steer status read`);
-    const status = asRecord(await boundedJson(response, `${this.agent} steer status read`));
+    const status = asRecord(
+      await boundedJson(
+        response,
+        `${this.agent} steer status read`,
+        sessionSnapshotBudget(this.agent),
+      ),
+    );
     if (status?.status !== "running") return { state: "idle" };
     const candidateRunId = nonEmptyString(status.turnId);
     const runId =
@@ -509,11 +512,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
-    const path =
-      this.agent === "claude"
-        ? `/session/${encodeURIComponent(sessionId)}`
-        : `/session/${encodeURIComponent(sessionId)}/status`;
-    const response = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
+    const response = await fetchSessionSnapshot(this.connection, sessionId, this.fetchImpl);
     if (response.status === 404) return { status: "missing" };
     assertOk(response, `${this.agent} status read`);
     const body =

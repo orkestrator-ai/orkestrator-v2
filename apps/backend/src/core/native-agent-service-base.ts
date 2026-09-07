@@ -117,6 +117,23 @@ export type NativeAgentServiceLayerTypes = [
   OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
+
+/**
+ * In-process marker that `trustedSessionInput` already prepended the coordinator
+ * preamble to this input.
+ *
+ * The injection has to be idempotent: `dispatchPromptInternal` runs
+ * `trustedSessionInput` and then hands the same object to `ensureSession`, which
+ * runs it again. That used to be detected by testing the prompt for a leading
+ * `<orkestrator-coordinator-context>`, which any caller could satisfy by
+ * submitting text that opens with a block of their own — suppressing the real
+ * authority block and substituting a forged one, which transcript stripping then
+ * hid from view. A module-private symbol cannot be reached or serialized by a
+ * caller across the JSON RPC boundary, so only this function can set it, while
+ * object spreads inside the dispatch path carry it forward.
+ */
+const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
+
 export abstract class NativeAgentServiceBase {
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
@@ -436,7 +453,7 @@ export abstract class NativeAgentServiceBase {
     if (
       "prompt" in input &&
       typeof input.prompt === "string" &&
-      !input.prompt.startsWith(COORDINATOR_CONTEXT_OPEN_TAG)
+      !(COORDINATOR_CONTEXT_APPLIED in input)
     ) {
       const status = workspace.repositoryStatus;
       const delegation = this.options.coordinatorDelegationAvailable?.()
@@ -444,6 +461,7 @@ export abstract class NativeAgentServiceBase {
         : `Delegation: Orkestrator worker controls are unavailable in this session. Codex subagents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,
+        [COORDINATOR_CONTEXT_APPLIED]: true,
         prompt:
           `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
           `Project: ${workspace.projectId}\n` +

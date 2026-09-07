@@ -1042,8 +1042,13 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * (`thread/name/set`) and the bridge's own index so rollback keeps titles.
    */
   protected applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
+    // Both title paths name the user's request, so neither may see the injected
+    // coordinator preamble: it would dominate the generated title and hand the
+    // project id, coordinator id, branch, and head commit to the separate
+    // `codex exec` the generator spawns.
+    const titleSource = stripCoordinatorContext(prompt);
     if (!session.title) {
-      const fallback = buildFallbackSessionTitle(stripCoordinatorContext(prompt));
+      const fallback = buildFallbackSessionTitle(titleSource);
       for (const id of context.bridgeSessionIds) {
         const attached = this.registry.getSession(id);
         if (attached && !attached.title) {
@@ -1068,7 +1073,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     session.titleGenerationToken = token;
 
     void this.options
-      .generateTitle(prompt)
+      .generateTitle(titleSource)
       .then(async (title) => {
         if (session.titleGenerationToken !== token) return;
 

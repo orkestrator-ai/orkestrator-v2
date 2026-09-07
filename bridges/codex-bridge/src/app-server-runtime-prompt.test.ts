@@ -1410,6 +1410,66 @@ describe("slash commands", () => {
     expect(messages?.[0]?.parts).toEqual([{ type: "text", content: "Move the dropdown" }]);
   });
 
+  test("a coordinator turn titles itself from the prompt, not the preamble", async () => {
+    const preamble =
+      "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +
+      "Role: read-only coordinator.\nBranch: main\nCommit: abc123\n" +
+      "</orkestrator-coordinator-context>";
+    const seen: string[] = [];
+    const h = await harness(
+      {},
+      {
+        generateTitle: async (prompt) => {
+          seen.push(prompt);
+          return "Dropdown placement";
+        },
+      },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: `${preamble}\n\nMove the dropdown`,
+      requestId: "req-coordinator-title",
+      attachments: [],
+    });
+    await h.drain();
+
+    // The generated title is what the user ends up seeing, and generating it
+    // spawns a separate `codex exec`. Neither may be handed the authority block
+    // or the internal ids inside it.
+    expect(seen).toEqual(["Move the dropdown"]);
+    expect(seen[0]).not.toContain("Role: read-only coordinator.");
+    expect(seen[0]).not.toContain("project-id");
+    expect(seen[0]).not.toContain("coordinator-id");
+    expect(seen[0]).not.toContain("abc123");
+  });
+
+  test("an attachment-only coordinator turn renders no empty text part", async () => {
+    const preamble =
+      "<orkestrator-coordinator-context>\nProject: project-id\n</orkestrator-coordinator-context>";
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    // Nothing survives stripping, so the row is attachment-only. It must not
+    // gain a blank text part that the renderer would show as an empty bubble.
+    await h.runtime.prompt(sessionId, {
+      prompt: `${preamble}\n\n`,
+      requestId: "req-coordinator-attachment",
+      attachments: [{ path: "/tmp/ws/shot.png", filename: "shot.png" }],
+    });
+
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("");
+    expect(messages?.[0]?.parts).toEqual([
+      {
+        type: "file",
+        content: "/tmp/ws/shot.png",
+        fileUrl: "/tmp/ws/shot.png",
+        filename: "shot.png",
+      },
+    ]);
+  });
+
   test("/help is answered locally without reaching Codex", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

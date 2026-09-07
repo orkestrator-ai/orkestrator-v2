@@ -235,9 +235,16 @@ export const COORDINATOR_CONTEXT_CLOSE_TAG = "</orkestrator-coordinator-context>
  * internal ids on screen. Transcript surfaces strip it; the wire prompt keeps
  * it.
  *
- * Only a leading block is removed, and only when it is closed. A later or
+ * Exactly one leading block is removed, and only when it is closed. A later or
  * unterminated occurrence is text inside the user's own prompt and is left
  * exactly as written, so this can never truncate a real message.
+ *
+ * Removing only the first block is what keeps a forged block visible. The
+ * server injects unconditionally — its idempotency marker is a private symbol on
+ * the input object, not this prefix — so a prompt whose text opens with a block
+ * of the user's own arrives as `injected + forged`. The first close tag ends the
+ * injected block, and the forgery renders in the transcript where it can be seen
+ * rather than being silently absorbed.
  */
 export function stripCoordinatorContext(text: string): string {
   if (!text.startsWith(COORDINATOR_CONTEXT_OPEN_TAG)) return text;

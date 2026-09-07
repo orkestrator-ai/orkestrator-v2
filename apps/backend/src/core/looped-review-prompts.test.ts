@@ -468,6 +468,26 @@ describe("prompt contract edge cases", () => {
     expect(prompt).toContain("Do not modify, create, or delete files");
   });
 
+  test("gives an inline legacy package the same working rules as a file-backed one", () => {
+    // A workflow persisted before packages became pointers still reaches
+    // discovery on resume. Dispatching that reviewer with no rules at all would
+    // let every one of them rerun the suite in the same worktree — the exact
+    // cost the shared package exists to avoid.
+    const prompt = createDiscoveryPrompt({ reviewPackage });
+
+    expect(prompt).toContain("Do not modify, create, or delete files");
+    expect(prompt).toContain("Do not rerun the full test suite");
+    expect(prompt).toContain("Do not ask questions or wait for input");
+    expect(prompt).toContain("do not commit, stash, reset, fetch, or switch branches");
+    // The inline shape has no `diffCommand` and no artifact files, so it must
+    // not be sent after evidence it does not carry.
+    expect(prompt).toContain("This package carries its own evidence");
+    expect(prompt).not.toContain("Run that command yourself to read the diff");
+    expect(prompt).not.toContain("diffCommand");
+    // The evidence itself still has to survive alongside the rules.
+    expect(prompt).toContain(JSON.stringify(reviewPackage.completeDiff));
+  });
+
   test("trims blank notes and limitations before applying the completeness rule", () => {
     const base: ReviewFixResult = {
       complete: false,

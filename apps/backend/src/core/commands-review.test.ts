@@ -8,6 +8,9 @@ import { REVIEW_PACKAGE_FORMAT, type ReviewPackage } from "@orkestrator/protocol
 import {
   generateLoopedReviewPackage,
   parseReviewArtifactStatOutput,
+  REVIEW_ARTIFACT_STAT_SCRIPT,
+  type ReviewArtifactSizes,
+  statEnvironmentReviewArtifacts,
   waitForContainerReviewPackageWrite,
   writeEnvironmentReviewPackage,
 } from "./commands-review.js";
@@ -275,6 +278,35 @@ describe("generateLoopedReviewPackage", () => {
       } as never),
     ).rejects.toThrow("escapes the environment worktree");
   });
+
+  test("refuses a command that ran but names no verified artifacts", async () => {
+    const { worktree, storage } = await reviewEnvironment();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
+    await git(worktree, "commit", "-am", "feat: change");
+    await writeValidationArtifacts(worktree, "1 pass\n", "");
+
+    // Only an entry carrying both paths is stat'ed, so a half-populated entry
+    // would otherwise reach the package with a path nothing verified and a null
+    // beside it. The guard has to reject it rather than publish either.
+    for (const overrides of [
+      { stdoutPath: null, stderrPath: null },
+      { stderrPath: null },
+      { stdoutPath: null },
+    ]) {
+      await expect(
+        generateLoopedReviewPackage(
+          "env-1",
+          "package-1",
+          1,
+          "main",
+          [validationEntry(overrides)],
+          [],
+          [],
+          { storage } as never,
+        ),
+      ).rejects.toThrow("Review package failed runtime validation");
+    }
+  });
 });
 
 describe("parseReviewArtifactStatOutput", () => {
@@ -310,6 +342,136 @@ describe("parseReviewArtifactStatOutput", () => {
         stdoutPath,
       ]),
     ).toThrow("size could not be read");
+  });
+});
+
+describe("statEnvironmentReviewArtifacts in a container", () => {
+  const stdoutPath = `${ARTIFACT_DIRECTORY}/validation-01.stdout.txt`;
+  const stderrPath = `${ARTIFACT_DIRECTORY}/validation-01.stderr.txt`;
+  const containerEnvironment = {
+    id: "env-1",
+    environmentType: "container",
+    containerId: "container-1",
+  } as never;
+
+  /**
+   * A workspace the real stat script can run against.
+   *
+   * The script and the parser both hardcode `/workspace`, so the root is
+   * relocated on the way in and restored on the way out. Everything between —
+   * the `-f` test, `realpath`, `wc -c`, and the tab-separated `printf` — is the
+   * shipped script under a real shell, which is the half a stubbed runner
+   * cannot cover.
+   */
+  async function statInWorkspace(
+    build: (root: string) => Promise<void>,
+    relativePaths: string[],
+  ): Promise<{ sizes: ReviewArtifactSizes; calls: Array<{ command: string; args: string[] }> }> {
+    const base = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-review-container-"));
+    temporaryDirectories.push(base);
+    await fs.mkdir(path.join(base, "workspace"));
+    // `realpath` in the script reports the resolved root, so the substitution
+    // has to start from the resolved root too or every path looks relocated.
+    const root = await fs.realpath(path.join(base, "workspace"));
+    await build(root);
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const sizes = await statEnvironmentReviewArtifacts(
+      containerEnvironment,
+      async (command, args) => {
+        calls.push({ command, args });
+        const child = Bun.spawn(["sh", ...args.map((arg) => arg.replace("/workspace", root))], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const output = await new Response(child.stdout).text();
+        expect(await child.exited).toBe(0);
+        return output.replaceAll(root, "/workspace");
+      },
+      relativePaths,
+    );
+    return { sizes, calls };
+  }
+
+  test("sends one argv-quoted command and reads back what the shell printed", async () => {
+    const { sizes, calls } = await statInWorkspace(
+      async (root) => {
+        await fs.mkdir(path.join(root, ARTIFACT_DIRECTORY), { recursive: true });
+        await fs.writeFile(path.join(root, stdoutPath), "1 pass\n");
+        await fs.writeFile(path.join(root, stderrPath), "warn\n");
+      },
+      [stdoutPath, stderrPath],
+    );
+
+    // One command for the whole round, with every path passed as an argument
+    // rather than interpolated into the script.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("sh");
+    expect(calls[0]!.args).toEqual([
+      "-c",
+      REVIEW_ARTIFACT_STAT_SCRIPT,
+      "sh",
+      stdoutPath,
+      stderrPath,
+    ]);
+    expect(sizes.get(stdoutPath)).toBe("1 pass\n".length);
+    expect(sizes.get(stderrPath)).toBe("warn\n".length);
+  });
+
+  test("reports a path the shell never wrote as a preparation failure", async () => {
+    await expect(
+      statInWorkspace(
+        async (root) => {
+          await fs.mkdir(path.join(root, ARTIFACT_DIRECTORY), { recursive: true });
+          await fs.writeFile(path.join(root, stdoutPath), "1 pass\n");
+        },
+        [stdoutPath, stderrPath],
+      ),
+    ).rejects.toThrow(`Review artifact was not written by preparation: ${stderrPath}`);
+  });
+
+  test("refuses artifacts the shell resolved outside the workspace or through a symlink", async () => {
+    await expect(
+      statInWorkspace(
+        async (root) => {
+          await fs.mkdir(path.join(root, ARTIFACT_DIRECTORY), { recursive: true });
+          await fs.writeFile(path.join(root, stdoutPath), "1 pass\n");
+          const outside = path.join(root, "..", "outside.txt");
+          await fs.writeFile(outside, "secret\n");
+          await fs.symlink(outside, path.join(root, stderrPath));
+        },
+        [stdoutPath, stderrPath],
+      ),
+    ).rejects.toThrow("escapes the environment worktree");
+
+    await expect(
+      statInWorkspace(
+        async (root) => {
+          await fs.mkdir(path.join(root, ARTIFACT_DIRECTORY), { recursive: true });
+          await fs.writeFile(path.join(root, stdoutPath), "1 pass\n");
+          await fs.writeFile(path.join(root, ARTIFACT_DIRECTORY, "elsewhere.txt"), "moved\n");
+          await fs.symlink(
+            path.join(root, ARTIFACT_DIRECTORY, "elsewhere.txt"),
+            path.join(root, stderrPath),
+          );
+        },
+        [stdoutPath, stderrPath],
+      ),
+    ).rejects.toThrow("must not traverse symbolic links");
+  });
+
+  test("asks the environment nothing when the round ran no commands", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const sizes = await statEnvironmentReviewArtifacts(
+      containerEnvironment,
+      async (command, args) => {
+        calls.push({ command, args });
+        return "";
+      },
+      [],
+    );
+    expect(sizes.size).toBe(0);
+    expect(calls).toHaveLength(0);
   });
 });
 

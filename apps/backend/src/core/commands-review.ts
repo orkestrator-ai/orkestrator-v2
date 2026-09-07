@@ -559,7 +559,7 @@ export async function statEnvironmentReviewArtifacts(
  * than compared in the shell so the backend — not a script running inside the
  * environment — decides whether a path stayed in the workspace.
  */
-const REVIEW_ARTIFACT_STAT_SCRIPT = `cd /workspace 2>/dev/null || exit 9
+export const REVIEW_ARTIFACT_STAT_SCRIPT = `cd /workspace 2>/dev/null || exit 9
 for p in "$@"; do
   if [ ! -f "$p" ]; then printf 'missing\t\t\t%s\n' "$p"; continue; fi
   printf 'file\t%s\t%s\t%s\n' "$(realpath -- "$p")" "$(wc -c < "$p")" "$p"

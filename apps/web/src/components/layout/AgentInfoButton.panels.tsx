@@ -10,10 +10,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type {
   NativeAgentAccountUsageWindow,
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
   NativeAgentRuntimeNotice,
   NativeAgentRuntimeSummary,
   NativeAgentTurnUsage,
@@ -881,6 +884,116 @@ export function AgentInteractionCapability({
               .map((kind) => INTERACTION_KIND_LABELS[kind] ?? kind)
               .join(", ")}.`}
       </div>
+    </div>
+  );
+}
+
+const MCP_STATUS_DOT: Record<NativeAgentMcpServer["status"], string> = {
+  connected: "bg-emerald-500",
+  connecting: "bg-amber-500",
+  failed: "bg-destructive",
+  "needs-auth": "bg-amber-500",
+  disabled: "bg-muted-foreground/50",
+  unknown: "bg-muted-foreground/50",
+};
+
+/**
+ * The action a click on a server row performs. Servers usually only offer
+ * `reconnect`, but a signed-out or disabled server is better served by the
+ * action that actually unblocks it, so those win over a reconnect that would
+ * fail the same way again.
+ */
+function primaryMcpAction(server: NativeAgentMcpServer): NativeAgentMcpServerAction | null {
+  for (const preferred of ["sign-in", "enable", "reconnect"] as const) {
+    if (server.actions.includes(preferred)) return preferred;
+  }
+  return server.actions[0] ?? null;
+}
+
+/**
+ * MCP inventory as a single "Tools N" line that expands into a dense list.
+ *
+ * A session can carry hundreds of tools across a dozen servers; rendering one
+ * card per server pushed everything else in the popover below the fold. The
+ * collapsed line keeps the total visible, and still surfaces how many servers
+ * are not connected so a failed server is not hidden by the collapse. Each row
+ * is the button: clicking it runs that server's primary action directly.
+ */
+export function McpServersPanel({
+  servers,
+  busyAction,
+  onAction,
+}: {
+  servers: NativeAgentMcpServer[];
+  busyAction: string | null;
+  onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (servers.length === 0) return null;
+  const toolTotal = servers.reduce((total, server) => total + (server.toolCount ?? 0), 0);
+  const unhealthy = servers.filter(
+    (server) => server.status === "failed" || server.status === "needs-auth",
+  ).length;
+  return (
+    <div
+      className="rounded-md border border-border/60 bg-muted/20 text-xs"
+      aria-label="MCP servers"
+    >
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+        <span className="font-medium text-foreground">Tools {toolTotal}</span>
+        <span className="ml-auto text-muted-foreground">
+          {formatCount(servers.length, "server")}
+          {unhealthy > 0 ? <span className="text-destructive"> · {unhealthy} down</span> : null}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="border-t border-border/60 py-1">
+          {servers.map((server) => {
+            const action = primaryMcpAction(server);
+            const pending = busyAction === `mcp-${server.id}-${action}`;
+            const status = server.status.replaceAll("-", " ");
+            return (
+              <button
+                key={server.id}
+                type="button"
+                disabled={action === null || busyAction !== null}
+                title={[
+                  `${server.name} · ${status}`,
+                  server.error,
+                  action ? `click to ${action.replaceAll("-", " ")}` : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" — ")}
+                className="flex w-full items-center gap-2 px-2.5 py-1 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent"
+                onClick={() => {
+                  if (action) onAction(server, action);
+                }}
+              >
+                <span
+                  className={cn("h-1.5 w-1.5 shrink-0 rounded-full", MCP_STATUS_DOT[server.status])}
+                  aria-hidden="true"
+                />
+                <span className="truncate text-foreground">{server.name}</span>
+                <span className="ml-auto shrink-0 font-mono tabular-nums text-muted-foreground">
+                  {pending ? "…" : server.status === "connected" ? (server.toolCount ?? 0) : status}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

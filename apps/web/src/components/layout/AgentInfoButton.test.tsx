@@ -4898,6 +4898,64 @@ describe("AgentInfoButton ACP agents", () => {
     } as NativeAgentSessionProjection;
   }
 
+  test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
+    // A session with a dozen servers used to render a dozen cards; the popover
+    // now leads with the tool total and only expands the dense list on demand,
+    // where the row itself is the reconnect control.
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage" ? new Promise(() => undefined) : {},
+    );
+    useNativeAgentProjectionStore.getState().setProjection(
+      ACP_KEY,
+      acpProjection("cursor", {
+        runtime: {
+          state: "attached",
+          mcp: [
+            {
+              id: "codex_apps",
+              name: "codex_apps",
+              status: "connected",
+              toolCount: 256,
+              actions: ["reconnect"],
+            },
+            {
+              id: "github",
+              name: "github",
+              status: "failed",
+              toolCount: 0,
+              error: "spawn failed",
+              actions: ["reconnect"],
+            },
+          ],
+        },
+      }),
+    );
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    const summary = await waitFor(() => screen.getByRole("button", { name: /Tools 256/ }));
+    // Collapsed, but a server that is down still says so.
+    expect(summary.textContent).toContain("2 servers");
+    expect(summary.textContent).toContain("1 down");
+    expect(screen.queryByRole("button", { name: /codex_apps/ })).toBeNull();
+
+    fireEvent.click(summary);
+    const row = screen.getByRole("button", { name: /codex_apps/ });
+    expect(screen.getByRole("button", { name: /github/ })).toBeTruthy();
+
+    fireEvent.click(row);
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.some(
+          ([command, input]: [string, { serverId?: string; action?: string }]) =>
+            command === "perform_native_agent_mcp_action" &&
+            input.serverId === "codex_apps" &&
+            input.action === "reconnect",
+        ),
+      ).toBe(true),
+    );
+  });
+
   test("renders drift and notices for a non-Codex platform through the same panel", async () => {
     // The point of the generalization: nothing in `AgentRuntimePanel` is
     // Codex-shaped, so a Cursor session gets the same drift block and the same

@@ -30,6 +30,7 @@ import {
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { extractAttachmentTags } from "../messages/attachment-tags.js";
+import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import {
   applyTranscriptToolOutput,
   deriveSubagentPartsFromTranscriptRecords,
@@ -863,7 +864,7 @@ export function extractPersistedMessageContent(
 
   const { text, parts } =
     role === "user"
-      ? extractAttachmentTags(joined)
+      ? extractAttachmentTags(stripCoordinatorContext(joined))
       : { text: joined, parts: [] as NormalizedPart[] };
 
   // An attachment-only prompt has no text left after stripping, but it is still

@@ -9,6 +9,14 @@ import {
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
 
+/** A fully configured coordinator launch: the only shape that hardens Codex. */
+const COORDINATOR_ENV = {
+  CODEX_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+  CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
+  CODEX_BRIDGE_READABLE_RUNTIME_ROOT: "/opt/orkestrator/codex",
+  CWD: "/projects/example",
+} as const;
+
 const originalConfiguredLimit = process.env[CODEX_MAX_CONCURRENT_THREADS_ENV];
 const originalAgentMcpUrl = process.env[ORKESTRATOR_AGENT_MCP_URL_ENV];
 const originalAgentMcpToken = process.env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV];
@@ -92,7 +100,6 @@ describe("Codex app-server configuration", () => {
       "permissions.coordinator-conversation-1.network.enabled": "false",
       'projects."/projects/example".trust_level': '"untrusted"',
       "features.apps": "false",
-      "features.code_mode_host": "false",
       "features.hooks": "false",
       "features.plugins": "false",
       "features.workspace_dependencies": "false",
@@ -116,6 +123,92 @@ describe("Codex app-server configuration", () => {
       '"/opt/orkestrator/codex" = "read"',
     );
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
+  });
+
+  test("leaves the code-mode host enabled so coordinator tool calls can dispatch", () => {
+    const overrides = codexAppServerConfigOverrides(COORDINATOR_ENV);
+
+    // Every catalogued model is `tool_mode = "code_mode_only"`, so disabling the
+    // host fails every tool call with "code-mode host is disabled" rather than
+    // narrowing the coordinator to inspection. Read-only enforcement is the
+    // permission profile's job.
+    expect(overrides["features.code_mode_host"]).toBeUndefined();
+    expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
+    expect(overrides["permissions.coordinator-conversation-1.filesystem"]).toContain(
+      '":workspace_roots" = { "." = "read" }',
+    );
+  });
+
+  // The code-mode host executes model-authored TypeScript in its own process and
+  // delegates every tool call back to `codex_core::tools::router`, so these
+  // overrides — not the host toggle — are the coordinator's whole security
+  // boundary. Enabling code mode was only safe because they hold, and the
+  // coordinator runs on the host machine rather than behind a container, so
+  // nothing catches it if one is dropped. Pin them together: any change that
+  // leaves the host enabled while weakening one of them must fail here.
+  test("cannot enable code mode without the full read-only enforcement set", () => {
+    const overrides = codexAppServerConfigOverrides(COORDINATOR_ENV);
+    const filesystem = overrides["permissions.coordinator-conversation-1.filesystem"]!;
+
+    expect(overrides["features.code_mode_host"]).toBeUndefined();
+
+    // 1. Tool calls resolve under the coordinator's profile, not Codex defaults.
+    expect(overrides.default_permissions).toBe('"coordinator-conversation-1"');
+    // 2. Read-only, deny-by-default, and no write grant anywhere in the profile.
+    expect(filesystem).toContain('":root" = "deny"');
+    expect(filesystem).toContain('":tmpdir" = "deny"');
+    expect(filesystem).toContain('":slash_tmp" = "deny"');
+    expect(filesystem).toContain('":workspace_roots" = { "." = "read" }');
+    expect(filesystem).not.toContain('"write"');
+    // 3. No network egress from delegated tool calls.
+    expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
+    // 4. The checkout stays data, so repository-local config/hooks cannot run.
+    expect(overrides['projects."/projects/example".trust_level']).toBe('"untrusted"');
+    // 5. Credentials are excluded from model-created execution environments.
+    expect(overrides["shell_environment_policy.inherit"]).toBe('"core"');
+    expect(overrides["shell_environment_policy.ignore_default_excludes"]).toBe("false");
+    expect(JSON.parse(overrides["shell_environment_policy.exclude"]!)).toEqual(
+      expect.arrayContaining(["*_KEY", "*_SECRET", "*_TOKEN", ORKESTRATOR_AGENT_MCP_TOKEN_ENV]),
+    );
+  });
+
+  // `code_mode_host` was removed from this list on purpose. Removing any other
+  // entry re-opens a capability — browser control, plugins, hooks — that the
+  // code-mode host can now reach through a delegated tool call.
+  test("keeps every other risky feature disabled for a coordinator", () => {
+    const overrides = codexAppServerConfigOverrides(COORDINATOR_ENV);
+
+    for (const feature of [
+      "apps",
+      "browser_use",
+      "browser_use_external",
+      "browser_use_full_cdp_access",
+      "computer_use",
+      "hooks",
+      "image_generation",
+      "in_app_browser",
+      "plugin_sharing",
+      "plugins",
+      "remote_plugin",
+      "skill_mcp_dependency_install",
+      "tool_call_mcp_elicitation",
+      "tool_suggest",
+      "workspace_dependencies",
+    ]) {
+      expect(overrides[`features.${feature}`]).toBe("false");
+    }
+  });
+
+  test("applies none of the coordinator hardening outside the coordinator policy", () => {
+    const overrides = codexAppServerConfigOverrides({ CWD: "/projects/example" });
+
+    // A normal environment is isolated by its container, configures no
+    // permission profile, and must not inherit a half-applied coordinator
+    // boundary that would read as enforcement without being it.
+    expect(overrides.default_permissions).toBeUndefined();
+    expect(overrides["shell_environment_policy.exclude"]).toBeUndefined();
+    expect(overrides['projects."/projects/example".trust_level']).toBeUndefined();
+    expect(Object.keys(overrides).filter((key) => key.startsWith("permissions."))).toEqual([]);
   });
 
   test("rejects incomplete coordinator permission-profile authority", () => {

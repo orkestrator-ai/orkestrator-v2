@@ -32,9 +32,18 @@ import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { extractAttachmentTags } from "../messages/attachment-tags.js";
 import {
   applyTranscriptToolOutput,
+  deriveSubagentPartsFromTranscriptRecords,
   normalizeTranscriptToolArgs,
+  parseSubAgentActivityRecords,
   resolveTranscriptToolOutputState,
+  type TranscriptRecord,
 } from "../subagent-transcript.js";
+import {
+  parentAgentPath,
+  parseSpawnResult,
+  requestedSpawnPath,
+  validAgentPath,
+} from "../subagent-spawn.js";
 
 export interface PersistedSessionIndexEntry {
   id?: unknown;
@@ -49,6 +58,9 @@ export interface PersistedSessionMeta {
   updatedAt: string;
   cwd?: string;
   transcriptPath?: string;
+  /** Present only for child rollouts; read from the bounded session header. */
+  parentThreadId?: string;
+  agentPath?: string;
 }
 
 export interface TranscriptCatalog {
@@ -287,6 +299,18 @@ export async function getSessionMetaFromTranscriptPath(
     if (firstUserText) break;
   }
   const transcriptTitle = firstUserText ? buildFallbackSessionTitle(firstUserText) : undefined;
+  const source = payload.source;
+  const threadSpawn =
+    source && typeof source === "object" && !Array.isArray(source)
+      ? (source as { subagent?: { thread_spawn?: Record<string, unknown> } }).subagent?.thread_spawn
+      : undefined;
+  const parentThreadId =
+    typeof threadSpawn?.parent_thread_id === "string" &&
+    threadSpawn.parent_thread_id.length > 0 &&
+    threadSpawn.parent_thread_id.length <= 512
+      ? threadSpawn.parent_thread_id
+      : undefined;
+  const agentPath = validAgentPath(threadSpawn?.agent_path) ? threadSpawn.agent_path : undefined;
 
   return {
     id,
@@ -298,6 +322,8 @@ export async function getSessionMetaFromTranscriptPath(
         : (fallbackUpdatedAt ?? new Date().toISOString()),
     cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
     transcriptPath,
+    ...(parentThreadId ? { parentThreadId } : {}),
+    ...(agentPath ? { agentPath } : {}),
   };
 }
 
@@ -315,6 +341,7 @@ export async function getSessionMetaFromTranscriptPath(
  * scan; a rejected scan is evicted immediately rather than pinned for the TTL.
  */
 export const TRANSCRIPT_CATALOG_TTL_MS = 2_000;
+export const MAX_PERSISTED_CHILD_PATH_LOOKUPS = 128;
 
 interface CachedTranscriptCatalog {
   codexHome: string;
@@ -453,6 +480,179 @@ export async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
     metaByPath,
     transcriptPathByThreadId,
   };
+}
+
+/**
+ * Resolve child paths after a bridge restart from bounded rollout headers.
+ * A conflicting path is retained as ambiguous (`null`) instead of depending on
+ * filesystem enumeration order. The shared catalog keeps this to one cached
+ * scan for the whole render probe.
+ */
+export async function resolvePersistedChildThreadIds(
+  parentThreadId: string,
+  requestedPaths: readonly string[],
+): Promise<ReadonlyMap<string, string | null>> {
+  if (requestedPaths.length === 0) return new Map();
+  const requested = new Set(requestedPaths.slice(0, MAX_PERSISTED_CHILD_PATH_LOOKUPS));
+  const resolved = new Map<string, string | null>();
+  const catalog = await buildTranscriptCatalogCached();
+  for (const meta of catalog.metas) {
+    const path = meta.agentPath;
+    if (meta.parentThreadId !== parentThreadId || !path || !requested.has(path)) continue;
+    const previous = resolved.get(path);
+    resolved.set(path, previous === undefined || previous === meta.id ? meta.id : null);
+  }
+  return resolved;
+}
+
+function normalizedSubagentPart(
+  part: ReturnType<typeof deriveSubagentPartsFromTranscriptRecords>[number],
+): NormalizedPart {
+  return {
+    type: "subagent",
+    content: part.content,
+    subagentId: part.subagentId,
+    subagentName: part.subagentName,
+    subagentRole: part.subagentRole,
+    subagentPrompt: part.subagentPrompt,
+    subagentActions: part.subagentActions,
+    subagentActionCount: part.subagentActionCount,
+    toolState: part.toolState,
+  };
+}
+
+/** Hard bounds for full child-rollout reads during one persisted hydration. */
+export const MAX_PERSISTED_SUBAGENT_TRANSCRIPTS = 32;
+export const MAX_CONCURRENT_PERSISTED_SUBAGENT_READS = 4;
+
+export interface PersistedSubagentHydrationDependencies {
+  resolveChildPaths: typeof resolvePersistedChildThreadIds;
+  createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
+  readTranscript: typeof readCachedTranscript;
+}
+
+async function mapWithConcurrency<T>(
+  values: readonly T[],
+  concurrency: number,
+  visit: (value: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const value = values[nextIndex]!;
+        nextIndex += 1;
+        await visit(value);
+      }
+    }),
+  );
+}
+
+/** Rebuild rich child cards before the generic persisted-tool hydrator runs. */
+export async function hydratePersistedSubagentParts(
+  parentThreadId: string,
+  records: TranscriptRecord[],
+  dependencies: PersistedSubagentHydrationDependencies = {
+    resolveChildPaths: resolvePersistedChildThreadIds,
+    createTranscriptMetaLoader: createSharedTranscriptMetaLoader,
+    readTranscript: readCachedTranscript,
+  },
+): Promise<Map<string, NormalizedPart>> {
+  const spawnCallIds: string[] = [];
+  const agentPathByCallId = new Map<string, string>();
+  const resolvedAgentIdByCallId = new Map<string, string>();
+  const failedSpawnCallIds = new Set<string>();
+  const parentPath = parentAgentPath(records);
+
+  for (const record of records) {
+    if (record.type !== "response_item" || !record.payload) continue;
+    const callId = asNonEmptyString(record.payload.call_id);
+    if (!callId) continue;
+    if (record.payload.type === "function_call" && record.payload.name === "spawn_agent") {
+      spawnCallIds.push(callId);
+      const path = requestedSpawnPath(record, parentPath);
+      if (path) agentPathByCallId.set(callId, path);
+      continue;
+    }
+    if (record.payload.type !== "function_call_output") continue;
+    const result = parseSpawnResult(record.payload.output);
+    if (result.failed) {
+      failedSpawnCallIds.add(callId);
+      resolvedAgentIdByCallId.delete(callId);
+      continue;
+    }
+    if (result.agentId) resolvedAgentIdByCallId.set(callId, result.agentId);
+    if (result.agentPath) agentPathByCallId.set(callId, result.agentPath);
+  }
+
+  if (spawnCallIds.length === 0) return new Map();
+
+  for (const activity of parseSubAgentActivityRecords(records)) {
+    if (!resolvedAgentIdByCallId.has(activity.callId)) {
+      resolvedAgentIdByCallId.set(activity.callId, activity.agentThreadId);
+    }
+  }
+
+  const unresolvedPaths = new Set<string>();
+  for (const callId of spawnCallIds) {
+    if (!failedSpawnCallIds.has(callId) && !resolvedAgentIdByCallId.has(callId)) {
+      const path = agentPathByCallId.get(callId);
+      if (path) unresolvedPaths.add(path);
+    }
+  }
+  const persisted = await dependencies.resolveChildPaths(parentThreadId, [...unresolvedPaths]);
+  for (const callId of spawnCallIds) {
+    if (failedSpawnCallIds.has(callId) || resolvedAgentIdByCallId.has(callId)) continue;
+    const path = agentPathByCallId.get(callId);
+    const agentId = path ? persisted.get(path) : undefined;
+    if (agentId) resolvedAgentIdByCallId.set(callId, agentId);
+  }
+
+  // Prefer recent children. Older resolved launches degrade to their generic
+  // persisted tool card, keeping full-rollout I/O bounded for long sessions.
+  const agentIdsToHydrate: string[] = [];
+  const selectedAgentIds = new Set<string>();
+  for (let index = spawnCallIds.length - 1; index >= 0; index -= 1) {
+    const agentId = resolvedAgentIdByCallId.get(spawnCallIds[index]!);
+    if (!agentId || selectedAgentIds.has(agentId)) continue;
+    selectedAgentIds.add(agentId);
+    agentIdsToHydrate.push(agentId);
+    if (agentIdsToHydrate.length >= MAX_PERSISTED_SUBAGENT_TRANSCRIPTS) break;
+  }
+  agentIdsToHydrate.reverse();
+
+  const childRecordsByAgentId = new Map<string, TranscriptRecord[]>();
+  const loadMeta = dependencies.createTranscriptMetaLoader();
+  await mapWithConcurrency(
+    agentIdsToHydrate,
+    MAX_CONCURRENT_PERSISTED_SUBAGENT_READS,
+    async (agentId) => {
+      const childMeta = await loadMeta(agentId);
+      const childRecords = childMeta?.transcriptPath
+        ? (await dependencies.readTranscript(childMeta.transcriptPath)).records
+        : [];
+      childRecordsByAgentId.set(agentId, childRecords);
+    },
+  );
+
+  const parts = deriveSubagentPartsFromTranscriptRecords(
+    records,
+    childRecordsByAgentId,
+    resolvedAgentIdByCallId,
+  );
+  return new Map(
+    spawnCallIds.flatMap((callId, index) => {
+      const resolvedAgentId = resolvedAgentIdByCallId.get(callId);
+      if (
+        resolvedAgentId &&
+        !failedSpawnCallIds.has(callId) &&
+        !selectedAgentIds.has(resolvedAgentId)
+      )
+        return [];
+      const part = parts[index];
+      return part ? [[callId, normalizedSubagentPart(part)] as const] : [];
+    }),
+  );
 }
 
 export async function getPersistedSessionMeta(
@@ -866,6 +1066,7 @@ export async function hydrateMessagesFromPersistedSession(threadId: string): Pro
   }
 
   const { records } = await readCachedTranscript(meta.transcriptPath);
+  const persistedSubagentParts = await hydratePersistedSubagentParts(threadId, records);
   const messages: NormalizedMessage[] = [];
   const toolPartsByCallId = new Map<
     string,
@@ -926,11 +1127,19 @@ export async function hydrateMessagesFromPersistedSession(threadId: string): Pro
 
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const assistantMessage = ensureAssistantMessage();
+      const callId = asNonEmptyString(payload.call_id);
+      const subagentPart =
+        payload.type === "function_call" && payload.name === "spawn_agent" && callId
+          ? persistedSubagentParts.get(callId)
+          : undefined;
+      if (subagentPart) {
+        assistantMessage.parts.push(subagentPart);
+        continue;
+      }
       const parts = createPersistedToolParts(payload, transcriptCwd);
       const firstPartIndex = assistantMessage.parts.length;
       assistantMessage.parts.push(...parts);
 
-      const callId = asNonEmptyString(payload.call_id);
       if (callId) {
         toolPartsByCallId.set(callId, {
           message: assistantMessage,

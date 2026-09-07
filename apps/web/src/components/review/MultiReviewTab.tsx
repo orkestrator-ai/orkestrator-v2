@@ -565,7 +565,8 @@ function MultiReviewOverviewTab({
                             the only place the reviewer's own outcome is legible. */}
                             {note ? (
                               <p
-                                className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`}
+                                className={`max-h-16 overflow-x-hidden overflow-y-auto overscroll-contain break-words whitespace-normal pr-1 text-[11px] [overflow-wrap:anywhere] ${NOTE_TONE_CLASS[note.tone]}`}
+                                data-testid={`multi-reviewer-note-${reviewer.id}`}
                                 title={note.text}
                               >
                                 {note.text}

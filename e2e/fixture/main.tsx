@@ -28,12 +28,15 @@ import {
   type ReviewModelCatalog,
 } from "../../apps/web/src/components/review/ReviewLaunchDialog";
 import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
+import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
 import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
 import {
   useBuildPipelineStore,
   type BuildPipeline,
 } from "../../apps/web/src/stores/buildPipelineStore";
+import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
+import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 
 declare global {
   interface Window {
@@ -287,6 +290,61 @@ function MultiReviewLaunchDialogFixture() {
         defaultAgent="claude"
         catalog={reviewModelCatalog}
         onConfirm={() => setOpen(false)}
+      />
+    </main>
+  );
+}
+
+const multiReviewOverviewError = `Provider failure: ${"unbroken-session-token/".repeat(256)}`;
+const multiReviewOverviewWorkflow: MultiReviewWorkflow = {
+  version: 1,
+  controller: "backend",
+  id: "multi-review-overview-fixture",
+  environmentId: "fixture-environment",
+  projectId: "fixture-project",
+  targetBranch: "main",
+  phase: "failed",
+  reviewers: [
+    {
+      id: "long-error-reviewer",
+      agent: "claude",
+      model: "opus",
+      status: "failed",
+      providerSessionId: "long-error-session",
+      error: multiReviewOverviewError,
+    },
+    {
+      id: "short-error-reviewer",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "failed",
+      providerSessionId: "short-error-session",
+      error: "The reviewer session no longer exists",
+    },
+  ],
+  fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+  error: "No reviewer produced a valid report",
+  createdAt: "2026-09-07T00:00:00.000Z",
+  updatedAt: "2026-09-07T00:00:00.000Z",
+  backendRevision: 1,
+};
+
+function MultiReviewOverviewFixture() {
+  useEffect(() => {
+    useMultiReviewStore.getState().replaceWorkflow(multiReviewOverviewWorkflow);
+    return () => useMultiReviewStore.getState().removeWorkflow(multiReviewOverviewWorkflow.id);
+  }, []);
+
+  return (
+    <main className="h-screen bg-background text-foreground">
+      <MultiReviewTab
+        data={{
+          environmentId: multiReviewOverviewWorkflow.environmentId,
+          workflowId: multiReviewOverviewWorkflow.id,
+          isLocal: true,
+        }}
+        isActive
+        hydrateWorkflow={async () => multiReviewOverviewWorkflow}
       />
     </main>
   );
@@ -730,6 +788,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;
+  }
+  if (window.location.pathname === "/multi-review-overview") {
+    return <MultiReviewOverviewFixture />;
   }
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;

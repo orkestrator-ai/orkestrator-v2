@@ -456,6 +456,45 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     expect(await screen.findByText("The reviewer session failed")).toBeTruthy();
     expect(screen.getByText("The reviewer session no longer exists")).toBeTruthy();
+    const reviewerError = screen.getByText("The reviewer session no longer exists");
+    expect(reviewerError.className).toContain("whitespace-normal");
+    expect(reviewerError.className).toContain("break-words");
+    expect(reviewerError.className).toContain("[overflow-wrap:anywhere]");
+    expect(reviewerError.className).not.toContain("truncate");
+  });
+
+  test("bounds a long reviewer failure while keeping its complete text available", async () => {
+    const ready = readyWorkflow();
+    const longReviewerError = `Provider failure: ${"unbroken-session-token/".repeat(256)}`;
+    ready.phase = "failed";
+    ready.error = "No reviewer produced a valid report";
+    ready.reviewers[0] = {
+      ...ready.reviewers[0]!,
+      status: "failed",
+      error: longReviewerError,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
+
+    const reviewerError = await screen.findByTestId("multi-reviewer-note-reviewer-1");
+    expect(reviewerError.textContent).toBe(longReviewerError);
+    expect(reviewerError.getAttribute("title")).toBe(longReviewerError);
+    expect(reviewerError.className).toContain("max-h-16");
+    expect(reviewerError.className).toContain("overflow-x-hidden");
+    expect(reviewerError.className).toContain("overflow-y-auto");
+    expect(reviewerError.className).toContain("overscroll-contain");
+    expect(reviewerError.className).toContain("whitespace-normal");
+    expect(reviewerError.className).toContain("break-words");
+    expect(reviewerError.className).toContain("[overflow-wrap:anywhere]");
+    expect(reviewerError.className).not.toContain("truncate");
+    expect(reviewerError.className).not.toContain("line-clamp");
   });
 
   test("records the handoff and opens its backend-owned session after delivery", async () => {

@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  COORDINATOR_CONTEXT_CLOSE_TAG,
+  COORDINATOR_CONTEXT_OPEN_TAG,
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   isCoordinatorWorkspace,
+  stripCoordinatorContext,
 } from "./coordinator.js";
 
 describe("coordinator runtime identities", () => {
@@ -52,5 +55,31 @@ describe("coordinator runtime identities", () => {
         ],
       }),
     ).toBe(false);
+  });
+});
+
+describe("coordinator context stripping", () => {
+  const preamble = [
+    COORDINATOR_CONTEXT_OPEN_TAG,
+    "Project: project-id",
+    "Coordinator: coordinator-id",
+    "Role: read-only coordinator.",
+    COORDINATOR_CONTEXT_CLOSE_TAG,
+  ].join("\n");
+
+  test("removes the injected preamble and leaves the user's prompt", () => {
+    expect(stripCoordinatorContext(`${preamble}\n\nMove the dropdown`)).toBe("Move the dropdown");
+  });
+
+  test("leaves an ordinary prompt untouched", () => {
+    expect(stripCoordinatorContext("Move the dropdown")).toBe("Move the dropdown");
+  });
+
+  test("never truncates a prompt whose block is unterminated or not leading", () => {
+    const unterminated = `${COORDINATOR_CONTEXT_OPEN_TAG}\nProject: project-id`;
+    expect(stripCoordinatorContext(unterminated)).toBe(unterminated);
+
+    const quoted = `Why does this render?\n${preamble}`;
+    expect(stripCoordinatorContext(quoted)).toBe(quoted);
   });
 });

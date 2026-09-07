@@ -92,7 +92,6 @@ describe("Codex app-server configuration", () => {
       "permissions.coordinator-conversation-1.network.enabled": "false",
       'projects."/projects/example".trust_level': '"untrusted"',
       "features.apps": "false",
-      "features.code_mode_host": "false",
       "features.hooks": "false",
       "features.plugins": "false",
       "features.workspace_dependencies": "false",
@@ -116,6 +115,25 @@ describe("Codex app-server configuration", () => {
       '"/opt/orkestrator/codex" = "read"',
     );
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
+  });
+
+  test("leaves the code-mode host enabled so coordinator tool calls can dispatch", () => {
+    const overrides = codexAppServerConfigOverrides({
+      CODEX_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: "/opt/orkestrator/codex",
+      CWD: "/projects/example",
+    });
+
+    // Every catalogued model is `tool_mode = "code_mode_only"`, so disabling the
+    // host fails every tool call with "code-mode host is disabled" rather than
+    // narrowing the coordinator to inspection. Read-only enforcement is the
+    // permission profile's job.
+    expect(overrides["features.code_mode_host"]).toBeUndefined();
+    expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
+    expect(overrides["permissions.coordinator-conversation-1.filesystem"]).toContain(
+      '":workspace_roots" = { "." = "read" }',
+    );
   });
 
   test("rejects incomplete coordinator permission-profile authority", () => {

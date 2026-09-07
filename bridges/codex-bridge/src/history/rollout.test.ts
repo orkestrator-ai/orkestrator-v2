@@ -949,6 +949,26 @@ describe("rollout public helpers (continued)", () => {
     ).toBeNull();
   });
 
+  test("rehydrates a coordinator turn without its injected preamble", () => {
+    const preamble =
+      "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +
+      "Role: read-only coordinator.\n</orkestrator-coordinator-context>";
+
+    expect(
+      extractPersistedMessageText(
+        [{ type: "input_text", text: `${preamble}\n\nMove the dropdown` }],
+        "user",
+      ),
+    ).toBe("Move the dropdown");
+    // A block the user quoted mid-prompt is their own text and must survive.
+    expect(
+      extractPersistedMessageText(
+        [{ type: "input_text", text: `Why does this render?\n${preamble}` }],
+        "user",
+      ),
+    ).toBe(`Why does this render?\n${preamble}`);
+  });
+
   test("recovers attachment rows from the persisted marker, not from inline image data", () => {
     const persisted = extractPersistedMessageContent(
       [

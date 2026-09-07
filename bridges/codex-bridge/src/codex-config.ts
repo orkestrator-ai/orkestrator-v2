@@ -64,15 +64,20 @@ export function codexAppServerConfigOverrides(
     // and extensions stay disabled even if a future Codex release changes the
     // trust side effect of starting a thread with a permission profile.
     overrides[`projects.${JSON.stringify(projectRoot)}.trust_level`] = JSON.stringify("untrusted");
+    // `features.code_mode_host` is deliberately left at its default. Every model
+    // the catalog now serves declares `tool_mode = "code_mode_only"`, so Codex
+    // dispatches *all* tool calls — shell reads and Orkestrator MCP controls
+    // alike — through the code-mode host. Turning that host off does not narrow
+    // the coordinator to inspection: it fails every tool call with "code-mode
+    // host is disabled", which is what left the coordinator unable to run
+    // `launch_environment`. Code-mode calls still resolve through
+    // `codex_core::tools::router`, so the permission profile set above is what
+    // enforces read-only, network-free execution, not the host toggle.
     for (const feature of [
       "apps",
       "browser_use",
       "browser_use_external",
       "browser_use_full_cdp_access",
-      // Code Mode runs model-authored TypeScript in a separate helper process.
-      // Keep that path disabled until an integration test proves the coordinator
-      // permission profile and environment exclusions are enforced inside it.
-      "code_mode_host",
       "computer_use",
       "hooks",
       "image_generation",

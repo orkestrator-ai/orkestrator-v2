@@ -127,6 +127,7 @@ import {
   readPersistedSessionTitleEntries,
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
+import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 import type { BridgeModel } from "./models-cache.js";
 import {
@@ -1005,8 +1006,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     prompt: string,
     attachments: PromptAttachmentInput[],
   ): NormalizedMessage {
+    // The coordinator preamble is authority for the model, not something the
+    // user typed. Strip it here so the transcript row shows their message
+    // instead of the injected block; the wire prompt is unaffected.
+    const displayed = stripCoordinatorContext(prompt);
     const parts: NormalizedPart[] = [];
-    if (prompt.length > 0) parts.push({ type: "text", content: prompt });
+    if (displayed.length > 0) parts.push({ type: "text", content: displayed });
     for (const attachment of attachments) {
       // `content` is the path, not the filename: this row has to be identical
       // to the one `extractAttachmentTags` rebuilds after a rehydration, and
@@ -1023,7 +1028,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const message: NormalizedMessage = {
       id: createMessageId(),
       role: "user",
-      content: prompt,
+      content: displayed,
       parts,
       createdAt: new Date(this.now()).toISOString(),
     };
@@ -1038,7 +1043,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    */
   protected applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
     if (!session.title) {
-      const fallback = buildFallbackSessionTitle(prompt);
+      const fallback = buildFallbackSessionTitle(stripCoordinatorContext(prompt));
       for (const id of context.bridgeSessionIds) {
         const attached = this.registry.getSession(id);
         if (attached && !attached.title) {

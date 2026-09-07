@@ -1,5 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
-import { COORDINATOR_EXECUTION_POLICY } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_CONTEXT_CLOSE_TAG,
+  COORDINATOR_CONTEXT_OPEN_TAG,
+  COORDINATOR_EXECUTION_POLICY,
+} from "@orkestrator/protocol/coordinator";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -432,7 +436,7 @@ export abstract class NativeAgentServiceBase {
     if (
       "prompt" in input &&
       typeof input.prompt === "string" &&
-      !input.prompt.startsWith("<orkestrator-coordinator-context>")
+      !input.prompt.startsWith(COORDINATOR_CONTEXT_OPEN_TAG)
     ) {
       const status = workspace.repositoryStatus;
       const delegation = this.options.coordinatorDelegationAvailable?.()
@@ -441,7 +445,7 @@ export abstract class NativeAgentServiceBase {
       return {
         ...trusted,
         prompt:
-          `<orkestrator-coordinator-context>\n` +
+          `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
           `Project: ${workspace.projectId}\n` +
           `Coordinator: ${coordinatorId}\n` +
           `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
@@ -449,7 +453,7 @@ export abstract class NativeAgentServiceBase {
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +
           `Commit: ${status?.headCommit ?? "unknown"}\n` +
-          `</orkestrator-coordinator-context>\n\n${input.prompt}`,
+          `${COORDINATOR_CONTEXT_CLOSE_TAG}\n\n${input.prompt}`,
       } as T;
     }
     return trusted;

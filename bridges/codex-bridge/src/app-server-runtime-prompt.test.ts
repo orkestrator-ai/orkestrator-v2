@@ -1388,6 +1388,28 @@ describe("slash commands", () => {
     expect(messages?.[0]?.content).toBe("/ReViEw src/parser.ts");
   });
 
+  test("a coordinator turn sends its preamble but does not render it", async () => {
+    const preamble =
+      "<orkestrator-coordinator-context>\nProject: project-id\nCoordinator: coordinator-id\n" +
+      "Role: read-only coordinator.\n</orkestrator-coordinator-context>";
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: `${preamble}\n\nMove the dropdown`,
+      requestId: "req-coordinator",
+      attachments: [],
+    });
+
+    // The model still receives the authority block.
+    const turnStart = h.child().requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params.input)).toContain("Role: read-only coordinator.");
+
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("Move the dropdown");
+    expect(messages?.[0]?.parts).toEqual([{ type: "text", content: "Move the dropdown" }]);
+  });
+
   test("/help is answered locally without reaching Codex", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

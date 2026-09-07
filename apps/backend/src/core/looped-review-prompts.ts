@@ -14,6 +14,7 @@ import {
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
+import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
 
 const nullableString = {
   anyOf: [{ type: "string" }, { type: "null" }],
@@ -301,6 +302,12 @@ function contextBlock(context?: ReviewPackageContext): string {
     : "";
 }
 
+/**
+ * Builds the schema-constrained preparation turn shared by Looped and Multi
+ * Review. The output contract is load-bearing: preparation commits, validates,
+ * and stores artifacts over several minutes in a tab the user can watch, and
+ * without it the model narrates that work in JSON the viewer folds away.
+ */
 export function createReviewPreparationPrompt(input: {
   round: number;
   packageId: string;
@@ -337,6 +344,10 @@ Target branch: \`${input.targetBranch}\`
    - A command that ran has its actual integer exit code, \`status="passed"\` only for exit code 0, and \`limitation=null\` unless a real limitation applies.
    - Do not include Git refs, diffs, hashes, or file contents. Orkestrator resolves those from the prepared HEAD.
    - Run each validation command once. Reviewers are told not to rerun them, so a command you skip is evidence nobody will have.
+
+## Output contract
+
+${REVIEW_PREPARATION_OUTPUT_CONTRACT}
 
 Do not perform the review itself.`;
 }

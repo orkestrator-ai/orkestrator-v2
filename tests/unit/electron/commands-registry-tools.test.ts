@@ -717,10 +717,10 @@ describe("agent extension discovery commands", () => {
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
-      // Pi has no MCP client. Cursor does have extension settings, but its SDK
-      // exposes no catalogue, so that row must report the list as unavailable.
-      if (catalog.agent === "pi") expect(catalog.mcpError).toBeUndefined();
-      else expect(catalog.mcpError).toBeTruthy();
+      // Pi has no MCP client; Cursor gets MCP inventory from its live bridge.
+      if (catalog.agent === "pi" || catalog.agent === "cursor") {
+        expect(catalog.mcpError).toBeUndefined();
+      } else expect(catalog.mcpError).toBeTruthy();
       expect(catalog.pluginError).toBeTruthy();
     }
   });

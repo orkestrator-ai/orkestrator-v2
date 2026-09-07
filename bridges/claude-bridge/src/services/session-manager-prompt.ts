@@ -6,6 +6,7 @@ import type {
   HookCallback,
   PreToolUseHookInput,
   SDKAPIRetryMessage,
+  SDKAuthStatusMessage,
   SDKAssistantMessage,
   SDKSystemMessage,
   SDKToolProgressMessage,
@@ -100,7 +101,6 @@ import {
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
-  generateAndSetSessionTitle,
   generateMessageId,
   pendingPlanApprovals,
   pendingQuestions,
@@ -701,17 +701,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       );
     const hasBackgroundTaskCandidateOwnedByThisQuery = () =>
       Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(queryIteratorControl!);
-    const scheduleTitleGeneration = () => {
-      const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;
-      if (isDefaultTitle && !options?._isReprompt && !session.titleGenerationPending) {
-        session.titleGenerationPending = true;
-        void generateAndSetSessionTitle(sessionId, prompt);
-      }
-    };
     const releaseCompletedTurnToBackgroundTasks = (backgroundTasksRunning: boolean) => {
       if (turnReleasedToBackgroundTasks || !ownsActiveTurn()) return;
       turnReleasedToBackgroundTasks = true;
-      scheduleTitleGeneration();
       releasedTurnStartedAt = session.turnStartedAt;
       session.status = "idle";
       session.turnStartedAt = undefined;
@@ -876,6 +868,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // bridge variable plus the latest managed GitHub credential.
         env: queryEnvironment,
         model: options?.model,
+        title: session.title,
         agent: options?.agent,
         ...(options?.outputSchema
           ? {
@@ -892,7 +885,23 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         ...(effortLevel && { effort: effortLevel }),
         // Opus 4.7 defaults adaptive thinking display to "omitted" (signature only,
         // redacted text). Opt back into "summarized" so thinking content renders in the UI.
-        thinking: { type: "adaptive", display: "summarized" },
+        thinking:
+          options?.parameterValues?.thinking === "disabled"
+            ? { type: "disabled" }
+            : typeof options?.parameterValues?.thinking === "string" &&
+                options.parameterValues.thinking.startsWith("budget-")
+              ? {
+                  type: "enabled",
+                  budgetTokens: Number(options.parameterValues.thinking.slice("budget-".length)),
+                  display: "summarized",
+                }
+              : { type: "adaptive", display: "summarized" },
+        ...(options?.parameterValues?.context1m === true && /opus|sonnet/i.test(options.model ?? "")
+          ? { betas: ["context-1m-2025-08-07" as const] }
+          : {}),
+        ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
+          ? { maxBudgetUsd: options.maxBudgetUsd }
+          : {}),
         includePartialMessages: true,
         // Preserve the full nested transcript. Every forwarded subagent block
         // carries parent_tool_use_id and is rendered inside its Agent card.
@@ -923,6 +932,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         enableFileCheckpointing: true,
         promptSuggestions: options?.promptSuggestions === true,
         agentProgressSummaries: true,
+        perTaskStopAffordance: true,
         // Use Claude Code system prompt with additional instructions
         systemPrompt: {
           type: "preset",
@@ -1257,8 +1267,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         onUserDialog: async () => ({ behavior: "cancelled" as const }),
       },
     });
-    session.queryControl = queryIterator;
-    queryIteratorControl = queryIterator;
+    const liveQuery = Object.assign(queryIterator, { pushInput: heldSdkPrompt.push });
+    session.queryControl = liveQuery;
+    queryIteratorControl = liveQuery;
     queryStarted = true;
     testHooks?.onQueryStarted?.();
     let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
@@ -1410,6 +1421,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           mcpServers: mcpServerStatuses,
           plugins: pluginStatuses,
           slashCommands: initMsg.slash_commands,
+          skills: Array.isArray(initMsg.skills) ? initMsg.skills : [],
+          apiKeySource: typeof initMsg.apiKeySource === "string" ? initMsg.apiKeySource : undefined,
           agents: supportedAgents,
         };
 
@@ -2015,6 +2028,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           stream.emitCurrentAssistantMessage();
         }
         // Skip adding user message replay as we already added it
+      } else if (message.type === "auth_status") {
+        const auth = message as SDKAuthStatusMessage;
+        const content = auth.error
+          ? `Claude authentication failed: ${auth.error}`
+          : auth.isAuthenticating
+            ? "Claude authentication is in progress."
+            : "Claude authentication state changed.";
+        sessionHealth(session).recordNotice({
+          method: "auth_status",
+          message: content,
+          severity: auth.error ? "error" : "info",
+          source: "provider",
+        });
+        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+          type: "status",
+          content,
+          severity: auth.error ? "error" : "info",
+          createdAt: new Date().toISOString(),
+        });
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
         // Query completed - log full result for debugging
         const resultMsg = message as SdkResultMessage;
@@ -2126,6 +2158,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             (resultMsg.subtype === "success"
               ? "Claude ended the turn on an API error."
               : `Claude query failed: ${resultMsg.subtype}`);
+          if (resultMsg.subtype === "error_max_budget_usd") {
+            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+              type: "status",
+              content: "Claude stopped because this session reached its spending cap.",
+              severity: "warning",
+              createdAt: new Date().toISOString(),
+            });
+          }
           if (options?.outputSchema) {
             const failure = structuredOutputFailure(
               "claude",
@@ -2318,8 +2358,6 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // request above is still resolving. The old turn must not publish a second
     // idle edge or clear the new turn's controller.
     if (!ownsActiveTurn()) return;
-
-    scheduleTitleGeneration();
 
     session.status = "idle";
     session.turnStartedAt = undefined;

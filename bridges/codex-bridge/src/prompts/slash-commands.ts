@@ -28,6 +28,7 @@ export interface BridgeSlashCommand {
 
 export interface PromptSlashCommand extends BridgeSlashCommand {
   source: "prompt";
+  catalogSource?: "project" | "user";
   path: string;
   template: string;
 }
@@ -201,9 +202,10 @@ export async function getAvailableSlashCommandDefinitions(
   const commandMap = new Map<string, SlashCommandDefinition>();
   const promptDirs = [join(cwd, ".codex", "prompts"), join(getCodexHomeDir(), "prompts")];
 
-  for (const promptDir of promptDirs) {
+  for (const [index, promptDir] of promptDirs.entries()) {
     const commands = await collectPromptSlashCommandsFromDir(promptDir);
     for (const command of commands) {
+      command.catalogSource = index === 0 ? "project" : "user";
       const key = command.name.toLowerCase();
       if (!commandMap.has(key)) {
         commandMap.set(key, command);
@@ -225,12 +227,20 @@ export async function getAvailableSlashCommandDefinitions(
   return Array.from(commandMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function serializeSlashCommand(command: SlashCommandDefinition): BridgeSlashCommand {
+export function serializeSlashCommand(command: SlashCommandDefinition): {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  source: "builtin" | "project" | "user";
+  scope: "global" | "session";
+} {
   return {
     name: command.name,
     description: command.description,
     argumentHint: command.argumentHint,
-    source: command.source,
+    source: command.source === "prompt" ? (command.catalogSource ?? "user") : "builtin",
+    scope:
+      command.source === "prompt" && command.catalogSource === "project" ? "session" : "global",
   };
 }
 

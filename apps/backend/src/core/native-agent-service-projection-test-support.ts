@@ -85,6 +85,8 @@ export function createProviderStub(
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
     dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
     steerSupported?: NativeAgentRuntimeProvider["steerSupported"];
+    authStatus?: NativeAgentRuntimeProvider["authStatus"];
+    setSessionTitle?: NativeAgentRuntimeProvider["setSessionTitle"];
   } = {},
 ) {
   const createSession = mock(behaviour.createSession ?? (async () => "provider-session"));
@@ -118,6 +120,8 @@ export function createProviderStub(
     : behaviour.steerSupported
       ? mock(behaviour.steerSupported)
       : undefined;
+  const authStatus = behaviour.authStatus ? mock(behaviour.authStatus) : undefined;
+  const setSessionTitle = behaviour.setSessionTitle ? mock(behaviour.setSessionTitle) : undefined;
   const provider = {
     agent,
     createSession,
@@ -141,6 +145,8 @@ export function createProviderStub(
     prepareDispatch,
     dispatchStatus,
     steerSupported,
+    authStatus,
+    setSessionTitle,
     dispose,
   } as unknown as NativeAgentRuntimeProvider;
   return {
@@ -148,6 +154,8 @@ export function createProviderStub(
     prepareDispatch,
     dispatchStatus,
     steerSupported,
+    authStatus,
+    setSessionTitle,
     createSession,
     registerSession,
     send,

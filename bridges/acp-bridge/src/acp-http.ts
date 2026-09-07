@@ -1,5 +1,8 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
 import { type IncomingMessage, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -31,8 +34,10 @@ import {
   PROMPT_TIMEOUT_MS,
   HttpError,
   authToken,
+  agentRuntime,
   bumpCursorDiscoveryRevision,
   clientSessionKeys,
+  configuredAcpMcpServers,
   provider,
   sessions,
   isObject,
@@ -82,6 +87,34 @@ export async function route(
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
   }
+  if (url.pathname === "/global/auth" && request.method === "GET") {
+    const credentialPresent =
+      provider !== "grok" ||
+      (await fileExists(
+        process.env.GROK_AUTH_FILE?.trim() || join(homedir(), ".grok", "auth.json"),
+      ));
+    const signedIn = credentialPresent && agentRuntime.authenticated !== false;
+    return json(response, 200, {
+      state: signedIn ? "signed-in" : "needs-auth",
+      signIn: {
+        kind: "terminal",
+        hint:
+          provider === "grok"
+            ? "Open a terminal and run grok login."
+            : "Sign in with the agent CLI.",
+      },
+      signOut: false,
+    });
+  }
+  if (
+    (url.pathname === "/global/auth/login" || url.pathname === "/global/auth/logout") &&
+    request.method === "POST"
+  ) {
+    return json(response, 405, { error: "Authentication is managed by the agent CLI" });
+  }
+  if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
+    return json(response, 200, { refreshed: true });
+  }
   if (url.pathname === "/global/models" && request.method === "GET") {
     const models = await listNormalizedModels(clientSignal);
     return json(response, 200, { models });
@@ -116,7 +149,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -176,6 +209,13 @@ export async function route(
       state.dispatching = false;
     }
     return json(response, 200, state.sessionConfig.composer);
+  }
+  if (action === "commands" && request.method === "GET") {
+    return json(response, 200, { commands: state.availableCommands ?? [] });
+  }
+  if (action === "mcp" && request.method === "GET") {
+    configuredAcpMcpServers();
+    return json(response, 200, { servers: agentRuntime.mcp ?? [] });
   }
   /**
    * Liveness only: no touch, no transcript hydration, no re-attach.
@@ -538,6 +578,15 @@ export async function route(
     return json(response, 200, { deleted: true });
   }
   return json(response, 405, { error: "Method not allowed" });
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await fs.access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 export function authenticated(request: IncomingMessage): boolean {
   const dedicated = request.headers[ACP_TOKEN_HEADER];

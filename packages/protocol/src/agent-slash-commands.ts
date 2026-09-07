@@ -1,4 +1,31 @@
-import type { NativeAgentCapabilities, NativeAgentSlashCommand } from "./native-agent.js";
+import type {
+  NativeAgentCapabilities,
+  NativeAgentSlashCommand,
+  NativeAgentSlashCommandSource,
+} from "./native-agent.js";
+
+/** Stable picker grouping: provider fundamentals first, extensions last. */
+export const NATIVE_AGENT_SLASH_COMMAND_SOURCE_ORDER: readonly NativeAgentSlashCommandSource[] = [
+  "builtin",
+  "orkestrator",
+  "project",
+  "user",
+  "plugin",
+  "skill",
+  "template",
+  "extension",
+  "unknown",
+];
+
+export function compareNativeAgentSlashCommands(
+  left: NativeAgentSlashCommand,
+  right: NativeAgentSlashCommand,
+): number {
+  const sourceOrder =
+    NATIVE_AGENT_SLASH_COMMAND_SOURCE_ORDER.indexOf(left.source) -
+    NATIVE_AGENT_SLASH_COMMAND_SOURCE_ORDER.indexOf(right.source);
+  return sourceOrder || left.name.localeCompare(right.name);
+}
 
 /**
  * One parsing rule for every provider.
@@ -118,7 +145,11 @@ export function isProviderSlashCommand(
   if (sessionAction && capabilities?.actions?.[sessionAction.capability] === true) {
     return false;
   }
-  return commands.some((command) => command.name.toLowerCase() === parsed.name);
+  return commands.some(
+    (command) =>
+      command.name.toLowerCase() === parsed.name ||
+      command.aliases?.some((alias) => alias.toLowerCase() === parsed.name),
+  );
 }
 
 /**
@@ -141,9 +172,10 @@ export function withSessionActionSlashCommands(
     }
     merged.set(name, {
       name,
+      source: "orkestrator",
       description: definition.description,
       ...(definition.argumentHint ? { argumentHint: definition.argumentHint } : {}),
     });
   }
-  return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...merged.values()].sort(compareNativeAgentSlashCommands);
 }

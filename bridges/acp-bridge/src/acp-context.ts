@@ -3,7 +3,9 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import type {
   NativeAgentComposerState,
+  NativeAgentMcpServer,
   NativeAgentRuntimeSummary,
+  NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { AcpTurnUsage } from "./usage.js";
@@ -340,8 +342,8 @@ export interface SessionState {
   turnStartedAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
-  /** `available_commands_update` size; both agents advertise their commands. */
-  commandCount?: number;
+  /** Bounded ACP command catalogue; persisted so detach/re-attach does not empty the picker. */
+  availableCommands?: NativeAgentSlashCommand[];
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
   /**
@@ -393,7 +395,7 @@ export interface PersistedSession {
   composer?: NativeAgentComposerState;
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
-  commandCount?: number;
+  availableCommands?: NativeAgentSlashCommand[];
   subagentLimitExceeded?: boolean;
   settledCursorAgentIds?: string[];
 }
@@ -475,11 +477,40 @@ export let catalogProbe: Promise<NativeAgentComposerState> | null = null;
  * child of this bridge is the same executable with the same configuration, so
  * whichever handshake observed them speaks for all of them.
  */
-export const agentRuntime: { version?: string; mcpServers?: number } = {};
+export const agentRuntime: {
+  version?: string;
+  mcp?: NativeAgentMcpServer[];
+  authMethods?: Array<{ id: string; name: string }>;
+  authenticated?: boolean;
+} = {};
 
 export interface AcpSpawnOptions {
   model?: string;
   effort?: string;
+}
+
+/** MCP launch configuration shared by every ACP session in this environment. */
+export function configuredAcpMcpServers(): JsonObject[] {
+  const url = process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
+  const token = process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
+  if (!url || !token) return [];
+  agentRuntime.mcp ??= [
+    {
+      id: "orkestrator",
+      name: "orkestrator",
+      status: "unknown",
+      scope: "orkestrator",
+      actions: [],
+    },
+  ];
+  return [
+    {
+      name: "orkestrator",
+      type: "http",
+      url,
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  ];
 }
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -750,7 +781,28 @@ export class AcpProcess {
     );
     const initialized = isObject(result) ? result : {};
     rememberAgentRuntime(initialized);
+    if (provider === "grok") await this.authenticateIfRequired(initialized, signal);
     return initialized;
+  }
+
+  private async authenticateIfRequired(
+    initialized: JsonObject,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const meta = isObject(initialized._meta) ? initialized._meta : {};
+    const required =
+      initialized.authRequired === true ||
+      initialized.requiresAuthentication === true ||
+      meta.authRequired === true ||
+      meta.requiresAuthentication === true;
+    const configured = process.env.GROK_AUTH_METHOD_ID?.trim();
+    const methodId = configured || (required ? agentRuntime.authMethods?.[0]?.id : undefined);
+    if (!methodId) {
+      agentRuntime.authenticated = !required;
+      return;
+    }
+    await this.request("authenticate", { methodId }, RPC_TIMEOUT_MS, signal);
+    agentRuntime.authenticated = true;
   }
 
   request(
@@ -1098,12 +1150,41 @@ function rememberAgentRuntime(initialized: JsonObject): void {
         ? meta.agentVersion
         : undefined;
   if (version) agentRuntime.version = version.slice(0, 64);
+  if (Array.isArray(initialized.authMethods)) {
+    agentRuntime.authMethods = initialized.authMethods.slice(0, 32).flatMap((candidate) => {
+      if (!isObject(candidate)) return [];
+      const id = typeof candidate.id === "string" ? candidate.id.trim().slice(0, 128) : "";
+      const name =
+        typeof candidate.name === "string"
+          ? candidate.name.trim().slice(0, 256)
+          : typeof candidate.description === "string"
+            ? candidate.description.trim().slice(0, 256)
+            : id;
+      return id ? [{ id, name: name || id }] : [];
+    });
+  }
 }
 
 function rememberVendorRuntime(method: string, params: JsonObject): void {
   if (!method.endsWith("/mcp/servers_updated") || !Array.isArray(params.mcpServers)) return;
-  if (agentRuntime.mcpServers === params.mcpServers.length) return;
-  agentRuntime.mcpServers = params.mcpServers.length;
+  const mcp = params.mcpServers.slice(0, 64).flatMap((candidate, index) => {
+    if (!isObject(candidate)) return [];
+    const name =
+      typeof candidate.name === "string" && candidate.name.trim()
+        ? candidate.name.trim().slice(0, 128)
+        : `server-${index + 1}`;
+    return [
+      {
+        id: name,
+        name,
+        status: "connected" as const,
+        scope: name === "orkestrator" ? ("orkestrator" as const) : undefined,
+        actions: [],
+      },
+    ];
+  });
+  if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
+  agentRuntime.mcp = mcp;
   for (const state of sessions.values()) state.revision += 1;
 }
 
@@ -1111,8 +1192,10 @@ export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
   const drift = state.health.drift();
   const notices = state.health.listNotices();
   return {
-    ...(agentRuntime.mcpServers === undefined ? {} : { mcpServers: agentRuntime.mcpServers }),
-    ...(state.commandCount === undefined ? {} : { commands: state.commandCount }),
+    ...(agentRuntime.mcp === undefined
+      ? {}
+      : { mcpServers: agentRuntime.mcp.length, mcp: agentRuntime.mcp }),
+    ...(state.availableCommands === undefined ? {} : { commands: state.availableCommands.length }),
     ...(agentRuntime.version ? { version: agentRuntime.version } : {}),
     state: state.status,
     ...(drift ? { drift } : {}),

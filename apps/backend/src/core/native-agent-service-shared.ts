@@ -26,6 +26,8 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 import type {
   AgentModel,
+  AgentModelParameter,
+  NativeAgentAuthStatus,
   NativeAgentCapabilities,
   NativeAgentComposerControl,
   NativeAgentComposerState,
@@ -43,6 +45,9 @@ import type {
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
+  NativeAgentSlashCommandSource,
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
   NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -303,6 +308,8 @@ export interface NativeAgentServiceOptions {
     input: EnsureNativeAgentSessionInput,
     environment: Environment,
   ) => Promise<NativeAgentRuntimeProvider>;
+  /** Graceful-interrupt window before provider hard-stop escalation. */
+  abortGraceMs?: number;
   /**
    * Clock for the activity sweep's backoff. Injectable so a test can prove the
    * retry schedule without sleeping through a 60-second ceiling.
@@ -443,6 +450,8 @@ export const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 export const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 export const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;
 export const NATIVE_SLASH_COMMAND_CACHE_LIMIT = 256;
+export const NATIVE_AUTH_STATUS_TTL_MS = 15_000;
+export const NATIVE_AUTH_STATUS_CACHE_LIMIT = 128;
 /** Prevent a failed optional discovery endpoint from being retried every poll. */
 export const NATIVE_DISCOVERY_RETRY_MS = 5_000;
 
@@ -484,7 +493,33 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if ((selectedModel?.reasoning?.length ?? 0) > 0) {
+  const parameters = selectedModel?.parameters ?? [];
+  for (const parameter of parameters) {
+    if (parameter.kind === "select" && (parameter.options?.length ?? 0) > 0) {
+      const value = composer.parameterValues?.[parameter.id] ?? parameter.defaultValue;
+      controls.push({
+        kind: "select",
+        id: `parameter:${parameter.id}`,
+        label: parameter.label,
+        ...(typeof value === "string" ? { value } : {}),
+        options: parameter.options!.map((option) => ({ ...option })),
+        disabled,
+      });
+    } else if (parameter.kind === "toggle") {
+      const value = composer.parameterValues?.[parameter.id] ?? parameter.defaultValue;
+      controls.push({
+        kind: "toggle",
+        id: `parameter:${parameter.id}`,
+        label: parameter.label,
+        value: typeof value === "boolean" ? value : false,
+        disabled,
+      });
+    }
+  }
+  if (
+    !parameters.some((parameter) => parameter.id === "reasoning") &&
+    (selectedModel?.reasoning?.length ?? 0) > 0
+  ) {
     controls.push({
       kind: "select",
       id: "reasoning",
@@ -499,6 +534,7 @@ export function nativeComposerControls(
     });
   }
   if (
+    !parameters.some((parameter) => parameter.id === "speed") &&
     capabilities.composer.speed &&
     composer.fastModeAvailable &&
     composer.fastModeEnabled !== null
@@ -668,6 +704,8 @@ export type {
   AgentInteractionPolicy,
   AgentInteractionResolution,
   AgentModel,
+  AgentModelParameter,
+  NativeAgentAuthStatus,
   NativeAgentCapabilities,
   NativeAgentComposerControl,
   NativeAgentComposerState,
@@ -684,6 +722,9 @@ export type {
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
+  NativeAgentSlashCommandSource,
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
   NativeAgentToolDetails,
   JsonSchema,
   Environment,

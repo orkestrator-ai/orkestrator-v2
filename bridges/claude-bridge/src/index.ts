@@ -11,6 +11,7 @@ import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
 import { createRequestLogger } from "./services/logger.js";
+import { readClaudeAuthStatus, refreshClaudeCatalogs } from "./services/session-manager.js";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -136,6 +137,17 @@ app.use("/session/:id/messages", compress({ encoding: "gzip" }));
  * does, so an authenticated 200 mirrors `/global/health`'s unconditional "ok".
  */
 app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
+app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
+app.post("/global/auth/login", (c) =>
+  c.json({ error: "Open a Claude terminal tab and run /login." }, 405),
+);
+app.post("/global/auth/logout", (c) =>
+  c.json({ error: "Claude sign-out is available from a terminal tab." }, 405),
+);
+app.post("/global/refresh-catalog", async (c) => {
+  await refreshClaudeCatalogs();
+  return c.json({ ok: true });
+});
 
 // Mount routes
 app.route("/global", health);

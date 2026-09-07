@@ -24,6 +24,7 @@ import {
   activeCursorToolReplays,
   adjustActiveCursorToolReplays,
   bumpCursorDiscoveryRevision,
+  configuredAcpMcpServers,
   trimmedToolCalls,
   acpToolSourceStates,
   cursorToolReplayProcesses,
@@ -569,7 +570,7 @@ export async function reconcileCursorToolMetadata(
     await replayChild.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
-      mcpServers: [],
+      mcpServers: configuredAcpMcpServers(),
       sessionId: state.acpSessionId,
     });
     // A turn dispatched while this replay was loading may already have been

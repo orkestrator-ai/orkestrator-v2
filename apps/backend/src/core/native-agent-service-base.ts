@@ -37,6 +37,7 @@ type NativeAgentSessionProjection = shared.NativeAgentSessionProjection;
 type NativeAgentSessionAction = shared.NativeAgentSessionAction;
 type NativeAgentSessionActionOutcome = shared.NativeAgentSessionActionOutcome;
 type NativeAgentSlashCommand = shared.NativeAgentSlashCommand;
+type NativeAgentAuthStatus = shared.NativeAgentAuthStatus;
 type NativeAgentToolDetails = shared.NativeAgentToolDetails;
 type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
@@ -174,6 +175,10 @@ export abstract class NativeAgentServiceBase {
   protected readonly slashCommandCache = new Map<
     string,
     { commands: NativeAgentSlashCommand[]; expiresAt: number }
+  >();
+  protected readonly authStatusCache = new Map<
+    string,
+    { status: NativeAgentAuthStatus | undefined; expiresAt: number }
   >();
   /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
   protected readonly modelCatalogRefreshes = new Map<
@@ -327,6 +332,10 @@ export abstract class NativeAgentServiceBase {
   >();
   /** Invalidates an in-flight read when a logical tab changes provider identity. */
   protected readonly projectionEpochs = new Map<string, number>();
+  /** Session-scoped stop result retained until the next authoritative projection. */
+  protected readonly stopNotices = new Map<string, string>();
+  /** One best-effort provider title push per backend-derived title. */
+  protected readonly pushedSessionTitles = new Map<string, string>();
   /** Round-robin offsets keep bounded scans from permanently favouring old sessions. */
   protected readonly interactionSelectionCursors = new Map<string, number>();
   protected interactionGlobalSelectionCursor = 0;
@@ -655,8 +664,15 @@ export abstract class NativeAgentServiceBase {
     input: NativeAgentProjectionInput,
   ): Promise<NativeAgentSessionProjection | null> {
     this.assertProjectionInput(input);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(sessionKey);
+    if (session) this.assertSessionIdentity(session, input, sessionKey);
     const provider = await this.provider(input);
-    const slashCommandKey = `${input.environmentId}\0${input.agent}`;
+    const slashCommandKey = `${input.environmentId}\0${input.agent}\0${session?.providerSessionId ?? "global"}`;
     // Discard in-flight discovery rather than waiting for it. Each refresh
     // re-checks its validity flag immediately before writing its cache, with no
     // await in between, so an invalidated read can no longer land. Awaiting one
@@ -674,6 +690,7 @@ export abstract class NativeAgentServiceBase {
     }
     this.modelCatalogCache.delete(input.environmentId);
     this.slashCommandCache.delete(slashCommandKey);
+    this.authStatusCache.delete(`${input.environmentId}\0${input.agent}`);
     // Best-effort, and dropped *after* the caches above rather than before.
     // Some providers answer this by reaching their bridge process — Pi has to,
     // because its `ModelRuntime` owns a credential snapshot this side cannot

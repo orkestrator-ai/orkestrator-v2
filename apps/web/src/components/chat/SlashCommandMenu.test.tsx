@@ -112,4 +112,27 @@ describe("SlashCommandMenu", () => {
     fireEvent.mouseDown(document.body);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  test("groups interleaved command sources under one header each", () => {
+    render(
+      <SlashCommandMenu
+        commands={[
+          { name: "/builtin-a", source: "builtin" },
+          { name: "/project-a", source: "project" },
+          { name: "/builtin-b", source: "builtin" },
+          { name: "/unknown" },
+        ]}
+        selectedIndex={2}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByText("Built in")).toHaveLength(1);
+    expect(screen.getAllByText("Project")).toHaveLength(1);
+    expect(screen.getAllByText("Other")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /builtin-b/i }).className).toContain(
+      "bg-zinc-800/80",
+    );
+  });
 });

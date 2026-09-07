@@ -399,6 +399,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
               promptSuggestions: input.promptSuggestions,
               model: preparation.model ?? input.model,
               effort: preparation.effort ?? input.reasoningEffort,
+              parameterValues: durable.controls?.parameterValues,
+              persistDefaults: durable.controls?.persistDefaults,
               agentMcp,
             });
             // Provider acceptance is the authoritative working edge. Record it
@@ -639,6 +641,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.providerConnections.clear();
     this.modelCatalogCache.clear();
     this.slashCommandCache.clear();
+    this.authStatusCache.clear();
     this.modelCatalogRefreshes.clear();
     this.slashCommandRefreshes.clear();
     this.projectionCache.clear();

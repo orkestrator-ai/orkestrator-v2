@@ -10,6 +10,7 @@
  * `authStatus` deliberately reports only presence and expiry.
  */
 import { Cursor, FileCredentialStore, type SdkCredentialStore } from "@cursor/sdk";
+import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import { credentialFile, LOGIN_TIMEOUT_MS } from "./config.js";
 
 export type CredentialSource = "api-key-env" | "stored-login" | "none";
@@ -22,12 +23,9 @@ export interface CredentialResolution {
   source: CredentialSource;
 }
 
-export interface BridgeAuthStatus {
-  authenticated: boolean;
-  source: CredentialSource;
-  email?: string;
-  expiresAt?: string;
-}
+export type BridgeAuthStatus = NativeAgentAuthStatus;
+const AUTH_CACHE_TTL_MS = 15_000;
+let authCache: { credential: string; expiresAt: number; value: BridgeAuthStatus } | undefined;
 
 /**
  * The credential store this bridge reads and writes.
@@ -59,21 +57,60 @@ export async function resolveCredential(): Promise<CredentialResolution> {
  * offer it rather than a failure the user cannot act on.
  */
 export async function authStatus(): Promise<BridgeAuthStatus> {
-  if (process.env.CURSOR_API_KEY?.trim()) {
-    return { authenticated: true, source: "api-key-env" };
+  const fromEnvironment = process.env.CURSOR_API_KEY?.trim();
+  const stored = fromEnvironment ? undefined : await credentialStore.load().catch(() => undefined);
+  const statusFn = (
+    Cursor.auth as typeof Cursor.auth & {
+      status?: typeof Cursor.auth.status;
+    }
+  ).status;
+  const sdkStatus = fromEnvironment
+    ? ({ status: "logged-in" as const } as const)
+    : statusFn
+      ? await statusFn({ store: credentialStore }).catch(() => ({ status: "logged-out" as const }))
+      : stored?.apiKey
+        ? ({
+            status: "logged-in" as const,
+            email: stored.email,
+            apiKeyExpiresAtMs: stored.apiKeyExpiresAtMs,
+          } as const)
+        : ({ status: "logged-out" as const } as const);
+  if (sdkStatus.status !== "logged-in") {
+    return { state: "signed-out", signIn: { kind: "browser-url" }, signOut: false };
   }
-  const stored = await credentialStore.load().catch(() => undefined);
-  if (!stored?.apiKey || isExpired(stored.apiKeyExpiresAtMs)) {
-    return { authenticated: false, source: "none" };
+  const expiresAtMs =
+    "apiKeyExpiresAtMs" in sdkStatus ? sdkStatus.apiKeyExpiresAtMs : stored?.apiKeyExpiresAtMs;
+  if (isExpired(expiresAtMs)) {
+    return { state: "expired", signIn: { kind: "browser-url" }, signOut: true };
   }
-  return {
-    authenticated: true,
-    source: "stored-login",
-    ...(stored.email ? { email: stored.email } : {}),
-    ...(stored.apiKeyExpiresAtMs
-      ? { expiresAt: new Date(stored.apiKeyExpiresAtMs).toISOString() }
-      : {}),
+  const credential = fromEnvironment ?? stored?.apiKey;
+  if (credential && authCache?.credential === credential && authCache.expiresAt > Date.now()) {
+    return authCache.value;
+  }
+  const meFn = (Cursor as typeof Cursor & { me?: typeof Cursor.me }).me;
+  const me =
+    credential && meFn ? await meFn({ apiKey: credential }).catch(() => undefined) : undefined;
+  const label =
+    [me?.userFirstName, me?.userLastName].filter(Boolean).join(" ") ||
+    me?.apiKeyName ||
+    ("email" in sdkStatus ? sdkStatus.email : undefined) ||
+    stored?.email ||
+    "Cursor account";
+  const value: BridgeAuthStatus = {
+    state: "signed-in",
+    account: {
+      label,
+      ...(expiresAtMs ? { expiresAt: new Date(expiresAtMs).toISOString() } : {}),
+    },
+    signIn: fromEnvironment
+      ? { kind: "none", hint: "Remove CURSOR_API_KEY to sign out." }
+      : { kind: "browser-url" },
+    signOut: !fromEnvironment,
   };
+  if (credential) {
+    authCache = { credential, expiresAt: Date.now() + AUTH_CACHE_TTL_MS, value };
+  }
+  return value;
 }
 
 export interface LoginHandle {
@@ -138,6 +175,7 @@ export function beginLogin(options: { openBrowser?: boolean } = {}): LoginHandle
 }
 
 export async function logout(): Promise<void> {
+  authCache = undefined;
   await Cursor.auth.logout({ store: credentialStore });
 }
 

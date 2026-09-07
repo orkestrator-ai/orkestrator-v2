@@ -15,6 +15,7 @@
  * which providers are configured and how.
  */
 import { CATALOG_TIMEOUT_MS } from "./config.js";
+import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 
@@ -27,13 +28,11 @@ export interface ProviderAuthStatus {
   authenticated: boolean;
   /** Models this provider offers that the credential actually unlocks. */
   modelCount: number;
+  /** A failed probe is not evidence that a configured credential is invalid. */
+  probeFailed?: boolean;
 }
 
-export interface BridgeAuthStatus {
-  /** True when at least one provider can serve a turn. */
-  authenticated: boolean;
-  providers: ProviderAuthStatus[];
-}
+export type BridgeAuthStatus = NativeAgentAuthStatus;
 
 export class CredentialError extends Error {
   constructor(message: string) {
@@ -67,20 +66,32 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
       const configured = runtime.hasConfiguredAuth(provider.id);
       // Bounded per provider: `checkAuth` can reach the network for an OAuth
       // refresh, and one slow provider must not hold the whole status read.
-      const [check, models] = configured
+      const [checkResult, modelsResult] = configured
         ? await Promise.all([
             withTimeout(
               runtime.checkAuth(provider.id),
               authProbeTimeoutMs,
               `Pi auth check for ${provider.id} timed out`,
-            ).catch(() => undefined),
+            ).then(
+              (value) => ({ ok: true as const, value }),
+              () => ({ ok: false as const, value: undefined }),
+            ),
             withTimeout(
               runtime.getAvailable(provider.id),
               authProbeTimeoutMs,
               `Pi model list for ${provider.id} timed out`,
-            ).catch(() => []),
+            ).then(
+              (value) => ({ ok: true as const, value }),
+              () => ({ ok: false as const, value: [] }),
+            ),
           ])
-        : [undefined, []];
+        : [
+            { ok: true as const, value: undefined },
+            { ok: true as const, value: [] },
+          ];
+      const check = checkResult.value;
+      const models = modelsResult.value;
+      const probeFailed = !checkResult.ok || !modelsResult.ok;
       return {
         id: provider.id,
         label: provider.name || provider.id,
@@ -96,13 +107,33 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
         ...(check?.source ? { source: check.source } : {}),
         ...(check?.type ? { type: check.type } : {}),
         modelCount: models.length,
+        ...(probeFailed ? { probeFailed: true } : {}),
       };
     }),
   );
 
+  const usable = providers.some((provider) => provider.authenticated && provider.modelCount > 0);
   return {
-    authenticated: providers.some((provider) => provider.authenticated && provider.modelCount > 0),
-    providers,
+    state: usable
+      ? "signed-in"
+      : providers.some((provider) => provider.probeFailed)
+        ? "unknown"
+        : "needs-auth",
+    providers: providers.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      state: provider.authenticated ? "signed-in" : provider.probeFailed ? "unknown" : "signed-out",
+      method: runtime.isUsingSubscription?.(provider.id)
+        ? "subscription"
+        : runtime.isUsingOAuth?.(provider.id)
+          ? "oauth"
+          : "api-key",
+    })),
+    signIn: {
+      kind: "terminal",
+      hint: "Open a Pi terminal tab and run /login.",
+    },
+    signOut: false,
   };
 }
 

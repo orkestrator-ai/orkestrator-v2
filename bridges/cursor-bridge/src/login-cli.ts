@@ -56,10 +56,10 @@ export async function runLogin(emit: (line: string) => void): Promise<number> {
   // matters to the caller is whether the credential is now readable, which is
   // the same question every later session asks.
   const status = await authStatus();
-  if (!status.authenticated) {
+  if (status.state !== "signed-in") {
     emit(JSON.stringify({ error: "Cursor sign-in completed but no credential was stored" }));
     return 1;
   }
-  emit(JSON.stringify({ ok: true, ...(status.email ? { email: status.email } : {}) }));
+  emit(JSON.stringify({ ok: true, ...(status.account ? { account: status.account.label } : {}) }));
   return 0;
 }

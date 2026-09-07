@@ -90,7 +90,8 @@ import {
 } from "./opencode-snapshots.js";
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
-import { listOpenCodeSlashCommands } from "./opencode-commands.js";
+import { OpenCodeCapabilities } from "./opencode-capabilities.js";
+import { openCodeContextUsage } from "./opencode-usage.js";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
@@ -100,74 +101,6 @@ const OPENCODE_SUBAGENT_MAX_SESSIONS = 16;
 const OPENCODE_SUBAGENT_MESSAGE_LIMIT = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
 const OPENCODE_SUBAGENT_FETCH_CONCURRENCY = 4;
 const OPENCODE_COMMAND_NAME_TTL_MS = 30_000;
-
-function openCodeContextUsage(
-  rawMessages: readonly unknown[],
-): NativeAgentContextUsage | undefined {
-  const usageTurns = rawMessages.flatMap((message) => {
-    const info = asRecord(asRecord(message)?.info);
-    const tokens = asRecord(info?.tokens);
-    if (!tokens) return [];
-    const number = (value: unknown) =>
-      typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-    const inputTokens = number(tokens.input);
-    const outputTokens = number(tokens.output);
-    const reasoningTokens = number(tokens.reasoning);
-    const cache = asRecord(tokens.cache);
-    const cacheReadTokens = number(cache?.read);
-    const cacheWriteTokens = number(cache?.write);
-    const reportedTotal = number(tokens.total);
-    const usedTokens =
-      reportedTotal > 0 ? reportedTotal : inputTokens + outputTokens + cacheReadTokens;
-    if (usedTokens <= 0) return [];
-    const time = asRecord(info?.time);
-    const created = number(time?.created);
-    const completed = number(time?.completed);
-    const providerId = nonEmptyString(info?.providerID);
-    const modelId = nonEmptyString(info?.modelID);
-    return [
-      {
-        usedTokens,
-        inputTokens,
-        outputTokens,
-        reasoningTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-        costUsd: number(info?.cost),
-        durationMs: completed >= created ? completed - created : 0,
-        ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
-      },
-    ];
-  });
-  const latestTurn = usageTurns.at(-1);
-  if (!latestTurn) return undefined;
-  return usageTurns.reduce<NativeAgentContextUsage>(
-    (usage, turn) => ({
-      ...usage,
-      inputTokens: (usage.inputTokens ?? 0) + turn.inputTokens,
-      outputTokens: (usage.outputTokens ?? 0) + turn.outputTokens,
-      reasoningTokens: (usage.reasoningTokens ?? 0) + turn.reasoningTokens,
-      cacheReadTokens: (usage.cacheReadTokens ?? 0) + turn.cacheReadTokens,
-      cacheWriteTokens: (usage.cacheWriteTokens ?? 0) + turn.cacheWriteTokens,
-      sessionTokens:
-        (usage.sessionTokens ?? 0) +
-        turn.inputTokens +
-        turn.outputTokens +
-        turn.cacheReadTokens +
-        turn.cacheWriteTokens,
-      costUsd: (usage.costUsd ?? 0) + turn.costUsd,
-      durationMs: (usage.durationMs ?? 0) + turn.durationMs,
-    }),
-    {
-      usedTokens: latestTurn.usedTokens,
-      lastTurnTokens: latestTurn.usedTokens,
-      ...(latestTurn.modelId ? { modelId: latestTurn.modelId } : {}),
-      estimated: false,
-      source: "opencode",
-      updatedAt: new Date().toISOString(),
-    },
-  );
-}
 
 export interface OpenCodeProviderDependencies {
   openCodeClient?: OpencodeClient;
@@ -200,6 +133,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.interactionAdapter.resolveInteraction(sessionId, interactionId, resolution),
   };
   private readonly lifecycle: OpenCodeSessionLifecycle;
+  private readonly capabilitiesAdapter: OpenCodeCapabilities;
   private readonly interactiveMetadata = new Map<
     string,
     {
@@ -265,6 +199,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         },
       });
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
+    this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
+      this.requestOptions(),
+    );
     this.interactionAdapter = new OpenCodeInteractionAdapter(
       this.client,
       connection.directory,
@@ -746,7 +683,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 arguments: command.arguments ?? "",
                 model: options.model ?? this.connection.model,
                 agent: options.executionAgent ?? options.mode,
-                variant: options.effort ?? this.connection.effort,
+                variant:
+                  (typeof options.parameterValues?.reasoning === "string"
+                    ? options.parameterValues.reasoning
+                    : (options.effort ?? this.connection.effort)) === "default"
+                    ? undefined
+                    : typeof options.parameterValues?.reasoning === "string"
+                      ? options.parameterValues.reasoning
+                      : (options.effort ?? this.connection.effort),
                 // Text became the command name and its arguments; only the files
                 // survive as parts.
                 parts: parts.filter((part) => part.type === "file") as never,
@@ -764,7 +708,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                     ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
                     : undefined,
                 agent: options.executionAgent ?? options.mode ?? "build",
-                variant: options.effort ?? this.connection.effort,
+                variant:
+                  (typeof options.parameterValues?.reasoning === "string"
+                    ? options.parameterValues.reasoning
+                    : (options.effort ?? this.connection.effort)) === "default"
+                    ? undefined
+                    : typeof options.parameterValues?.reasoning === "string"
+                      ? options.parameterValues.reasoning
+                      : (options.effort ?? this.connection.effort),
               },
               this.requestOptions(),
             );
@@ -1230,9 +1181,27 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   slashCommands() {
-    return listOpenCodeSlashCommands(this.client, this.connection.directory, () =>
-      this.requestOptions(),
-    );
+    return this.capabilitiesAdapter.slashCommands();
+  }
+
+  mcpServers() {
+    return this.capabilitiesAdapter.mcpServers();
+  }
+
+  mcpServerAction(
+    _sessionId: string,
+    serverId: string,
+    action: Parameters<OpenCodeCapabilities["mcpServerAction"]>[1],
+  ) {
+    return this.capabilitiesAdapter.mcpServerAction(serverId, action);
+  }
+
+  authStatus() {
+    return this.capabilitiesAdapter.authStatus();
+  }
+
+  setSessionTitle(sessionId: string, title: string) {
+    return this.capabilitiesAdapter.setSessionTitle(sessionId, title);
   }
 
   async resumeSession(sessionId: string): Promise<string> {

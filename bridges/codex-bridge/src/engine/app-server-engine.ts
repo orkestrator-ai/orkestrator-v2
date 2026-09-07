@@ -771,6 +771,7 @@ export class AppServerEngine implements CodexEngine {
               config.sandbox ?? (config.mode === "plan" ? "read-only" : "danger-full-access"),
           }),
       ...(config.model ? { model: config.model } : {}),
+      ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
       ...(config.agentMcp
@@ -952,6 +953,48 @@ export class AppServerEngine implements CodexEngine {
         })),
       rateLimits: allowlistRateLimits(value(rateLimits)),
     };
+  }
+
+  async listMcpServers(threadId?: string | null): Promise<unknown> {
+    return this.supervisor.request("mcpServerStatus/list", {
+      limit: 100,
+      detail: "full",
+      ...(threadId ? { threadId } : {}),
+    });
+  }
+
+  async reconnectMcpServers(): Promise<void> {
+    await this.supervisor.request("config/mcpServer/reload", undefined);
+  }
+
+  async beginMcpOauth(
+    name: string,
+    threadId?: string | null,
+  ): Promise<{ authorizationUrl: string }> {
+    return this.supervisor.request("mcpServer/oauth/login", {
+      name,
+      ...(threadId ? { threadId } : {}),
+    });
+  }
+
+  async readAccount(): Promise<unknown> {
+    return this.supervisor.request("account/read", { refreshToken: true });
+  }
+
+  async beginAccountLogin(): Promise<unknown> {
+    return this.supervisor.request("account/login/start", {
+      type: "chatgpt",
+      codexStreamlinedLogin: true,
+      useHostedLoginSuccessPage: true,
+    });
+  }
+
+  async logoutAccount(): Promise<void> {
+    await this.supervisor.request("account/logout", undefined);
+  }
+
+  async revertThread(threadId: string, beforeTurnId: string): Promise<void> {
+    await this.supervisor.request("thread/revert", { threadId, beforeTurnId });
   }
 
   async readThread(
@@ -1185,6 +1228,8 @@ export class AppServerEngine implements CodexEngine {
       input: options.input.map(toAppServerInput),
       ...this.toThreadParams(options.config),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),
+      ...(options.config.reasoningSummary ? { summary: options.config.reasoningSummary } : {}),
+      ...(options.config.personality ? { personality: options.config.personality } : {}),
       // turn/start takes a resolved policy object, not the mode string.
       ...(options.config.permissionProfile
         ? {}

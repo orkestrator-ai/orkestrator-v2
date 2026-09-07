@@ -469,7 +469,18 @@ export abstract class StorageNative extends StorageReviews {
               origin: existing.origin,
               interactionPolicy: existing.interactionPolicy,
               controls: input.controls
-                ? { ...existing.controls, ...input.controls }
+                ? {
+                    ...existing.controls,
+                    ...input.controls,
+                    ...(input.controls.parameterValues
+                      ? {
+                          parameterValues: {
+                            ...existing.controls?.parameterValues,
+                            ...input.controls.parameterValues,
+                          },
+                        }
+                      : {}),
+                  }
                 : existing.controls,
             }
           : interactionMetadata),
@@ -506,7 +517,29 @@ export abstract class StorageNative extends StorageReviews {
       if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
         throw new Error("Native agent control update target is stale");
       }
-      const controls = { ...existing.controls, ...update };
+      const modelChanged =
+        update.modelId !== undefined && update.modelId !== existing.controls?.modelId;
+      const retainedParameterValues = modelChanged
+        ? {}
+        : Object.fromEntries(
+            Object.entries(existing.controls?.parameterValues ?? {}).filter(
+              ([id]) => id !== "permissionMode" || update.mode === undefined,
+            ),
+          );
+      const controls = {
+        ...existing.controls,
+        ...update,
+        ...(update.parameterValues
+          ? {
+              parameterValues: {
+                ...retainedParameterValues,
+                ...update.parameterValues,
+              },
+            }
+          : Object.keys(retainedParameterValues).length > 0
+            ? { parameterValues: retainedParameterValues }
+            : { parameterValues: undefined }),
+      };
       const updated: PersistedNativeAgentSession = {
         ...existing,
         controls,

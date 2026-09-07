@@ -1276,6 +1276,7 @@ export async function buildSdkPrompt(
 export interface HeldSdkPrompt {
   prompt: AsyncIterable<SDKUserMessage>;
   close: () => void;
+  push: (message: SDKUserMessage) => boolean;
 }
 
 /**
@@ -1293,6 +1294,8 @@ export function holdSdkPromptOpen(
 ): HeldSdkPrompt {
   let closed = false;
   let resolveClosed!: () => void;
+  let resolveAvailable: (() => void) | undefined;
+  const queued: SDKUserMessage[] = [];
   const closedPromise = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
@@ -1302,6 +1305,15 @@ export function holdSdkPromptOpen(
     closed = true;
     signal.removeEventListener("abort", close);
     resolveClosed();
+    resolveAvailable?.();
+    resolveAvailable = undefined;
+  };
+  const push = (message: SDKUserMessage) => {
+    if (closed) return false;
+    queued.push(message);
+    resolveAvailable?.();
+    resolveAvailable = undefined;
+    return true;
   };
   signal.addEventListener("abort", close, { once: true });
   if (signal.aborted) close();
@@ -1322,13 +1334,25 @@ export function holdSdkPromptOpen(
           yield message;
         }
       }
-      await closedPromise;
+      while (!closed) {
+        const next = queued.shift();
+        if (next) {
+          yield next;
+          continue;
+        }
+        await Promise.race([
+          closedPromise,
+          new Promise<void>((resolve) => {
+            resolveAvailable = resolve;
+          }),
+        ]);
+      }
     } finally {
       close();
     }
   }
 
-  return { prompt: stream(), close };
+  return { prompt: stream(), close, push };
 }
 
 /**

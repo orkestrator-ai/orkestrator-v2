@@ -49,6 +49,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentToolDetails,
   NativeAgentMessagePage,
+  NativeAgentMcpServerAction,
   NativeAgentLiveWindow,
   NativeAgentProjectionUpdate,
 } from "@orkestrator/protocol/native-agent";
@@ -500,6 +501,32 @@ export async function performNativeAgentSessionAction(input: {
   action: NativeAgentSessionAction;
 }): Promise<NativeAgentSessionActionOutcome> {
   return invoke("perform_native_agent_session_action", input);
+}
+
+export async function performNativeAgentMcpAction(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  serverId: string;
+  action: NativeAgentMcpServerAction;
+}): Promise<{ url?: string }> {
+  return invoke("perform_native_agent_mcp_action", input);
+}
+
+export async function beginNativeAgentSignIn(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<{ url?: string; code?: string }> {
+  return invoke("begin_native_agent_sign_in", input);
+}
+
+export async function signOutNativeAgent(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+}): Promise<void> {
+  await invoke("sign_out_native_agent", input);
 }
 
 export async function resolveNativeAgentInteraction(input: {

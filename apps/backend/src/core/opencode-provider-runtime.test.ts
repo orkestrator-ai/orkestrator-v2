@@ -436,6 +436,19 @@ describe("OpenCode provider runtime", () => {
             { id: "high", label: "High" },
           ],
           defaultReasoningId: "default",
+          parameters: [
+            {
+              id: "reasoning",
+              label: "Reasoning",
+              kind: "select",
+              scope: "turn",
+              defaultValue: "default",
+              options: [
+                { id: "default", label: "Default" },
+                { id: "high", label: "High" },
+              ],
+            },
+          ],
           supportsSpeed: false,
           // OpenCode has primary agents, not a Build/Plan permission mode.
           supportsMode: false,

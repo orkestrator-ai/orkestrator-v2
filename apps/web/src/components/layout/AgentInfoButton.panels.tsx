@@ -550,13 +550,131 @@ export type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | 
   percentUsed?: number;
 };
 
+const DAILY_WINDOW_PREFIX = "daily:";
+/** Trailing days the chart plots; providers report up to ninety buckets. */
+const DAILY_CHART_DAYS = 30;
+
+interface DailyTokenPoint {
+  key: string;
+  date: string;
+  tokens: number;
+}
+
+/**
+ * Separate the per-day token buckets from the account's quota windows.
+ *
+ * A provider can report months of daily buckets. Rendering one card per day
+ * pushed the quota and credit windows the panel exists for far below the fold,
+ * so the days become a single chart and only the remaining windows stay as
+ * cards. A daily bucket with no token count has nothing to plot, so it falls
+ * back to a card where its other fields can still be read.
+ */
+export function splitAccountUsage(account: NativeAgentAccountUsageWindow[]): {
+  windows: NativeAgentAccountUsageWindow[];
+  daily: DailyTokenPoint[];
+} {
+  const windows: NativeAgentAccountUsageWindow[] = [];
+  const daily: DailyTokenPoint[] = [];
+  for (const entry of account) {
+    const date = entry.window.startsWith(DAILY_WINDOW_PREFIX)
+      ? entry.window.slice(DAILY_WINDOW_PREFIX.length)
+      : null;
+    if (date === null || entry.tokens === undefined) {
+      windows.push(entry);
+      continue;
+    }
+    daily.push({ key: entry.window, date: entry.label ?? date, tokens: entry.tokens });
+  }
+  return { windows, daily };
+}
+
+/** Short day label, falling back to the provider's own string when unparseable. */
+function formatDayLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * Daily token consumption as a compact bar chart.
+ *
+ * Bars are scaled against the peak day rather than any quota, because the
+ * provider reports consumption without a daily ceiling. Hovering a column
+ * reads its day out above the plot; the newest day is the standing readout so
+ * the chart says something before it is touched.
+ */
+function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const plotted = points.slice(-DAILY_CHART_DAYS);
+  const oldest = plotted[0];
+  const latest = plotted[plotted.length - 1];
+  if (!oldest || !latest) return null;
+
+  const peak = plotted.reduce((highest, point) => Math.max(highest, point.tokens), 0);
+  const readout = plotted.find((point) => point.key === hoveredKey) ?? latest;
+
+  return (
+    <section className="space-y-2" aria-label="Daily tokens">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          Daily tokens
+        </div>
+        <div className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+          {formatDayLabel(readout.date)}{" "}
+          <span className="text-foreground">{formatTokenCount(readout.tokens)}</span>
+        </div>
+      </div>
+      <div className="flex h-14 items-stretch gap-[2px]" onMouseLeave={() => setHoveredKey(null)}>
+        {plotted.map((point) => (
+          <div
+            key={point.key}
+            role="img"
+            aria-label={`${formatDayLabel(point.date)}: ${formatTokenCount(point.tokens)} tokens`}
+            title={`${formatDayLabel(point.date)} · ${formatTokenCount(point.tokens)}`}
+            className="flex min-w-[3px] flex-1 cursor-default items-end"
+            onMouseEnter={() => setHoveredKey(point.key)}
+          >
+            <div
+              className={`w-full rounded-t-[2px] ${
+                point.key === readout.key ? "bg-primary" : "bg-primary/50"
+              }`}
+              style={{
+                height: `${peak > 0 ? Math.max(2, (point.tokens / peak) * 100) : 2}%`,
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground">
+        <span className="truncate">{formatDayLabel(oldest.date)}</span>
+        <span className="shrink-0 font-mono tabular-nums">Peak {formatTokenCount(peak)}</span>
+        <span className="truncate">{formatDayLabel(latest.date)}</span>
+      </div>
+    </section>
+  );
+}
+
 function AccountUsageSection({ account }: { account: NativeAgentAccountUsageWindow[] }) {
+  const { windows, daily } = splitAccountUsage(account);
+  return (
+    <>
+      {windows.length > 0 ? <AccountWindowsSection windows={windows} /> : null}
+      {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
+    </>
+  );
+}
+
+function AccountWindowsSection({ windows }: { windows: NativeAgentAccountUsageWindow[] }) {
   return (
     <section className="space-y-2" aria-label="Account usage">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         Account
       </div>
-      {account.map((window) => (
+      {windows.map((window) => (
         <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 text-xs font-medium text-foreground">

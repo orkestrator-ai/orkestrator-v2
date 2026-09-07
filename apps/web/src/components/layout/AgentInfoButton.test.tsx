@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -1440,6 +1440,39 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("Weekly quota")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Turn usage" })).toBeTruthy();
     expect(screen.getByText("600 · $0.25")).toBeTruthy();
+  });
+
+  test("charts daily token buckets instead of one card per day", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            account: [
+              { window: "lifetime", label: "Lifetime", tokens: 1_200_000_000 },
+              { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
+              { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
+              { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(chart).toBeTruthy();
+    expect(within(chart).getAllByRole("img").length).toBe(3);
+    expect(within(chart).getByLabelText("Aug 25: 417M tokens")).toBeTruthy();
+    expect(within(chart).getByText("Peak 417M")).toBeTruthy();
+    // The newest day is the standing readout before anything is hovered.
+    expect(within(chart).getByText("375M")).toBeTruthy();
+    // Non-daily windows keep their cards; the days no longer get one each.
+    expect(
+      within(screen.getByRole("region", { name: "Account usage" })).getByText("Lifetime"),
+    ).toBeTruthy();
+    expect(screen.queryByText("2026-08-24")).toBe(null);
   });
 
   test("retains provider-neutral account and turn rows beside legacy live counters", () => {

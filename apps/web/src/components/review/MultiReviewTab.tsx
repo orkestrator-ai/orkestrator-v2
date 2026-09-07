@@ -74,7 +74,8 @@ interface MultiReviewTabProps {
 
 function phaseCopy(phase: MultiReviewPhase): string {
   const labels = {
-    reviewing: "Independent reviews are running",
+    preparing: "The fix model is preparing the review package",
+    reviewing: "Independent read-only reviews are running",
     consolidating: "The fix model is consolidating findings",
     ready: "Consolidated report ready",
     fixing: "The fix model is addressing every finding",
@@ -87,7 +88,11 @@ function phaseCopy(phase: MultiReviewPhase): string {
   return labels[phase];
 }
 
-/** Opens the idle consolidation session as a normal native agent tab. */
+/**
+ * Opens the idle consolidation session as a normal native agent tab. If that
+ * provider session was deleted, the native tab asks the backend to seed and
+ * record a fresh replacement before exposing it to the user.
+ */
 export function multiReviewFixSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
@@ -98,7 +103,6 @@ export function multiReviewFixSessionTabOptions(
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
-    requireExistingResumeSession: true,
     displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
@@ -433,12 +437,15 @@ function MultiReviewOverviewTab({
   }
 
   const busy =
+    workflow.phase === "preparing" ||
     workflow.phase === "reviewing" ||
     workflow.phase === "consolidating" ||
     workflow.phase === "fixing" ||
     workflow.phase === "cancelling";
   const fixSessionStalled =
-    (workflow.phase === "consolidating" || workflow.phase === "fixing") &&
+    (workflow.phase === "preparing" ||
+      workflow.phase === "consolidating" ||
+      workflow.phase === "fixing") &&
     workflow.fixSession?.stalledSince !== undefined;
   const canCancel =
     workflow.phase !== "completed" &&
@@ -496,12 +503,15 @@ function MultiReviewOverviewTab({
               {workflow.reviewers.map((reviewer, index) => {
                 const note = reviewerStatusNote(reviewer);
                 const runtimeSummary = reviewerRuntimeSummary(reviewer, reviewPanelNow);
-                const stoppable = reviewer.status === "pending" || reviewer.status === "running";
+                const stoppable =
+                  workflow.phase === "reviewing" &&
+                  (reviewer.status === "pending" || reviewer.status === "running");
                 const canRestart =
                   (workflow.phase === "reviewing" ||
                     workflow.phase === "consolidating" ||
                     workflow.phase === "ready" ||
                     workflow.phase === "failed") &&
+                  workflow.activeRequest?.kind !== "prepare" &&
                   workflow.reviewSnapshotStale !== true &&
                   workflow.fixResult === undefined &&
                   !(workflow.phase === "failed" && workflow.consolidatedReport !== undefined);

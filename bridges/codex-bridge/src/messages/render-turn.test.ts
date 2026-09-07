@@ -33,6 +33,8 @@ describe("turn render state", () => {
     expect(state.completedItemParts.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
+    expect(state.subagentPathIds.size).toBe(0);
+    expect(state.subagentTerminalPathRetries.size).toBe(0);
     expect(state.fileChange.baselines.size).toBe(0);
     expect(state.fileChange.cache.size).toBe(0);
   });
@@ -43,6 +45,8 @@ describe("turn render state", () => {
     previous.completedItemParts.set("old", { source: null, parts: [] });
     previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
     previous.subagentFingerprints.set("agent:old", "old");
+    previous.subagentPathIds.set("/root/old", "old");
+    previous.subagentTerminalPathRetries.add("/root/missing");
     previous.fileChange.baselines.set("a.ts", "before");
     previous.fileChange.cache.set("old", { filePath: "a.ts" });
 
@@ -51,6 +55,8 @@ describe("turn render state", () => {
     expect(next.completedItemParts.size).toBe(0);
     expect(next.subagentParts.size).toBe(0);
     expect(next.subagentFingerprints.size).toBe(0);
+    expect(next.subagentPathIds.size).toBe(0);
+    expect(next.subagentTerminalPathRetries.size).toBe(0);
     expect(next.fileChange.baselines.get("a.ts")).toBe("before");
     expect(next.fileChange.cache.size).toBe(0);
   });
@@ -61,6 +67,8 @@ describe("turn render state", () => {
     state.completedItemParts.set("x", { source: null, parts: [] });
     state.subagentParts.set("a", { type: "subagent", content: "x" });
     state.subagentFingerprints.set("a", "fingerprint");
+    state.subagentPathIds.set("/root/a", "a");
+    state.subagentTerminalPathRetries.add("/root/missing");
     state.fileChange.baselines.set("a.ts", "x");
     state.fileChange.cache.set("a", { filePath: "a.ts" });
     releaseTurnRenderState(state);
@@ -68,6 +76,8 @@ describe("turn render state", () => {
     expect(state.completedItemParts.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
+    expect(state.subagentPathIds.size).toBe(0);
+    expect(state.subagentTerminalPathRetries.size).toBe(0);
     expect(state.fileChange.baselines.size).toBe(0);
     expect(state.fileChange.cache.size).toBe(0);
   });
@@ -989,6 +999,78 @@ describe("renderTurn", () => {
       "child",
     ]);
     expect(secondRender.content).toBe("parent during load");
+  });
+
+  test("retries from live identity evidence that arrives during transcript I/O", async () => {
+    const accumulator = turn();
+    const state = createTurnRenderState();
+    let releaseFirstLoad!: () => void;
+    const firstLoadGate = new Promise<void>((resolve) => {
+      releaseFirstLoad = resolve;
+    });
+    let loads = 0;
+
+    const rendering = renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async ({ items }) => {
+        loads += 1;
+        if (loads === 1) await firstLoadGate;
+        const activity = items.find((item) => item.type === "subagent_activity");
+        return [
+          {
+            type: "subagent",
+            content: "review",
+            ...(activity?.type === "subagent_activity"
+              ? { subagentId: activity.agent_thread_id }
+              : {}),
+            toolState: "pending",
+          },
+        ];
+      },
+    });
+    accumulator.onItemCompleted({
+      id: "activity",
+      type: "subagent_activity",
+      activity: "started",
+      agent_thread_id: "child-review",
+      agent_path: "/root/review",
+    });
+    releaseFirstLoad();
+
+    const rendered = await rendering;
+    expect(loads).toBe(2);
+    expect(rendered.parts.filter((part) => part.type === "subagent")).toEqual([
+      expect.objectContaining({ subagentId: "child-review", toolState: "pending" }),
+    ]);
+  });
+
+  test("rehydrates subagent snapshots into a fresh state after inactivity", async () => {
+    const accumulator = turn();
+    const authoritative = {
+      type: "subagent" as const,
+      content: "restored child",
+      subagentId: "child-restored",
+      toolState: "pending" as const,
+    };
+    let loads = 0;
+    const renderWithState = (state: ReturnType<typeof createTurnRenderState>) =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => {
+          loads += 1;
+          return [authoritative];
+        },
+      });
+
+    const inactiveState = createTurnRenderState();
+    expect((await renderWithState(inactiveState)).parts).toContainEqual(authoritative);
+    releaseTurnRenderState(inactiveState);
+    expect((await renderWithState(createTurnRenderState())).parts).toContainEqual(authoritative);
+    expect(loads).toBe(2);
   });
 
   test("keeps a parent arriving during loading after an unchanged existing subagent", async () => {

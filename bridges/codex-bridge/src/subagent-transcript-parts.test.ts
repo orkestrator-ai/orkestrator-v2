@@ -827,6 +827,140 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     ]);
   });
 
+  test("keeps native fallbacks aligned when a failed spawn separates successes", async () => {
+    const response = (payload: Record<string, unknown>, second: number): TranscriptRecord => ({
+      timestamp: `2026-07-17T17:02:${second.toString().padStart(2, "0")}.000Z`,
+      type: "response_item",
+      payload,
+    });
+    const parentRecords = [
+      response(
+        {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: '{"task_name":"one"}',
+          call_id: "call-one",
+        },
+        1,
+      ),
+      response(
+        {
+          type: "function_call_output",
+          call_id: "call-one",
+          output: '{"task_name":"/root/one"}',
+        },
+        2,
+      ),
+      response(
+        {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: '{"task_name":"rejected"}',
+          call_id: "call-rejected",
+        },
+        3,
+      ),
+      response(
+        {
+          type: "function_call_output",
+          call_id: "call-rejected",
+          output: "collab spawn failed: agent thread limit reached",
+        },
+        4,
+      ),
+      response(
+        {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: '{"task_name":"two"}',
+          call_id: "call-two",
+        },
+        5,
+      ),
+      response(
+        {
+          type: "function_call_output",
+          call_id: "call-two",
+          output: '{"task_name":"/root/two"}',
+        },
+        6,
+      ),
+    ];
+    const loadedIds: string[] = [];
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "parent",
+      currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
+      fallbackAgentIdsInSpawnOrder: ["child-one", undefined, "child-two"],
+      resolveChildPaths: async () => new Map(),
+      loadSessionMeta: async (id) => {
+        loadedIds.push(id);
+        return { transcriptPath: `/tmp/${id}.jsonl` };
+      },
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript([]),
+    });
+
+    expect(loadedIds).toEqual(["parent", "child-one", "child-two"]);
+    expect(parts.map((part) => [part.subagentRole, part.subagentId, part.toolState])).toEqual([
+      ["one", "child-one", "pending"],
+      ["rejected", undefined, "failure"],
+      ["two", "child-two", "pending"],
+    ]);
+  });
+
+  test("uses exact path identity ahead of fallback and blocks ambiguous path guesses", async () => {
+    const records: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T17:02:01.000Z",
+        type: "session_meta",
+        payload: { id: "parent", source: "vscode" },
+      },
+      {
+        timestamp: "2026-07-17T17:02:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: '{"task_name":"review"}',
+          call_id: "call-review",
+        },
+      },
+      {
+        timestamp: "2026-07-17T17:02:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-review",
+          output: '{"task_name":"/root/review"}',
+        },
+      },
+    ];
+    const loaded: string[] = [];
+    let diskLookups = 0;
+    const derive = (pathEvidence: string | null) =>
+      deriveTranscriptSubagentPartsForTurn({
+        threadId: "parent",
+        currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
+        fallbackAgentIdsInSpawnOrder: ["stale-positional-id"],
+        activityAgentIdsByPath: new Map([["/root/review", pathEvidence]]),
+        resolveChildPaths: async () => {
+          diskLookups += 1;
+          return new Map();
+        },
+        loadSessionMeta: async (id) => ({ transcriptPath: `/tmp/${id}.jsonl` }),
+        loadTranscript: async (path) => {
+          loaded.push(path);
+          return path.endsWith("parent.jsonl") ? transcript(records) : transcript([]);
+        },
+      });
+
+    expect((await derive("path-child"))[0]?.subagentId).toBe("path-child");
+    expect((await derive(null))[0]?.subagentId).toBeUndefined();
+    expect(diskLookups).toBe(0);
+    expect(loaded).not.toContain("/tmp/stale-positional-id.jsonl");
+  });
+
   test("leaves output-less spawns unresolved when fallbacks are absent or whitespace", async () => {
     const parentRecords: TranscriptRecord[] = ["call-absent", "call-blank"].map(
       (callId, index) => ({

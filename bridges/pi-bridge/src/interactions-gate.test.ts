@@ -91,3 +91,22 @@ describe("requestToolApproval with the gate on", () => {
     expect(resolveApproval(state, "never-existed", "allow")).toBe(false);
   });
 });
+
+test("read-only reviews deny commands, writes and unknown tools even with approvals disabled", async () => {
+  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
+  try {
+    const state = newSessionState();
+    state.readOnly = true;
+    for (const tool of ["bash", "write", "edit", "custom-extension"]) {
+      expect(await requestToolApproval(state, tool, tool, {})).toMatchObject({ block: true });
+    }
+    expect(await requestToolApproval(state, "read", "read", {})).toEqual({ block: false });
+    expect(state.approvals.size).toBe(0);
+    state.readOnly = false;
+    expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
+  } finally {
+    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  }
+});

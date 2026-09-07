@@ -9,6 +9,7 @@ import {
   InvalidMultiReviewAddressStateError,
   MissingMultiReviewAddressSessionError,
   dispatchMultiReviewAddressPrompt,
+  recoverMissingMultiReviewFixSession,
 } from "./multi-review-address-dispatch.js";
 
 const workflow = {
@@ -218,4 +219,69 @@ test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provi
     ),
   ).rejects.toBeInstanceOf(InvalidMultiReviewAddressStateError);
   expect(ensureSession).not.toHaveBeenCalled();
+});
+
+test("recoverMissingMultiReviewFixSession adopts and seeds the replacement before returning it", async () => {
+  const adoptSession = mock(async () => undefined as never);
+  const ensureSession = mock(async () => undefined as never);
+  const dispatchIntent = mock(async (input: { requestId: string }) => ({
+    outcome: "accepted" as const,
+    requestId: input.requestId,
+  }));
+  const recoverable = {
+    ...workflow,
+    phase: "interactive",
+    fixTabId: "multi-review-fix:multi-1:launch-1",
+    addressSessionKey: "multi-review:multi-1:interactive:launch-1",
+    consolidatedReport: {
+      issues: [{ title: "Lost-session regression" }],
+      testCoverageGaps: [{ untestedBehavior: "Replacement recovery" }],
+    },
+    fixSession: {
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+      sessionKey: "multi-review:multi-1:interactive:launch-1",
+      providerSessionId: "provider-fix",
+      requestIds: ["multi-review-address:multi-1"],
+      status: "idle",
+      startedAt: "2026-09-07T00:00:00.000Z",
+    },
+  } as MultiReviewWorkflow;
+
+  const result = await recoverMissingMultiReviewFixSession(
+    { adoptSession, ensureSession, dispatchIntent },
+    recoverable,
+    {
+      tabId: "multi-review-fix:multi-1:launch-1",
+      expectedProviderSessionId: "provider-fix",
+      replacementProviderSessionId: "provider-replacement",
+    },
+  );
+
+  expect(adoptSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
+      providerSessionId: "provider-replacement",
+      expectedProviderSessionId: "provider-fix",
+      sessionMode: "build",
+    }),
+  );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
+      prompt: expect.stringContaining("Lost-session regression"),
+      mode: "build",
+    }),
+  );
+  expect(ensureSession).not.toHaveBeenCalled();
+  expect(result).toMatchObject({
+    tabId: "multi-review-fix:multi-1:launch-1",
+    fixSession: {
+      providerSessionId: "provider-replacement",
+      sessionKey: "multi-review:multi-1:interactive:launch-1",
+      status: "idle",
+    },
+  });
+  expect(result.fixSession.requestIds).toHaveLength(2);
 });

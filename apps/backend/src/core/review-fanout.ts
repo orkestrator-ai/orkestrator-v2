@@ -544,6 +544,8 @@ export interface ReviewFanoutHost {
   readonly reviewInstruction?: string;
   /** Names the owner in user-facing failure text. */
   readonly label: string;
+  /** Package consumers use provider plan/read-only mode, including repair turns. */
+  readonly reviewerMode?: "plan" | "build";
   /** Durable session key for one reviewer. Must be stable across restarts. */
   sessionKeyFor(reviewer: ReviewerRecord, index: number): string;
   /** Pane title for one reviewer's session. */
@@ -711,7 +713,8 @@ export class ReviewFanoutRunner {
         host.sessionLabelFor(reviewer, index),
         {
           clientSessionKey: sessionKey,
-          mode: "build",
+          mode: host.reviewerMode ?? "build",
+          ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
           model: reviewerModel(reviewer),
           effort: reviewer.reasoningEffort,
           interaction: this.interactionContext(reviewer, sessionKey),
@@ -775,7 +778,8 @@ export class ReviewFanoutRunner {
         await provider.send(reviewer.providerSessionId, prompt, {
           requestId: reviewer.requestId,
           schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-          mode: "build",
+          mode: host.reviewerMode ?? "build",
+          ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
           model: reviewerModel(reviewer),
           effort: reviewer.reasoningEffort,
         });

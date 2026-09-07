@@ -64,6 +64,7 @@ import {
   navigateSessionHistory,
   parseComposerPatch,
   resumeSession,
+  setSessionReadOnly,
   setSessionTitle,
 } from "./agent-session.js";
 import {
@@ -220,11 +221,22 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
+    if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
+      throw new HttpError(400, "readOnly must be a boolean");
     const state = await createSession(
       clientSessionKey,
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     );
+    if (typeof body.readOnly === "boolean") {
+      if (
+        (state.readOnly === true) !== body.readOnly &&
+        (state.status === "running" || state.dispatching || state.compacting)
+      ) {
+        throw new HttpError(409, "Session is already running");
+      }
+      await setSessionReadOnly(state, body.readOnly);
+    }
     // The backend stores this session id as soon as create returns. A bridge
     // restart before the first prompt used to lose it, so every later status
     // read 404'd and the tab stuck on "session is recovering".
@@ -803,6 +815,9 @@ async function handlePrompt(
     throw new HttpError(409, "Session is already running");
   }
 
+  if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
+    throw new HttpError(400, "readOnly must be a boolean");
+
   // Claim the turn synchronously. `ensureSession` yields even on its attached
   // fast path, so a second request would otherwise pass both the duplicate and
   // the busy check and dispatch the same prompt twice.
@@ -819,6 +834,7 @@ async function handlePrompt(
     // attached, and it is far cheaper than a cold start.
     images = await readPromptImages(attachments, workingDirectory);
     files = await resolvePromptFiles(attachments, workingDirectory);
+    if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
     applyComposerPatch(state, parseComposerPatch(body));
     session = await ensureSession(state);
     await applyComposerToSession(state);

@@ -294,6 +294,47 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("validates and symmetrically updates readOnly on idempotent creation", async () => {
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const malformed = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-read-only", readOnly: "yes" }),
+      });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toMatchObject({ error: "readOnly must be a boolean" });
+
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-read-only", readOnly: true }),
+      });
+      expect(created.status).toBe(201);
+      const createdBody = (await created.json()) as { sessionId: string };
+      const state = sessions.get(createdBody.sessionId)!;
+      expect(state.readOnly).toBe(true);
+
+      let disposed = 0;
+      state.session = fakeAgentSession({
+        dispose: () => {
+          disposed += 1;
+        },
+      });
+      const recreated = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-read-only", readOnly: false }),
+      });
+      expect(recreated.status).toBe(201);
+      expect((await recreated.json()).sessionId).toBe(createdBody.sessionId);
+      expect(state.readOnly).toBe(false);
+      expect(state.session).toBeNull();
+      expect(disposed).toBe(1);
+    } finally {
+      sessions.clear();
+      clientSessionKeys.clear();
+      resetTestDependencies();
+    }
+  });
+
   test("create persists the session so a restart can reopen it", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-persist-"));
     process.env.PI_BRIDGE_STATE_DIR = directory;
@@ -592,6 +633,62 @@ describe("successful lifecycle routes", () => {
       expect(state.status).toBe("idle");
       expect(state.promptJournal.get("req-success")?.state).toBe("completed");
     } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("validates readOnly and rebuilds the SDK session across policy transitions", async () => {
+    const state = seedSession();
+    let disposedWritable = 0;
+    let disposedReadOnly = 0;
+    let creations = 0;
+    state.session = fakeAgentSession({
+      dispose: () => {
+        disposedWritable += 1;
+      },
+    });
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => composer,
+      createAgentSession: async () => {
+        creations += 1;
+        return fakeAgentSession({
+          bindExtensions: async () => undefined,
+          dispose: () => {
+            if (creations === 1) disposedReadOnly += 1;
+          },
+        });
+      },
+    });
+    try {
+      const malformed = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "review", requestId: "req-malformed", readOnly: 1 }),
+      });
+      expect(malformed.status).toBe(400);
+      expect(state.session).not.toBeNull();
+
+      const review = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "review", requestId: "req-review", readOnly: true }),
+      });
+      expect(review.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.readOnly).toBe(true);
+      expect(disposedWritable).toBe(1);
+      expect(creations).toBe(1);
+
+      const fix = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "fix", requestId: "req-fix", readOnly: false }),
+      });
+      expect(fix.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.readOnly).toBe(false);
+      expect(disposedReadOnly).toBe(1);
+      expect(creations).toBe(2);
+    } finally {
+      await state.session?.dispose();
+      sessions.delete(state.id);
       resetTestDependencies();
     }
   });

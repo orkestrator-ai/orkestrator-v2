@@ -392,9 +392,18 @@ export function applyCodexCollabStateToSubagentParts(
     const spawnPrompt = typeof item.prompt === "string" ? item.prompt : undefined;
 
     if (receiverIds.length === 0) {
-      const existingIndex = parts.findIndex(
-        (part, index) => !claimedIndexes.has(index) && !part.subagentId,
-      );
+      let existingIndex =
+        item.status === "failed"
+          ? parts.findIndex(
+              (part, index) =>
+                !claimedIndexes.has(index) && !part.subagentId && part.toolState === "failure",
+            )
+          : -1;
+      if (existingIndex < 0) {
+        existingIndex = parts.findIndex(
+          (part, index) => !claimedIndexes.has(index) && !part.subagentId,
+        );
+      }
       if (existingIndex < 0) return;
       const existing = parts[existingIndex]!;
       claimedIndexes.add(existingIndex);
@@ -410,12 +419,14 @@ export function applyCodexCollabStateToSubagentParts(
         if (
           !claimedIndexes.has(preferredIndex) &&
           parts[preferredIndex] &&
-          !parts[preferredIndex]?.subagentId
+          !parts[preferredIndex]?.subagentId &&
+          parts[preferredIndex]?.toolState !== "failure"
         ) {
           existingIndex = preferredIndex;
         } else {
           existingIndex = parts.findIndex(
-            (part, index) => !claimedIndexes.has(index) && !part.subagentId,
+            (part, index) =>
+              !claimedIndexes.has(index) && !part.subagentId && part.toolState !== "failure",
           );
         }
       }

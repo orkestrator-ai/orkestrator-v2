@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
   MULTI_REVIEW_WORKFLOW_VERSION,
   MULTI_REVIEW_UNSTICK_PROMPT,
   isMultiReviewTerminalPhase,
@@ -33,13 +34,24 @@ import {
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA, parseFixResult } from "./looped-review-prompts.js";
-import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
+import {
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  parseReviewPreparationResult,
+  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  parseFixResult,
+} from "./looped-review-prompts.js";
+import { parseReviewPackageReference } from "./review-package.js";
+import {
+  createMultiReviewPreparationPrompt,
+  createPackagedMultiReviewerPrompt,
+  createMultiReviewConsolidationPrompt,
+} from "./multi-review-prompts.js";
 import {
   InvalidMultiReviewAddressStateError,
   MissingMultiReviewAddressSessionError,
   MultiReviewAddressDispatchError,
   type MultiReviewAddressDispatchResult,
+  type MultiReviewFixSessionReplacement,
 } from "./multi-review-address-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
@@ -121,6 +133,7 @@ class FixResultValidationError extends Error {
 
 function isSupervisedPhase(phase: MultiReviewPhase): boolean {
   return (
+    phase === "preparing" ||
     phase === "reviewing" ||
     phase === "consolidating" ||
     phase === "fixing" ||
@@ -161,6 +174,11 @@ export interface MultiReviewServiceOptions {
   dispatchAddressPrompt?: (
     workflow: MultiReviewWorkflow,
   ) => Promise<MultiReviewAddressDispatchResult | MultiReviewFixSession | void>;
+  /** Rebinds and seeds a renderer-created replacement for a missing Fix session. */
+  recoverAddressSession?: (
+    workflow: MultiReviewWorkflow,
+    replacement: MultiReviewFixSessionReplacement,
+  ) => Promise<MultiReviewAddressDispatchResult>;
   /** Removes a failed custom launch from the native-agent identity store. */
   invalidateAddressSession?: (
     workflow: MultiReviewWorkflow,
@@ -334,7 +352,7 @@ export class MultiReviewService {
       })),
       fixModel: input.fixModel,
       reviewWorktreeSnapshot,
-      phase: "reviewing",
+      phase: "preparing",
       createdAt: timestamp,
       updatedAt: timestamp,
       backendRevision: 0,
@@ -450,6 +468,51 @@ export class MultiReviewService {
     });
   }
 
+  async recoverFixSession(
+    environmentId: string,
+    replacement: MultiReviewFixSessionReplacement,
+  ): Promise<MultiReviewWorkflow> {
+    if (!this.options.recoverAddressSession) {
+      throw new Error("Multi Review Fix session recovery is unavailable");
+    }
+    const records = await this.storage.listMultiReviewWorkflows(environmentId);
+    const candidate = records
+      .map((record) => record.snapshot)
+      .find(
+        (workflow) =>
+          isMultiReviewWorkflow(workflow) &&
+          workflow.phase === "interactive" &&
+          (workflow.fixSession?.providerSessionId === replacement.expectedProviderSessionId ||
+            workflow.fixSession?.providerSessionId === replacement.replacementProviderSessionId) &&
+          (workflow.fixTabId ?? workflow.addressTabId ?? `multi-review-fix:${workflow.id}`) ===
+            replacement.tabId,
+      );
+    if (!candidate || !isMultiReviewWorkflow(candidate)) {
+      throw new Error("The Multi Review workflow for this Fix tab is no longer available");
+    }
+    return this.withLock(candidate.id, async () => {
+      const controlled = await this.loadControlled(candidate.id);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${candidate.id}`);
+      const { workflow, token } = controlled;
+      try {
+        if (workflow.fixSession?.providerSessionId === replacement.replacementProviderSessionId) {
+          return workflow;
+        }
+        const recovered = await this.options.recoverAddressSession!(workflow, replacement);
+        await this.assertFence(workflow.id, token);
+        workflow.fixSession = recovered.fixSession;
+        workflow.fixSessionKey = recovered.fixSession.sessionKey;
+        workflow.fixTabId = recovered.tabId;
+        workflow.presentationError = MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE;
+        delete workflow.error;
+        this.progress.forget(replacement.expectedProviderSessionId);
+        return await this.save(workflow, token);
+      } finally {
+        await this.release(workflow, token);
+      }
+    });
+  }
+
   async retry(workflowId: string): Promise<MultiReviewWorkflow> {
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
@@ -457,7 +520,9 @@ export class MultiReviewService {
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
       if (workflow.reviewSnapshotStale === true) {
-        const replacement = await this.captureReviewWorktreeSnapshot(workflow.environmentId);
+        const replacement = workflow.reviewPackage
+          ? undefined
+          : await this.captureReviewWorktreeSnapshot(workflow.environmentId);
         for (const reviewer of workflow.reviewers) {
           await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
           if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
@@ -484,8 +549,9 @@ export class MultiReviewService {
           workflow.fixModel,
           workflow.fixSession?.providerSessionId,
         );
-        workflow.reviewWorktreeSnapshot = replacement;
-        workflow.phase = "reviewing";
+        if (replacement) workflow.reviewWorktreeSnapshot = replacement;
+        workflow.phase = "preparing";
+        delete workflow.reviewPackage;
         workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
         delete workflow.reviewSnapshotStale;
         delete workflow.fixSession;
@@ -496,6 +562,20 @@ export class MultiReviewService {
         delete workflow.addressPromptAttempts;
         clearPendingAddressIdentity(workflow);
         delete workflow.presentationError;
+      } else if (
+        workflow.activeRequest?.kind === "prepare" ||
+        (!workflow.reviewPackage &&
+          workflow.reviewers.every((reviewer) => reviewer.status === "pending"))
+      ) {
+        await this.abandonSession(
+          workflow,
+          workflow.fixModel,
+          workflow.fixSession?.providerSessionId,
+        );
+        workflow.phase = "preparing";
+        workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        delete workflow.fixSession;
+        delete workflow.activeRequest;
       } else {
         // Reviewer failures are independent, so a single pass can fail several of
         // them at once. Restoring only the first would consolidate from fewer
@@ -592,6 +672,9 @@ export class MultiReviewService {
         // Idempotent: a double click, or a reviewer that settled between the
         // render and the command, must not rewrite a finished result.
         if (reviewer.status !== "pending" && reviewer.status !== "running") return workflow;
+        if (workflow.phase !== "reviewing") {
+          throw new Error("A reviewer can only be stopped while review is running");
+        }
         await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
         if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
         reviewer.status = "cancelled";
@@ -635,6 +718,11 @@ export class MultiReviewService {
       try {
         const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
         if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+        if (workflow.activeRequest?.kind === "prepare") {
+          throw new Error(
+            "Retry Multi Review to finish preparing the review package before restarting reviewers",
+          );
+        }
         if (
           workflow.phase !== "reviewing" &&
           workflow.phase !== "consolidating" &&
@@ -1105,7 +1193,11 @@ export class MultiReviewService {
       await this.advanceCancellation(workflow, token);
     } else if (workflow.phase === "reviewing") {
       await this.advanceReviewers(workflow, token);
-    } else if (workflow.phase === "consolidating" || workflow.phase === "fixing") {
+    } else if (
+      workflow.phase === "preparing" ||
+      workflow.phase === "consolidating" ||
+      workflow.phase === "fixing"
+    ) {
       await this.advanceFixModel(workflow, token);
     }
   }
@@ -1354,6 +1446,20 @@ export class MultiReviewService {
         await this.save(workflow, token);
       },
       assertFence: () => this.assertFence(workflow.id, token),
+      reviewerMode: workflow.reviewPackage ? "plan" : "build",
+      ...(workflow.reviewPackage
+        ? {
+            reviewerPrompt: async (index: number, count: number) => {
+              await this.assertReviewPackageIntegrity(workflow, token);
+              return createPackagedMultiReviewerPrompt({
+                reviewPackage: workflow.reviewPackage!,
+                reviewInstruction: workflow.reviewInstruction,
+                reviewerNumber: index + 1,
+                reviewerCount: count,
+              });
+            },
+          }
+        : {}),
       reviewSnapshot: async () =>
         promptWorktreeSnapshot(await this.assertReviewSnapshotCurrent(workflow, token)),
       resolveUnattendedInteractions: (provider, providerSessionId) =>
@@ -1419,7 +1525,7 @@ export class MultiReviewService {
       await this.abandonSession(workflow, workflow.fixModel, session.providerSessionId);
       this.progress.forget(session.providerSessionId);
       throw new Error(
-        `The ${workflow.phase === "fixing" ? "fix" : "consolidation"} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
+        `The ${workflow.phase === "preparing" ? "preparation" : workflow.phase === "fixing" ? "fix" : "consolidation"} session produced no activity for ${stalledMinutes(elapsedMs)} minutes`,
       );
     }
     if (elapsedMs >= this.stallWarningMs() && session.stalledSince === undefined) {
@@ -1439,16 +1545,18 @@ export class MultiReviewService {
   }
 
   private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const preparing = workflow.phase === "preparing";
+    const sessionLabel = preparing ? "preparation" : "consolidation";
     const provider = await this.provider(workflow, workflow.fixModel);
     await this.assertFence(workflow.id, token);
     if (!workflow.fixSession) {
       const sessionKey = workflow.fixSessionKey ?? fixSessionKey(workflow.id);
       const providerSessionId = await provider.createSession(
         "review",
-        "Multi Review · Consolidation",
+        preparing ? "Multi Review · Prepare review package" : "Multi Review · Consolidation",
         {
           clientSessionKey: sessionKey,
-          mode: "plan",
+          mode: preparing ? "build" : "plan",
           model: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
           effort: workflow.fixModel.reasoningEffort,
           interaction: {
@@ -1485,12 +1593,18 @@ export class MultiReviewService {
     if (!workflow.activeRequest) {
       const requestId = randomUUID();
       workflow.activeRequest = {
-        kind: "consolidate",
+        kind: preparing ? "prepare" : "consolidate",
         requestId,
         state: "prepared",
         createdAt: nowIso(),
       };
       session.requestIds.push(requestId);
+      session.status = "running";
+      session.startedAt = nowIso();
+      delete session.completedAt;
+      delete session.progressAt;
+      delete session.progressDigest;
+      delete session.stalledSince;
       await this.save(workflow, token);
     }
     const request = workflow.activeRequest;
@@ -1501,11 +1615,20 @@ export class MultiReviewService {
       // already-answered prompt and is not re-gated.
       let prompt = request.schemaRepairPrompt;
       if (!prompt) {
-        if (request.kind === "consolidate") {
-          const reviewSnapshot = await this.assertReviewSnapshotCurrent(workflow, token);
+        if (request.kind === "prepare") {
+          prompt = createMultiReviewPreparationPrompt({
+            packageId: this.reviewPackageId(workflow),
+            targetBranch: workflow.targetBranch,
+          });
+        } else if (request.kind === "consolidate") {
+          const reviewSnapshot = workflow.reviewPackage
+            ? undefined
+            : await this.assertReviewSnapshotCurrent(workflow, token);
+          if (workflow.reviewPackage) await this.assertReviewPackageIntegrity(workflow, token);
           prompt = createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
-            worktree: promptWorktreeSnapshot(reviewSnapshot),
+            worktree: reviewSnapshot ? promptWorktreeSnapshot(reviewSnapshot) : undefined,
+            reviewPackage: workflow.reviewPackage,
             reports: consolidationReports(workflow.reviewers),
           });
         } else {
@@ -1522,10 +1645,13 @@ export class MultiReviewService {
         await provider.send(session.providerSessionId, prompt, {
           requestId: request.requestId,
           schema:
-            request.kind === "consolidate"
-              ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
-              : REVIEW_FIX_RESULT_JSON_SCHEMA,
+            request.kind === "prepare"
+              ? REVIEW_PREPARATION_RESULT_JSON_SCHEMA
+              : request.kind === "consolidate"
+                ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
+                : REVIEW_FIX_RESULT_JSON_SCHEMA,
           mode: request.kind === "consolidate" ? "plan" : "build",
+          readOnly: request.kind === "consolidate",
           model: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
           effort: workflow.fixModel.reasoningEffort,
         });
@@ -1570,10 +1696,10 @@ export class MultiReviewService {
     if (status === "error" || status === "missing") {
       throw new Error(
         status === "missing"
-          ? "The consolidation session no longer exists"
+          ? `The ${sessionLabel} session no longer exists`
           : statusDetail
-            ? `The consolidation session failed: ${statusDetail}`
-            : "The consolidation session failed",
+            ? `The ${sessionLabel} session failed: ${statusDetail}`
+            : `The ${sessionLabel} session failed`,
       );
     }
     const result = await provider.structured<unknown>(session.providerSessionId, request.requestId);
@@ -1583,9 +1709,52 @@ export class MultiReviewService {
       await this.save(workflow, token);
       if (request.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
         throw new Error(
-          `The fix model became idle without returning its ${request.kind === "fix" ? "fix result" : "consolidated report"}`,
+          `The fix model became idle without returning its ${request.kind === "prepare" ? "review package preparation" : request.kind === "fix" ? "fix result" : "consolidated report"}`,
         );
       }
+      return;
+    }
+    if (request.kind === "prepare") {
+      if (
+        !result.ok &&
+        result.error.code !== "schema_retry_exhausted" &&
+        result.error.code !== "malformed_output"
+      )
+        throw new Error(result.error.message);
+      let preparation: ReturnType<typeof parseReviewPreparationResult>;
+      try {
+        if (!result.ok) throw new Error(result.error.message);
+        preparation = parseReviewPreparationResult(result.value);
+      } catch (error) {
+        await this.prepareFixSessionSchemaRepair(
+          workflow,
+          token,
+          request,
+          session,
+          new FixResultValidationError(errorMessage(error)),
+        );
+        return;
+      }
+      const packageId = this.reviewPackageId(workflow);
+      const generated = await this.invoke<unknown>("generate_looped_review_package", {
+        environmentId: workflow.environmentId,
+        packageId,
+        round: 1,
+        targetBranch: workflow.targetBranch,
+        preparation,
+      });
+      await this.assertFence(workflow.id, token);
+      workflow.reviewPackage = parseReviewPackageReference(generated, {
+        id: packageId,
+        round: 1,
+        targetBranch: workflow.targetBranch,
+      });
+      workflow.phase = "reviewing";
+      session.status = "idle";
+      session.completedAt = nowIso();
+      delete workflow.activeRequest;
+      delete workflow.reviewSnapshotStale;
+      await this.save(workflow, token);
       return;
     }
     if (request.kind === "consolidate") {
@@ -1666,7 +1835,7 @@ export class MultiReviewService {
     const attempt = (request.schemaRepairAttempts ?? 0) + 1;
     if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
       throw new Error(
-        `${error.message} The fix model could not produce a valid ${request.kind === "fix" ? "fix result" : "consolidated report"} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
+        `${error.message} The fix model could not produce a valid ${request.kind === "prepare" ? "review package preparation" : request.kind === "fix" ? "fix result" : "consolidated report"} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
       );
     }
     const requestId = randomUUID();
@@ -1678,16 +1847,25 @@ export class MultiReviewService {
       error.issues,
       attempt,
       MAX_SCHEMA_REPAIR_ATTEMPTS,
-      request.kind === "fix"
+      request.kind === "prepare"
         ? {
-            schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
-            resultLabel: "fix result",
-            workLabel: "fix work",
-            stageLabel: "fix stage",
+            schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+            resultLabel: "review package preparation",
+            workLabel: "preparation work",
+            stageLabel: "preparation stage",
             preserveInstruction:
-              "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
+              "Do not rerun validation, create another commit, or modify artifacts. Correct only the preparation metadata using the evidence already collected.",
           }
-        : undefined,
+        : request.kind === "fix"
+          ? {
+              schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+              resultLabel: "fix result",
+              workLabel: "fix work",
+              stageLabel: "fix stage",
+              preserveInstruction:
+                "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
+            }
+          : undefined,
     );
     delete request.idleResultPolls;
     session.requestIds.push(requestId);
@@ -1868,6 +2046,32 @@ export class MultiReviewService {
         `Multi Review cannot establish its worktree snapshot: ${errorMessage(error)}`,
       );
     }
+  }
+
+  private reviewPackageId(workflow: MultiReviewWorkflow): string {
+    const digest = createHash("sha256")
+      .update(workflow.fixSessionKey ?? fixSessionKey(workflow.id))
+      .digest("hex")
+      .slice(0, 32);
+    return `review-package-multi-${digest}`;
+  }
+
+  private async assertReviewPackageIntegrity(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<void> {
+    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+      "verify_looped_review_package",
+      {
+        environmentId: workflow.environmentId,
+        reviewPackage: workflow.reviewPackage,
+      },
+    );
+    await this.assertFence(workflow.id, token);
+    if (!verification.valid)
+      throw new ReviewSnapshotChangedError(
+        `Multi Review package integrity verification failed: ${verification.reason ?? "unknown reason"}. Retry to prepare a new package.`,
+      );
   }
 
   private providerKey(workflow: MultiReviewWorkflow, selection: MultiReviewModelSelection): string {

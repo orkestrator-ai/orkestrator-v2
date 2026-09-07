@@ -8,7 +8,11 @@ import {
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_PREFIX,
 } from "./review-evidence-frames.js";
-import { isSafeLoopedReviewTargetBranch } from "./review-workflow.js";
+import {
+  isReviewPackageReference,
+  type ReviewPackageReference,
+  isSafeLoopedReviewTargetBranch,
+} from "./review-workflow.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   REVIEW_FANOUT_MAX_SNAPSHOT_PATHS,
@@ -36,6 +40,8 @@ export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
 /** Former pane title retained for restored layouts and backend session metadata. */
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
+export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
+  "The original consolidation conversation was no longer available. A fresh Fix session was created and seeded with the consolidated findings.";
 
 /** JSON evidence cannot synthesize the frame's XML-like boundary markers. */
 function promptCarrierJson(value: unknown): string {
@@ -100,6 +106,7 @@ export interface MultiReviewReviewerTranscript {
 }
 
 export type MultiReviewPhase =
+  | "preparing"
   | "reviewing"
   | "consolidating"
   | "ready"
@@ -148,6 +155,8 @@ export interface MultiReviewWorkflow {
   fixSessionKey?: string;
   fixSession?: MultiReviewFixSession;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
+  /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
+  reviewPackage?: ReviewPackageReference;
   /** Set when the worktree changed before all reports could be consolidated. */
   reviewSnapshotStale?: boolean;
   phase: MultiReviewPhase;
@@ -179,7 +188,7 @@ export interface MultiReviewWorkflow {
   /** Non-fatal failure to publish the current fix session into the pane layout. */
   presentationError?: string;
   activeRequest?: {
-    kind: "consolidate" | "fix";
+    kind: "prepare" | "consolidate" | "fix";
     requestId: string;
     state: "prepared" | "dispatching" | "sent";
     createdAt: string;
@@ -266,6 +275,7 @@ export function isStartMultiReviewCustomFixInput(
 }
 
 const PHASES = new Set<MultiReviewPhase>([
+  "preparing",
   "reviewing",
   "consolidating",
   "ready",
@@ -351,7 +361,7 @@ function isActiveRequest(
       "schemaRepairPrompt",
       "idleResultPolls",
     ]) &&
-    (value.kind === "consolidate" || value.kind === "fix") &&
+    (value.kind === "prepare" || value.kind === "consolidate" || value.kind === "fix") &&
     nonBlank(value.requestId) &&
     (value.state === "prepared" || value.state === "dispatching" || value.state === "sent") &&
     typeof value.createdAt === "string" &&
@@ -416,6 +426,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "fixSession",
       "phase",
       "reviewWorktreeSnapshot",
+      "reviewPackage",
       "reviewSnapshotStale",
       "consolidatedReport",
       "fixResult",
@@ -457,6 +468,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.fixSession !== undefined && !isFixSession(value.fixSession)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
+    (value.reviewPackage !== undefined &&
+      (!isReviewPackageReference(value.reviewPackage) ||
+        value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
     !optionalDate(value.cancellingSince) ||

@@ -215,6 +215,8 @@ export interface PendingApproval {
 }
 
 export interface SessionState {
+  /** Workflow-owned tool restriction, independent of Pi thinking/composer modes. */
+  readOnly?: boolean;
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
@@ -317,6 +319,7 @@ export interface SessionState {
 }
 
 export interface PersistedSession {
+  readOnly?: boolean;
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;

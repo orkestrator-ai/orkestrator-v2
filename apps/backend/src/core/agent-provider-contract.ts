@@ -185,6 +185,8 @@ export type ProviderNativeAgentSessionAction =
     };
 
 export interface ProviderCreateSessionOptions {
+  /** Explicit tool restriction for providers without a native read-only mode. */
+  readOnly?: boolean;
   clientSessionKey?: string;
   mode?: ProviderExecutionMode;
   model?: string;
@@ -198,6 +200,7 @@ export interface ProviderCreateSessionOptions {
 }
 
 export interface ProviderSendOptions {
+  readOnly?: boolean;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];

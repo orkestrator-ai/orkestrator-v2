@@ -351,7 +351,7 @@ describe("reconcilePersistedLayout", () => {
     }
   });
 
-  test("restores strict backend-owned native session identity", () => {
+  test("allows restored Multi Review fix tabs to replace a missing provider session", () => {
     const restored = reconcilePersistedLayout(
       saved({
         kind: "leaf",
@@ -367,17 +367,103 @@ describe("reconcilePersistedLayout", () => {
               requireExistingResumeSession: true,
             },
           },
+          {
+            id: "multi-review-fix:multi-1:launch-1",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId: "env-1",
+              sessionId: "provider-custom-fix",
+              requireExistingResumeSession: true,
+            },
+          },
+          {
+            id: "strict-provider-transcript",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId: "env-1",
+              sessionId: "provider-transcript",
+              requireExistingResumeSession: true,
+            },
+          },
         ],
         activeTabId: "multi-review-fix:multi-1",
       }),
       context,
     );
 
-    const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+    const tabs = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    const tab = tabs[0]!;
     expect(tab.nativeAgentData).toMatchObject({
       sessionId: "provider-fix",
+    });
+    expect(
+      (tab.nativeAgentData as Record<string, unknown>).requireExistingResumeSession,
+    ).toBeUndefined();
+    expect(tabs[1]!.nativeAgentData).toMatchObject({
+      sessionId: "provider-custom-fix",
+    });
+    expect(
+      (tabs[1]!.nativeAgentData as Record<string, unknown>).requireExistingResumeSession,
+    ).toBeUndefined();
+    expect(tabs[2]!.nativeAgentData).toMatchObject({
+      sessionId: "provider-transcript",
       requireExistingResumeSession: true,
     });
+  });
+
+  test("keeps the Multi Review resume migration after a persisted layout merge", () => {
+    const legacyTab = {
+      id: "multi-review-fix:multi-1:launch-1",
+      type: "agent-native",
+      displayTitle: "Fix",
+      nativeAgentData: {
+        platform: "codex",
+        environmentId: "env-1",
+        sessionId: "provider-fix",
+        requireExistingResumeSession: true,
+      },
+    };
+    type MergeInput = Parameters<typeof mergePersistedPaneLayouts>[0];
+    const base: MergeInput = {
+      version: PANE_LAYOUT_VERSION,
+      containerId: "container-1",
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf" as const,
+        id: "pane-1",
+        tabs: [legacyTab],
+        activeTabId: legacyTab.id,
+      },
+    };
+    const restored = reconcilePersistedLayout(
+      saved(base.root, { activePaneId: "pane-1" }),
+      context,
+    )!;
+    const local: MergeInput = {
+      version: PANE_LAYOUT_VERSION,
+      containerId: restored.containerId,
+      activePaneId: restored.activePaneId,
+      root: restored.root,
+    };
+    const remote: MergeInput = {
+      ...base,
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        activeTabId: legacyTab.id,
+        tabs: [{ ...legacyTab, displayTitle: "Fix findings" } as TabInfo],
+      },
+    };
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+    const mergedTab = (merged.root as Extract<typeof merged.root, { kind: "leaf" }>).tabs[0]! as {
+      displayTitle?: string;
+      nativeAgentData?: Record<string, unknown>;
+    };
+    expect(mergedTab.displayTitle).toBe("Fix findings");
+    expect(mergedTab.nativeAgentData?.requireExistingResumeSession).toBeUndefined();
   });
 
   test("ignores malformed one-shot agent launch and handoff values", () => {

@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { captureReviewWorktreeSnapshot } from "./review-fanout.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 import { expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +38,10 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import {
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  REVIEW_FIX_RESULT_JSON_SCHEMA,
+} from "./looped-review-prompts.js";
 import {
   MissingMultiReviewAddressSessionError,
   MultiReviewAddressDispatchError,
@@ -43,7 +52,9 @@ import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-revi
 const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 const REVIEW_FINGERPRINT = "a".repeat(64);
 
-async function stableReviewInvoker<T>(command: string): Promise<T> {
+async function stableReviewInvoker<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (command === "generate_looped_review_package") return testGeneratedReviewPackage(args!) as T;
+  if (command === "verify_looped_review_package") return { valid: true } as T;
   if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
   return {
     head: REVIEW_HEAD,
@@ -117,6 +128,7 @@ const consolidatedReport: StructuredReviewReport = {
 
 class Provider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
+  readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
   readonly aborted: string[] = [];
   readonly closed: string[] = [];
@@ -177,6 +189,7 @@ class Provider implements BuildPipelineProvider {
     _label: string,
     options?: ProviderCreateSessionOptions,
   ) {
+    this.creates.push({ label: _label, options });
     const clientSessionKey = options?.clientSessionKey;
     if (clientSessionKey) {
       this.createdSessionKeys.push(clientSessionKey);
@@ -252,6 +265,8 @@ class Provider implements BuildPipelineProvider {
     if (!this.returnStructured) return null;
     const sent = this.sends.get(requestId)!;
     const isConsolidation = this.consolidationSessions.has(sessionId);
+    if (sent.options.schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA)
+      return { ok: true, provider: "claude", requestId, value: TEST_REVIEW_PREPARATION as T };
     if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
       if (this.fixStructuredFailure) {
         const code = this.fixStructuredFailure;
@@ -835,6 +850,78 @@ test("MultiReviewService dispatches a durable address intent without a renderer"
   );
 });
 
+test("MultiReviewService persists a seeded replacement for a missing interactive Fix session", async () => {
+  const provider = new Provider();
+  const recoverAddressSession = jest.fn(
+    async (workflow: MultiReviewWorkflow, replacement: { tabId: string }) => ({
+      tabId: replacement.tabId,
+      fixSession: {
+        ...workflow.fixSession!,
+        sessionKey: workflow.fixSession!.sessionKey.startsWith(
+          `multi-review:${workflow.id}:interactive`,
+        )
+          ? workflow.fixSession!.sessionKey
+          : `multi-review:${workflow.id}:interactive`,
+        providerSessionId: "provider-replacement",
+        requestIds: [...workflow.fixSession!.requestIds, "replacement-request"],
+        status: "idle" as const,
+      },
+    }),
+  );
+  await withService(
+    "env-address-replacement",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      const interactive = (await snapshot(started.id))!;
+
+      const recovered = await service.recoverFixSession("env-address-replacement", {
+        tabId: interactive.fixTabId!,
+        expectedProviderSessionId: ready.fixSession!.providerSessionId,
+        replacementProviderSessionId: "provider-replacement",
+      });
+
+      expect(recoverAddressSession).toHaveBeenCalledTimes(1);
+      expect(recovered.fixSession).toMatchObject({
+        providerSessionId: "provider-replacement",
+        sessionKey: `multi-review:${started.id}:interactive`,
+        status: "idle",
+      });
+      expect(recovered.fixSessionKey).toBe(`multi-review:${started.id}:interactive`);
+      expect(recovered.presentationError).toContain(
+        "fresh Fix session was created and seeded with the consolidated findings",
+      );
+
+      await expect(
+        service.recoverFixSession("env-address-replacement", {
+          tabId: interactive.fixTabId!,
+          expectedProviderSessionId: ready.fixSession!.providerSessionId,
+          replacementProviderSessionId: "provider-replacement",
+        }),
+      ).resolves.toMatchObject({
+        fixSession: { providerSessionId: "provider-replacement" },
+      });
+      expect(recoverAddressSession).toHaveBeenCalledTimes(1);
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => ({
+          fixSession: workflow.fixSession!,
+          tabId: workflow.addressTabId!,
+        }),
+        recoverAddressSession,
+      },
+    },
+  );
+});
+
 test("MultiReviewService owns a custom-fix launch after the renderer records intent", async () => {
   const provider = new Provider();
   let releaseDispatch!: () => void;
@@ -1385,7 +1472,7 @@ test("MultiReviewService stops when the snapshot changes between reviewers and r
       ]);
 
       const retried = await service.retry(started.id);
-      expect(retried.phase).toBe("reviewing");
+      expect(retried.phase).toBe("preparing");
       expect(retried.reviewSnapshotStale).toBeUndefined();
       expect(retried.reviewWorktreeSnapshot?.fingerprint).toBe(replacementFingerprint);
       expect(retried.reviewWorktreeSnapshot?.paths).toEqual([
@@ -1401,6 +1488,8 @@ test("MultiReviewService stops when the snapshot changes between reviewers and r
     },
     {
       invoke: (async (_command: string, args?: Record<string, unknown>) => {
+        if (_command !== "get_environment_uncommitted_paths")
+          return stableReviewInvoker(_command, args);
         probes.push(args);
         return probes.length <= 2
           ? { head: REVIEW_HEAD, paths: ["src/feature.ts"], fingerprint: REVIEW_FINGERPRINT }
@@ -1669,6 +1758,7 @@ async function withService(
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
   }) => Promise<void>,
   options: {
+    packageFlow?: boolean;
     createProvider?: () => Promise<BuildPipelineProvider>;
     serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
@@ -1695,29 +1785,20 @@ async function withService(
     worktreePath: "/tmp/review",
     setupScriptsComplete: true,
   });
-  const service = new MultiReviewService(
-    storage,
-    options.invoke ??
-      (async (command: string) => {
-        if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
-        return {
-          head: REVIEW_HEAD,
-          paths: [],
-          fingerprint: REVIEW_FINGERPRINT,
-        } as never;
-      }),
-    {
-      autoAdvance: false,
-      provider: options.createProvider ?? (async () => provider),
-      ...options.serviceOptions,
-    },
-  );
+  const service = new MultiReviewService(storage, options.invoke ?? stableReviewInvoker, {
+    autoAdvance: false,
+    provider: options.createProvider ?? (async () => provider),
+    ...options.serviceOptions,
+  });
   try {
     await run({
       service,
       storage,
       start: (reviewers = [{ agent: "claude", model: "opus" }]) =>
-        service.start({
+        (options.packageFlow
+          ? service.start.bind(service)
+          : (input: Parameters<MultiReviewService["start"]>[0]) =>
+              startLegacyReview(service, storage, options.invoke ?? stableReviewInvoker, input))({
           environmentId,
           projectId: "project-1",
           targetBranch: "main",
@@ -2302,7 +2383,7 @@ test("MultiReviewService rehydrates active review activity without a renderer", 
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await first.start({
+  const started = await startLegacyReview(first, storage, stableReviewInvoker, {
     environmentId: "env-active",
     projectId: "project-1",
     targetBranch: "main",
@@ -2367,7 +2448,7 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive fix ha
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-1",
     projectId: "project-1",
     targetBranch: "main",
@@ -2431,7 +2512,7 @@ test("MultiReviewService fails an idle reviewer that never returns structured ou
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-idle",
     projectId: "project-1",
     targetBranch: "main",
@@ -2475,7 +2556,7 @@ test("MultiReviewService leaves an interactive handoff idle for the native tab",
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-interactive",
     projectId: "project-1",
     targetBranch: "main",
@@ -2534,7 +2615,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-cancel",
     projectId: "project-1",
     targetBranch: "main",
@@ -2566,7 +2647,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
     reviewers: [{ status: "completed" }],
     fixSession: { status: "cancelled" },
   });
-  const replacement = await service.start({
+  const replacement = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-cancel",
     projectId: "project-1",
     targetBranch: "main",
@@ -2610,7 +2691,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
     autoAdvance: false,
     provider: async () => provider,
   });
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-cancel-terminal",
     projectId: "project-1",
     targetBranch: "main",
@@ -2681,7 +2762,7 @@ test("MultiReviewService coalesces repeated advances while a provider call is bl
     autoAdvance: false,
     provider: async () => provider,
   });
-  await service.start({
+  await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-coalesce",
     projectId: "project-1",
     targetBranch: "main",
@@ -2736,7 +2817,7 @@ test("MultiReviewService renews its lease while a provider call is blocked", asy
     provider: async () => provider,
   });
   await service.init();
-  const started = await service.start({
+  const started = await startLegacyReview(service, storage, stableReviewInvoker, {
     environmentId: "env-lease",
     projectId: "project-1",
     targetBranch: "main",
@@ -4419,5 +4500,403 @@ test("MultiReviewService does not move a durable stall clock forward across rest
       expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
     },
     { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 60 * 60_000 } },
+  );
+});
+
+/** Exercise pre-package snapshots through the real supervisor, as on upgrade. */
+async function startLegacyReview(
+  service: MultiReviewService,
+  storage: StorageService,
+  invoke: typeof stableReviewInvoker,
+  input: Parameters<MultiReviewService["start"]>[0],
+): Promise<MultiReviewWorkflow> {
+  const timestamp = new Date().toISOString();
+  const workflow: MultiReviewWorkflow = {
+    ...input,
+    version: 1,
+    controller: "backend",
+    id: randomUUID(),
+    reviewers: input.reviewers.map((selection) => ({
+      ...selection,
+      id: randomUUID(),
+      status: "pending",
+    })),
+    phase: "reviewing",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 0,
+    reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
+      invoke,
+      input.environmentId,
+      "Multi Review",
+    ),
+  };
+  const saved = await storage.createMultiReviewWorkflowIfNoActive(
+    workflow.id,
+    workflow.environmentId,
+    1,
+    workflow,
+  );
+  if (!saved)
+    throw new Error("Finish, cancel, or delete the existing Multi Review before starting another");
+  workflow.backendRevision = saved.revision;
+  void service.advanceNow(workflow.id);
+  return workflow;
+}
+
+test("Multi Review prepares once with the fix model and reviews the same immutable package read-only", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const commands: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  await withService(
+    "env-package",
+    provider,
+    async ({ service, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-package",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [
+          { agent: "claude", model: "review-a" },
+          { agent: "codex", model: "review-b" },
+        ],
+        fixModel: { agent: "claude", model: "fix-model", reasoningEffort: "high" },
+      });
+      expect(started.phase).toBe("preparing");
+      await service.advanceNow(started.id);
+      const preparing = (await snapshot(started.id))!;
+      expect(preparing.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
+      expect(preparing.activeRequest).toMatchObject({ kind: "prepare", state: "sent" });
+      expect(provider.creates).toHaveLength(1);
+      expect(provider.creates[0]?.options).toMatchObject({
+        model: "fix-model",
+        effort: "high",
+        mode: "build",
+      });
+      expect([...provider.sends.values()][0]?.options.schema).toEqual(
+        REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+      );
+      expect(commands.some((entry) => entry.command === "generate_looped_review_package")).toBe(
+        false,
+      );
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      const reviewing = (await snapshot(started.id))!;
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.reviewPackage?.kind).toBe("file");
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const ready = (await snapshot(started.id))!;
+      expect(ready.phase).toBe("ready");
+      const reviews = [...provider.sends.values()].filter((sent) =>
+        sent.prompt.includes("You are independent reviewer"),
+      );
+      expect(reviews).toHaveLength(2);
+      for (const sent of reviews) {
+        expect(sent.options).toMatchObject({ mode: "plan", readOnly: true });
+        expect(sent.prompt).toContain(reviewing.reviewPackage!.filePath);
+        expect(sent.prompt).toContain("Do not modify files, run git, rerun validation");
+        expect(sent.prompt).not.toContain("Validation commands may write");
+      }
+      expect(
+        provider.creates
+          .slice(1)
+          .every((entry) => entry.options?.mode === "plan" && entry.options?.readOnly === true),
+      ).toBe(true);
+      expect(
+        commands.filter((entry) => entry.command === "generate_looped_review_package"),
+      ).toHaveLength(1);
+      // A live checkout change must not invalidate the immutable evidence after preparation.
+      expect(
+        commands.filter((entry) => entry.command === "get_environment_uncommitted_paths"),
+      ).toHaveLength(1);
+      expect(
+        commands.filter((entry) => entry.command === "verify_looped_review_package"),
+      ).toHaveLength(3);
+      const consolidation = [...provider.sends.values()].find((sent) =>
+        sent.prompt.includes("<multi-review-reports-json>"),
+      );
+      expect(consolidation?.options).toMatchObject({ mode: "plan", readOnly: true });
+      expect(consolidation?.prompt).toContain("same backend-verified immutable review package");
+      expect(consolidation?.prompt).toContain(reviewing.reviewPackage!.filePath);
+      await service.address(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("interactive");
+    },
+    {
+      invoke: async (command, args) => {
+        commands.push({ command, args });
+        return stableReviewInvoker(command, args);
+      },
+    },
+  );
+});
+
+test("preparing reviewers cannot be stopped or restarted before their package exists", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-package-action-guards",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.activeRequest?.state === "sent");
+      const reviewerId = started.reviewers[0]!.id;
+
+      await expect(service.stopReviewer(started.id, reviewerId)).rejects.toThrow(
+        "only be stopped while review is running",
+      );
+      await expect(service.restartReviewer(started.id, reviewerId)).rejects.toThrow(
+        "finish preparing the review package",
+      );
+      expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({ status: "pending" });
+      expect(provider.aborted).toEqual([]);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("package preparation uses the durable fix-session stall clock", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];
+  await withService(
+    "env-package-stall",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      const failed = (await snapshot(started.id))!;
+      expect(failed.error).toContain("preparation session produced no activity");
+      expect(failed.fixSession?.status).toBe("failed");
+      expect(provider.aborted).toContain(failed.fixSession!.providerSessionId);
+    },
+    {
+      packageFlow: true,
+      serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 },
+    },
+  );
+});
+
+test("restarting a packaged reviewer re-verifies and reuses the read-only package prompt", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const commands: string[] = [];
+  await withService(
+    "env-package-restart-reviewer",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => (await snapshot(started.id))?.activeRequest?.state === "sent");
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      const reviewing = (await snapshot(started.id))!;
+      expect(reviewing.phase).toBe("reviewing");
+
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      const firstRun = (await snapshot(started.id))!.reviewers[0]!;
+      expect(firstRun.status).toBe("running");
+      expect(commands.filter((command) => command === "verify_looped_review_package")).toHaveLength(
+        1,
+      );
+
+      const restarted = await service.restartReviewer(started.id, firstRun.id);
+      expect(restarted.phase).toBe("reviewing");
+      expect(restarted.reviewers[0]?.status).toBe("pending");
+      await service.advanceNow(started.id);
+
+      const reviewSends = [...provider.sends.values()].filter((sent) =>
+        sent.prompt.includes("You are independent reviewer"),
+      );
+      expect(reviewSends).toHaveLength(2);
+      expect(reviewSends.at(-1)?.options).toMatchObject({ mode: "plan", readOnly: true });
+      expect(reviewSends.at(-1)?.prompt).toContain(reviewing.reviewPackage!.filePath);
+      expect(commands.filter((command) => command === "verify_looped_review_package")).toHaveLength(
+        2,
+      );
+    },
+    {
+      packageFlow: true,
+      invoke: async (command, args) => {
+        commands.push(command);
+        return stableReviewInvoker(command, args);
+      },
+    },
+  );
+});
+
+test("package preparation resumes after backend restart without redispatch or a mounted renderer", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const send = provider.send.bind(provider);
+  let ambiguous = true;
+  provider.send = async (session, prompt, options) => {
+    await send(session, prompt, options);
+    if (ambiguous) {
+      ambiguous = false;
+      throw new AmbiguousPromptDispatchError("accepted but response lost");
+    }
+  };
+  await withService(
+    "env-package-resume",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(
+        async () => (await snapshot(started.id))?.activeRequest?.state === "dispatching",
+      );
+      const requestId = (await snapshot(started.id))!.activeRequest!.requestId;
+      await service.shutdown();
+      const restored = new MultiReviewService(storage, stableReviewInvoker, {
+        autoAdvance: false,
+        provider: async () => provider,
+      });
+      try {
+        await restored.init();
+        expect((await storage.getEnvironment(started.environmentId))?.agentActivityState).toBe(
+          "working",
+        );
+        provider.statusValue = "idle";
+        await restored.advanceNow(started.id);
+        expect((await snapshot(started.id))?.reviewPackage).toBeDefined();
+        expect(provider.sends.size).toBe(1);
+        expect(provider.sends.has(requestId)).toBe(true);
+        await restored.advanceNow(started.id);
+        await restored.advanceNow(started.id);
+        expect((await snapshot(started.id))?.phase).toBe("ready");
+      } finally {
+        await restored.shutdown();
+      }
+    },
+    { packageFlow: true },
+  );
+});
+
+test("failed package generation blocks reviewers and retry runs preparation again", async () => {
+  const provider = new Provider();
+  let blocked = true;
+  await withService(
+    "env-package-failure",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+      expect((await snapshot(started.id))?.error).toContain("requires a clean worktree");
+      expect(provider.creates).toHaveLength(1);
+      const previousKey = (await snapshot(started.id))!.fixSessionKey;
+      blocked = false;
+      const retried = await service.retry(started.id);
+      expect(retried.phase).toBe("preparing");
+      expect(retried.fixSessionKey).not.toBe(previousKey);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+    },
+    {
+      packageFlow: true,
+      invoke: async (command, args) => {
+        if (command === "generate_looped_review_package" && blocked)
+          throw new Error("Review package preparation requires a clean worktree");
+        return stableReviewInvoker(command, args);
+      },
+    },
+  );
+});
+
+test("package tampering fails closed and retry discards reports before preparing new evidence", async () => {
+  const provider = new Provider();
+  let valid = false;
+  await withService(
+    "env-package-tamper",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+      const failed = (await snapshot(started.id))!;
+      expect(failed.reviewSnapshotStale).toBe(true);
+      expect(
+        [...provider.sends.values()].filter((sent) =>
+          sent.prompt.includes("You are independent reviewer"),
+        ),
+      ).toHaveLength(0);
+      const oldId = failed.reviewPackage!.id;
+      valid = true;
+      const retried = await service.retry(started.id);
+      expect(retried.phase).toBe("preparing");
+      expect(retried.reviewPackage).toBeUndefined();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect((await snapshot(started.id))!.reviewPackage!.id).not.toBe(oldId);
+    },
+    {
+      packageFlow: true,
+      invoke: async (command, args) =>
+        command === "verify_looped_review_package"
+          ? ({ valid, reason: "hash mismatch" } as never)
+          : stableReviewInvoker(command, args),
+    },
+  );
+});
+
+test("preparation metadata repairs are bounded and preserve already collected evidence", async () => {
+  const provider = new Provider();
+  const structured = provider.structured.bind(provider);
+  let invalid = true;
+  provider.structured = async (session, request) =>
+    invalid
+      ? { ok: true, provider: "claude", requestId: request, value: {} as never }
+      : structured(session, request);
+  await withService(
+    "env-package-repair",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(
+        async () => (await snapshot(started.id))?.activeRequest?.schemaRepairAttempts === 1,
+      );
+      const repairing = (await snapshot(started.id))!;
+      expect(repairing.activeRequest?.schemaRepairPrompt).toContain("Do not rerun validation");
+      expect(repairing.activeRequest?.kind).toBe("prepare");
+      expect(repairing.reviewPackage).toBeUndefined();
+      invalid = false;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect(provider.creates).toHaveLength(2);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("cancelling package preparation stops its fix-model session before settling", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-package-cancel",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+      const sessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+      provider.statusOverrides.set(sessionId, "idle");
+      await service.cancel(started.id);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("cancelled");
+      expect(provider.aborted).toContain(sessionId);
+      expect(provider.creates).toHaveLength(1);
+    },
+    { packageFlow: true },
   );
 });

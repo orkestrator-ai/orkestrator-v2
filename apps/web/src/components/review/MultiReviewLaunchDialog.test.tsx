@@ -89,9 +89,9 @@ describe("MultiReviewLaunchDialog", () => {
     });
     expect(scrollRegion.className).toContain("overflow-y-auto");
     expect(scrollRegion.contains(screen.getByLabelText("Reviewer 3 model"))).toBe(true);
-    expect(scrollRegion.contains(screen.getByLabelText("Consolidation & fix model model"))).toBe(
-      true,
-    );
+    expect(
+      scrollRegion.contains(screen.getByLabelText("Preparation, consolidation & fix model model")),
+    ).toBe(true);
     expect(
       scrollRegion.contains(screen.getByRole("button", { name: "Start 3-model review" })),
     ).toBe(false);
@@ -147,7 +147,7 @@ describe("MultiReviewLaunchDialog", () => {
     for (const name of [
       "Reviewer 1 model",
       "Reviewer 2 model",
-      "Consolidation & fix model model",
+      "Preparation, consolidation & fix model model",
     ]) {
       expect(screen.getByLabelText(name).closest("fieldset")?.disabled).toBe(true);
     }
@@ -372,7 +372,7 @@ describe("MultiReviewLaunchDialog", () => {
     );
 
     chooseFavorite("Reviewer 2", /GPT-5\.6/);
-    chooseFavorite("Consolidation & fix model", /GPT-5\.6/);
+    chooseFavorite("Preparation, consolidation & fix model", /GPT-5\.6/);
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
@@ -460,7 +460,7 @@ describe("MultiReviewLaunchDialog", () => {
       />,
     );
 
-    chooseFavorite("Consolidation & fix model", /GPT-5\.6/);
+    chooseFavorite("Preparation, consolidation & fix model", /GPT-5\.6/);
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({

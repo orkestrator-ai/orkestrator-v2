@@ -158,8 +158,10 @@ const installMultiReviewWorkflowMock = mock((_workflow: unknown) => {});
 const removeMultiReviewWorkflowMock = mock((_workflowId: string) => {});
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
+const selectEnvironmentMock = mock((_environmentId: string | null) => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
+let projectBoardActionLog: string[] = [];
 const toggleFilesPanelMock = mock(() => {});
 const addCommentMock = mock(async (_taskId: string, _body: string) => {});
 const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
@@ -221,6 +223,7 @@ let currentOtherProjects: Project[] = [];
 /** Projects removed from the store, to model a deletion while a dialog is open. */
 let currentDeletedProjectIds = new Set<string>();
 let currentProjectBoardTab: "coordinator" | "kanban" | "github" | "linear" | "features" = "kanban";
+let currentProjectBoardNotesOpen = false;
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
@@ -640,6 +643,7 @@ mock.module("@/stores", () => ({
     selector?: (state: {
       selectedEnvironmentId: string | null;
       selectedProjectId: string | null;
+      selectEnvironment: (environmentId: string | null) => void;
       projectBoardTab: "coordinator" | "kanban" | "linear" | "github" | "features";
       setProjectBoardTab: (
         tab: "coordinator" | "kanban" | "linear" | "github" | "features",
@@ -651,6 +655,7 @@ mock.module("@/stores", () => ({
       {
         selectedEnvironmentId: currentSelectedEnvironmentId,
         selectedProjectId: currentSelectedProjectId,
+        selectEnvironment: selectEnvironmentMock,
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
         setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
@@ -849,8 +854,23 @@ beforeEach(() => {
   toastErrorMock.mockReset();
   toastInfoMock.mockReset();
   toastWarningMock.mockReset();
+  selectEnvironmentMock.mockReset();
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
+  projectBoardActionLog = [];
+  selectEnvironmentMock.mockImplementation((environmentId) => {
+    projectBoardActionLog.push(`environment:${environmentId}`);
+    currentSelectedEnvironmentId = environmentId;
+  });
+  setProjectBoardTabMock.mockImplementation((tab) => {
+    projectBoardActionLog.push(`tab:${tab}`);
+    currentProjectBoardTab = tab as typeof currentProjectBoardTab;
+    currentProjectBoardNotesOpen = false;
+  });
+  setProjectBoardNotesOpenMock.mockImplementation((open) => {
+    projectBoardActionLog.push(`notes:${open}`);
+    currentProjectBoardNotesOpen = open;
+  });
   toggleFilesPanelMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
@@ -893,6 +913,7 @@ beforeEach(() => {
   currentOtherProjects = [];
   currentDeletedProjectIds = new Set<string>();
   currentProjectBoardTab = "kanban";
+  currentProjectBoardNotesOpen = false;
   currentChanges = [];
   currentFilesPanelOpen = false;
   currentReviewPrompt = undefined;
@@ -1023,7 +1044,10 @@ describe("ActionBar grid presentation", () => {
     expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(
       true,
     );
-    expect(screen.getByRole("tab", { name: "Kanban" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Project notes" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Kanban" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(
       true,
     );
@@ -1041,9 +1065,11 @@ describe("ActionBar grid presentation", () => {
     const environmentSettings = screen.getByRole("button", { name: "Environment settings" });
     const createPr = screen.getByRole("button", { name: "Create PR" });
     const projectNotes = screen.getByRole("button", { name: "Project notes" });
-    const kanban = screen.getByRole("tab", { name: "Kanban" });
+    const kanban = screen.getByRole("button", { name: "Kanban" });
 
     expect(environmentSettings.textContent).toContain("Env. settings");
+    expect(projectNotes.textContent).toContain("Project notes");
+    expect(projectNotes.hasAttribute("disabled")).toBe(false);
     expect(createPr.getAttribute("data-variant")).toBe("ghost");
     expect(projectNotes.getAttribute("data-variant")).toBe("ghost");
     expect(kanban.className).toContain("bg-primary");
@@ -1126,14 +1152,83 @@ describe("ActionBar grid presentation", () => {
     ]);
   });
 
+  test("opens project notes from an environment view", () => {
+    currentProjectBoardTab = "coordinator";
+    render(<ActionBar presentation="grid" />);
+
+    const projectNotes = screen.getByRole("button", { name: "Project notes" });
+    expect(projectNotes.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(projectNotes);
+
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
+    expect(selectEnvironmentMock).toHaveBeenCalledWith(null);
+    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
+    expect(projectBoardActionLog).toEqual(["tab:kanban", "environment:null", "notes:true"]);
+    expect({
+      tab: currentProjectBoardTab as string,
+      environmentId: currentSelectedEnvironmentId,
+      notesOpen: currentProjectBoardNotesOpen,
+    }).toEqual({ tab: "kanban", environmentId: null, notesOpen: true });
+  });
+
+  test("opens a project-board tab from an environment view", () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Coordinator" }));
+
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("coordinator");
+    expect(selectEnvironmentMock).toHaveBeenCalledWith(null);
+  });
+
+  test("opens project notes without resetting an already-selected Kanban tab", () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
+
+    expect(setProjectBoardTabMock).not.toHaveBeenCalled();
+    expect(projectBoardActionLog).toEqual(["environment:null", "notes:true"]);
+    expect(currentProjectBoardTab).toBe("kanban");
+    expect(currentSelectedEnvironmentId).toBeNull();
+    expect(currentProjectBoardNotesOpen).toBe(true);
+  });
+
+  test("returns to an already-selected project-board tab from an environment view", () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Kanban" }));
+
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
+    expect(selectEnvironmentMock).toHaveBeenCalledWith(null);
+  });
+
+  test("uses button-group semantics while the project panels are not rendered", () => {
+    render(<ActionBar presentation="grid" />);
+
+    const navigation = screen.getByRole("group", { name: "Project navigation" });
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+
+    expect(navigation).toBeTruthy();
+    expect(kanban.getAttribute("aria-pressed")).toBe("true");
+    expect(kanban.hasAttribute("aria-selected")).toBe(false);
+    expect(kanban.hasAttribute("aria-controls")).toBe(false);
+
+    fireEvent.keyDown(kanban, { key: "ArrowRight" });
+    expect(setProjectBoardTabMock).not.toHaveBeenCalled();
+    expect(selectEnvironmentMock).not.toHaveBeenCalled();
+  });
+
   test("uses an accent state for the selected mobile board control", () => {
     currentSelectedEnvironmentId = null;
     currentProjectBoardTab = "linear";
     render(<ActionBar presentation="grid" />);
 
+    expect(screen.getByRole("tablist", { name: "Project navigation" })).toBeTruthy();
     const linear = screen.getByRole("tab", { name: "Linear" });
     const kanban = screen.getByRole("tab", { name: "Kanban" });
     expect(linear.getAttribute("aria-selected")).toBe("true");
+    expect(linear.getAttribute("aria-controls")).toBe("project-panel-linear");
+    expect(linear.hasAttribute("aria-pressed")).toBe(false);
     expect(linear.className).toContain("bg-primary");
     expect(kanban.getAttribute("aria-selected")).toBe("false");
   });
@@ -2131,7 +2226,7 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Project Notes" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Project notes" }) === null).toBe(true);
   });
 
   test("native and terminal context menus route neutral, tmux, and CLI tabs", () => {

@@ -31,9 +31,20 @@ import {
 const ADDRESS_REVIEW_FINDINGS_TAIL =
   "Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing.";
 
+/**
+ * How a schema-constrained preparation turn must use its two channels.
+ *
+ * Codex and the ACP agents answer such a turn in the text channel, and left to
+ * themselves they re-draft the enforced payload between tool calls. The viewer
+ * folds any message that is pure JSON into a collapsed payload card, so a run
+ * narrating that way reads as a silent tab to whoever is watching it. Saying
+ * why an interim JSON message is useless is what stops the drafting.
+ */
 export const REVIEW_PREPARATION_OUTPUT_CONTRACT =
-  "Send interim progress only through the provider's commentary or update channel, using ordinary prose sentences. " +
+  "The enforced schema applies to your final response only; everything before it is an ordinary conversation. " +
+  "Send interim progress only through the provider's commentary or update channel, using ordinary prose sentences that say what you are doing and what you found, because a human watches them while the run works. " +
   "Never send a JSON object or array as an interim update, and do not use the final-response channel for progress. " +
+  "Do not draft, preview, restate, or incrementally build the preparation metadata, and do not wrap progress in schema field names: a message that begins with `{` or `[` is folded away as machine output, so a drafted payload is not progress anyone can see. " +
   "After every implementation step, validation command, tool call, and subagent has finished, make the final assistant response the only JSON object, containing the provider-enforced preparation metadata.";
 
 function numberedComment(text: string, index: number): string {

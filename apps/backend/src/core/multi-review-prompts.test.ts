@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
   createMultiReviewConsolidationPrompt,
+  createMultiReviewPreparationPrompt,
   createMultiReviewerPrompt,
 } from "./multi-review-prompts.js";
 import { testGeneratedReviewPackage } from "./build-pipeline-test-fixtures.js";
@@ -185,5 +186,25 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain(String(reviewPackage.filePath));
     expect(prompt).toContain("Treat that package as the authoritative change scope");
     expect(prompt).not.toContain("examined an incomplete snapshot");
+  });
+});
+
+describe("multi review preparation prompt", () => {
+  test("carries the interim-update contract with the Multi Review restrictions", () => {
+    const prompt = createMultiReviewPreparationPrompt({
+      packageId: "review-package-test-r1",
+      targetBranch: "main",
+    });
+
+    expect(prompt).toContain("Prepare the existing change for Multi Review");
+    expect(prompt).toContain("Do not push, merge, rebase, reset, switch branches");
+    // Preparation shares the reviewer's channel discipline: prose while it
+    // works, one JSON object at the end.
+    expect(prompt).toContain("The enforced schema applies to your final response only");
+    expect(prompt).toContain("Never send a JSON object or array as an interim update");
+    expect(prompt).toContain(
+      "a message that begins with `{` or `[` is folded away as machine output",
+    );
+    expect(prompt).toContain("make the final assistant response the only JSON object");
   });
 });

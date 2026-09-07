@@ -220,6 +220,8 @@ export interface EngineAccountUsageWindow {
   usedPercent?: number;
   resetsAt?: string;
   creditsRemaining?: number;
+  /** Preserve the exact decimal representation reported by app-server. */
+  creditBalance?: string;
   /** Account token activity reported by `account/usage/read`. */
   tokens?: number;
 }

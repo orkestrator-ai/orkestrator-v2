@@ -1554,6 +1554,23 @@ describe("runtime health", () => {
           credits: { balance: "123.45", hasCredits: true },
           spendControl: { monthlyLimit: 500 },
         },
+        rateLimitsByLimitId: {
+          codex: {
+            limitName: "Codex",
+            primary: {
+              usedPercent: 56,
+              resetsAt: 126,
+              windowDurationMins: 300,
+              private: "drop-me",
+            },
+            secondary: null,
+            credits: { balance: "999.00" },
+          },
+          review: {
+            limitName: "Review",
+            primary: { usedPercent: 78, windowDurationMins: 10_080 },
+          },
+        },
         account: { email: "private@example.test" },
       }),
     });
@@ -1574,6 +1591,16 @@ describe("runtime health", () => {
         primary: { usedPercent: 12, resetsAt: 42, windowDurationMins: 10_080 },
         secondary: { usedPercent: 34, resetsAt: 84, windowDurationMins: 300 },
       },
+      rateLimitsByLimitId: {
+        codex: {
+          limitName: "Codex",
+          primary: { usedPercent: 56, resetsAt: 126, windowDurationMins: 300 },
+        },
+        review: {
+          limitName: "Review",
+          primary: { usedPercent: 78, windowDurationMins: 10_080 },
+        },
+      },
     });
     expect(serialized).not.toContain("codexHome");
     expect(serialized).not.toContain('"pid"');
@@ -1581,6 +1608,8 @@ describe("runtime health", () => {
     expect(serialized).not.toContain("123.45");
     expect(serialized).not.toContain("monthlyLimit");
     expect(serialized).not.toContain("private-window-id");
+    expect(serialized).not.toContain("drop-me");
+    expect(serialized).not.toContain("999.00");
   });
 
   test("invalid rate-limit durations are omitted at the runtime-health boundary", async () => {

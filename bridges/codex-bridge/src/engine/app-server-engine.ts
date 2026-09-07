@@ -234,10 +234,8 @@ function allowlistRuntimeInventory(
   };
 }
 
-function allowlistRateLimits(value: unknown): Record<string, unknown> | { error: string } {
-  const response = objectRecord(value);
-  if (typeof response.error === "string") return { error: "Unavailable" };
-  const raw = objectRecord(response.rateLimits);
+function allowlistRateLimitSnapshot(value: unknown): Record<string, unknown> {
+  const raw = objectRecord(value);
   const rateLimits: Record<string, unknown> = {};
   const limitName = optionalPublicString(raw.limitName);
   if (limitName) rateLimits.limitName = limitName;
@@ -259,7 +257,28 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
     }
     if (Object.keys(allowed).length > 0) rateLimits[key] = allowed;
   }
-  return { rateLimits };
+  return rateLimits;
+}
+
+function allowlistRateLimits(value: unknown): Record<string, unknown> | { error: string } {
+  const response = objectRecord(value);
+  if (typeof response.error === "string") return { error: "Unavailable" };
+  const rateLimits = allowlistRateLimitSnapshot(response.rateLimits);
+  const rawByLimitId = objectRecord(response.rateLimitsByLimitId);
+  const rateLimitsByLimitId = Object.fromEntries(
+    Object.entries(rawByLimitId)
+      .slice(0, 16)
+      .flatMap(([limitId, snapshot]) => {
+        const safeLimitId = optionalPublicString(limitId)?.slice(0, 128);
+        if (!safeLimitId) return [];
+        const allowed = allowlistRateLimitSnapshot(snapshot);
+        return Object.keys(allowed).length > 0 ? [[safeLimitId, allowed]] : [];
+      }),
+  );
+  return {
+    rateLimits,
+    ...(Object.keys(rateLimitsByLimitId).length > 0 ? { rateLimitsByLimitId } : {}),
+  };
 }
 
 function safeUsageCount(value: unknown): number | undefined {

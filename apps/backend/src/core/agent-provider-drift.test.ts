@@ -7,12 +7,30 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_PROJECTION_ADVISORIES,
+  normalizeProviderContextUsage,
   normalizeProviderDrift,
   normalizeProviderRuntimeNotices,
   normalizeProviderRuntimeSummary,
   providerAdvisoryNotices,
 } from "./agent-provider-runtime.js";
 import { MAX_NATIVE_AGENT_DRIFT_KINDS } from "@orkestrator/protocol/native-agent";
+
+describe("normalizeProviderContextUsage", () => {
+  test("preserves a bounded provider-formatted credit balance", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        account: [
+          { window: "credits", label: "Credits", creditBalance: "12.50" },
+          { window: "ignored", creditBalance: 12.5 },
+        ],
+      })?.account,
+    ).toEqual([
+      { window: "credits", label: "Credits", creditBalance: "12.50" },
+      { window: "ignored" },
+    ]);
+  });
+});
 
 describe("normalizeProviderDrift", () => {
   test("accepts a well-formed count and kind list", () => {

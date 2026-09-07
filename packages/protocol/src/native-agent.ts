@@ -730,6 +730,8 @@ export interface NativeAgentAccountUsageWindow {
   resetsAt?: string;
   spendUsd?: number;
   creditsRemaining?: number;
+  /** Provider-formatted balance when credits are not a plain numeric count. */
+  creditBalance?: string;
   limitUsd?: number;
 }
 

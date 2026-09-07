@@ -739,12 +739,38 @@ export type NativeAgentExecutionPolicyId =
   | "coordinator-read-only"
   | "pipeline";
 
+/**
+ * A thing an agent can do, named independently of any provider's tool names.
+ *
+ * `toolPolicy` cannot serve this purpose: it is the user-editable override
+ * surface and its strings are passed to a provider verbatim, so the same list
+ * means "Write, Edit" on one bridge and nothing at all on another. A capability
+ * is translated by each bridge into whatever its own SDK calls that operation,
+ * which is what lets one coordinator policy hold across every platform.
+ */
+export const NATIVE_AGENT_CAPABILITIES = [
+  "file.write",
+  "file.patch",
+  "shell",
+  "shell.mutate",
+  "network",
+] as const;
+export type NativeAgentCapability = (typeof NATIVE_AGENT_CAPABILITIES)[number];
+
+export function isNativeAgentCapability(value: unknown): value is NativeAgentCapability {
+  return (
+    typeof value === "string" && (NATIVE_AGENT_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
 export interface NativeAgentExecutionPolicy {
   id: NativeAgentExecutionPolicyId;
   sandbox: "provider" | "container" | "none";
   approvals: "ask" | "auto-approve" | "deny";
   projectResources: boolean;
   toolPolicy?: { allow?: string[]; deny?: string[] };
+  /** Provider-neutral denials each bridge translates into its own tool names. */
+  capabilityPolicy?: { deny: NativeAgentCapability[] };
   networkAccess: "restricted" | "full";
   /** Provider caveat when one policy axis cannot be enforced exactly. */
   note?: string;
@@ -761,7 +787,16 @@ export type NativeAgentExecutionPolicyOverride = Partial<
 export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAgentExecutionPolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const policy = value as Record<string, unknown>;
+  // `null` is neither absent nor an object. Reading `.deny` off it throws a
+  // TypeError out of a type guard that runs on request bodies at every bridge's
+  // trust boundary, turning a rejection into an unhandled error.
+  const isPlainObject = (candidate: unknown): candidate is Record<string, unknown> =>
+    typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
+  if (policy.toolPolicy !== undefined && !isPlainObject(policy.toolPolicy)) return false;
+  if (policy.capabilityPolicy !== undefined && !isPlainObject(policy.capabilityPolicy))
+    return false;
   const toolPolicy = policy.toolPolicy as Record<string, unknown> | undefined;
+  const capabilityPolicy = policy.capabilityPolicy as Record<string, unknown> | undefined;
   return (
     (policy.id === "interactive-host" ||
       policy.id === "interactive-container" ||
@@ -782,7 +817,10 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
           toolPolicy.allow.every((item) => typeof item === "string"))) &&
         (toolPolicy.deny === undefined ||
           (Array.isArray(toolPolicy.deny) &&
-            toolPolicy.deny.every((item) => typeof item === "string")))))
+            toolPolicy.deny.every((item) => typeof item === "string"))))) &&
+    (capabilityPolicy === undefined ||
+      (Array.isArray(capabilityPolicy.deny) &&
+        capabilityPolicy.deny.every(isNativeAgentCapability)))
   );
 }
 

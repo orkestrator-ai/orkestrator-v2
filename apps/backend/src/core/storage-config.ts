@@ -2,6 +2,7 @@ import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
+import { coordinatorProviderTierSetting } from "./coordinator-providers.js";
 import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
@@ -495,6 +496,12 @@ export abstract class StorageConfig extends StorageProjects {
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,
       enabledAgentPlatforms,
+      // Normalized rather than trusted: an unrecognised value must fall back to
+      // the strictest level, never leave the coordinator admitting a platform
+      // whose boundary this host cannot hold.
+      coordinatorProviderTiers: coordinatorProviderTierSetting(
+        reviewValidated.coordinatorProviderTiers,
+      ),
       agentSettings: {
         ...agentSettings,
         defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, agentSettings.defaultAgent),

@@ -324,6 +324,11 @@ export function UnassignedNativeAgentComposer({
   disabled,
   onSend,
   onResume,
+  projectId,
+  platformFilter,
+  platformNotes,
+  placeholder,
+  emptyPlatformsMessage,
 }: {
   tabId: string;
   environmentId: string;
@@ -340,7 +345,27 @@ export function UnassignedNativeAgentComposer({
       executionProfileId?: string;
     },
   ) => void;
-  onResume: (platform: AgentPlatform) => void;
+  /**
+   * Omitted where resuming makes no sense.
+   *
+   * A coordinator conversation owns its provider session; adopting an arbitrary
+   * rollout into one would attach a transcript the workspace has no record of.
+   */
+  onResume?: (platform: AgentPlatform) => void;
+  /**
+   * The project whose defaults apply when no Environment record exists.
+   *
+   * A coordinator runtime deliberately has no Environment, so without this the
+   * repository's model and effort defaults would be skipped and every
+   * conversation would start on the application default instead.
+   */
+  projectId?: string;
+  /** Narrows the offered platforms further, e.g. to those a coordinator qualifies. */
+  platformFilter?: readonly AgentPlatform[];
+  /** Per-platform caveat shown beside the picker, such as a weaker sandbox. */
+  platformNotes?: Partial<Record<AgentPlatform, string>>;
+  placeholder?: string;
+  emptyPlatformsMessage?: string;
 }) {
   const sessionKey = createSessionKey(environmentId, tabId);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -351,13 +376,24 @@ export function UnassignedNativeAgentComposer({
   const config = useConfigStore((state) => state.config);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath;
-  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
-    useAgentModelFavorites();
+  const {
+    favorites,
+    enabledPlatforms: allEnabledPlatforms,
+    toggleFavorite,
+    reorderFavorites,
+  } = useAgentModelFavorites();
+  const enabledPlatforms = useMemo(
+    () =>
+      platformFilter
+        ? allEnabledPlatforms.filter((candidate) => platformFilter.includes(candidate))
+        : allEnabledPlatforms,
+    [allEnabledPlatforms, platformFilter],
+  );
   // Same triple App overlay launches use: an environment or repository default
   // must win over the application one, constrained to platforms still enabled.
   const defaultPlatform = firstEnabledAgentPlatform(
     enabledPlatforms,
-    resolvedDefaultAgent(config, environment?.projectId, environment),
+    resolvedDefaultAgent(config, environment?.projectId ?? projectId, environment),
   );
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
@@ -369,11 +405,12 @@ export function UnassignedNativeAgentComposer({
   const platform = draft.platform ?? defaultPlatform;
   const configured = resolvedPlatformSettings(
     config,
-    environment?.projectId,
+    environment?.projectId ?? projectId,
     environment,
     platform,
   );
   const selectedAdapter = findNativeAgentAdapter(platform);
+  const platformNote = platformNotes?.[platform];
   // A draft with no explicit choice follows the stored platform default, then
   // Normal. OpenCode has no toggle, so this stays false there.
   const effectiveFastMode = hasDraft ? draft.fastMode : (configured.fastMode ?? false);
@@ -641,21 +678,37 @@ export function UnassignedNativeAgentComposer({
     });
   };
 
+  // Nothing to choose from is a real state once a filter applies: every
+  // platform may be disabled, or none may meet the host's safety level.
+  // Rendering the composer anyway would offer a Send button that can only fail.
+  if (enabledPlatforms.length === 0) {
+    return (
+      <div className="grid h-full place-items-center p-8 text-center">
+        <p className="max-w-md text-sm text-muted-foreground">
+          {emptyPlatformsMessage ??
+            "No agent platform is available here. Enable one in Settings to continue."}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <NativeComposeDock
         centered
         actions={
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setResumePlatformDialogOpen(true)}
-            disabled={disabled}
-            className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <History className="mr-2 h-4 w-4" />
-            Resume Session
-          </Button>
+          onResume ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setResumePlatformDialogOpen(true)}
+              disabled={disabled}
+              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <History className="mr-2 h-4 w-4" />
+              Resume Session
+            </Button>
+          ) : null
         }
       >
         <NativeComposeBar
@@ -696,7 +749,7 @@ export function UnassignedNativeAgentComposer({
             event.preventDefault();
             send();
           }}
-          placeholder="Ask an agent anything…"
+          placeholder={placeholder ?? "Ask an agent anything…"}
           disabled={disabled}
           menus={
             fileMentionMenuOpen ? (
@@ -736,7 +789,7 @@ export function UnassignedNativeAgentComposer({
                   const nextAdapter = findNativeAgentAdapter(next);
                   const nextFastMode = resolvedPlatformSettings(
                     config,
-                    environment?.projectId,
+                    environment?.projectId ?? projectId,
                     environment,
                     next,
                   ).fastMode;
@@ -864,17 +917,30 @@ export function UnassignedNativeAgentComposer({
           sendTitle="Start agent"
           onSend={send}
         />
+        {platformNote ? (
+          // Beside the picker rather than in a dialog: this is the difference
+          // between a boundary the platform enforces and one it merely applies,
+          // and it has to be readable at the moment the platform is chosen.
+          <p
+            data-testid="unassigned-platform-note"
+            className="mx-auto mt-2 max-w-xl text-center text-xs text-amber-300/90"
+          >
+            {platformNote}
+          </p>
+        ) : null}
       </NativeComposeDock>
-      <NativeAgentResumePlatformDialog
-        open={resumePlatformDialogOpen}
-        onOpenChange={setResumePlatformDialogOpen}
-        enabledPlatforms={enabledPlatforms}
-        disabled={disabled}
-        onSelect={(selectedPlatform) => {
-          setResumePlatformDialogOpen(false);
-          onResume(selectedPlatform);
-        }}
-      />
+      {onResume ? (
+        <NativeAgentResumePlatformDialog
+          open={resumePlatformDialogOpen}
+          onOpenChange={setResumePlatformDialogOpen}
+          enabledPlatforms={enabledPlatforms}
+          disabled={disabled}
+          onSelect={(selectedPlatform) => {
+            setResumePlatformDialogOpen(false);
+            onResume(selectedPlatform);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

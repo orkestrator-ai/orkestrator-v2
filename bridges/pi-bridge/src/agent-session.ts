@@ -250,7 +250,11 @@ export async function createSession(
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
     if (existing) {
-      if (policy) existing.policy = resolvePiExecutionPolicy(policy);
+      const resolved = resolvePiExecutionPolicy(policy);
+      if (policy || resolved.id === "coordinator-read-only") existing.policy = resolved;
+      if (resolved.id === "coordinator-read-only" && existing.readOnly !== true) {
+        await setSessionReadOnly(existing, true);
+      }
       await hydrateSessionComposer(existing);
       return existing;
     }
@@ -259,7 +263,13 @@ export async function createSession(
   }
 
   const work = (async () => {
-    const state = newSessionState(clientSessionKey, resolvePiExecutionPolicy(policy));
+    const resolved = resolvePiExecutionPolicy(policy);
+    const state = newSessionState(clientSessionKey, resolved);
+    // Pi's read-only gate is the enforcement point, and it is read at session
+    // construction. A coordinator policy has to set it here rather than
+    // through the separate `readOnly` request field, which the coordinator
+    // path does not send.
+    if (resolved.id === "coordinator-read-only") state.readOnly = true;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(state.composer);
     sessions.set(state.id, state);
@@ -525,9 +535,36 @@ function applyPiToolPolicy(
 
 let warnedLegacyPolicy = false;
 
+/** Provider-neutral process authority, matching the other bridges. */
+export const BRIDGE_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";
+
+/**
+ * The policy a coordinator process runs under, whatever the request said.
+ *
+ * Pi's own gate is per session and rebuilt on every attach, so a session
+ * restored after a restart would otherwise come back under whatever policy it
+ * was last configured with — including none.
+ */
+export function coordinatorProcessPolicy(): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
+  return {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    networkAccess: "restricted",
+  };
+}
+
 export function resolvePiExecutionPolicy(
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
+  // Process authority first: a coordinator bridge serves exactly one
+  // conversation, so nothing a caller sends may widen what it runs under, and
+  // the legacy env overrides below must not loosen it either.
+  if (process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only") {
+    return coordinatorProcessPolicy();
+  }
   const fallback =
     policy ??
     ({

@@ -121,18 +121,41 @@ export function openCodeRequestOptions(
   return { signal: AbortSignal.any([monitorSignal, AbortSignal.timeout(timeoutMs)]) };
 }
 
+/**
+ * OpenCode's permission ids for the tools a read-only coordinator may use.
+ *
+ * The base rule for a coordinator is `{"*": deny}`, so without an explicit
+ * allow list here the session could not even read a file — which is the one
+ * thing a coordinator is for.
+ */
+const OPENCODE_READ_ONLY_PERMISSIONS = Object.freeze([
+  "read",
+  "list",
+  "glob",
+  "grep",
+  "todoread",
+  "todowrite",
+  "task",
+]);
+
 export function effectiveOpenCodePolicy(
   policy: NativeAgentExecutionPolicy,
 ): NativeAgentExecutionPolicy {
-  if (policy.id === "coordinator-read-only" && !policy.projectResources) {
-    throw new Error("OpenCode cannot enforce the coordinator project-resource boundary");
-  }
   return {
     ...policy,
+    // OpenCode resolves its session directory from the checkout's own
+    // configuration and offers no way to opt out, so this axis cannot be
+    // honoured. Reported rather than silently dropped: it is why OpenCode is
+    // `provider-configured` and not `enforced`.
     projectResources: true,
     ...(policy.projectResources
       ? {}
-      : { note: "OpenCode always reads project configuration for its session directory." }),
+      : {
+          note:
+            policy.id === "coordinator-read-only"
+              ? "OpenCode always loads the checkout's project configuration, including any MCP servers it declares."
+              : "OpenCode always reads project configuration for its session directory.",
+        }),
   };
 }
 
@@ -143,19 +166,51 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
       : policy.approvals === "deny"
         ? ("deny" as const)
         : ("ask" as const);
+  const coordinatorAllow =
+    policy.id === "coordinator-read-only" && !policy.toolPolicy?.allow
+      ? OPENCODE_READ_ONLY_PERMISSIONS
+      : [];
   return [
     { permission: "*", pattern: "*", action },
-    ...(policy.toolPolicy?.allow ?? []).map((permission) => ({
+    ...[...coordinatorAllow, ...(policy.toolPolicy?.allow ?? [])].map((permission) => ({
       permission,
       pattern: "*",
       action: "allow" as const,
     })),
+    // Last, so a deny always wins a collision with the read allowances above.
     ...(policy.toolPolicy?.deny ?? []).map((permission) => ({
       permission,
       pattern: "*",
       action: "deny" as const,
     })),
   ];
+}
+
+/**
+ * OpenCode's read-only agent, pinned for coordinator prompts.
+ *
+ * Its permission rules are the boundary, but the agent selection decides which
+ * tools are offered at all, and `build` advertises writing tools the model
+ * would then repeatedly try and have denied.
+ */
+export function openCodeCoordinatorAgent(
+  policy: NativeAgentExecutionPolicy | undefined,
+): string | undefined {
+  return policy?.id === "coordinator-read-only" ? "plan" : undefined;
+}
+
+/**
+ * The agent a dispatch runs as, with the coordinator override applied.
+ *
+ * `fallback` is omitted for a slash command, which OpenCode resolves itself:
+ * naming "build" there would override a command that declares its own agent.
+ */
+export function openCodeAgentFor(
+  policy: NativeAgentExecutionPolicy | undefined,
+  options: { executionAgent?: string; mode?: string },
+  fallback?: string,
+): string | undefined {
+  return openCodeCoordinatorAgent(policy) ?? options.executionAgent ?? options.mode ?? fallback;
 }
 
 export function openCodePromptParts(

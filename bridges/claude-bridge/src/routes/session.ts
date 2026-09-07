@@ -53,6 +53,7 @@ import {
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -159,7 +160,11 @@ session.post("/create", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const title = body.title as string | undefined;
     const clientSessionKey = body.clientSessionKey as string | undefined;
-    const policy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
+    // Process authority wins. A coordinator bridge is launched for exactly
+    // one conversation, so a request body cannot widen what it runs under.
+    const policy = effectiveExecutionPolicy(
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    );
 
     const newSession = policy
       ? await createOrRecoverSession(title, clientSessionKey, policy)
@@ -384,8 +389,11 @@ session.post("/:id/config", async (c) => {
     ...(permissionMode ? { permissionMode } : {}),
     ...(parameterValues ? { parameterValues } : {}),
   });
-  if (isNativeAgentExecutionPolicy(body.policy)) {
-    sessionData.executionPolicy = structuredClone(body.policy);
+  const nextPolicy = effectiveExecutionPolicy(
+    isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+  );
+  if (nextPolicy) {
+    sessionData.executionPolicy = structuredClone(nextPolicy);
   }
   if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
     await setSessionPreferences(sessionData.id, { planMode: permissionMode === "plan" });

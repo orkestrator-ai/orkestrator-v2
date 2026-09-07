@@ -1,6 +1,7 @@
 import { DOCKER_IMAGE, runCommand } from "./commands-dependencies.js";
 import type { ChildProcessWithoutNullStreams, Environment } from "./commands-dependencies.js";
 import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
+import type { CoordinatorConversation } from "@orkestrator/protocol/coordinator";
 import {
   CONTAINER_WORKSPACE_PREPARE_COMMAND,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
@@ -266,7 +267,7 @@ export async function stopLocalServerUnlocked(
               ...current,
               conversations: current.conversations.map((conversation) =>
                 conversation.id === conversationId
-                  ? { ...conversation, codexBridgePort: undefined, codexBridgePid: undefined }
+                  ? { ...conversation, bridgePort: undefined, bridgePid: undefined }
                   : conversation,
               ),
               updatedAt: new Date().toISOString(),
@@ -290,4 +291,28 @@ export async function stopLocalServersForEnvironmentUnlocked(
     results,
     `Failed to stop all local servers for environment: ${environmentId}`,
   );
+}
+
+/** The Environment-shaped bridge identity for one coordinator conversation. */
+export function coordinatorBridgeEnvironmentFields(
+  conversation: Pick<CoordinatorConversation, "agent" | "bridgePort" | "bridgePid">,
+): Partial<Environment> {
+  if (!conversation.agent) return {};
+  const { port, pid } = localServerFields(conversation.agent);
+  return { [port]: conversation.bridgePort, [pid]: conversation.bridgePid } as Partial<Environment>;
+}
+
+/** The inverse: read whichever field pair this conversation's agent writes. */
+export function coordinatorBridgeIdentityFromEnvironment(
+  agent: CoordinatorConversation["agent"],
+  fields: Partial<Environment>,
+): { bridgePort?: number; bridgePid?: number } {
+  if (!agent) return {};
+  const { port, pid } = localServerFields(agent);
+  const portValue = fields[port];
+  const pidValue = fields[pid];
+  return {
+    bridgePort: typeof portValue === "number" ? portValue : undefined,
+    bridgePid: typeof pidValue === "number" ? pidValue : undefined,
+  };
 }

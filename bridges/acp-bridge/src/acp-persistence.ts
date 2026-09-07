@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   isNativeAgentExecutionPolicy,
   type NativeAgentComposerState,
@@ -235,7 +236,11 @@ const FAIL_CLOSED_LEGACY_POLICY: NativeAgentExecutionPolicy = {
 };
 
 export function restorePersistedPolicy(value: unknown): NativeAgentExecutionPolicy {
-  if (isNativeAgentExecutionPolicy(value)) return structuredClone(value);
+  if (isNativeAgentExecutionPolicy(value)) {
+    // A persisted permissive policy must not survive into a coordinator
+    // process, which is exactly what a restart would otherwise restore.
+    return effectiveExecutionPolicy(structuredClone(value)) ?? structuredClone(value);
+  }
   return structuredClone(FAIL_CLOSED_LEGACY_POLICY);
 }
 

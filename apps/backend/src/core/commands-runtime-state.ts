@@ -120,6 +120,17 @@ export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok
 /** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
 export type AcpLocalServerKind = Extract<LocalServerKind, "grok">;
 
+/**
+ * The registered command that retires one platform's local bridge.
+ *
+ * Coordinator teardown used to name the Codex command literally, which meant a
+ * conversation on any other platform left its bridge, its transcript and its
+ * scoped MCP credential running after the tab closed.
+ */
+export function localServerStopCommandName(kind: LocalServerKind): string {
+  return `stop_local_${kind}_server_cmd`;
+}
+
 export function retryableBridgeStartupError(
   message: string,
   retryAfterMs = 500,

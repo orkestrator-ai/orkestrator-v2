@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -129,7 +130,7 @@ export async function route(
       selectedSessionId,
       clientSignal,
       parseComposerPatch(body),
-      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+      effectiveExecutionPolicy(isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined),
     );
     return json(response, 201, publicSession(state));
   }
@@ -146,7 +147,13 @@ export async function route(
       ...spawnOptions,
       model: spawnOptions.modelId,
       effort: spawnOptions.reasoningId,
-      ...(isNativeAgentExecutionPolicy(body.policy) ? { policy: body.policy } : {}),
+      ...(() => {
+        // Process authority wins: a coordinator bridge serves one conversation.
+        const policy = effectiveExecutionPolicy(
+          isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+        );
+        return policy ? { policy } : {};
+      })(),
     });
     return json(response, 201, publicSession(state));
   }

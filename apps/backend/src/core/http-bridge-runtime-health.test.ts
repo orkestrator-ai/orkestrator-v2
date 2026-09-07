@@ -195,6 +195,7 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
       drift: { unknownEvents: 1, unknownKinds: ["future-event"] },
       notices: [{ message: "deprecated", severity: "warning", source: "provider" }],
     });
+    expect(snapshot.notices).toBeUndefined();
     expect(requests.some(({ url }) => url.endsWith("/runtime-health"))).toBe(true);
   });
 

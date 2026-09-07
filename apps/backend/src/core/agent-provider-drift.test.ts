@@ -170,8 +170,10 @@ describe("providerAdvisoryNotices", () => {
     ).toEqual([{ kind: "advisory", message: "broken", severity: "error" }]);
   });
 
-  test("a notice with no severity stays in the health panel", () => {
-    expect(providerAdvisoryNotices([{ message: "legacy" }])).toEqual([]);
+  test("a legacy notice normalized to warning stays in the health panel", () => {
+    const normalized = normalizeProviderRuntimeNotices([{ message: "legacy" }]);
+    expect(normalized).toEqual([{ message: "legacy", severity: "warning", source: "bridge" }]);
+    expect(providerAdvisoryNotices(normalized)).toEqual([]);
   });
 
   test("deduplicates by message", () => {
@@ -217,6 +219,24 @@ describe("providerAdvisoryNotices", () => {
     );
     expect(advisories).toHaveLength(MAX_PROJECTION_ADVISORIES);
     expect(advisories.at(-1)?.message).toBe("advisory-8");
+  });
+
+  test("a repeated error moves to the newest position before bounding", () => {
+    const advisories = providerAdvisoryNotices([
+      ...Array.from({ length: MAX_PROJECTION_ADVISORIES + 1 }, (_, index) => ({
+        message: `advisory-${index}`,
+        severity: "error" as const,
+      })),
+      { message: "advisory-0", severity: "error" },
+    ]);
+
+    expect(advisories.map((notice) => notice.message)).toEqual([
+      "advisory-2",
+      "advisory-3",
+      "advisory-4",
+      "advisory-5",
+      "advisory-0",
+    ]);
   });
 
   test("no qualifying notices means no advisories, not an empty row", () => {

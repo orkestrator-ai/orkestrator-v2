@@ -118,21 +118,18 @@ describe("notice recording", () => {
 });
 
 describe("advisories", () => {
-  test("only warning and error notices reach the transcript", () => {
+  test("only error notices reach the transcript", () => {
     const recorder = new RuntimeHealthRecorder();
     recorder.recordNotice({ message: "inventory", severity: "info" });
     recorder.recordNotice({ message: "deprecated", severity: "warning", source: "provider" });
     recorder.recordNotice({ message: "broken", severity: "error", source: "provider" });
-    expect(recorder.advisories()).toEqual([
-      { message: "deprecated", severity: "warning" },
-      { message: "broken", severity: "error" },
-    ]);
+    expect(recorder.advisories()).toEqual([{ message: "broken", severity: "error" }]);
   });
 
   test("advisories are bounded to the most recent few", () => {
     const recorder = new RuntimeHealthRecorder();
     for (let index = 0; index < 9; index += 1) {
-      recorder.recordNotice({ message: `advisory-${index}`, severity: "warning" });
+      recorder.recordNotice({ message: `advisory-${index}`, severity: "error" });
     }
     const advisories = recorder.advisories();
     expect(advisories).toHaveLength(5);

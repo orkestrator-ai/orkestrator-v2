@@ -241,9 +241,9 @@ function appendTranscriptNotice(
  *
  * These are the SDK's own diagnostics, so they are recorded as `provider`
  * notices. The severity split is what decides whether the tab shows the notice
- * at all: `info` stays in the health panel, `warning` and `error` are promoted
- * into the transcript by the backend, because a refused model or an exhausted
- * retry changes what the user is reading and a hook that started does not.
+ * at all: `info` and `warning` stay in the health panel, while `error` is
+ * promoted into the transcript by the backend. Dedicated transcript rows,
+ * such as API retry progress, remain independent of this health severity.
  */
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
 const MAX_SDK_CAPABILITIES = 64;
@@ -1819,7 +1819,8 @@ export async function sendPrompt(
         // frame carrying the whole SDK message — which nothing consumed, and
         // which put arbitrary provider payload on the wire. Record them as
         // runtime notices instead, where they are bounded, redacted, carry a
-        // severity, and reach the health panel and the tab.
+        // severity, and reach the health panel. Only errors are additionally
+        // promoted into the tab by the backend.
         if (sysMsg.subtype === "api_retry") {
           // A retry the user can see, rather than a silent stall. Recorded as a
           // pending row and settled by the next assistant message or by the

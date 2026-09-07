@@ -3150,12 +3150,13 @@ describe("sendPrompt", () => {
     expect(notices[0]).toMatchObject({
       message: "Claude reported api retry",
       method: "system/api_retry",
-      // Retrying an overloaded API changes what the user is reading, so it is
-      // promoted into the tab rather than left in the health panel.
+      // The dedicated retry row makes progress visible in the transcript;
+      // this provider warning itself remains health-panel inventory.
       severity: "warning",
       source: "provider",
     });
     expect(notices[0]?.occurrences?.[0]?.detail).toBe("Overloaded, retrying");
+    expect(getSession(session.id)?.health?.advisories()).toEqual([]);
   });
 
   test("a merely informational system subtype stays out of the tab", async () => {

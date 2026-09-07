@@ -2194,7 +2194,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         name: "Show details for Codex reported mcpServer startupStatus updated",
       }),
     );
-    expect(screen.getByRole("dialog", { name: "Codex runtime notice" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Codex Native runtime notice" })).toBeTruthy();
     expect(screen.getByText("mcpServer/startupStatus/updated")).toBeTruthy();
     expect(
       screen.getByText(
@@ -2230,7 +2230,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
       name: "Show details for Codex reported configWarning",
     });
     fireEvent.click(noticeTrigger);
-    expect(screen.getByRole("dialog", { name: "Codex runtime notice" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Codex Native runtime notice" })).toBeTruthy();
     expect(screen.getByText("The /compact command is deprecated")).toBeTruthy();
     expect(screen.getByText("Use /new instead")).toBeTruthy();
     expect(screen.queryByText("Invalid Date") === null).toBe(true);
@@ -2242,14 +2242,18 @@ describe("AgentInfoButton Codex runtime panel", () => {
     });
     act(() => document.dispatchEvent(escape));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+      expect(screen.queryByRole("dialog", { name: "Codex Native runtime notice" }) === null).toBe(
+        true,
+      ),
     );
     expect(isPopoverOpen()).toBe(true);
 
     fireEvent.click(noticeTrigger);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+      expect(screen.queryByRole("dialog", { name: "Codex Native runtime notice" }) === null).toBe(
+        true,
+      ),
     );
     expect(isPopoverOpen()).toBe(true);
 
@@ -2264,7 +2268,9 @@ describe("AgentInfoButton Codex runtime panel", () => {
     fireEvent.pointerDown(overlay!);
     fireEvent.click(overlay!);
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+      expect(screen.queryByRole("dialog", { name: "Codex Native runtime notice" }) === null).toBe(
+        true,
+      ),
     );
     expect(isPopoverOpen()).toBe(true);
   });
@@ -5089,7 +5095,7 @@ describe("AgentInfoButton ACP agents", () => {
     // Collapsed, but a server that is down still says so.
     expect(summary.textContent).toContain("2 servers");
     expect(summary.textContent).toContain("1 down");
-    expect(screen.queryByRole("button", { name: /codex_apps/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /codex_apps/ }) === null).toBe(true);
 
     fireEvent.click(summary);
     const row = screen.getByRole("button", { name: /codex_apps/ });
@@ -5214,7 +5220,7 @@ describe("AgentInfoButton ACP agents", () => {
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 9/ })));
     expect(screen.getByText("orkestrator")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /orkestrator/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /orkestrator/ }) === null).toBe(true);
   });
 
   test("renders drift and notices for a non-Codex platform through the same panel", async () => {
@@ -5241,6 +5247,14 @@ describe("AgentInfoButton ACP agents", () => {
     );
     expect(screen.getByText("tool:webSearch")).toBeTruthy();
     expect(screen.getByText("Cursor substituted a model")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show details for Cursor substituted a model" }),
+    );
+    expect(screen.getByRole("dialog", { name: "Cursor Agent runtime notice" })).toBeTruthy();
+    expect(
+      screen.getByText("Cursor Agent did not provide additional detail for this notice."),
+    ).toBeTruthy();
   });
 
   test("names a Grok session and renders the usage its bridge reported", () => {

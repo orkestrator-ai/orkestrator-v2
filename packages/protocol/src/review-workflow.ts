@@ -101,7 +101,40 @@ export type ActiveLoopedReviewPhase = Exclude<
 >;
 export type LoopedReviewSessionPhase = "preparation" | "discovery" | "fix" | "pr";
 
+/**
+ * One validation command from the preparation turn.
+ *
+ * The exact stdout and stderr bytes stay in the artifact files the preparation
+ * session wrote; the package only points at them. Copying them into the package
+ * meant reading every artifact back out of the environment — through base64 for
+ * container environments — to produce evidence the reviewer could have read
+ * directly.
+ */
 export interface ReviewPackageCommandResult {
+  command: string;
+  status: "passed" | "failed" | "skipped";
+  exitCode: number | null;
+  /** Null for a skipped command, which produced no output to point at. */
+  stdoutPath: string | null;
+  stderrPath: string | null;
+  stdoutBytes: number;
+  stderrBytes: number;
+  durationMs: number;
+  limitation?: string;
+}
+
+/**
+ * A path in the reviewed range and its Git status letter. The file's content is
+ * deliberately absent: it is reachable at `headRef` in the environment the
+ * reviewer is already working in.
+ */
+export interface ReviewPackageFile {
+  path: string;
+  status: string;
+}
+
+/** The pre-file-backed inline package shape. Only legacy snapshots contain it. */
+export interface LegacyReviewPackageCommandResult {
   command: string;
   status: "passed" | "failed" | "skipped";
   exitCode: number | null;
@@ -111,7 +144,7 @@ export interface ReviewPackageCommandResult {
   limitation?: string;
 }
 
-export interface ReviewPackageFile {
+export interface LegacyReviewPackageFile {
   path: string;
   status: string;
   content: string | null;
@@ -128,7 +161,40 @@ export interface ReviewPackageContext {
   projectNotes?: string;
 }
 
+/** Distinguishes the pointer package from the inline package that preceded it. */
+export const REVIEW_PACKAGE_FORMAT = 2;
+
+/**
+ * The backend-owned evidence pointer every reviewer in one round shares.
+ *
+ * `baseRef` and `headRef` are immutable commit IDs, so `diffCommand` returns
+ * identical bytes for every reviewer no matter what the worktree does next.
+ * That is what the package guarantees; it does not carry the diff itself, and
+ * reviewers run read-only commands to reach the evidence it names.
+ */
 export interface ReviewPackage {
+  format: typeof REVIEW_PACKAGE_FORMAT;
+  id: string;
+  round: number;
+  preparedAt: string;
+  targetBranch: string;
+  baseRef: string;
+  headRef: string;
+  commit: { sha: string; subject: string } | null;
+  /** The exact command reviewers run to obtain the reviewed diff. */
+  diffCommand: string;
+  changedFiles: ReviewPackageFile[];
+  validation: ReviewPackageCommandResult[];
+  uncommittedFiles: Array<{ path: string; reason: string }>;
+  limitations: string[];
+  context?: ReviewPackageContext;
+}
+
+/**
+ * The inline package written before packages became files. Retained so review
+ * workflows persisted by an older build still load; nothing produces it.
+ */
+export interface LegacyReviewPackage {
   id: string;
   round: number;
   preparedAt: string;
@@ -137,8 +203,8 @@ export interface ReviewPackage {
   headRef: string;
   commit: { sha: string; subject: string; committedFiles: string[] } | null;
   completeDiff: string;
-  changedFiles: ReviewPackageFile[];
-  validation: ReviewPackageCommandResult[];
+  changedFiles: LegacyReviewPackageFile[];
+  validation: LegacyReviewPackageCommandResult[];
   skippedFiles: Array<{ path: string; reason: string }>;
   uncommittedFiles: Array<{ path: string; reason: string }>;
   limitations: string[];
@@ -147,9 +213,8 @@ export interface ReviewPackage {
 
 /**
  * Lightweight durable pointer to a backend-owned review package in the
- * environment workspace. The full diff, file contents and validation output
- * live only in `filePath`; snapshots keep the fields needed for recovery and
- * the round summary UI.
+ * environment workspace. The package file itself lives at `filePath`; snapshots
+ * keep the fields needed for recovery and the round summary UI.
  */
 export interface ReviewPackageReference {
   kind: "file";
@@ -163,12 +228,13 @@ export interface ReviewPackageReference {
   sha256: string;
   bytes: number;
   changedFileCount: number;
-  diffCharacters: number;
+  /** Only present on references generated before the package stopped carrying the diff. */
+  diffCharacters?: number;
   limitations: string[];
 }
 
 /** Legacy snapshots may still contain the inline package written before file-backed packages. */
-export type PersistedReviewPackage = ReviewPackage | ReviewPackageReference;
+export type PersistedReviewPackage = ReviewPackage | LegacyReviewPackage | ReviewPackageReference;
 
 export interface LoopedReviewInteractionQuestion {
   prompt: string;
@@ -578,28 +644,103 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function isFileNoteList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        isRecord(entry) &&
+        isBoundedNonEmptyString(entry.path, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+        isBoundedNonEmptyString(entry.reason, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH),
+    )
+  );
+}
+
+/**
+ * `null` context means "this review has no ticket/notes context". The package
+ * generator emits it explicitly, so rejecting it would make every context-free
+ * review unreadable the moment its package is persisted.
+ */
+function isOptionalPackageContext(value: unknown): boolean {
+  return value === undefined || value === null || isReviewPackageContext(value);
+}
+
+function isPackageIdentity(value: Record<string, unknown>, round?: number): boolean {
+  return (
+    isPositiveInteger(value.round) &&
+    (round === undefined || value.round === round) &&
+    isBoundedNonEmptyString(value.id, LOOPED_REVIEW_MAX_ID_LENGTH) &&
+    typeof value.preparedAt === "string" &&
+    isSafeLoopedReviewTargetBranch(value.targetBranch) &&
+    isBoundedNonEmptyString(value.baseRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+    isBoundedNonEmptyString(value.headRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+    isStringArray(value.limitations) &&
+    isFileNoteList(value.uncommittedFiles) &&
+    isOptionalPackageContext(value.context)
+  );
+}
+
 export function isReviewPackage(value: unknown, round?: number): value is ReviewPackage {
   if (
     !isRecord(value) ||
-    !isPositiveInteger(value.round) ||
-    (round !== undefined && value.round !== round) ||
-    !isBoundedNonEmptyString(value.id, LOOPED_REVIEW_MAX_ID_LENGTH) ||
-    typeof value.preparedAt !== "string" ||
-    !isSafeLoopedReviewTargetBranch(value.targetBranch) ||
-    !isBoundedNonEmptyString(value.baseRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
-    !isBoundedNonEmptyString(value.headRef, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
+    value.format !== REVIEW_PACKAGE_FORMAT ||
+    !isPackageIdentity(value, round) ||
+    !isBoundedNonEmptyString(value.diffCommand, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
+    !Array.isArray(value.changedFiles) ||
+    !Array.isArray(value.validation)
+  )
+    return false;
+  if (
+    value.commit !== null &&
+    (!isRecord(value.commit) ||
+      !isBoundedNonEmptyString(value.commit.sha, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
+      typeof value.commit.subject !== "string")
+  )
+    return false;
+  return (
+    value.changedFiles.every(
+      (entry) =>
+        isRecord(entry) &&
+        isBoundedNonEmptyString(entry.path, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+        isBoundedNonEmptyString(entry.status, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH),
+    ) &&
+    value.validation.every((entry) => {
+      if (
+        !isRecord(entry) ||
+        !isBoundedNonEmptyString(entry.command, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
+        (entry.status !== "passed" && entry.status !== "failed" && entry.status !== "skipped") ||
+        (entry.exitCode !== null && !Number.isSafeInteger(entry.exitCode)) ||
+        !isNonNegativeInteger(entry.durationMs) ||
+        !isNonNegativeInteger(entry.stdoutBytes) ||
+        !isNonNegativeInteger(entry.stderrBytes) ||
+        !isOptionalString(entry.limitation)
+      )
+        return false;
+      // A command that ran points at both artifacts; a skipped one wrote
+      // neither. Allowing one path without the other would leave a reviewer
+      // told to read stderr that preparation never created.
+      if (entry.status === "skipped") {
+        return entry.stdoutPath === null && entry.stderrPath === null;
+      }
+      return (
+        isBoundedNonEmptyString(entry.stdoutPath, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
+        isBoundedNonEmptyString(entry.stderrPath, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH)
+      );
+    })
+  );
+}
+
+export function isLegacyReviewPackage(
+  value: unknown,
+  round?: number,
+): value is LegacyReviewPackage {
+  if (
+    !isRecord(value) ||
+    !isPackageIdentity(value, round) ||
     typeof value.completeDiff !== "string" ||
     !Array.isArray(value.changedFiles) ||
     !Array.isArray(value.validation) ||
-    !Array.isArray(value.skippedFiles) ||
-    !Array.isArray(value.uncommittedFiles) ||
-    !isStringArray(value.limitations) ||
-    // `null` means "this review has no ticket/notes context". The package
-    // generator emits it explicitly, so rejecting it here would make every
-    // context-free review unreadable the moment its package is persisted.
-    (value.context !== undefined &&
-      value.context !== null &&
-      !isReviewPackageContext(value.context))
+    !isFileNoteList(value.skippedFiles)
   )
     return false;
   if (
@@ -630,12 +771,6 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
         typeof entry.stderr === "string" &&
         isNonNegativeInteger(entry.durationMs) &&
         isOptionalString(entry.limitation),
-    ) &&
-    [...value.skippedFiles, ...value.uncommittedFiles].every(
-      (entry) =>
-        isRecord(entry) &&
-        isBoundedNonEmptyString(entry.path, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
-        isBoundedNonEmptyString(entry.reason, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH),
     )
   );
 }
@@ -661,6 +796,9 @@ export function isReviewPackageReference(
       "diffCharacters",
       "limitations",
     ]) &&
+    // Absent on every reference generated since the package stopped carrying
+    // the diff; still validated when an older snapshot supplies it.
+    (value.diffCharacters === undefined || isNonNegativeInteger(value.diffCharacters)) &&
     value.kind === "file" &&
     isPositiveInteger(value.round) &&
     (round === undefined || value.round === round) &&
@@ -675,7 +813,6 @@ export function isReviewPackageReference(
     Number.isSafeInteger(value.bytes) &&
     (value.bytes as number) > 0 &&
     isNonNegativeInteger(value.changedFileCount) &&
-    isNonNegativeInteger(value.diffCharacters) &&
     isStringArray(value.limitations)
   );
 }
@@ -684,7 +821,11 @@ export function isPersistedReviewPackage(
   value: unknown,
   round?: number,
 ): value is PersistedReviewPackage {
-  return isReviewPackageReference(value, round) || isReviewPackage(value, round);
+  return (
+    isReviewPackageReference(value, round) ||
+    isReviewPackage(value, round) ||
+    isLegacyReviewPackage(value, round)
+  );
 }
 
 function isFindingOutcome(value: unknown): value is LoopedReviewFindingOutcome {

@@ -14,8 +14,8 @@ export const MAX_PERSISTED_REVIEW_PACKAGE_BYTES = 16 * 1024 * 1024;
  * Validates the identity-bearing shell returned by the environment-side package
  * generator and strips any model-authored context.
  *
- * Git refs, diff bytes, file contents, hashes, and validation output all come
- * from the backend command. The model only supplies preparation metadata, so a
+ * Git refs, the reviewed range, changed paths, and artifact sizes all come from
+ * the backend command. The model only supplies preparation metadata, so a
  * caller must never let it replace the expected package identity. Trusted
  * ticket/project context is delivered in the reviewer prompt and never stored
  * in the repository workspace.
@@ -40,10 +40,9 @@ export function normalizeGeneratedReviewPackage(
     typeof candidate.preparedAt !== "string" ||
     typeof candidate.baseRef !== "string" ||
     typeof candidate.headRef !== "string" ||
-    typeof candidate.completeDiff !== "string" ||
+    typeof candidate.diffCommand !== "string" ||
     !Array.isArray(candidate.changedFiles) ||
     !Array.isArray(candidate.validation) ||
-    !Array.isArray(candidate.skippedFiles) ||
     !Array.isArray(candidate.uncommittedFiles) ||
     !Array.isArray(candidate.limitations)
   ) {
@@ -93,7 +92,6 @@ export function reviewPackageReference(
     sha256,
     bytes: contents.byteLength,
     changedFileCount: reviewPackage.changedFiles.length,
-    diffCharacters: reviewPackage.completeDiff.length,
     limitations: [...reviewPackage.limitations],
   };
 }

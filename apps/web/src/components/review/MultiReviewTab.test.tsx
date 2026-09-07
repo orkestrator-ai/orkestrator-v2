@@ -16,6 +16,8 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
+  fixSessionActivity,
+  fixSessionRuntimeSummary,
   multiReviewFixSessionTabOptions,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
@@ -1697,4 +1699,118 @@ test("renders backend-owned package preparation after remount with cancel availa
     />,
   );
   expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
+});
+
+describe("MultiReviewTab fix model card", () => {
+  function preparingWorkflow(): MultiReviewWorkflow {
+    const workflow = reviewingWorkflow();
+    workflow.phase = "preparing";
+    workflow.reviewers = workflow.reviewers.map((reviewer) => ({
+      ...reviewer,
+      status: "pending",
+      providerSessionId: undefined,
+    }));
+    workflow.activeRequest = {
+      kind: "prepare",
+      requestId: "prepare-1",
+      state: "sent",
+      createdAt: "2026-08-14T00:00:00.000Z",
+    };
+    workflow.fixSession = {
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+      sessionKey: "multi-review:multi-1:fix",
+      providerSessionId: "provider-fix",
+      requestIds: ["prepare-1"],
+      status: "running",
+      startedAt: "2026-08-14T00:00:00.000Z",
+    };
+    return workflow;
+  }
+
+  test("opens the live preparation session in a new native tab", () => {
+    const workflow = preparingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("Preparing review package")).toBeTruthy();
+    expect(screen.getByLabelText("Fix model runtime")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(card);
+    expect(createTab).toHaveBeenCalledTimes(1);
+    const [agent, options] = createTab.mock.calls[0]!;
+    expect(agent).toBe("codex");
+    expect(options).toMatchObject({
+      agentLaunchMode: "native",
+      resumeSessionId: "provider-fix",
+      requireExistingResumeSession: true,
+      isReviewTab: true,
+    });
+  });
+
+  test("stays disabled until the fix model has opened a provider session", () => {
+    const workflow = preparingWorkflow();
+    delete workflow.fixSession;
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(card);
+    expect(createTab).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Fix model runtime") === null).toBe(true);
+  });
+
+  test("labels the fix model by workflow phase, then by session status once settled", () => {
+    const ready = readyWorkflow();
+    expect(fixSessionActivity({ ...ready, phase: "preparing" })).toBe("Preparing review package");
+    expect(fixSessionActivity({ ...ready, phase: "consolidating" })).toBe("Consolidating findings");
+    expect(fixSessionActivity({ ...ready, phase: "fixing" })).toBe("Addressing findings");
+    expect(fixSessionActivity(ready)).toBe("Idle");
+    expect(
+      fixSessionActivity({
+        ...ready,
+        phase: "failed",
+        fixSession: { ...ready.fixSession!, status: "failed" },
+      }),
+    ).toBe("Failed");
+    const { fixSession: _none, ...withoutSession } = ready;
+    expect(fixSessionActivity({ ...withoutSession, phase: "completed" })).toBe("Not started");
+  });
+
+  test("formats fix session runtime for live and settled sessions", () => {
+    const ready = readyWorkflow();
+    const session = ready.fixSession!;
+    const now = Date.parse("2026-08-14T00:02:05.000Z");
+    expect(fixSessionRuntimeSummary({ ...session, status: "running" }, now)).toBe("2m 5s");
+    expect(
+      fixSessionRuntimeSummary({ ...session, completedAt: "2026-08-14T00:00:30.000Z" }, now),
+    ).toBe("30s");
+    const { completedAt: _completedAt, ...unfinished } = session;
+    expect(fixSessionRuntimeSummary(unfinished, now)).toBeNull();
+  });
 });

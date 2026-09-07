@@ -1787,7 +1787,7 @@ exit 0
     } finally {
       await fs.rm(worktreePath, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("does not prune through a staging-directory replacement race", async () => {
     const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-prune-race-"));

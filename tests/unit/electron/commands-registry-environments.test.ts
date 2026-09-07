@@ -6463,13 +6463,8 @@ exit 0
           environment.deletionRequestedAt !== undefined,
         "persisted cleanup recovery to begin",
       );
-      let recoveredEnvironment: Environment | null = environment;
-      for (let attempt = 0; attempt < 100 && recoveredEnvironment; attempt += 1) {
-        recoveredEnvironment = await context.storage.getEnvironment(environment.id);
-        if (recoveredEnvironment) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-      }
+      await context.environmentLifecycleTasks.beginShutdown();
+      const recoveredEnvironment = await context.storage.getEnvironment(environment.id);
       expect(recoveredEnvironment).toBeNull();
     },
     ASYNC_TEST_BUDGET_MS,

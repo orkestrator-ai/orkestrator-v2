@@ -13,9 +13,20 @@ const unsandboxed = { claudeSandbox: false };
 const everyPlatform = [...AGENT_PLATFORMS];
 
 describe("coordinator provider qualification", () => {
-  test("only enforced platforms are admitted by default", () => {
+  test("the default admits enforced and provider-configured platforms, not advisory", () => {
     const admitted = everyPlatform.filter((platform) =>
       coordinatorProviderAllowed(platform, {
+        host: sandboxed,
+        enabledPlatforms: everyPlatform,
+      }),
+    );
+    expect(admitted).toEqual(["claude", "codex", "cursor", "opencode", "pi"]);
+  });
+
+  test("the strictest setting admits only enforced platforms", () => {
+    const admitted = everyPlatform.filter((platform) =>
+      coordinatorProviderAllowed(platform, {
+        tierSetting: "enforced",
         host: sandboxed,
         enabledPlatforms: everyPlatform,
       }),
@@ -50,6 +61,7 @@ describe("coordinator provider qualification", () => {
 
   test("a host without Claude's sandbox demotes Claude rather than claiming enforcement", () => {
     const claude = coordinatorProviderQualification("claude", {
+      tierSetting: "enforced",
       host: unsandboxed,
       enabledPlatforms: everyPlatform,
     });
@@ -122,10 +134,11 @@ describe("coordinator provider qualification", () => {
     expect(cursor.reason).toContain("mailbox cannot receive replies");
   });
 
-  test("an unknown tier setting falls back to the strictest, never the loosest", () => {
+  test("only an absent tier uses the default while malformed values fail closed", () => {
     expect(coordinatorProviderTierSetting("advisory")).toBe("advisory");
+    expect(coordinatorProviderTierSetting("enforced")).toBe("enforced");
     expect(coordinatorProviderTierSetting("nonsense")).toBe("enforced");
-    expect(coordinatorProviderTierSetting(undefined)).toBe("enforced");
+    expect(coordinatorProviderTierSetting(undefined)).toBe("provider-configured");
     expect(coordinatorProviderTierSetting(null)).toBe("enforced");
   });
 

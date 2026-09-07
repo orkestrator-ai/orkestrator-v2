@@ -47,8 +47,9 @@ tiers, shown beside the picker when it carries a caveat:
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Agent platforms → Coordinator safety level** chooses the weakest
-tier this installation will offer. It defaults to `enforced`, so the lower two
-are opt-in.
+tier this installation will offer. It defaults to `provider-configured`, which
+is also the recommended level: `enforced` and `provider-configured` platforms
+are offered, and `advisory` stays opt-in.
 
 What each enforced platform actually does:
 

@@ -1,8 +1,11 @@
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { NATIVE_AGENT_MAIL_CAPABILITIES } from "@orkestrator/protocol/agent-mail";
-import type {
-  CoordinatorProviderQualification,
-  CoordinatorProviderTier,
+import {
+  COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+  DEFAULT_COORDINATOR_PROVIDER_TIER,
+  normalizeCoordinatorProviderTierDefaultVersion,
+  type CoordinatorProviderQualification,
+  type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
 
 /**
@@ -23,7 +26,11 @@ export const COORDINATOR_PROVIDER_TIER_SETTINGS = [
 ] as const;
 export type CoordinatorProviderTierSetting = (typeof COORDINATOR_PROVIDER_TIER_SETTINGS)[number];
 
-export const DEFAULT_COORDINATOR_PROVIDER_TIER: CoordinatorProviderTierSetting = "enforced";
+export {
+  COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+  DEFAULT_COORDINATOR_PROVIDER_TIER,
+  normalizeCoordinatorProviderTierDefaultVersion,
+};
 
 const TIER_RANK: Readonly<Record<CoordinatorProviderTier, number>> = Object.freeze({
   enforced: 0,
@@ -33,9 +40,10 @@ const TIER_RANK: Readonly<Record<CoordinatorProviderTier, number>> = Object.free
 });
 
 export function coordinatorProviderTierSetting(value: unknown): CoordinatorProviderTierSetting {
-  return (COORDINATOR_PROVIDER_TIER_SETTINGS as readonly string[]).includes(value as string)
+  if (value === undefined) return DEFAULT_COORDINATOR_PROVIDER_TIER;
+  return (COORDINATOR_PROVIDER_TIER_SETTINGS as readonly unknown[]).includes(value)
     ? (value as CoordinatorProviderTierSetting)
-    : DEFAULT_COORDINATOR_PROVIDER_TIER;
+    : "enforced";
 }
 
 /**

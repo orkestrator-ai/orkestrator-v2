@@ -14,20 +14,33 @@
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realCursorSdk from "@cursor/sdk";
-import { workingDirectory } from "./config.js";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const realCursorSdkSnapshot = { ...realCursorSdk };
+const previousApiKey = process.env.CURSOR_API_KEY;
+const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
+const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
+const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
+process.env.CURSOR_BRIDGE_STATE_DIR = bridgeStateRoot;
+process.env.CURSOR_BRIDGE_AUTH_FILE = join(bridgeStateRoot, "missing-auth.json");
 
-let apiKey: string | undefined = "test-key";
 let listed: { items: unknown[] } = { items: [] };
 let runs: { items: unknown[] } = { items: [] };
 let listRunsFails = false;
 let resumeFails = false;
 const created: Array<Record<string, unknown>> = [];
 const resumed: string[] = [];
-let sqliteRuns: Array<Record<string, unknown>> = [];
+let storedRuns: Array<Record<string, unknown>> = [];
 const deletedRunBatches: string[][] = [];
 let updatedAgent: Record<string, unknown> | undefined;
+const jsonlStoreRoots: string[] = [];
+const jsonlStores: object[] = [];
+const configuredStores: unknown[] = [];
+const platformOptions: Array<Record<string, unknown>> = [];
+const prewarmOptions: Array<Record<string, unknown>> = [];
+let prewarmFails = false;
+let warmWorkspaceReleases = 0;
 
 function fakeSdkAgent(agentId: string) {
   return {
@@ -50,14 +63,45 @@ function fakeSdkAgent(agentId: string) {
 
 mock.module("@cursor/sdk", () => ({
   ...realCursorSdkSnapshot,
-  FileCredentialStore: class {
-    async load() {
-      return apiKey ? { apiKey } : undefined;
-    }
-  },
   Cursor: {
     ...(realCursorSdkSnapshot as { Cursor?: object }).Cursor,
+    configure: ({ local }: { local?: { store?: unknown } }) => {
+      configuredStores.push(local?.store);
+    },
     models: { list: async () => [] },
+  },
+  JsonlLocalAgentStore: class {
+    readonly agents = {
+      get: async () => ({ agentId: "agent-1", latestCheckpoint: "latest" }),
+      update: async ({ agent }: { agent: Record<string, unknown> }) => {
+        updatedAgent = agent;
+      },
+    };
+    readonly checkpoints = {};
+    readonly runs = {
+      list: async () => ({ items: storedRuns, nextCursor: undefined }),
+      delete: async ({ filter }: { filter: { runIds: string[] } }) => {
+        deletedRunBatches.push(filter.runIds);
+      },
+    };
+    readonly runEvents = { delete: async () => undefined };
+
+    constructor(root: string) {
+      jsonlStoreRoots.push(root);
+      jsonlStores.push(this);
+    }
+  },
+  createAgentPlatform: async (options: Record<string, unknown>) => {
+    platformOptions.push(options);
+    return {
+      prewarmLocalWorkspace: async (options: Record<string, unknown>) => {
+        prewarmOptions.push(options);
+        if (prewarmFails) throw new Error("workspace scan unavailable");
+        return async () => {
+          warmWorkspaceReleases += 1;
+        };
+      },
+    };
   },
   Agent: {
     create: async (options: Record<string, unknown>) => {
@@ -77,53 +121,40 @@ mock.module("@cursor/sdk", () => ({
   },
 }));
 
-mock.module("@cursor/sdk/sqlite", () => ({
-  SqliteLocalAgentStore: {
-    open: async () => ({
-      runs: {
-        list: async () => ({ items: sqliteRuns, nextCursor: undefined }),
-        delete: async ({ filter }: { filter: { runIds: string[] } }) => {
-          deletedRunBatches.push(filter.runIds);
-        },
-      },
-      runEvents: { delete: async () => undefined },
-      agents: {
-        get: async () => ({ agentId: "agent-1", latestCheckpoint: "latest" }),
-        update: async ({ agent }: { agent: Record<string, unknown> }) => {
-          updatedAgent = agent;
-        },
-      },
-      dispose: async () => undefined,
-    }),
-  },
-}));
-
+const { workingDirectory } = await import("./config.js");
 const {
   applyComposerPatch,
+  detachAgent,
   ensureAgent,
   listResumableSessions,
   newSessionState,
+  resolveCursorExecutionPolicy,
   resumeSession,
   rewindSessionHistory,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
 const { sessions } = await import("./state.js");
 
-const previousApiKey = process.env.CURSOR_API_KEY;
-
 beforeEach(() => {
   sessions.clear();
-  apiKey = "test-key";
+  process.env.CURSOR_API_KEY = "test-key";
   listed = { items: [] };
   runs = { items: [] };
   listRunsFails = false;
   resumeFails = false;
   created.length = 0;
   resumed.length = 0;
-  sqliteRuns = [];
+  storedRuns = [];
   deletedRunBatches.length = 0;
   updatedAgent = undefined;
-  delete process.env.CURSOR_API_KEY;
+  prewarmOptions.length = 0;
+  prewarmFails = false;
+  warmWorkspaceReleases = 0;
+});
+
+test("configures one JSONL store below the bridge state directory", () => {
+  expect(jsonlStoreRoots).toEqual([join(bridgeStateRoot, "cursor-sdk")]);
+  expect(configuredStores).toEqual([jsonlStores[0]]);
 });
 
 describe("rewindSessionHistory", () => {
@@ -143,7 +174,7 @@ describe("rewindSessionHistory", () => {
       },
       { id: "answer", role: "assistant", content: "ok", parts: [], createdAt: "now" },
     ];
-    sqliteRuns = [
+    storedRuns = [
       { runId: "unsupported", turnNumber: 0, startCheckpointRef: "cp-0" },
       { runId: "run-1", turnNumber: 1, startCheckpointRef: "cp-1" },
       { runId: "run-2", turnNumber: 2, startCheckpointRef: "cp-2" },
@@ -180,6 +211,10 @@ afterAll(() => {
   sessions.clear();
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousApiKey;
+  if (previousStateDir === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
+  else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
+  if (previousCredentialFile === undefined) delete process.env.CURSOR_BRIDGE_AUTH_FILE;
+  else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
   mock.module("@cursor/sdk", () => realCursorSdkSnapshot);
 });
 
@@ -193,7 +228,7 @@ function conversationRun(turns: unknown[], supports = true) {
 
 describe("ensureAgent", () => {
   test("refuses to attach without a credential, with a message naming the fix", async () => {
-    apiKey = undefined;
+    delete process.env.CURSOR_API_KEY;
     const state = newSessionState();
     expect(ensureAgent(state)).rejects.toThrow(/Settings/);
   });
@@ -210,13 +245,71 @@ describe("ensureAgent", () => {
     expect(first).toBe(second);
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({ local: { cwd: workingDirectory } });
+    expect(platformOptions).toEqual([
+      expect.objectContaining({
+        localStore: jsonlStores[0],
+        workspaceRef: workingDirectory,
+        scopedWorkspaceRef: workingDirectory,
+      }),
+    ]);
+    expect(prewarmOptions).toHaveLength(1);
+    const { name: _name, ...createdOptions } = created[0]!;
+    expect(prewarmOptions[0]).toEqual(createdOptions);
+    expect(state.workspaceWarmRelease).toBeFunction();
+
+    await detachAgent(state);
+    expect(warmWorkspaceReleases).toBe(1);
+    expect(state.workspaceWarmRelease).toBeUndefined();
+  });
+
+  test("continues attaching when the optional workspace warm-up fails", async () => {
+    const state = newSessionState();
+    prewarmFails = true;
+
+    await expect(ensureAgent(state)).resolves.toMatchObject({ agentId: "created-agent" });
+    expect(prewarmOptions).toHaveLength(1);
+    expect(state.workspaceWarmRelease).toBeUndefined();
+  });
+
+  test("reports unsupported approval semantics and fails deny-mode escalation closed", async () => {
+    const ask = resolveCursorExecutionPolicy({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "full",
+    });
+    expect(ask.approvals).toBe("auto-approve");
+    expect(ask.note).toContain("cannot surface interactive approvals");
+
+    const denied = newSessionState(undefined, {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    await expect(ensureAgent(denied)).rejects.toThrow("refused before attach");
+    expect(created).toHaveLength(0);
+  });
+
+  test("forces the provider sandbox for restricted network policy", () => {
+    const effective = resolveCursorExecutionPolicy({
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+    });
+    expect(effective.sandbox).toBe("provider");
+    expect(effective.note).toContain("restricted network access");
   });
 
   test("a failed attach does not poison the next one", async () => {
     const state = newSessionState();
-    apiKey = undefined;
+    delete process.env.CURSOR_API_KEY;
     await ensureAgent(state).catch(() => undefined);
-    apiKey = "test-key";
+    process.env.CURSOR_API_KEY = "test-key";
     await expect(ensureAgent(state)).resolves.toMatchObject({ agentId: "created-agent" });
   });
 
@@ -266,7 +359,7 @@ describe("ensureAgent", () => {
 
 describe("listResumableSessions", () => {
   test("is empty rather than an error when nothing is signed in", async () => {
-    apiKey = undefined;
+    delete process.env.CURSOR_API_KEY;
     expect(await listResumableSessions()).toEqual([]);
   });
 
@@ -430,5 +523,20 @@ describe("resumeSession", () => {
     const state = await resumeSession("agent-1", { modelId: "composer-2.5", modeId: "plan" });
     expect(state.composer.selectedModelId).toBe("composer-2.5");
     expect(state.composer.selectedModeId).toBe("plan");
+  });
+
+  test("applies the backend policy before adopting a resumed agent", async () => {
+    const state = await resumeSession("agent-1", undefined, {
+      id: "interactive-container",
+      sandbox: "container",
+      approvals: "deny",
+      projectResources: true,
+      networkAccess: "restricted",
+    });
+    expect(state.policy).toMatchObject({
+      id: "interactive-container",
+      approvals: "deny",
+      projectResources: true,
+    });
   });
 });

@@ -2305,6 +2305,32 @@ describe("session lifecycle", () => {
     );
   });
 
+  test("a deny policy cannot run silently with workspace write access", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+      },
+    });
+    await h.runtime.prompt(sessionId, {
+      prompt: "inspect it",
+      requestId: "req-deny",
+      attachments: [],
+    });
+
+    expect(
+      h.child().requests.find((request) => request.method === "thread/start")!.params,
+    ).toMatchObject({
+      approvalPolicy: "never",
+      sandbox: "read-only",
+    });
+  });
+
   test("coordinator policy pins build mode to read-only without network access", async () => {
     const previous = process.env.CODEX_BRIDGE_EXECUTION_POLICY;
     const previousProfile = process.env.CODEX_BRIDGE_PERMISSION_PROFILE;

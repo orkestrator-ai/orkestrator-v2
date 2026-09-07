@@ -1,6 +1,6 @@
 # 11 — Usage, cost and limits
 
-**Status:** ⬜ Not started · 0/15 tasks · Depends on: 02
+**Status:** 🟨 In progress · implementation complete, awaiting browser QA and merge · Depends on: 02
 
 ## Goal
 
@@ -89,3 +89,16 @@ account panel becomes the generic one.
 
 Billing or pricing lookups Orkestrator does not already do. Codex
 `account/rateLimitResetCredit/consume` and nudge emails.
+
+## Implementation notes
+
+- The provider-neutral projection now retains the newest twenty turn rows and
+  sixteen account windows. Opening the information panel requests the richer
+  provider snapshot without making billing metadata a transcript dependency.
+- Claude, Codex, OpenCode, Cursor, Grok and Pi map their native usage into the
+  shared shape. Grok's undocumented `costUsdTicks` remains intentionally
+  ignored until its unit can be verified against a real billed turn.
+- The generic panel renders account windows and recent turns even while the
+  compatibility stores supply fresher live context counters. Automated bridge,
+  projection and renderer coverage is in place; two-provider browser/reload QA
+  remains required before merge.

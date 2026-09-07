@@ -30,13 +30,36 @@ describe("the v2 event-kind table", () => {
     expect(isKnownOpenCodeEvent("invented.event")).toBe(false);
   });
 
-  test("marks exactly the request-monitor events it consumes", () => {
+  test("marks exactly the interaction and projection events it consumes", () => {
     expect(
       Object.entries(KNOWN_OPENCODE_EVENTS)
         .filter(([, handled]) => handled)
         .map(([type]) => type)
         .sort(),
-    ).toEqual(["permission.asked", "question.asked", "question.rejected", "question.replied"]);
+    ).toEqual([
+      "global.disposed",
+      "mcp.tools.changed",
+      "message.part.delta",
+      "message.part.removed",
+      "message.part.updated",
+      "message.removed",
+      "message.updated",
+      "permission.asked",
+      "permission.replied",
+      "question.asked",
+      "question.rejected",
+      "question.replied",
+      "server.connected",
+      "server.instance.disposed",
+      "session.compacted",
+      "session.deleted",
+      "session.diff",
+      "session.error",
+      "session.idle",
+      "session.status",
+      "session.updated",
+      "todo.updated",
+    ]);
   });
 });
 

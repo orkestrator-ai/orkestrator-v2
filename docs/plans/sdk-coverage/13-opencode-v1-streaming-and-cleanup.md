@@ -1,6 +1,6 @@
 # 13 — OpenCode on v1: streaming and cleanup
 
-**Status:** ⬜ Not started · 0/13 tasks · Depends on: 03
+**Status:** 🟨 In progress · implementation complete, awaiting merge and browser QA · Depends on: 03
 
 ## Goal
 
@@ -74,3 +74,17 @@ every path keeps its snapshot read as the authority, per the invariants.
 
 Any `client.v2.*` call. `session.next.*` events. Steering and `switchAgent`/
 `switchModel`.
+
+## Implementation notes
+
+- The installed v1 session model exposes `Session.permission` as a
+  `PermissionRuleset`. The SSE adapter retains that bounded provider value at
+  the adapter boundary; plan 12 owns translating it into the normalized
+  execution policy.
+- A warm projection previously issued one `session.status` and one
+  `session.messages` request per projection refresh. The fake-stream regression
+  test records zero of each after the authoritative baseline; status is
+  reconciled every 30 seconds and both are refetched after a stream gap.
+- The inactive/reload guarantee is covered at the provider boundary by keeping
+  the stream independent of renderer state and by the reconnect-gap regression
+  test. Interactive browser QA remains required before merge.

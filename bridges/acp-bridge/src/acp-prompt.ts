@@ -1,7 +1,5 @@
 import {
   AcpProcess,
-  CURSOR_BACKGROUND_WAIT_MS,
-  MAX_CURSOR_BACKGROUND_CONTINUATIONS,
   PROMPT_TIMEOUT_MS,
   RETRIABLE_PROVIDER_MAX_RETRIES,
   RETRIABLE_PROVIDER_RETRY_BASE_MS,
@@ -13,17 +11,10 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
-import {
-  cursorBackgroundContinueEnabled,
-  formatCursorBackgroundContinuation,
-  listWatchableCursorChildren,
-  pushContinuationUserMessage,
-  waitForWatchableCursorChildren,
-} from "./acp-cursor-background.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
-import { failAllActiveSubagents, finishSubagentTool } from "./acp-tools.js";
+import type { PromptResponse, StopReason } from "@agentclientprotocol/sdk";
 
 // Transient provider codes the bridge auto-retries. `resource_exhausted` is
 // Cursor's capacity signal; `unavailable` is a dropped connection / PING
@@ -160,7 +151,10 @@ export async function requestPromptWithRetriableProviderRetries(
     }
 
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
-    if (!requestError && !flattened) return result;
+    if (!requestError && !flattened) {
+      promptStopReason(result);
+      return result;
+    }
     if (!retryStillOwned(state, child, promptSequence)) {
       if (state.retryCancelledPromptSequence === promptSequence) {
         return { stopReason: "cancelled" };
@@ -210,14 +204,23 @@ export async function requestPromptWithRetriableProviderRetries(
   }
 }
 
-/**
- * Cursor's ACP `session/prompt` returns when the parent generation ends, even
- * if a background Task is still running. The IDE then waits for the child and
- * re-prompts; `cursor-agent acp` does not. Hold the HTTP turn open and inject
- * the child's transcript so the parent cannot miss the result. Grok is
- * excluded: it already notifies through `subagent_finished` and the parent
- * turn is allowed to go idle with live children.
- */
+export function promptStopReason(result: unknown): StopReason {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error(`${provider} returned an invalid ACP prompt response`);
+  }
+  const stopReason = (result as Partial<PromptResponse>).stopReason;
+  if (
+    stopReason !== "end_turn" &&
+    stopReason !== "max_tokens" &&
+    stopReason !== "max_turn_requests" &&
+    stopReason !== "refusal" &&
+    stopReason !== "cancelled"
+  ) {
+    throw new Error(`${provider} returned an invalid ACP prompt stopReason`);
+  }
+  return stopReason;
+}
+
 export async function dispatchAcpPrompt(
   state: SessionState,
   child: AcpProcess,
@@ -225,83 +228,11 @@ export async function dispatchAcpPrompt(
   promptSequence: number,
   schema: JsonObject | undefined,
 ): Promise<unknown> {
-  let result = await requestPromptWithRetriableProviderRetries(
+  return requestPromptWithRetriableProviderRetries(
     state,
     child,
     initialPrompt,
     promptSequence,
     schema,
   );
-  if (!cursorBackgroundContinueEnabled()) return result;
-
-  let continuations = 0;
-  while (
-    retryStillOwned(state, child, promptSequence) &&
-    continuations < MAX_CURSOR_BACKGROUND_CONTINUATIONS
-  ) {
-    // Only children Cursor itself named. An inferred binding is good enough to
-    // show activity in a card; it is not good enough to hold this turn open.
-    const watchable = listWatchableCursorChildren(state, { includeDiscovered: false });
-    if (watchable.length === 0) return result;
-
-    const wait = abortWhenPromptLost(state, child, promptSequence);
-    let outcomes;
-    try {
-      outcomes = await waitForWatchableCursorChildren(
-        state,
-        watchable,
-        CURSOR_BACKGROUND_WAIT_MS,
-        wait.signal,
-      );
-    } finally {
-      wait.stop();
-    }
-
-    if (!retryStillOwned(state, child, promptSequence)) {
-      failAllActiveSubagents(state);
-      if (state.retryCancelledPromptSequence === promptSequence) {
-        return { stopReason: "cancelled" };
-      }
-      throw retryOwnershipLostError(state);
-    }
-
-    for (const outcome of outcomes) {
-      finishSubagentTool(state, outcome.toolUseId, outcome.agentState);
-    }
-
-    continuations += 1;
-    if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
-    const text = schema
-      ? `${formatCursorBackgroundContinuation(outcomes)}\n\n${structuredPromptInstruction(schema)}`
-      : formatCursorBackgroundContinuation(outcomes);
-    pushContinuationUserMessage(state, text);
-    result = await requestPromptWithRetriableProviderRetries(
-      state,
-      child,
-      {
-        sessionId: state.acpSessionId,
-        prompt: [{ type: "text", text }],
-      },
-      promptSequence,
-      schema,
-    );
-  }
-  return result;
-}
-
-function abortWhenPromptLost(
-  state: SessionState,
-  child: AcpProcess,
-  promptSequence: number,
-): { signal: AbortSignal; stop: () => void } {
-  const controller = new AbortController();
-  const timer = setInterval(() => {
-    if (!retryStillOwned(state, child, promptSequence)) controller.abort();
-  }, 100);
-  timer.unref();
-  if (!retryStillOwned(state, child, promptSequence)) controller.abort();
-  return {
-    signal: controller.signal,
-    stop: () => clearInterval(timer),
-  };
 }

@@ -24,7 +24,6 @@ export function codexAppServerConfigOverrides(
 ): Record<string, string> {
   const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
   const overrides: Record<string, string> = {
-    "features.goals": "true",
     // Codex 0.147+ negotiates the stateless MCP 2026-07-28 protocol and falls
     // back to the 2025 era for third-party servers that have not upgraded yet.
     "features.mcp_2026_07_28": "true",

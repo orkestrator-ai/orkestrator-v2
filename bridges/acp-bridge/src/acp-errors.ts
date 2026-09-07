@@ -10,7 +10,7 @@ export const GROK_USAGE_EXHAUSTED_MESSAGE =
 export const GROK_PAYMENT_REQUIRED_MESSAGE =
   "Grok Build could not continue because payment or usage credits are required. Check your Grok Build billing, then retry this message.";
 
-type AcpProvider = "cursor" | "grok" | undefined;
+type AcpProvider = string | undefined;
 
 function boundedErrorText(value: string): string | undefined {
   const normalized = value

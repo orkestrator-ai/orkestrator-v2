@@ -42,17 +42,6 @@ describe("ACP bridge", () => {
     return JSON.parse(lines[0]!) as string[];
   }
 
-  test("starts Cursor ACP without project MCP auto-approval by default", async () => {
-    // ACP_APPROVE_PROJECT_MCPS must fail closed when absent — the state every
-    // launcher except the container one leaves it in. Delete it outright
-    // instead of setting "0", so a regression to a default-on check such as
-    // `!== "0"` cannot satisfy this test.
-    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: undefined })).toEqual([
-      "--force",
-      "acp",
-    ]);
-  });
-
   test("starts Grok ACP with automatic tool approval", async () => {
     expect(await readAgentArgs({ ACP_PROVIDER: "grok" })).toEqual([
       "--always-approve",

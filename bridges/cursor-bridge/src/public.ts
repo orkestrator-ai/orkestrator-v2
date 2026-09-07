@@ -29,6 +29,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.composer,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
@@ -42,6 +43,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     error: state.error,
     revision: state.revision,
     composer: state.composer,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(readiness ? { readiness } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
@@ -164,8 +166,10 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(sessionTokens !== undefined ? { sessionTokens } : {}),
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
+    ...(usage?.turns ? { turns: usage.turns } : {}),
+    ...(usage?.account ? { account: usage.account } : {}),
     ...(liveEstimate !== undefined ? { estimated: true } : {}),
-    source: "provider",
+    source: "cursor",
     updatedAt: state.currentRunUsageUpdatedAt ?? usage!.updatedAt,
   };
 }

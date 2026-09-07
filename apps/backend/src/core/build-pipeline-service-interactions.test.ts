@@ -528,7 +528,7 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("production OpenCode uses journaled decline/deny enforcement without a grant-once stream", async () => {
+  test("production OpenCode combines the always-on projection stream with journaled decline/deny enforcement", async () => {
     await withService(async (service, storage) => {
       const started = await service.start(startInput({ agentType: "opencode" }));
       await service.advanceNow(started.id);
@@ -555,9 +555,23 @@ describe("BuildPipelineService", () => {
       let subscriptions = 0;
       const client = {
         event: {
-          async subscribe() {
+          async subscribe(_parameters: unknown, options: { signal: AbortSignal }) {
             subscriptions += 1;
-            throw new Error("The common backend resolver must not subscribe");
+            return {
+              stream: {
+                [Symbol.asyncIterator]() {
+                  return {
+                    next: async () => {
+                      await new Promise<void>((resolve) => {
+                        if (options.signal.aborted) return resolve();
+                        options.signal.addEventListener("abort", () => resolve(), { once: true });
+                      });
+                      return { done: true as const, value: undefined };
+                    },
+                  };
+                },
+              },
+            };
           },
         },
         permission: {
@@ -603,7 +617,7 @@ describe("BuildPipelineService", () => {
       );
       try {
         await production.advanceNow(started.id);
-        expect(subscriptions).toBe(0);
+        expect(subscriptions).toBe(1);
         expect(rejected).toEqual(["question-1"]);
         expect(phaseAtRejection).toEqual(["building"]);
         expect(await pipeline(storage, started.id)).toMatchObject({

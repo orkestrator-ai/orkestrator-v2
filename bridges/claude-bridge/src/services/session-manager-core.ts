@@ -693,6 +693,93 @@ export function createStructuredUsageRefreshCoordinator(
   };
 }
 
+interface ClaudeContextUsage {
+  totalTokens?: number;
+  maxTokens?: number;
+  percentage?: number;
+  model?: string;
+  categories?: Array<{ name: string; tokens: number; color?: string }>;
+}
+
+function parseClaudeContextUsage(raw: unknown): ClaudeContextUsage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const parsed: ClaudeContextUsage = {
+    totalTokens: parseTokenValue(value.totalTokens),
+    maxTokens: parseTokenValue(value.maxTokens),
+    percentage: typeof value.percentage === "number" ? value.percentage : undefined,
+    model: typeof value.model === "string" ? value.model : undefined,
+    categories: Array.isArray(value.categories)
+      ? value.categories.flatMap((entry) => {
+          if (!entry || typeof entry !== "object") return [];
+          const item = entry as Record<string, unknown>;
+          const name = typeof item.name === "string" ? item.name : undefined;
+          const tokens = parseTokenValue(item.tokens);
+          if (!name || tokens === undefined) return [];
+          return [
+            {
+              name,
+              tokens,
+              color: typeof item.color === "string" ? item.color : undefined,
+            },
+          ];
+        })
+      : undefined,
+  };
+  return parsed.totalTokens !== undefined ||
+    parsed.maxTokens !== undefined ||
+    parsed.percentage !== undefined ||
+    parsed.model !== undefined ||
+    (parsed.categories?.length ?? 0) > 0
+    ? parsed
+    : undefined;
+}
+
+/** Refresh detailed context only for an explicit usage-panel read. */
+export async function refreshClaudeContextUsage(
+  session: SessionState,
+): Promise<SessionUsageSnapshot | undefined> {
+  const getContextUsage = session.queryControl?.getContextUsage;
+  const previous = session.inProgressUsage ?? session.usage;
+  // Current Agent SDK controls live only as long as the query. An idle session
+  // therefore returns its last authoritative snapshot without starting a turn.
+  if (!getContextUsage) return previous;
+  const context = parseClaudeContextUsage(
+    await getContextUsage.call(session.queryControl, { detail: "full" }),
+  );
+  if (!context) return previous;
+  const usedTokens = context.totalTokens ?? previous?.usedTokens ?? 0;
+  const maximumTokens = context.maxTokens ?? previous?.totalTokens;
+  const usage: SessionUsageSnapshot = {
+    ...(previous ?? {
+      usedTokens,
+      source: "claude",
+      updatedAt: new Date().toISOString(),
+    }),
+    usedTokens,
+    ...(maximumTokens !== undefined
+      ? {
+          totalTokens: maximumTokens,
+          percentUsed:
+            context.percentage ??
+            (maximumTokens > 0 ? Math.min(100, (usedTokens / maximumTokens) * 100) : 0),
+        }
+      : {}),
+    ...(context.model ? { modelId: context.model } : {}),
+    ...(context.categories ? { contextCategories: context.categories } : {}),
+    estimated: false,
+    updatedAt: new Date().toISOString(),
+  };
+  if (session.inProgressUsage) session.inProgressUsage = usage;
+  else session.usage = usage;
+  eventEmitter.emit({
+    type: "session.updated",
+    sessionId: session.id,
+    data: { contextUsage: usage },
+  });
+  return usage;
+}
+
 export async function buildClaudeUsageSnapshot(
   session: SessionState,
   result: SdkResultMessage,
@@ -734,43 +821,14 @@ export async function buildClaudeUsageSnapshot(
           cost: 0,
         };
 
-  let context:
-    | {
-        totalTokens?: number;
-        maxTokens?: number;
-        percentage?: number;
-        model?: string;
-        categories?: Array<{ name: string; tokens: number; color?: string }>;
-      }
-    | undefined;
+  let context: ClaudeContextUsage | undefined;
   if (queryControl?.getContextUsage) {
     try {
-      const raw = await queryControl.getContextUsage();
-      if (raw && typeof raw === "object") {
-        const value = raw as Record<string, unknown>;
-        context = {
-          totalTokens: parseTokenValue(value.totalTokens),
-          maxTokens: parseTokenValue(value.maxTokens),
-          percentage: typeof value.percentage === "number" ? value.percentage : undefined,
-          model: typeof value.model === "string" ? value.model : undefined,
-          categories: Array.isArray(value.categories)
-            ? value.categories.flatMap((entry) => {
-                if (!entry || typeof entry !== "object") return [];
-                const item = entry as Record<string, unknown>;
-                const name = typeof item.name === "string" ? item.name : undefined;
-                const tokens = parseTokenValue(item.tokens);
-                if (!name || tokens === undefined) return [];
-                return [
-                  {
-                    name,
-                    tokens,
-                    color: typeof item.color === "string" ? item.color : undefined,
-                  },
-                ];
-              })
-            : undefined,
-        };
-      }
+      // This runs on the turn's terminal path while the SDK iterator still owns
+      // the stdout loop. Summary uses the last response plus local estimates;
+      // unlike the full form it does not issue token-counting API requests.
+      const raw = await queryControl.getContextUsage({ detail: "summary" });
+      context = parseClaudeContextUsage(raw);
     } catch (error) {
       debugLog("[session-manager] Context usage control request failed:", error);
     }
@@ -784,22 +842,82 @@ export async function buildClaudeUsageSnapshot(
   // the heuristic is the fallback for shapes this function does not model.
   const cacheInclusiveTurnTotal =
     totals.input + totals.cacheRead + totals.cacheWrite + totals.output;
+  const previous = session.usage;
   const usedTokens =
     context?.totalTokens ??
     (cacheInclusiveTurnTotal > 0 ? cacheInclusiveTurnTotal : undefined) ??
     heuristic?.usedTokens ??
+    previous?.usedTokens ??
     0;
+  const modelContextWindow = Math.max(
+    ...modelEntries.map(([, usage]) => usage.contextWindow ?? 0),
+    0,
+  );
   const contextWindow =
     context?.maxTokens ??
     heuristic?.totalTokens ??
-    Math.max(...modelEntries.map(([, usage]) => usage.contextWindow ?? 0), 0);
-  const previous = session.usage;
+    (modelContextWindow > 0 ? modelContextWindow : previous?.totalTokens) ??
+    0;
   const lastTurnTokens = cacheInclusiveTurnTotal;
   // Claude's result counters are exact even when the SDK omits the model's
   // context-window capacity. Keep that token-only snapshot so workflow callers
   // can report consumption without manufacturing a percentage or denominator.
-  if (usedTokens <= 0 || (contextWindow <= 0 && lastTurnTokens <= 0)) return undefined;
+  const hasFreshContext = context?.totalTokens !== undefined || heuristic?.usedTokens !== undefined;
+  const hasTurnMetadata =
+    lastTurnTokens > 0 ||
+    result.total_cost_usd !== undefined ||
+    result.duration_ms !== undefined ||
+    result.duration_api_ms !== undefined ||
+    result.ttft_ms !== undefined ||
+    result.num_turns !== undefined ||
+    (result.permission_denials?.length ?? 0) > 0;
+  if (!hasFreshContext && !hasTurnMetadata) return undefined;
   const hasContextWindow = contextWindow > 0;
+  const updatedAt = new Date().toISOString();
+  const turnId =
+    (typeof result.user_message_uuid === "string" && result.user_message_uuid.trim()) ||
+    (typeof result.uuid === "string" && result.uuid.trim()) ||
+    `claude-turn-${session.latestTurnGeneration ?? updatedAt}`;
+  const turn = {
+    turnId,
+    costUsd: result.total_cost_usd ?? totals.cost,
+    inputTokens: totals.input,
+    outputTokens: totals.output,
+    cacheReadTokens: totals.cacheRead,
+    cacheWriteTokens: totals.cacheWrite,
+    totalTokens: lastTurnTokens,
+    durationMs: result.duration_ms,
+    apiDurationMs: result.duration_api_ms,
+    ttftMs: result.ttft_ms,
+    numTurns: result.num_turns,
+    ...(modelEntries.length === 1 ? { modelId: modelEntries[0]![0] } : {}),
+  };
+  const previousTurns = previous?.turns ?? [];
+  const turns = [...previousTurns.filter((entry) => entry.turnId !== turnId), turn].slice(-20);
+  const denialDetails = (result.permission_denials ?? []).flatMap((denial) => {
+    if (!denial || typeof denial !== "object" || Array.isArray(denial)) return [];
+    const value = denial as Record<string, unknown>;
+    if (typeof value.tool_name !== "string" || value.tool_name.trim().length === 0) return [];
+    const reason =
+      typeof value.decision_reason === "string"
+        ? value.decision_reason
+        : typeof value.message === "string"
+          ? value.message
+          : undefined;
+    return [
+      {
+        toolName: value.tool_name.slice(0, 200),
+        ...(typeof value.tool_use_id === "string"
+          ? { toolUseId: value.tool_use_id.slice(0, 200) }
+          : {}),
+        ...(reason ? { reason: reason.slice(0, 1_000) } : {}),
+      },
+    ];
+  });
+  const permissionDenialDetails = [
+    ...(previous?.permissionDenialDetails ?? []),
+    ...denialDetails,
+  ].slice(-20);
   return {
     usedTokens,
     ...(hasContextWindow
@@ -821,10 +939,12 @@ export async function buildClaudeUsageSnapshot(
     apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
     permissionDenials:
       (previous?.permissionDenials ?? 0) + (result.permission_denials?.length ?? 0),
+    ...(permissionDenialDetails.length > 0 ? { permissionDenialDetails } : {}),
+    turns,
     contextCategories: context?.categories,
     estimated: context?.totalTokens === undefined,
     source: "claude",
-    updatedAt: new Date().toISOString(),
+    updatedAt,
     // Read from the session, not the previous snapshot: rate-limit events land
     // mid-turn, so the first turn's windows exist before any snapshot does.
     rateLimits: session.rateLimits ?? previous?.rateLimits,
@@ -1279,7 +1399,6 @@ export async function applySessionPlanMode(
 ): Promise<void> {
   if (persist) await persistSessionMetadata(session, planMode);
   if (!planMode || session.planMode !== true) {
-    session.observedPlan = undefined;
   }
   session.planMode = planMode;
   eventEmitter.emit({

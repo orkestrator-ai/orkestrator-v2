@@ -27,14 +27,19 @@ import {
 } from "./agent-provider-contract.js";
 import type {
   NativeAgentComposerState,
+  NativeAgentContextUsage,
   NativeAgentControlUpdate,
+  NativeAgentExecutionPolicy,
   NativeAgentForkOutcome,
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
   NativeAgentSessionActionOutcome,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+  isNativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
@@ -158,6 +163,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 mode,
                 clientSessionKey,
                 agentMcp: options.agentMcp,
+                policy: options.policy,
               }
             : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
               ? {
@@ -167,11 +173,17 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
                   agentMcp: options.agentMcp,
+                  policy: options.policy,
                   ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
                     : {}),
                 }
-              : { title: label, clientSessionKey, agentMcp: options.agentMcp },
+              : {
+                  title: label,
+                  clientSessionKey,
+                  agentMcp: options.agentMcp,
+                  policy: options.policy,
+                },
         ),
       },
       this.fetchImpl,
@@ -469,6 +481,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return (await this.observeSession(sessionId)).status;
   }
 
+  async refreshUsage(sessionId: string): Promise<NativeAgentContextUsage | undefined> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/usage`,
+      {},
+      this.fetchImpl,
+    );
+    // Usage is an additive capability. Older bridges and providers without a
+    // detailed account endpoint keep their last ordinary status snapshot.
+    if (response.status === 404 || response.status === 405) return undefined;
+    assertOk(response, `${this.agent} usage read`);
+    const body = asRecord(await boundedJson(response, `${this.agent} usage read`));
+    return normalizeProviderContextUsage(body?.contextUsage);
+  }
+
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
     const path =
       this.agent === "claude"
@@ -745,6 +772,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         );
       }
       const readiness = normalizeProviderReadiness(payload?.readiness);
+      const policy = isNativeAgentExecutionPolicy(payload?.policy) ? payload.policy : undefined;
       const reportedKinds = asRecord(asRecord(payload?.capabilities)?.interactions)?.kinds;
       const interactionKinds = Array.isArray(reportedKinds)
         ? reportedKinds.filter((kind): kind is string => typeof kind === "string")
@@ -767,6 +795,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(readiness ? { readiness } : {}),
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
+        ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
         // The bridge's own answer for this session, which overrides the
         // platform table. Pi reports it; the others do not, and absent leaves
@@ -886,6 +915,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(normalizeProviderContextUsage(payload.contextUsage)
           ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
           : {}),
+        ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
         ...(runtime ? { runtime } : {}),
         ...(codexNotices.length > 0 ? { notices: codexNotices } : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
@@ -957,6 +987,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(normalizeProviderContextUsage(payload.contextUsage)
         ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
         : {}),
+      ...(isNativeAgentExecutionPolicy(payload.policy) ? { policy: payload.policy } : {}),
       ...(normalizeProviderRateLimits(payload.rateLimits).length > 0
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
@@ -1166,7 +1197,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  async resumeSession(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string> {
+  async resumeSession(
+    sessionId: string,
+    controls?: NativeAgentControlUpdate,
+    policy?: NativeAgentExecutionPolicy,
+  ): Promise<string> {
     if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
       const response = await bridgeFetch(
         this.connection,
@@ -1180,6 +1215,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(controls?.mode ? { mode: controls.mode } : {}),
             ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
             ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
+            ...(policy ? { policy } : {}),
           }),
         },
         this.fetchImpl,
@@ -1200,6 +1236,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         this.fetchImpl,
       );
       assertOk(response, "Claude session resume");
+      if (policy) {
+        const policyResponse = await bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/config`,
+          { method: "POST", body: JSON.stringify({ policy }) },
+          this.fetchImpl,
+        );
+        await assertOkWithErrorDetail(policyResponse, "Claude resumed session policy update");
+      }
       return sessionId;
     }
     const response = await bridgeFetch(
@@ -1214,6 +1259,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(controls?.mode ? { mode: controls.mode } : {}),
           ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
           ...(controls?.parameterValues ? { parameterValues: controls.parameterValues } : {}),
+          ...(policy ? { policy } : {}),
         }),
       },
       this.fetchImpl,

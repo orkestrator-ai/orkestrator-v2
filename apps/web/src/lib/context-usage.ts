@@ -1,47 +1,14 @@
-export interface ContextUsageSnapshot {
-  usedTokens: number;
+import type {
+  NativeAgentContextUsage,
+  NativeAgentRateLimitWindow,
+} from "@orkestrator/protocol/native-agent";
+
+export type ContextUsageSnapshot = Omit<NativeAgentContextUsage, "maximumTokens" | "percentage"> & {
   totalTokens?: number;
   percentUsed?: number;
-  modelId?: string;
-  /** Exact provider token counters when the native API exposes them. */
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  reasoningTokens?: number;
-  /** Provider-reported totals. These are not inferred from context occupancy. */
-  lastTurnTokens?: number;
-  sessionTokens?: number;
-  costUsd?: number;
-  durationMs?: number;
-  apiDurationMs?: number;
-  /** False for exact provider data; true only for legacy heuristic extraction. */
-  estimated?: boolean;
-  /** `"provider"` is what the Codex bridge labels its exact app-server counters. */
-  source?: "claude" | "opencode" | "codex" | "heuristic" | "provider";
-  updatedAt?: string;
-  rateLimits?: AgentRateLimitWindow[];
-  credits?: {
-    hasCredits?: boolean;
-    unlimited?: boolean;
-    balance?: string;
-  };
-  contextCategories?: Array<{
-    name: string;
-    tokens: number;
-    color?: string;
-  }>;
-  permissionDenials?: number;
-  linesAdded?: number;
-  linesRemoved?: number;
-}
+};
 
-export interface AgentRateLimitWindow {
-  label: string;
-  usedPercent?: number;
-  resetsAt?: string;
-  windowMinutes?: number;
-}
+export type AgentRateLimitWindow = NativeAgentRateLimitWindow;
 
 const USED_KEYS = [
   "usedTokens",

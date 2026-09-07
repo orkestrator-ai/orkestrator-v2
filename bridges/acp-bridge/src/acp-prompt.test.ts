@@ -185,52 +185,6 @@ describe("ACP bridge", () => {
     ).toBe(false);
   });
 
-  // The fake agent records its own argv, so these assert the exact command line
-  // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const recorded = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.trim().length > 0,
-    );
-    // One session spawns one agent. A second line would mean the child was
-    // restarted, which should fail as itself rather than as a JSON parse error
-    // on two concatenated records.
-    const lines = recorded.trim().split("\n");
-    expect(lines).toHaveLength(1);
-    return JSON.parse(lines[0]!) as string[];
-  }
-
-  test("starts local-default Cursor ACP without project MCP auto-approval", async () => {
-    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "0" })).toEqual(["--force", "acp"]);
-  });
-
-  test("treats a non-canonical Cursor MCP approval value as disabled", async () => {
-    // The backend only ever writes "0" or "1". Anything else arrived from an
-    // ambient environment the bridge did not choose, so it must not grant
-    // repository-controlled MCP servers a host process.
-    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "true" })).toEqual(["--force", "acp"]);
-  });
-
-  test("starts explicitly isolated Cursor ACP with MCP auto-approval", async () => {
-    expect(await readAgentArgs({ ACP_APPROVE_PROJECT_MCPS: "1" })).toEqual([
-      "--force",
-      "--approve-mcps",
-      "acp",
-    ]);
-  });
-
   test("ignores an agent's live echo of the user prompt", async () => {
     const bridge = await spawnBridge({ env: { FAKE_ACP_ECHO_USER_PROMPT: "1" } });
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
@@ -384,7 +338,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_000,
       cacheWriteTokens: 45,
       costUsd: 0.042,
-      source: "provider",
+      source: "cursor",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
 
@@ -401,7 +355,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_000,
       cacheWriteTokens: 45,
       costUsd: 0.042,
-      source: "provider",
+      source: "cursor",
     });
     expect(restored.contextUsage?.percentage).toBeCloseTo(7.8375);
   });
@@ -446,7 +400,7 @@ describe("ACP bridge", () => {
       // frame that closes the turn omits it, so this value proves the two
       // reports merged instead of the later one replacing the earlier.
       cacheWriteTokens: 20,
-      source: "provider",
+      source: "cursor",
     });
     expect(session.contextUsage).not.toHaveProperty("maximumTokens");
     expect(session.contextUsage).not.toHaveProperty("percentage");

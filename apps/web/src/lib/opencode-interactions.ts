@@ -59,34 +59,6 @@ export interface OpenCodeEvent {
 }
 
 /**
- * Subscribe to events from the server
- * Returns an async iterator for SSE events
- */
-export async function subscribeToEvents(
-  client: OpencodeClient,
-): Promise<AsyncIterable<OpenCodeEvent> | null> {
-  try {
-    // event.subscribe() returns { stream: AsyncGenerator }
-    const response = await client.event.subscribe();
-
-    // The response has a stream property that is the async generator
-    if (response && "stream" in response) {
-      return response.stream as AsyncIterable<OpenCodeEvent>;
-    }
-
-    // Fallback - try to iterate the response directly
-    if (response && Symbol.asyncIterator in Object(response)) {
-      return response as unknown as AsyncIterable<OpenCodeEvent>;
-    }
-
-    return null;
-  } catch (error) {
-    console.error("[opencode-client] Failed to subscribe to events:", error);
-    return null;
-  }
-}
-
-/**
  * Get list of existing sessions
  */
 /**
@@ -272,33 +244,6 @@ export async function replyToQuestion(
     console.error("[opencode-client] Failed to reply to question:", error);
     return reconcileInteractionResponse(requestId, (signal) =>
       getPendingQuestions(client, { throwOnError: true, signal }),
-    );
-  }
-}
-
-/**
- * Reply to a permission request
- */
-export async function replyToPermission(
-  client: OpencodeClient,
-  requestId: string,
-  reply: PermissionReply,
-  message?: string,
-): Promise<OpenCodeInteractionResponseResult> {
-  try {
-    await client.permission.reply(
-      {
-        requestID: requestId,
-        reply,
-        message,
-      },
-      { throwOnError: true },
-    );
-    return "applied";
-  } catch (error) {
-    console.error("[opencode-client] Failed to reply to permission:", error);
-    return reconcileInteractionResponse(requestId, (signal) =>
-      getPendingPermissions(client, { throwOnError: true, signal }),
     );
   }
 }

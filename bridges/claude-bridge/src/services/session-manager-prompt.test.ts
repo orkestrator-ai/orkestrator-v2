@@ -14,6 +14,7 @@ import { join } from "node:path";
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_STREAM_CONTENT_BLOCK_INDEX,
+  PLAN_MODE_INSTRUCTIONS,
   abortSession,
   captureEvents,
   createSession,
@@ -26,6 +27,7 @@ import {
   getSessionMessages,
   mockGetMcpServerNames,
   mockGetMcpServersForSdk,
+  mockGetMcpRuntimeConfig,
   mockGetPluginsForSdk,
   mockQuery,
   nextQueryCall,
@@ -45,6 +47,26 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("sendPrompt", () => {
+  test("keeps plan guidance out of the user turn and passes it through SDK options", async () => {
+    const { call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      { permissionMode: "plan" },
+      "Inspect the implementation",
+    );
+    const sdkPrompt = await readSdkPrompt(call);
+    expect(call.options.planModeInstructions).toBe(PLAN_MODE_INSTRUCTIONS);
+    expect(sdkPrompt).toEqual([
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Inspect the implementation" }],
+        },
+        parent_tool_use_id: null,
+      },
+    ]);
+  });
+
   test("ignores the 1M-context parameter on a model that does not declare it", async () => {
     const session = createSession();
     track(session.id);
@@ -3160,10 +3182,32 @@ describe("sendPrompt", () => {
 
     const promptPromise = sendPrompt(session.id, "hello");
     const call = await nextQueryCall();
-    call.push({
-      type: "system",
-      subtype: "compact_boundary",
-      compact_metadata: { trigger: "auto", pre_tokens: 142_000 },
+    session.usage = {
+      usedTokens: 142_000,
+      totalTokens: 200_000,
+      percentUsed: 71,
+      inputTokens: 142_000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      lastTurnTokens: 142_000,
+      sessionTokens: 142_000,
+      source: "claude",
+      updatedAt: new Date(0).toISOString(),
+    };
+    const hooks = call.options.hooks as Record<
+      string,
+      Array<{ hooks: Array<(input: Record<string, unknown>) => Promise<unknown>> }>
+    >;
+    await hooks.PreCompact![0]!.hooks[0]!({
+      hook_event_name: "PreCompact",
+      trigger: "auto",
+      custom_instructions: null,
+    });
+    await hooks.PostCompact![0]!.hooks[0]!({
+      hook_event_name: "PostCompact",
+      trigger: "auto",
+      compact_summary: "Provider-owned summary",
     });
     call.push({ type: "result", subtype: "success" });
     call.finish();
@@ -4045,7 +4089,7 @@ describe("sendPrompt", () => {
     expect(getPromptDispatchState(session.id, "delete-in-flight-request")).toBe("not-found");
   });
 
-  test("forwards query configuration and captures init, compact, generic system, and context events", async () => {
+  test("forwards query configuration and captures init, generic system, and context events", async () => {
     mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
       local: { command: "safe-command", args: [] },
     }));
@@ -4067,11 +4111,6 @@ describe("sendPrompt", () => {
             ],
             plugins: [{ name: "plain", path: "/plain", status: "loaded" }],
             slash_commands: ["/compact"],
-          },
-          {
-            type: "system",
-            subtype: "compact_boundary",
-            compact_metadata: { pre_tokens: 100, post_tokens: 20, trigger: "manual" },
           },
           { type: "system", subtype: "status", detail: "working" },
           {
@@ -4128,7 +4167,10 @@ describe("sendPrompt", () => {
           { name: "plain", status: "loaded" },
         ],
       });
-      expect(events.some((event) => event.type === "system.compact")).toBe(true);
+      expect(call.options.hooks).toMatchObject({
+        PreCompact: [{ hooks: [expect.any(Function)] }],
+        PostCompact: [{ hooks: [expect.any(Function)] }],
+      });
       // A system subtype with no branch is a diagnostic, not transcript
       // content. It used to be re-emitted as an untyped `system.message` frame
       // carrying the whole SDK message; it is now a bounded, redacted notice.
@@ -4159,6 +4201,22 @@ describe("sendPrompt", () => {
         durationMs: 0,
         apiDurationMs: 0,
         permissionDenials: 0,
+        turns: [
+          {
+            turnId: expect.any(String),
+            costUsd: 0,
+            inputTokens: 12,
+            outputTokens: 3,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 15,
+            durationMs: undefined,
+            apiDurationMs: undefined,
+            ttftMs: undefined,
+            numTurns: undefined,
+            modelId: undefined,
+          },
+        ],
         contextCategories: undefined,
         estimated: true,
         source: "claude",
@@ -4186,6 +4244,7 @@ describe("sendPrompt", () => {
         "sessionTokens",
         "source",
         "totalTokens",
+        "turns",
         "updatedAt",
         "usedTokens",
       ]);
@@ -4195,5 +4254,32 @@ describe("sendPrompt", () => {
       else process.env.CWD = previousCwd;
       stop();
     }
+  });
+
+  test("excludes project MCP and plugin sources when project resources are disabled", async () => {
+    const session = createSession("restricted resources");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "restricted",
+    };
+    const prompt = sendPrompt(session.id, "Inspect safely");
+    const call = await nextQueryCall();
+
+    expect(mockGetMcpServersForSdk).toHaveBeenCalled();
+    expect(mockGetMcpRuntimeConfig).toHaveBeenLastCalledWith(
+      process.env.CWD || process.cwd(),
+      process.env,
+      undefined,
+      false,
+    );
+    expect(mockGetPluginsForSdk).toHaveBeenLastCalledWith(process.env.CWD || process.cwd(), false);
+    expect(call.options.settingSources).toEqual(["user"]);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
   });
 });

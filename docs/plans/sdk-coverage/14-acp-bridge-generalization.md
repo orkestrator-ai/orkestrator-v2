@@ -1,6 +1,6 @@
 # 14 — ACP bridge generalization
 
-**Status:** ⬜ Not started · 0/16 tasks · Depends on: 02, 06, 08
+**Status:** 🟨 In progress · core implementation complete, awaiting real-agent/browser QA and merge · Depends on: 02, 06, 08
 
 ## Goal
 
@@ -97,3 +97,18 @@ against it.
 
 Steering (ACP v1 has none). Hosting a second agent in this milestone; the
 plan makes it possible, a separate plan adds one.
+
+## Implementation notes
+
+- The bridge pins `@agentclientprotocol/sdk` 1.4.0 and uses its public request
+  and response types at the client-method boundary. Protocol negotiation fails
+  clearly when the agent returns an unsupported version.
+- Provider launch, authentication, modes and extension prefixes are driven by
+  a config record. The production Cursor-era ACP replay/discovery modules and
+  Grok-only wrapper were removed; Cursor's supported path is its SDK bridge.
+- Workspace-confined filesystem methods and bounded Bun-terminal methods are
+  implemented, including inline captured output. Fake-agent tests cover auth,
+  capabilities, protocol refusal, filesystem and the terminal lifecycle.
+- The pinned real-Grok argv check and browser fixture remain manual before
+  merge. Plans 06 and 08 still own the fully normalized command and account
+  surfaces used above this adapter.

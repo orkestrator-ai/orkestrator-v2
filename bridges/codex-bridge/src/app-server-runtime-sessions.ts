@@ -30,6 +30,8 @@ import {
   AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
   AmbiguousDispatchResolution,
   mergeRateLimitWindows,
+  mergeAccountUsage,
+  accountUsageFromLimits,
   isJsonObject,
   DEFAULT_COMPACTION_TIMEOUT_MS,
   MAX_STEER_REQUESTS,
@@ -1006,7 +1008,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     const context = this.registry.getThreadForSession(sessionId);
     if (context && phaseToExternalStatus(context.phase) === "running") return "running";
 
-    const nextConfig = this.toEngineConfig(body);
+    const nextConfig = this.toEngineConfig({
+      ...body,
+      ...(body.policy ? {} : { policy: session.config.policy }),
+    });
     const requestedModelChanged = session.config.model !== nextConfig.model;
     let attached: ThreadContext | undefined;
     let previousConfirmedModel: string | undefined;
@@ -1066,6 +1071,42 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     if (!context) return [...session.localMessages];
 
     return this.messagesForSession(session, context);
+  }
+
+  async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    void this.touchSession(sessionId);
+    const readAccountUsage = this.options.engine.readAccountUsage;
+    const providerAccount = readAccountUsage
+      ? await readAccountUsage.call(this.options.engine)
+      : undefined;
+    const previous = session.threadId ? this.usageByThread.get(session.threadId) : undefined;
+    const withLimits = mergeAccountUsage(
+      previous?.account,
+      accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+    );
+    const account = mergeAccountUsage(withLimits, providerAccount);
+    if (!previous && !account) return undefined;
+    const usage: EngineUsageSnapshot = {
+      ...(previous ?? {
+        usedTokens: 0,
+        totalTokens: 0,
+        percentUsed: 0,
+        estimated: false,
+        source: "codex",
+        updatedAt: new Date(this.now()).toISOString(),
+      }),
+      ...(account ? { account } : {}),
+      updatedAt: new Date(this.now()).toISOString(),
+    };
+    if (session.threadId) this.usageByThread.set(session.threadId, usage);
+    this.options.emit({
+      type: "session.updated",
+      sessionId,
+      data: { contextUsage: usage },
+    });
+    return usage;
   }
 
   getStatus(sessionId: string): {
@@ -1304,6 +1345,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     mode: ConversationMode;
     fastMode: boolean;
     durable: boolean;
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   } | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
@@ -1315,6 +1357,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         : {}),
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
+      ...(session.config.policy ? { policy: session.config.policy } : {}),
       durable: await this.isSessionConfigPersisted(session),
     };
   }

@@ -39,15 +39,19 @@ const noProviderCatalog = {
 
 describe("opencode-client createClient", () => {
   test("returns false when the health endpoint rejects or reports a non-success status", async () => {
-    globalThis.fetch = mock(
-      async () => new Response("unavailable", { status: 503 }),
-    ) as unknown as typeof fetch;
-    await expect(checkHealth("http://127.0.0.1:7777")).resolves.toBe(false);
+    const unavailable = {
+      global: { health: async () => ({ error: { message: "unavailable" } }) },
+    } as unknown as OpencodeClient;
+    await expect(checkHealth(unavailable)).resolves.toBe(false);
 
-    globalThis.fetch = mock(async () => {
-      throw new TypeError("connection refused");
-    }) as unknown as typeof fetch;
-    await expect(checkHealth("http://127.0.0.1:7777")).resolves.toBe(false);
+    const rejected = {
+      global: {
+        health: async () => {
+          throw new TypeError("connection refused");
+        },
+      },
+    } as unknown as OpencodeClient;
+    await expect(checkHealth(rejected)).resolves.toBe(false);
   });
 
   test("rewrites loopback SDK requests through the gateway when enabled", async () => {
@@ -76,12 +80,15 @@ describe("opencode-client createClient", () => {
 
   test("health-checks a cached client with the credential it was created with", async () => {
     const requests: Array<{ url: string; headers: Headers }> = [];
-    globalThis.fetch = mock(async (input, init) => {
+    globalThis.fetch = mock(async (input) => {
+      const request = input as Request;
       requests.push({
-        url: String(input),
-        headers: new Headers(init?.headers),
+        url: request.url,
+        headers: request.headers,
       });
-      return new Response("ok");
+      return new Response(JSON.stringify({ healthy: true, version: "test" }), {
+        headers: { "content-type": "application/json" },
+      });
     }) as unknown as typeof fetch;
 
     const client = createClient("http://127.0.0.1:7777", undefined, "cached-secret");

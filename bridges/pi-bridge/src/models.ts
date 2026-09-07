@@ -28,29 +28,27 @@ import { CATALOG_TIMEOUT_MS, MAX_MODEL_ID_BYTES, MAX_MODELS } from "./config.js"
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 
-/**
- * The ladder Pi itself defines, in order.
- *
- * `off` is a real selection rather than "let the model decide" — it disables
- * reasoning outright — so it is offered as its own option instead of being
- * folded into the shared `default` id, which every other platform uses to mean
- * the opposite.
- */
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type PiThinkingLevel = (typeof THINKING_LEVELS)[number];
-
 /** Pi's own default when neither the model nor the user's settings name one. */
-export const DEFAULT_THINKING_LEVEL: PiThinkingLevel = "medium";
+export const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = "medium";
 
-const THINKING_LABELS: Readonly<Record<PiThinkingLevel, string>> = Object.freeze({
-  off: "Off",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra high",
-  max: "Max",
-});
+function thinkingLabel(level: ModelThinkingLevel): string {
+  switch (level) {
+    case "off":
+      return "Off";
+    case "minimal":
+      return "Minimal";
+    case "low":
+      return "Low";
+    case "medium":
+      return "Medium";
+    case "high":
+      return "High";
+    case "xhigh":
+      return "Extra high";
+    case "max":
+      return "Max";
+  }
+}
 
 let catalogCache: AgentModel[] | null = null;
 interface CatalogProbe {
@@ -263,11 +261,10 @@ export function normalizeAgentModel(
  * the axis exists and has exactly one honest value.
  */
 function reasoningOptions(model: Model<Api>): Array<{ id: string; label: string }> {
-  return getSupportedThinkingLevels(model)
-    .filter((level): level is PiThinkingLevel =>
-      (THINKING_LEVELS as readonly string[]).includes(level),
-    )
-    .map((level) => ({ id: level, label: THINKING_LABELS[level] }));
+  return getSupportedThinkingLevels(model).map((level) => ({
+    id: level,
+    label: thinkingLabel(level),
+  }));
 }
 
 /**
@@ -342,10 +339,23 @@ export function thinkingLevel(
   model?: Model<Api>,
 ): ModelThinkingLevel {
   const trimmed = reasoningId?.trim();
-  const requested = (THINKING_LEVELS as readonly string[]).includes(trimmed ?? "")
-    ? (trimmed as ModelThinkingLevel)
-    : DEFAULT_THINKING_LEVEL;
+  const requested = isThinkingLevel(trimmed) ? trimmed : DEFAULT_THINKING_LEVEL;
   return model ? clampThinkingLevel(model, requested) : requested;
+}
+
+function isThinkingLevel(value: string | undefined): value is ModelThinkingLevel {
+  switch (value) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**

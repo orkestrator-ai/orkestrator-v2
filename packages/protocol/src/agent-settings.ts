@@ -26,6 +26,7 @@ import {
   type ActionDefaults,
 } from "./action-defaults.js";
 import { REVIEW_FANOUT_MAX_REVIEWERS, REVIEW_FANOUT_MIN_REVIEWERS } from "./review-fanout.js";
+import type { NativeAgentExecutionPolicyOverride } from "./native-agent.js";
 
 export type AgentLaunchMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
@@ -75,6 +76,8 @@ export interface AgentSettingsTier {
   actionDefaults?: ActionDefaults;
   multiReview?: MultiReviewAgentSettings;
   platforms?: Partial<Record<AgentPlatform, AgentPlatformSettings>>;
+  /** Environment-origin execution axes. Every absent field inherits the backend default. */
+  executionPolicy?: NativeAgentExecutionPolicyOverride;
 }
 
 /** Lowest priority first is *not* the order here: environment wins. */
@@ -259,6 +262,7 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
   const defaultAgent = isAgentPlatform(record.defaultAgent) ? record.defaultAgent : undefined;
   const actionDefaults = normalizeActionDefaults(record.actionDefaults);
   const multiReview = normalizeMultiReviewSettings(record.multiReview);
+  const executionPolicy = normalizeExecutionPolicyOverride(record.executionPolicy);
 
   const platforms: Partial<Record<AgentPlatform, AgentPlatformSettings>> = {};
   const rawPlatforms =
@@ -275,7 +279,54 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
     ...(Object.keys(actionDefaults).length > 0 ? { actionDefaults } : {}),
     ...(multiReview ? { multiReview } : {}),
     ...(Object.keys(platforms).length > 0 ? { platforms } : {}),
+    ...(executionPolicy ? { executionPolicy } : {}),
   };
+}
+
+function normalizeExecutionPolicyOverride(
+  value: unknown,
+): NativeAgentExecutionPolicyOverride | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const sandbox =
+    record.sandbox === "provider" || record.sandbox === "container" || record.sandbox === "none"
+      ? record.sandbox
+      : undefined;
+  const approvals =
+    record.approvals === "ask" || record.approvals === "auto-approve" || record.approvals === "deny"
+      ? record.approvals
+      : undefined;
+  const networkAccess =
+    record.networkAccess === "restricted" || record.networkAccess === "full"
+      ? record.networkAccess
+      : undefined;
+  const stringList = (candidate: unknown): string[] | undefined => {
+    if (!Array.isArray(candidate)) return undefined;
+    const values = candidate
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 128);
+    return values.length > 0 ? [...new Set(values)] : undefined;
+  };
+  const rawTools =
+    record.toolPolicy && typeof record.toolPolicy === "object" && !Array.isArray(record.toolPolicy)
+      ? (record.toolPolicy as Record<string, unknown>)
+      : undefined;
+  const allow = stringList(rawTools?.allow);
+  const deny = stringList(rawTools?.deny);
+  const normalized: NativeAgentExecutionPolicyOverride = {
+    ...(sandbox ? { sandbox } : {}),
+    ...(approvals ? { approvals } : {}),
+    ...(typeof record.projectResources === "boolean"
+      ? { projectResources: record.projectResources }
+      : {}),
+    ...(allow || deny
+      ? { toolPolicy: { ...(allow ? { allow } : {}), ...(deny ? { deny } : {}) } }
+      : {}),
+    ...(networkAccess ? { networkAccess } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 /** True when this tier expresses no opinion at all, i.e. inherits everything. */
@@ -285,6 +336,7 @@ export function isEmptyAgentSettings(tier: AgentSettingsTier | null | undefined)
     !tier.defaultAgent &&
     Object.keys(tier.actionDefaults ?? {}).length === 0 &&
     !tier.multiReview &&
+    !tier.executionPolicy &&
     Object.keys(tier.platforms ?? {}).length === 0
   );
 }

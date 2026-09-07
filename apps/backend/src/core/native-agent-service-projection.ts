@@ -4,6 +4,7 @@ import {
   nativeAsyncQuestionItemId,
   recoverBackgroundTaskLaunchId,
   type NativeAgentAsyncQuestionResponse,
+  type NativeAgentContextUsage,
 } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
@@ -150,6 +151,32 @@ export type NativeAgentServiceLayerTypes = [
   OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
+
+/**
+ * Carry sparse provider turn rows across projection reads.
+ *
+ * Live bridge events often contain only the newest row. The backend projection
+ * is the renderer's authoritative reload source, so replacing that sparse list
+ * would make older rows disappear whenever the tab remounted. Re-inserting by
+ * id also moves a corrected row to the newest position while retaining the
+ * strict twenty-row bound.
+ */
+export function mergeContextUsageTurns(
+  previous: NativeAgentContextUsage | undefined,
+  current: NativeAgentContextUsage | undefined,
+): NativeAgentContextUsage | undefined {
+  if (!current) return previous;
+  const turns = new Map((previous?.turns ?? []).map((turn) => [turn.turnId, turn]));
+  for (const turn of current.turns ?? []) {
+    turns.delete(turn.turnId);
+    turns.set(turn.turnId, turn);
+  }
+  const mergedTurns = [...turns.values()].slice(-20);
+  return {
+    ...current,
+    ...(mergedTurns.length > 0 ? { turns: mergedTurns } : {}),
+  };
+}
 
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
@@ -1345,6 +1372,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
       generation = this.providerConnections.get(providerCacheKey) ?? `in-process:${input.agent}`;
       const advertisedCapabilities = nativeCapabilities(input.agent);
+      // User-triggered supplementary metadata. A billing endpoint failure
+      // must not make an otherwise healthy transcript unavailable. Merge the
+      // value below after the ordinary snapshot resolves.
+      const refreshedUsage = input.refreshUsage
+        ? await resolved.provider
+            .refreshUsage?.(resolved.session.providerSessionId)
+            .catch(() => undefined)
+        : undefined;
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
@@ -1486,21 +1521,29 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         snapshot.controls,
       );
       const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
-      const contextUsage = snapshot.contextUsage
+      const previousContextUsage =
+        previous?.projection.sessionId === resolved.session.providerSessionId
+          ? previous.projection.contextUsage
+          : undefined;
+      const mergedContextUsage = mergeContextUsageTurns(
+        previousContextUsage,
+        mergeContextUsageTurns(snapshot.contextUsage, refreshedUsage),
+      );
+      const contextUsage = mergedContextUsage
         ? {
-            ...snapshot.contextUsage,
-            ...(snapshot.contextUsage.maximumTokens === undefined && selectedModel?.contextWindow
+            ...mergedContextUsage,
+            ...(mergedContextUsage.maximumTokens === undefined && selectedModel?.contextWindow
               ? { maximumTokens: selectedModel.contextWindow }
               : {}),
-            ...(snapshot.contextUsage.percentage === undefined &&
-            (snapshot.contextUsage.maximumTokens ?? selectedModel?.contextWindow)
+            ...(mergedContextUsage.percentage === undefined &&
+            (mergedContextUsage.maximumTokens ?? selectedModel?.contextWindow)
               ? {
                   percentage: Math.max(
                     0,
                     Math.min(
                       100,
-                      (snapshot.contextUsage.usedTokens /
-                        (snapshot.contextUsage.maximumTokens ?? selectedModel!.contextWindow!)) *
+                      (mergedContextUsage.usedTokens /
+                        (mergedContextUsage.maximumTokens ?? selectedModel!.contextWindow!)) *
                         100,
                     ),
                   ),
@@ -1759,6 +1802,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
+        ...((snapshot.policy ?? resolved.session.policy)
+          ? { policy: snapshot.policy ?? resolved.session.policy }
+          : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
         ...(snapshot.runtime || mcpServers.length > 0
           ? {

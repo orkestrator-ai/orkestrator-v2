@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertStableRead,
-  imageMimeType,
   MAX_PROMPT_ATTACHMENTS,
   parsePromptAttachments,
   promptFileReferences,
@@ -21,7 +20,10 @@ import {
   type ReadIdentity,
 } from "./prompt-attachments.js";
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
 
 let workspace: string;
 let outside: string;
@@ -93,23 +95,6 @@ describe("parsePromptAttachments", () => {
   });
 });
 
-describe("imageMimeType", () => {
-  test("identifies each supported format from its signature", () => {
-    expect(imageMimeType(PNG)).toBe("image/png");
-    expect(imageMimeType(Buffer.from([0xff, 0xd8, 0xff, 0x00]))).toBe("image/jpeg");
-    expect(imageMimeType(Buffer.from("GIF89a....", "latin1"))).toBe("image/gif");
-    expect(imageMimeType(Buffer.from("RIFF0000WEBP", "latin1"))).toBe("image/webp");
-  });
-
-  test("refuses a format it cannot name rather than guessing", () => {
-    // The extension is a caller-supplied label; only the bytes decide.
-    expect(() => imageMimeType(Buffer.from("<svg/>", "latin1"))).toThrow(PromptAttachmentError);
-    expect(() => imageMimeType(Buffer.alloc(0))).toThrow(PromptAttachmentError);
-    // A truncated PNG signature must not pass on its prefix alone.
-    expect(() => imageMimeType(Buffer.from([0x89, 0x50, 0x4e]))).toThrow(PromptAttachmentError);
-  });
-});
-
 describe("readPromptImages", () => {
   test("reads a workspace image and types it from its bytes", async () => {
     await writeFile(join(workspace, "shot.png"), PNG);
@@ -131,6 +116,13 @@ describe("readPromptImages", () => {
     await writeFile(join(workspace, "notes.md"), "hello");
     expect(await readPromptImages([{ type: "file", path: "notes.md" }], workspace)).toEqual([]);
     expect(await readPromptImages([], workspace)).toEqual([]);
+  });
+
+  test("refuses a format Pi's SDK cannot name rather than guessing from its extension", async () => {
+    await writeFile(join(workspace, "not-really.png"), "<svg/>");
+    expect(
+      await codeOf(readPromptImages([{ type: "image", path: "not-really.png" }], workspace)),
+    ).toBe("attachment_unsupported_format");
   });
 
   test("refuses a path that escapes the workspace", async () => {

@@ -159,6 +159,9 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
     raw.source === "claude" ||
     raw.source === "opencode" ||
     raw.source === "codex" ||
+    raw.source === "cursor" ||
+    raw.source === "grok" ||
+    raw.source === "pi" ||
     raw.source === "heuristic" ||
     raw.source === "provider"
   )
@@ -194,6 +197,93 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       ];
     });
     if (categories.length > 0) usage.contextCategories = categories;
+  }
+  if (Array.isArray(raw.turns)) {
+    const turns = raw.turns.slice(-20).flatMap((candidate) => {
+      const turn = asRecord(candidate);
+      if (!turn || typeof turn.turnId !== "string" || turn.turnId.length === 0) return [];
+      const normalized: NonNullable<NativeAgentContextUsage["turns"]>[number] = {
+        turnId: turn.turnId.slice(0, 256),
+      };
+      for (const key of [
+        "costUsd",
+        "rawCostUsd",
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "reasoningTokens",
+        "totalTokens",
+        "durationMs",
+        "apiDurationMs",
+        "ttftMs",
+        "numTurns",
+        "toolCalls",
+      ] as const) {
+        const value = turn[key];
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+          normalized[key] = value;
+      }
+      if (typeof turn.requestId === "string") normalized.requestId = turn.requestId.slice(0, 256);
+      if (typeof turn.modelId === "string") normalized.modelId = turn.modelId.slice(0, 256);
+      return [normalized];
+    });
+    if (turns.length > 0) usage.turns = turns;
+  }
+  if (Array.isArray(raw.account)) {
+    const priority = new Set(["primary", "secondary", "credits"]);
+    const stable = raw.account.filter((candidate) => {
+      const entry = asRecord(candidate);
+      return typeof entry?.window === "string" && priority.has(entry.window);
+    });
+    const remainder = raw.account.filter((candidate) => {
+      const entry = asRecord(candidate);
+      return typeof entry?.window !== "string" || !priority.has(entry.window);
+    });
+    const candidates = [...stable.slice(0, 3), ...remainder.slice(-(16 - stable.length))].slice(
+      0,
+      16,
+    );
+    const account = candidates.flatMap((candidate) => {
+      const window = asRecord(candidate);
+      if (!window || typeof window.window !== "string" || window.window.length === 0) return [];
+      const normalized: NonNullable<NativeAgentContextUsage["account"]>[number] = {
+        window: window.window.slice(0, 128),
+      };
+      if (typeof window.label === "string") normalized.label = window.label.slice(0, 128);
+      for (const key of [
+        "tokens",
+        "usedPercent",
+        "spendUsd",
+        "creditsRemaining",
+        "limitUsd",
+      ] as const) {
+        const value = window[key];
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+          normalized[key] = value;
+      }
+      if (typeof window.resetsAt === "string" && Number.isFinite(Date.parse(window.resetsAt))) {
+        normalized.resetsAt = window.resetsAt;
+      }
+      return [normalized];
+    });
+    if (account.length > 0) usage.account = account;
+  }
+  if (Array.isArray(raw.permissionDenialDetails)) {
+    const details = raw.permissionDenialDetails.slice(-20).flatMap((candidate) => {
+      const denial = asRecord(candidate);
+      if (!denial || typeof denial.toolName !== "string" || denial.toolName.length === 0) return [];
+      return [
+        {
+          toolName: denial.toolName.slice(0, 128),
+          ...(typeof denial.toolUseId === "string"
+            ? { toolUseId: denial.toolUseId.slice(0, 256) }
+            : {}),
+          ...(typeof denial.reason === "string" ? { reason: denial.reason.slice(0, 512) } : {}),
+        },
+      ];
+    });
+    if (details.length > 0) usage.permissionDenialDetails = details;
   }
   return usage;
 }

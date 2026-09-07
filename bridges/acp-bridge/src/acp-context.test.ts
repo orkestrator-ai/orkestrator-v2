@@ -1653,7 +1653,7 @@ describe("ACP bridge", () => {
         FAKE_ACP_PROMPT_BLOCKS_FILE: blocksFile,
         // Grok currently understates this capability but accepts the standard
         // image block; keep that compatibility case explicit in the harness.
-        FAKE_ACP_IMAGE_CAPABILITY: acpProvider === "cursor" ? "true" : "false",
+        FAKE_ACP_IMAGE_CAPABILITY: "true",
       };
       const first = await spawnBridge({ stateDirectory, env: bridgeEnv });
       const created = (await nativeFetch(`${first.base}/session/create`, {

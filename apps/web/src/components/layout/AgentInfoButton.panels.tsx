@@ -13,10 +13,11 @@ import {
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type {
+  NativeAgentAccountUsageWindow,
   NativeAgentRuntimeNotice,
   NativeAgentRuntimeSummary,
+  NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
-import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 
 function formatUsd(value: number): string {
   if (value === 0) return "$0.00";
@@ -123,15 +124,6 @@ export function SystemUsagePanel({
       </div>
     </section>
   );
-}
-
-/**
- * An overdrawn allowance reports a negative remainder, and `formatUsd` would
- * render that as `$-50.0000` through its sub-cent branch. Sign it outside the
- * currency instead.
- */
-function formatCents(value: number): string {
-  return value < 0 ? `-${formatUsd(Math.abs(value) / 100)}` : formatUsd(value / 100);
 }
 
 function formatDuration(value: number): string {
@@ -558,113 +550,93 @@ export type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | 
   percentUsed?: number;
 };
 
-export function CursorAccountUsagePanel({
-  result,
-  loading,
-}: {
-  result: CursorUsageResult | null;
-  loading: boolean;
-}) {
-  if (loading && !result) {
-    return (
-      <div className="rounded-lg border border-dashed border-border/70 px-4 py-4 text-sm text-muted-foreground">
-        Loading Cursor account usage…
-      </div>
-    );
-  }
-  if (!result) return null;
-  if (!result.ok) {
-    return (
-      <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-3">
-        <div className="text-xs font-medium text-amber-100/90">Account usage unavailable</div>
-        <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          {result.message}
-        </div>
-      </div>
-    );
-  }
-
-  const account = result.data;
-  const limits: AgentRateLimitWindow[] = [
-    ...(account.buckets.length === 0 && account.internalPercentages?.totalPercentUsed !== undefined
-      ? [
-          {
-            label: "Cursor quota",
-            usedPercent: account.internalPercentages.totalPercentUsed,
-            ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
-          },
-        ]
-      : []),
-    ...account.buckets.flatMap((bucket) =>
-      bucket.usedPercent === undefined
-        ? []
-        : [
-            {
-              label: bucket.label,
-              usedPercent: bucket.usedPercent,
-              ...(bucket.resetsAt ? { resetsAt: bucket.resetsAt } : {}),
-            },
-          ],
-    ),
-  ];
-  const hasMoney =
-    account.included.usedCents !== undefined ||
-    account.onDemand?.usedCents !== undefined ||
-    account.onDemand?.individualLimitCents !== undefined ||
-    account.onDemand?.pooledLimitCents !== undefined;
-
+function AccountUsageSection({ account }: { account: NativeAgentAccountUsageWindow[] }) {
   return (
-    <div className="space-y-3">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-            Cursor account
-          </div>
-          <div className="mt-1 text-sm font-medium text-foreground">
-            {account.plan ?? "Current billing cycle"}
-          </div>
-        </div>
-        {account.cycle.endsAt ? (
-          <div className="max-w-[13rem] text-right text-[10px] text-muted-foreground">
-            Resets {formatResetDateTime(account.cycle.endsAt)}
-          </div>
-        ) : null}
+    <section className="space-y-2" aria-label="Account usage">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        Account
       </div>
-
-      {hasMoney ? (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-4">
-          {account.included.usedCents !== undefined ? (
-            <Metric label="Included used" value={formatCents(account.included.usedCents)} />
+      {account.map((window) => (
+        <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 text-xs font-medium text-foreground">
+              {window.label ?? window.window}
+            </div>
+            {window.resetsAt ? (
+              <div className="shrink-0 text-[10px] text-muted-foreground">
+                Resets {formatResetDateTime(window.resetsAt)}
+              </div>
+            ) : null}
+          </div>
+          {window.usedPercent !== undefined ? (
+            <div className="mt-2">
+              <div className="mb-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                {window.usedPercent.toFixed(window.usedPercent >= 10 ? 0 : 1)}%
+              </div>
+              <Progress value={window.usedPercent} aria-label={`${window.usedPercent}% used`} />
+            </div>
           ) : null}
-          {account.onDemand?.usedCents !== undefined ? (
-            <Metric label="On-demand" value={formatCents(account.onDemand.usedCents)} />
-          ) : null}
-          {account.onDemand?.individualLimitCents !== undefined ? (
-            <Metric
-              label="Spend limit"
-              value={formatCents(account.onDemand.individualLimitCents)}
-              detail={account.onDemand.limitType}
-            />
-          ) : account.onDemand?.pooledLimitCents !== undefined ? (
-            <Metric
-              label="Pooled limit"
-              value={formatCents(account.onDemand.pooledLimitCents)}
-              detail={account.onDemand.limitType}
-            />
-          ) : null}
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {window.tokens !== undefined ? (
+              <Metric label="Tokens" value={formatTokenCount(window.tokens)} />
+            ) : null}
+            {window.spendUsd !== undefined ? (
+              <Metric label="Spend" value={formatUsd(window.spendUsd)} />
+            ) : null}
+            {window.limitUsd !== undefined ? (
+              <Metric label="Limit" value={formatUsd(window.limitUsd)} />
+            ) : null}
+            {window.creditsRemaining !== undefined ? (
+              <Metric label="Credits" value={String(window.creditsRemaining)} />
+            ) : null}
+          </div>
         </div>
-      ) : null}
+      ))}
+    </section>
+  );
+}
 
-      {limits.length > 0 ? <RateLimitsSection rateLimits={limits} /> : null}
-      {!hasMoney && limits.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/70 px-4 py-4 text-sm text-muted-foreground">
-          No usage figures reported.
-        </div>
-      ) : null}
-      <div className="border-t border-border/60 pt-3 text-right text-[10px] text-muted-foreground">
-        Cursor dashboard · refreshed {new Date(account.source.retrievedAt).toLocaleTimeString()}
+function TurnUsageSection({ turns }: { turns: NativeAgentTurnUsage[] }) {
+  return (
+    <section className="space-y-2" aria-label="Turn usage">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        Recent turns
       </div>
-    </div>
+      {Array.from(turns)
+        .reverse()
+        .map((turn) => {
+          const tokens =
+            turn.totalTokens ??
+            (turn.inputTokens ?? 0) +
+              (turn.outputTokens ?? 0) +
+              (turn.cacheReadTokens ?? 0) +
+              (turn.cacheWriteTokens ?? 0);
+          return (
+            <div key={turn.turnId} className="rounded-lg border border-border/60 px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                  {turn.turnId}
+                </div>
+                <div className="shrink-0 font-mono text-xs tabular-nums text-foreground">
+                  {formatTokenCount(tokens)}
+                  {turn.costUsd !== undefined ? ` · ${formatUsd(turn.costUsd)}` : ""}
+                </div>
+              </div>
+              {turn.modelId || turn.requestId || turn.durationMs !== undefined ? (
+                <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                  {[
+                    turn.modelId,
+                    turn.requestId,
+                    turn.durationMs === undefined ? undefined : formatDuration(turn.durationMs),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+    </section>
   );
 }
 
@@ -714,6 +686,7 @@ export function UsagePanel({
 
   return (
     <div className="space-y-4">
+      {usage.account?.length ? <AccountUsageSection account={usage.account} /> : null}
       {contextWindow ? (
         <div>
           <div className="mb-2 flex items-end justify-between gap-3">
@@ -781,6 +754,8 @@ export function UsagePanel({
           />
         ) : null}
       </div>
+
+      {usage.turns?.length ? <TurnUsageSection turns={usage.turns} /> : null}
 
       {displayedRateLimits && displayedRateLimits.length > 0 ? (
         <RateLimitsSection rateLimits={displayedRateLimits} />

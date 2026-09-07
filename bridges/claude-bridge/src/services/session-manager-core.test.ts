@@ -19,6 +19,7 @@ import {
   nextQueryCall,
   originalExecFile,
   queryControlOverrides,
+  refreshClaudeContextUsage,
   realFs,
   runPromptWithMessages,
   sendPrompt,
@@ -1219,6 +1220,41 @@ describe("rate_limit_event", () => {
 });
 
 describe("claude usage snapshot", () => {
+  test("uses a full context read only for an explicit panel refresh", async () => {
+    const session = createSession("full usage");
+    session.usage = {
+      usedTokens: 10,
+      inputTokens: 4,
+      outputTokens: 6,
+      turns: [{ turnId: "turn-1", inputTokens: 4, outputTokens: 6 }],
+      source: "claude",
+      updatedAt: new Date().toISOString(),
+    };
+    const getContextUsage = mock(async () => ({
+      totalTokens: 50_000,
+      maxTokens: 200_000,
+      percentage: 25,
+      model: "claude-opus-5",
+      categories: [{ name: "Messages", tokens: 49_000, color: "blue" }],
+    }));
+    session.queryControl = { getContextUsage };
+
+    const usage = await refreshClaudeContextUsage(session);
+
+    expect(getContextUsage).toHaveBeenCalledWith({ detail: "full" });
+    expect(usage).toMatchObject({
+      usedTokens: 50_000,
+      totalTokens: 200_000,
+      percentUsed: 25,
+      modelId: "claude-opus-5",
+      inputTokens: 4,
+      outputTokens: 6,
+      turns: [{ turnId: "turn-1" }],
+      contextCategories: [{ name: "Messages", tokens: 49_000, color: "blue" }],
+      estimated: false,
+    });
+  });
+
   test("counts cache reads on a resumed turn", async () => {
     const { session } = await runPromptWithMessages([
       {
@@ -1293,7 +1329,9 @@ describe("claude usage snapshot", () => {
       total_cost_usd: 0.5,
       duration_ms: 100,
       duration_api_ms: 80,
-      permission_denials: [{ tool_name: "Bash" }],
+      num_turns: 3,
+      ttft_ms: 25,
+      permission_denials: [{ tool_name: "Bash", tool_use_id: "tool-denied" }],
     };
 
     for (let index = 0; index < 2; index += 1) {
@@ -1318,11 +1356,60 @@ describe("claude usage snapshot", () => {
       apiDurationMs: 160,
       permissionDenials: 2,
     });
+    expect(getSession(session.id)?.usage?.turns).toHaveLength(2);
+    expect(getSession(session.id)?.usage?.turns?.at(-1)).toMatchObject({
+      costUsd: 0.5,
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 70,
+      totalTokens: 100,
+      durationMs: 100,
+      apiDurationMs: 80,
+      ttftMs: 25,
+      numTurns: 3,
+      modelId: "claude-opus-5",
+    });
+    expect(getSession(session.id)?.usage?.permissionDenialDetails).toEqual([
+      { toolName: "Bash", toolUseId: "tool-denied" },
+      { toolName: "Bash", toolUseId: "tool-denied" },
+    ]);
   });
 
   test("publishes nothing when a turn reports no tokens", async () => {
     const { session } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);
     expect(session.usage).toBeUndefined();
+  });
+
+  test("retains cost and timing when an older runtime omits token counters", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "result",
+        subtype: "success",
+        uuid: "result-cost-only",
+        total_cost_usd: 0.125,
+        duration_ms: 250,
+        duration_api_ms: 200,
+        num_turns: 2,
+        ttft_ms: 40,
+      },
+    ]);
+
+    expect(session.usage).toMatchObject({
+      usedTokens: 0,
+      costUsd: 0.125,
+      durationMs: 250,
+      turns: [
+        {
+          turnId: "result-cost-only",
+          costUsd: 0.125,
+          durationMs: 250,
+          apiDurationMs: 200,
+          numTurns: 2,
+          ttftMs: 40,
+          totalTokens: 0,
+        },
+      ],
+    });
   });
 
   test("keeps exact token totals when no context window can be determined", async () => {
@@ -1345,13 +1432,14 @@ describe("claude usage snapshot", () => {
   });
 
   test("prefers an exact context report over the token arithmetic", async () => {
-    queryControlOverrides.getContextUsage = mock(async () => ({
+    const getContextUsage = mock(async () => ({
       totalTokens: 51_200,
       maxTokens: 200_000,
       percentage: 25.6,
       model: "claude-opus-5",
       categories: [{ name: "System prompt", tokens: 1200, color: "#fff" }, { name: "bad entry" }],
     }));
+    queryControlOverrides.getContextUsage = getContextUsage;
 
     const { session } = await runPromptWithMessages([
       {
@@ -1370,6 +1458,7 @@ describe("claude usage snapshot", () => {
       estimated: false,
       contextCategories: [{ name: "System prompt", tokens: 1200, color: "#fff" }],
     });
+    expect(getContextUsage).toHaveBeenCalledWith({ detail: "summary" });
   });
 
   test("publishes a context control report when the turn has no token counters", async () => {

@@ -161,6 +161,8 @@ export function acpContextUsage(
     durationMs?: number;
     lastTurnTokens?: number;
     sessionTokens?: number;
+    turns?: NativeAgentContextUsage["turns"];
+    source?: NativeAgentContextUsage["source"];
     updatedAt: string;
   },
 ): NativeAgentContextUsage | null {
@@ -195,11 +197,12 @@ export function acpContextUsage(
     ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
     ...(details.lastTurnTokens === undefined ? {} : { lastTurnTokens: details.lastTurnTokens }),
     ...(details.sessionTokens === undefined ? {} : { sessionTokens: details.sessionTokens }),
+    ...(details.turns?.length ? { turns: details.turns.slice(-20) } : {}),
     ...(usage.apiDurationMs === undefined ? {} : { apiDurationMs: usage.apiDurationMs }),
     ...(usage.costUsd === undefined ? {} : { costUsd: usage.costUsd }),
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(details.modelId ? { modelId: details.modelId } : {}),
-    source: "provider",
+    source: details.source ?? "provider",
     updatedAt: details.updatedAt,
   };
 }

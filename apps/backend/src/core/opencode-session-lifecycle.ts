@@ -20,6 +20,7 @@ import {
 } from "./opencode-snapshots.js";
 
 const OPENCODE_EXISTENCE_PROBE_CONCURRENCY = 8;
+const DEFAULT_OPENCODE_STATUS_RECONCILE_INTERVAL_MS = 30_000;
 
 export class OpenCodeSessionLifecycle {
   readonly ownedSessions = new Set<string>();
@@ -32,6 +33,9 @@ export class OpenCodeSessionLifecycle {
   private sessionListFailure: { error: unknown; expiresAt: number } | null = null;
   private sessionListRead: Promise<OpenCodeExistenceSnapshot> | null = null;
   private existenceProbeCursor = 0;
+  private readonly eventLifecycle = new Map<string, OpenCodeSessionLifecycleState>();
+  private lastStatusReconcileAt = 0;
+  private readonly statusReconcileIntervalMs: number;
 
   constructor(
     private readonly client: OpencodeClient,
@@ -39,10 +43,32 @@ export class OpenCodeSessionLifecycle {
     private readonly now: () => number,
     private readonly existenceCacheTtlMs: number,
     private readonly requestOptions: () => { signal: AbortSignal },
-  ) {}
+    statusReconcileIntervalMs?: number,
+  ) {
+    this.statusReconcileIntervalMs = Math.max(
+      1,
+      statusReconcileIntervalMs ?? DEFAULT_OPENCODE_STATUS_RECONCILE_INTERVAL_MS,
+    );
+  }
 
   own(sessionId: string): void {
     this.ownedSessions.add(sessionId);
+  }
+
+  observeEvent(sessionId: string, state: "running" | "idle" | "missing"): void {
+    setBoundedMapEntry(this.eventLifecycle, sessionId, state, MAX_TRACKED_PROVIDER_INTERACTIONS);
+    if (state === "missing") {
+      this.sessionExistenceCache.delete(sessionId);
+      this.sessionExistenceRetryAt.delete(sessionId);
+      this.sessionListCache?.snapshot.sessionIds.delete(sessionId);
+    } else {
+      this.rememberExistingSession(sessionId);
+    }
+  }
+
+  invalidateEvents(): void {
+    this.eventLifecycle.clear();
+    this.lastStatusReconcileAt = 0;
   }
 
   /**
@@ -68,6 +94,18 @@ export class OpenCodeSessionLifecycle {
     const lifecycle = new Map<string, OpenCodeSessionLifecycleState>();
     if (uniqueSessionIds.length === 0) return lifecycle;
 
+    const now = this.now();
+    if (
+      !strongExistenceRead &&
+      now - this.lastStatusReconcileAt < this.statusReconcileIntervalMs &&
+      uniqueSessionIds.every((sessionId) => this.eventLifecycle.has(sessionId))
+    ) {
+      for (const sessionId of uniqueSessionIds) {
+        lifecycle.set(sessionId, this.eventLifecycle.get(sessionId)!);
+      }
+      return lifecycle;
+    }
+
     const statusResponse = await this.client.session.status(
       { directory: this.directory },
       this.requestOptions(),
@@ -77,6 +115,7 @@ export class OpenCodeSessionLifecycle {
       statusResponse.data,
       new Set(uniqueSessionIds),
     );
+    this.lastStatusReconcileAt = now;
     const omittedSessionIds: string[] = [];
     for (const sessionId of uniqueSessionIds) {
       const status = statusSnapshot[sessionId];
@@ -84,8 +123,10 @@ export class OpenCodeSessionLifecycle {
         omittedSessionIds.push(sessionId);
       } else if (status.type === "busy" || status.type === "retry") {
         lifecycle.set(sessionId, "running");
+        this.observeEvent(sessionId, "running");
       } else if (status.type === "idle") {
         lifecycle.set(sessionId, "idle");
+        this.observeEvent(sessionId, "idle");
       } else {
         lifecycle.set(sessionId, "unknown");
       }
@@ -97,8 +138,10 @@ export class OpenCodeSessionLifecycle {
       const probe = existence.get(sessionId);
       if (probe?.state === "exists") {
         lifecycle.set(sessionId, "idle");
+        this.observeEvent(sessionId, "idle");
       } else if (probe?.state === "missing") {
         lifecycle.set(sessionId, "missing");
+        this.observeEvent(sessionId, "missing");
       } else if (tolerateExistenceFailure) {
         // An omitted status-map entry is not running. When existence cannot be
         // confirmed, retaining the durable mapping as idle is safer than
@@ -292,5 +335,7 @@ export class OpenCodeSessionLifecycle {
     this.sessionExistenceRetryAt.clear();
     this.sessionListCache = null;
     this.sessionListFailure = null;
+    this.eventLifecycle.clear();
+    this.lastStatusReconcileAt = 0;
   }
 }

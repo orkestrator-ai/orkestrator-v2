@@ -28,12 +28,14 @@ import {
 } from "./app-server/interactions.js";
 import type {
   EngineEvent,
+  EngineAccountUsageWindow,
   EngineGeneration,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
   EngineThread,
   EngineTurnConfig,
   EngineUsageSnapshot,
+  EngineTurnUsage,
   EngineUserInput,
 } from "./engine/types.js";
 import {
@@ -406,6 +408,49 @@ export function mergeRateLimitWindows(
   return [...bySlot.values()].sort((left, right) =>
     left.slot === right.slot ? 0 : left.slot === "primary" ? -1 : 1,
   );
+}
+
+/** Replace repeated snapshots for one turn and retain only the newest twenty. */
+export function mergeTurnUsage(
+  retained: EngineTurnUsage[] | undefined,
+  update: EngineTurnUsage[] | undefined,
+): EngineTurnUsage[] | undefined {
+  if (!update || update.length === 0) return retained;
+  const byTurn = new Map((retained ?? []).map((turn) => [turn.turnId, turn]));
+  for (const turn of update) byTurn.set(turn.turnId, { ...byTurn.get(turn.turnId), ...turn });
+  return [...byTurn.values()].slice(-20);
+}
+
+/** Merge account windows by their provider-stable identifier. */
+export function mergeAccountUsage(
+  retained: EngineAccountUsageWindow[] | undefined,
+  update: EngineAccountUsageWindow[] | undefined,
+): EngineAccountUsageWindow[] | undefined {
+  if (!update || update.length === 0) return retained;
+  const updatedWindows = new Set(update.map((window) => window.window));
+  return [
+    ...(retained ?? []).filter((window) => !updatedWindows.has(window.window)),
+    ...update,
+  ].slice(-100);
+}
+
+export function accountUsageFromLimits(
+  limits: EngineRateLimitWindow[],
+  credits?: import("./engine/types.js").EngineCreditSnapshot,
+): EngineAccountUsageWindow[] {
+  const windows: EngineAccountUsageWindow[] = limits.map((limit) => ({
+    window: limit.slot,
+    label: limit.label,
+    ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
+    ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+  }));
+  if (credits?.balance !== undefined) {
+    const balance = Number(credits.balance);
+    if (Number.isFinite(balance) && balance >= 0) {
+      windows.push({ window: "credits", label: "Credits", creditsRemaining: balance });
+    }
+  }
+  return windows;
 }
 
 /** A JSON object, as opposed to a scalar, an array or null. */

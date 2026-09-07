@@ -29,6 +29,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
+import { terminalDisplayOutput } from "./acp-client-methods.js";
 
 /** Every `session/update` kind that appends to or mutates the transcript. */
 export const TRANSCRIPT_UPDATE_KINDS = new Set([
@@ -189,7 +190,8 @@ export function toolCallContentText(value: unknown): string | undefined {
     }
     if (item.type === "terminal") {
       const terminalId = boundedString(item.terminalId, MAX_TOOL_ID_BYTES);
-      return [terminalId ? `[Terminal ${terminalId}]` : "[Terminal]"];
+      const output = terminalId ? terminalDisplayOutput(terminalId) : undefined;
+      return [output || (terminalId ? `[Terminal ${terminalId}]` : "[Terminal]")];
     }
     return [];
   });

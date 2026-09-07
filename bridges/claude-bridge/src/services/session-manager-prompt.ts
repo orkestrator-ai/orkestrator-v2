@@ -4,7 +4,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CanUseTool,
   HookCallback,
-  PreToolUseHookInput,
   SDKAPIRetryMessage,
   SDKAuthStatusMessage,
   SDKAssistantMessage,
@@ -33,7 +32,6 @@ import type {
   McpServerRuntimeStatus,
   PluginRuntimeStatus,
   SdkMessageBase,
-  SdkCompactBoundaryMessage,
   SdkResultMessage,
   SdkSystemMessage,
   TaskListSnapshot,
@@ -43,17 +41,11 @@ import type {
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import {
-  isHandledSdkMessageType,
-  isSdkCompactBoundaryMessage,
-  isSdkResultMessage,
-  sessionHealth,
-} from "../types/index.js";
+import { isHandledSdkMessageType, isSdkResultMessage, sessionHealth } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_LIMITS,
-  isPlanMarkdownPath,
 } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
@@ -178,6 +170,13 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
 
+export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
+1. Thoroughly explore the codebase and its existing patterns.
+2. Consider viable approaches and their trade-offs.
+3. Design a concrete implementation strategy.
+4. When ready, call ExitPlanMode with the plan for approval.
+Do not write or edit files until the plan is approved.`;
+
 /**
  * Settle a retry row this turn opened.
  *
@@ -294,51 +293,6 @@ function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "plan
   };
 }
 
-function updateObservedPlan(session: SessionState, input: PreToolUseHookInput): void {
-  if (input.tool_name !== "Write" && input.tool_name !== "Edit") return;
-  const toolInput =
-    input.tool_input && typeof input.tool_input === "object" && !Array.isArray(input.tool_input)
-      ? (input.tool_input as Record<string, unknown>)
-      : undefined;
-  const filePath = toolInput?.file_path;
-  if (typeof filePath !== "string" || !isPlanMarkdownPath(filePath)) return;
-
-  if (input.tool_name === "Write") {
-    const next = boundedPlan(toolInput?.content);
-    if (!next.plan) return;
-    session.observedPlan = {
-      path: filePath,
-      content: next.plan,
-      truncated: next.planTruncated === true,
-    };
-    return;
-  }
-
-  const observed = session.observedPlan;
-  if (!observed) return;
-  if (observed.path !== filePath || observed.content === undefined || observed.truncated) return;
-  const oldString = toolInput?.old_string;
-  const newString = toolInput?.new_string;
-  if (
-    typeof oldString !== "string" ||
-    oldString.length === 0 ||
-    typeof newString !== "string" ||
-    !observed.content.includes(oldString)
-  ) {
-    return;
-  }
-  const nextContent =
-    toolInput?.replace_all === true
-      ? observed.content.split(oldString).join(newString)
-      : observed.content.replace(oldString, newString);
-  const next = boundedPlan(nextContent);
-  if (!next.plan) {
-    session.observedPlan = undefined;
-    return;
-  }
-  observed.content = next.plan;
-  observed.truncated = next.planTruncated === true;
-}
 /**
  * Send a prompt to a session and process the response
  */
@@ -526,26 +480,6 @@ export async function sendPrompt(
     const fileTags = fileAttachments.map(attachmentTag).join("\n");
     sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
   }
-  // Build the final prompt for the SDK - includes planning mode instruction if enabled
-  let finalPrompt = sdkTextPrompt;
-  // If plan mode is enabled, instruct Claude to use the EnterPlanMode tool
-  // This uses Claude's native planning mode which allows read-only exploration
-  if (options?.permissionMode === "plan") {
-    // The SDK injects its own read-only enforcement preamble + ExitPlanMode protocol
-    // when permissionMode === "plan". We append guidance on *how* to plan well.
-    const planModeInstruction = `<system-reminder>
-The user has enabled PLANNING MODE via the UI. You are in plan mode.
-Use this phase to:
-1. Thoroughly explore the codebase to understand existing patterns
-2. Identify similar features and architectural approaches
-3. Consider multiple approaches and their trade-offs
-4. Design a concrete implementation strategy
-5. When ready, call ExitPlanMode with your plan to present it for approval
-Plan mode is read-only: do not write or edit files until the user approves your plan via ExitPlanMode.
-</system-reminder>
-`;
-    finalPrompt = planModeInstruction + sdkTextPrompt;
-  }
   // Add user message with displayPrompt (what the user sees, without planning mode instruction).
   // Re-prompts (e.g. after plan rejection) use role "system" so they don't appear as user-typed.
   const messageRole = options?._isReprompt ? "system" : "user";
@@ -624,11 +558,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // This allows the Claude SDK to operate on the actual project directory
     const cwd = process.env.CWD || process.cwd();
 
+    const policy = session.executionPolicy;
+    const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.
     const [{ servers: mcpServers, names: mcpServerNames }, plugins] = await Promise.all([
-      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp),
-      getPluginsForSdk(cwd),
+      getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, includeProjectResources),
+      getPluginsForSdk(cwd, includeProjectResources),
     ]);
 
     const mcpServerCount = Object.keys(mcpServers).length;
@@ -638,7 +574,27 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // `"plan"` permissionMode. The SDK enforces read-only and runs its built-in
     // ExitPlanMode tool natively — without this, ExitPlanMode fails because the
     // CLI has no plan-mode state to exit.
-    const permissionMode = options?.permissionMode ?? "bypassPermissions";
+    const policyPermissionMode =
+      policy?.approvals === "ask"
+        ? "default"
+        : policy?.approvals === "deny"
+          ? "dontAsk"
+          : "bypassPermissions";
+    const permissionMode = options?.permissionMode ?? policyPermissionMode;
+    const defaultAllowedTools = [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "AskUserQuestion",
+      "Task",
+      "Agent",
+    ];
+    const allowedTools = policy?.toolPolicy?.allow ?? defaultAllowedTools;
 
     const fastMode = options?.fastMode === true;
 
@@ -658,7 +614,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const envPath = process.env.PATH;
     debugLog("[session-manager] SDK env PATH", { path: envPath });
     const sdkPrompt = await buildSdkPrompt(
-      finalPrompt,
+      sdkTextPrompt,
       options?.attachments,
       cwd,
       testHooks?.afterAttachmentSymlinkValidation,
@@ -842,20 +798,80 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
-    /*
-     * Claude Code writes its plan file before asking to run ExitPlanMode, but
-     * the SDK does not necessarily yield that assistant message until the
-     * permission callback returns. Observe the write off-loop so the pending
-     * approval snapshot already contains the plan while the callback is parked.
-     */
-    const observePlanWrite: HookCallback = async (hookInput) => {
+    // Hook callbacks run on the SDK's hook path, not on the JSONL message
+    // consumer. Keep them synchronous apart from the required Promise return:
+    // state is updated and the event is queued without delaying either stream.
+    let compactedTokensBefore: number | undefined;
+    const recordPreCompact: HookCallback = async (hookInput) => {
       if (
-        hookInput.hook_event_name === "PreToolUse" &&
-        session.planMode &&
-        session.latestTurnGeneration === turnGeneration
+        hookInput.hook_event_name !== "PreCompact" ||
+        session.latestTurnGeneration !== turnGeneration
       ) {
-        updateObservedPlan(session, hookInput);
+        return {};
       }
+      compactedTokensBefore = (session.inProgressUsage ?? session.usage)?.usedTokens;
+      return {};
+    };
+    const recordPostCompact: HookCallback = async (hookInput) => {
+      if (
+        hookInput.hook_event_name !== "PostCompact" ||
+        session.latestTurnGeneration !== turnGeneration
+      ) {
+        return {};
+      }
+      // Publish only once PostCompact confirms success. PreCompact captures the
+      // before-value, but an attempted compaction that fails must not leave a
+      // durable boundary claiming the model's context changed.
+      appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+        type: "compaction",
+        content: "",
+        createdAt: new Date().toISOString(),
+        ...(typeof compactedTokensBefore === "number" ? { compactedTokensBefore } : {}),
+        tokenCountText: `${hookInput.trigger} compaction`,
+      });
+      eventEmitter.emit({
+        type: "system.compact",
+        sessionId,
+        data: {
+          preTokens: compactedTokensBefore,
+          trigger: hookInput.trigger,
+        },
+      });
+      return {};
+    };
+    const recordBackgroundTaskHook: HookCallback = async (hookInput) => {
+      if (
+        session.latestTurnGeneration !== turnGeneration ||
+        !queryIteratorControl ||
+        (hookInput.hook_event_name !== "TaskCreated" &&
+          hookInput.hook_event_name !== "TaskCompleted" &&
+          hookInput.hook_event_name !== "SubagentStart" &&
+          hookInput.hook_event_name !== "SubagentStop")
+      ) {
+        return {};
+      }
+      if (
+        hookInput.hook_event_name === "TaskCreated" ||
+        hookInput.hook_event_name === "SubagentStart"
+      ) {
+        recordBackgroundTaskLaunch(
+          session,
+          hookInput.hook_event_name === "TaskCreated"
+            ? {
+                id: hookInput.task_id,
+                description: hookInput.task_subject || hookInput.task_description,
+              }
+            : { id: hookInput.agent_id, description: hookInput.agent_type },
+          queryIteratorControl,
+        );
+      } else {
+        const taskId =
+          hookInput.hook_event_name === "TaskCompleted" ? hookInput.task_id : hookInput.agent_id;
+        if (settleBackgroundTask(session, taskId, "completed")) {
+          emitBackgroundTaskSnapshot(session);
+        }
+      }
+      finishTurnInputIfSettled();
       return {};
     };
     const queryIterator = query({
@@ -879,6 +895,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             }
           : {}),
         permissionMode,
+        ...(permissionMode === "plan" ? { planModeInstructions: PLAN_MODE_INSTRUCTIONS } : {}),
         // Required when using bypassPermissions mode
         ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
         // Use effort level to control thinking depth (replaces maxThinkingTokens)
@@ -906,21 +923,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // Preserve the full nested transcript. Every forwarded subagent block
         // carries parent_tool_use_id and is rendered inside its Agent card.
         forwardSubagentText: true,
-        allowedTools: [
-          "Read",
-          "Edit",
-          "Write",
-          "Bash",
-          "Glob",
-          "Grep",
-          "WebSearch",
-          "WebFetch",
-          "AskUserQuestion",
-          "Task",
-          "Agent",
-          // Allow all MCP tools
-          "mcp:*",
-        ],
+        allowedTools,
+        ...(policy?.toolPolicy?.deny ? { disallowedTools: policy.toolPolicy.deny } : {}),
+        ...(policy?.sandbox === "provider"
+          ? {
+              sandbox: {
+                enabled: true,
+                autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
+                network: { allowLocalBinding: policy.networkAccess === "full" },
+              },
+            }
+          : {}),
         abortController,
         // A deterministic UUID makes the bridge id recoverable from the SDK's
         // persisted session store after a bridge restart.
@@ -942,9 +955,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
-        settingSources: options?.includeLocalSettings
-          ? ["user", "project", "local"]
-          : ["user", "project"],
+        settingSources:
+          policy?.projectResources !== false
+            ? options?.includeLocalSettings
+              ? ["user", "project", "local"]
+              : ["user", "project"]
+            : ["user"],
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
@@ -953,14 +969,16 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
         hooks: {
-          PreToolUse: [{ matcher: "Write|Edit", hooks: [observePlanWrite] }],
+          TaskCreated: [{ hooks: [recordBackgroundTaskHook] }],
+          TaskCompleted: [{ hooks: [recordBackgroundTaskHook] }],
+          SubagentStart: [{ hooks: [recordBackgroundTaskHook] }],
+          SubagentStop: [{ hooks: [recordBackgroundTaskHook] }],
+          PreCompact: [{ hooks: [recordPreCompact] }],
+          PostCompact: [{ hooks: [recordPostCompact] }],
         },
-        // This bridge always registers the `observePlanWrite` hook above, so
-        // its outcome is always worth hearing about: a hook that fails silently
-        // leaves plan observation broken with nothing to say so. The flag is
-        // off by default in the SDK, which is right for a session with no hooks
-        // — a stream of hook events nobody consumes is drift noise. Tie it to
-        // the registration rather than turning it on unconditionally.
+        // Hook failures are observable provider-health data. Without these
+        // events a failed lifecycle hook would silently leave task or
+        // compaction projection stale.
         includeHookEvents: true,
         // Pinned against @anthropic-ai/claude-agent-sdk 0.3.261: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
@@ -1101,18 +1119,16 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             // Create a plan approval request and wait for user decision
             const approvalId = generateMessageId();
+            // The SDK's ExitPlanMode request is the authoritative plan. Reading
+            // and replaying the preceding plan-file edits duplicated Edit
+            // semantics and could drift from the bytes Claude actually asks
+            // the user to approve.
             const directPlan = boundedPlan(input?.plan);
-            const capturedPlan = session.observedPlan?.content
-              ? {
-                  plan: session.observedPlan.content,
-                  ...(session.observedPlan.truncated ? { planTruncated: true } : {}),
-                }
-              : {};
             const approvalRequest: PlanApprovalRequest = {
               id: approvalId,
               sessionId,
               toolUseId: permissionContext?.toolUseID ?? approvalId,
-              ...(directPlan.plan ? directPlan : capturedPlan),
+              ...directPlan,
               expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
             };
 
@@ -1438,46 +1454,6 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           type: "session.init",
           sessionId,
           data: session.initData,
-        });
-      } else if (isSdkCompactBoundaryMessage(message as SdkMessageBase)) {
-        // Handle /compact command result
-        const compactMsg = message as SdkCompactBoundaryMessage;
-        const compactMetadata = compactMsg.compact_metadata || {};
-
-        debugLog("[session-manager] Compact boundary received", {
-          sessionId,
-          preTokens: compactMetadata.pre_tokens,
-          trigger: compactMetadata.trigger,
-        });
-
-        // Emit event so frontend can show feedback
-        eventEmitter.emit({
-          type: "system.compact",
-          sessionId,
-          data: {
-            preTokens: compactMetadata.pre_tokens,
-            postTokens: compactMetadata.post_tokens,
-            trigger: compactMetadata.trigger,
-          },
-        });
-        // The event above is a live hint; this is the durable record. Without
-        // it a reload showed a transcript with no boundary in it at all, which
-        // is the one thing that makes a compacted session confusing — the model
-        // no longer remembers what is above this point and nothing said so.
-        //
-        // No summary text: the SDK reports the boundary and its token counts,
-        // not what the compaction produced. An empty `content` renders as the
-        // boundary rule alone, which is the honest thing to show.
-        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-          type: "compaction",
-          content: "",
-          createdAt: new Date().toISOString(),
-          ...(typeof compactMetadata.pre_tokens === "number"
-            ? { compactedTokensBefore: compactMetadata.pre_tokens }
-            : {}),
-          ...(compactMetadata.trigger
-            ? { tokenCountText: `${compactMetadata.trigger} compaction` }
-            : {}),
         });
       } else if (message.type === "prompt_suggestion") {
         const suggestion =

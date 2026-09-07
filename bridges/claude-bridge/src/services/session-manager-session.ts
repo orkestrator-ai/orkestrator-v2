@@ -76,11 +76,17 @@ import { ensurePersistedSession } from "./session-manager-persistence.js";
 export async function createOrRecoverSession(
   title?: string,
   clientSessionKey?: string,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
   const stableId = sessionIdForClientKey(clientSessionKey);
   if (stableId) {
     const existing = sessions.get(stableId) ?? (await ensurePersistedSession(stableId));
-    if (existing) return existing;
+    if (existing) {
+      existing.executionPolicy = policy;
+      return existing;
+    }
   }
-  return createSession(title, clientSessionKey);
+  const created = createSession(title, clientSessionKey);
+  created.executionPolicy = policy;
+  return created;
 }

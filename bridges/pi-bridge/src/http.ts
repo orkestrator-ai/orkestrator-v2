@@ -48,6 +48,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
@@ -219,7 +220,11 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
-    const state = await createSession(clientSessionKey, parseComposerPatch(body));
+    const state = await createSession(
+      clientSessionKey,
+      parseComposerPatch(body),
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    );
     // The backend stores this session id as soon as create returns. A bridge
     // restart before the first prompt used to lose it, so every later status
     // read 404'd and the tab stuck on "session is recovering".
@@ -238,7 +243,11 @@ async function routeGlobal(
     if (!sessionFile) throw new HttpError(400, "sessionId is required");
     // A handle outside the session directory, or one naming a file that does
     // not exist, is a caller error rather than a bridge failure.
-    const state = await resumeSession(sessionFile, parseComposerPatch(body)).catch((error) => {
+    const state = await resumeSession(
+      sessionFile,
+      parseComposerPatch(body),
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    ).catch((error) => {
       throw new HttpError(400, errorText(error));
     });
     await persistBarrier();
@@ -835,7 +844,6 @@ async function handlePrompt(
   state.promptSequence += 1;
   state.turnStartedAt = Date.now();
   state.currentTurnUsage = {};
-  state.currentTurnOutput = schema ? "" : null;
   state.currentAssistantMessageId = undefined;
   state.revision += 1;
 
@@ -862,7 +870,6 @@ async function handlePrompt(
     state.toolInputs.clear();
     state.currentTurnUsage = undefined;
     state.turnStartedAt = undefined;
-    state.currentTurnOutput = null;
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();

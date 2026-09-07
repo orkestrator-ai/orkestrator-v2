@@ -21,6 +21,83 @@ import {
   NATIVE_PROJECTION_CACHE_LIMIT,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
+import { mergeContextUsageTurns } from "./native-agent-service-projection.js";
+
+describe("usage projection history", () => {
+  test("merges sparse turn updates by id and retains only the newest twenty", () => {
+    const previousTurns = Array.from({ length: 20 }, (_, index) => ({
+      turnId: `turn-${index}`,
+      inputTokens: index,
+    }));
+    const merged = mergeContextUsageTurns(
+      { usedTokens: 20, turns: previousTurns },
+      {
+        usedTokens: 21,
+        turns: [
+          { turnId: "turn-19", inputTokens: 190 },
+          { turnId: "turn-20", inputTokens: 20 },
+        ],
+      },
+    );
+
+    expect(merged?.turns).toHaveLength(20);
+    expect(merged?.turns?.[0]?.turnId).toBe("turn-1");
+    expect(merged?.turns?.at(-2)).toEqual({ turnId: "turn-19", inputTokens: 190 });
+    expect(merged?.turns?.at(-1)).toEqual({ turnId: "turn-20", inputTokens: 20 });
+  });
+
+  test("keeps existing turn rows when a bridge refresh is sparse", () => {
+    expect(
+      mergeContextUsageTurns(
+        { usedTokens: 10, turns: [{ turnId: "turn-1", outputTokens: 2 }] },
+        { usedTokens: 12 },
+      ),
+    ).toEqual({ usedTokens: 12, turns: [{ turnId: "turn-1", outputTokens: 2 }] });
+  });
+
+  test("projects fresh account usage without discarding transcript usage", async () => {
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        contextUsage: {
+          usedTokens: 12,
+          turns: [{ turnId: "turn-1", outputTokens: 2 }],
+        },
+      }),
+      refreshUsage: async () => ({
+        usedTokens: 14,
+        turns: [{ turnId: "turn-2", inputTokens: 3 }],
+        account: [{ window: "weekly", label: "Weekly", usedPercent: 25 }],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-usage-refresh-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:usage-refresh",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection({ ...identity, refreshUsage: true });
+
+        expect(stub.refreshUsage).toHaveBeenCalledWith("provider-session");
+        expect(projection?.contextUsage).toMatchObject({
+          usedTokens: 14,
+          account: [{ window: "weekly", label: "Weekly", usedPercent: 25 }],
+          turns: [
+            { turnId: "turn-1", outputTokens: 2 },
+            { turnId: "turn-2", inputTokens: 3 },
+          ],
+        });
+      },
+    );
+  });
+});
 
 import {
   createProviderStub,
@@ -1250,13 +1327,53 @@ describe("NativeAgentService", () => {
         expect(fenced).not.toBeNull();
         expect(fenced).toMatchObject({ revision: 0 });
         await expect(resumed).resolves.toMatchObject({ sessionId: "provider-resumed" });
-        expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls);
+        expect(resumeSession).toHaveBeenCalledWith("provider-resumed", controls, {
+          id: "interactive-host",
+          sandbox: "provider",
+          approvals: "ask",
+          projectResources: false,
+          networkAccess: "restricted",
+        });
         const key = nativeAgentSessionStorageKey(
           identity.environmentId,
           identity.agent,
           identity.logicalSessionKey,
         );
         expect((await storage.getNativeAgentSession(key))?.controls).toEqual(controls);
+      },
+    );
+  });
+
+  test("keeps an existing session's policy when environment defaults change", async () => {
+    const stub = createProviderStub("cursor");
+    await withService(
+      {
+        prefix: "orkestrator-native-policy-immutable-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const existingIdentity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:policy-old",
+        };
+        const original = await service.ensureSession(existingIdentity);
+        await storage.updateEnvironment("env-1", {
+          agentSettings: { executionPolicy: { approvals: "deny" } },
+        });
+
+        await expect(service.ensureSession(existingIdentity)).resolves.toEqual(original);
+        await service.ensureSession({
+          ...existingIdentity,
+          logicalSessionKey: "env-env-1:policy-new",
+        });
+
+        expect(stub.createSession.mock.calls[0]?.[2]).toMatchObject({
+          policy: { id: "interactive-host", approvals: "ask" },
+        });
+        expect(stub.createSession.mock.calls[1]?.[2]).toMatchObject({
+          policy: { id: "interactive-host", approvals: "deny" },
+        });
       },
     );
   });

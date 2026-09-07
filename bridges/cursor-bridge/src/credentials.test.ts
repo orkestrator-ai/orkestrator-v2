@@ -51,6 +51,9 @@ mock.module("@cursor/sdk", () => ({
   FileCredentialStore: FakeCredentialStore,
   Cursor: {
     ...(realCursorSdkSnapshot as { Cursor?: object }).Cursor,
+    // The bridge configures local agent persistence process-wide. Credential
+    // behavior is unrelated, but this mock still has to preserve that method.
+    configure: () => undefined,
     auth: {
       login: (options: Record<string, unknown>) => {
         loginCalls.push(options);

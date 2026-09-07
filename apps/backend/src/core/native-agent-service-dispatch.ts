@@ -4,6 +4,7 @@ import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
   PendingNativeAgentDispatchError,
   PendingNativeAgentSteerError,
@@ -599,20 +600,31 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!nativeCapabilities(input.agent).resume) {
       throw new Error(`${input.agent} does not support session resume`);
     }
-    const provider = await this.provider(input);
-    if (!provider.resumeSession) {
-      throw new Error(`${input.agent} does not support session resume`);
-    }
     const key = nativeAgentSessionStorageKey(
       input.environmentId,
       input.agent,
       input.logicalSessionKey,
     );
     const existing = await this.storage.getNativeAgentSession(key);
-    this.invalidateProjection(key);
-    const resumedId = await provider.resumeSession(input.providerSessionId, input.controls);
-    await this.adoptSession({
+    const trustedInput = await this.trustedSessionInput({
       ...input,
+      origin: existing?.origin ?? "interactive-native",
+      interactionPolicy: existing?.interactionPolicy ?? INTERACTIVE_AGENT_INTERACTION_POLICY,
+      executionPolicy: undefined,
+      policy: undefined,
+    });
+    const provider = await this.provider(trustedInput);
+    if (!provider.resumeSession) {
+      throw new Error(`${input.agent} does not support session resume`);
+    }
+    this.invalidateProjection(key);
+    const resumedId = await provider.resumeSession(
+      input.providerSessionId,
+      input.controls,
+      trustedInput.policy,
+    );
+    await this.adoptSession({
+      ...trustedInput,
       providerSessionId: resumedId,
       expectedProviderSessionId: existing?.providerSessionId,
       controls: input.controls,

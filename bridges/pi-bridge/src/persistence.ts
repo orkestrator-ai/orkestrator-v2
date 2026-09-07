@@ -11,6 +11,7 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
 import { readTodos } from "./tool-rendering.js";
@@ -153,6 +154,7 @@ async function persistNow(): Promise<void> {
 function toPersisted(state: SessionState): PersistedSession {
   return {
     id: state.id,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
     ...(state.piSessionId ? { piSessionId: state.piSessionId } : {}),
@@ -222,6 +224,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
     nonBlank(entry.clientSessionKey) ? entry.clientSessionKey : undefined,
   );
   state.id = entry.id;
+  if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
   state.status = entry.status === "error" ? "error" : "idle";
@@ -320,7 +323,38 @@ function restoreUsage(value: unknown): SessionState["usage"] {
   if (Object.keys(turn).length === 0) return undefined;
   return {
     turn,
+    ...(Array.isArray(value.turns)
+      ? {
+          turns: value.turns.slice(-20).flatMap((candidate) => {
+            if (!isObject(candidate) || !nonBlank(candidate.turnId)) return [];
+            const entry: NonNullable<NonNullable<SessionState["usage"]>["turns"]>[number] = {
+              turnId: candidate.turnId,
+            };
+            for (const key of [
+              "costUsd",
+              "inputTokens",
+              "outputTokens",
+              "cacheReadTokens",
+              "cacheWriteTokens",
+              "reasoningTokens",
+              "totalTokens",
+              "durationMs",
+              "toolCalls",
+            ] as const) {
+              const number = candidate[key];
+              if (typeof number === "number" && Number.isFinite(number) && number >= 0) {
+                entry[key] = number;
+              }
+            }
+            if (nonBlank(candidate.requestId)) entry.requestId = candidate.requestId;
+            if (nonBlank(candidate.modelId)) entry.modelId = candidate.modelId;
+            return [entry];
+          }),
+        }
+      : {}),
     ...(nonBlank(value.modelId) ? { modelId: value.modelId } : {}),
+    ...readNumber(value, "sessionTokens"),
+    ...readNumber(value, "sessionToolCalls"),
     ...readNumber(value, "durationMs"),
     ...readNumber(value, "costUsd"),
     ...readNumber(value, "contextTokens"),

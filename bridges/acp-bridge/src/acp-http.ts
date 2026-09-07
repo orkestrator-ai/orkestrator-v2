@@ -6,11 +6,12 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
-  readPromptImages,
-  type AcpPromptImage,
+  readPromptContents,
+  type AcpPromptContent,
 } from "./prompt-attachments.js";
 import {
   applyComposerPatch,
@@ -35,7 +36,6 @@ import {
   HttpError,
   authToken,
   agentRuntime,
-  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   configuredAcpMcpServers,
   provider,
@@ -66,11 +66,7 @@ import {
   scheduleCursorToolMetadataReconcile,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
-import { dispatchAcpPrompt } from "./acp-prompt.js";
-import {
-  hydrateCursorChildTranscripts,
-  settleTerminalCursorChildren,
-} from "./acp-cursor-background.js";
+import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
@@ -129,7 +125,12 @@ export async function route(
     if (Buffer.byteLength(selectedSessionId) > 1_024) {
       return json(response, 400, { error: "sessionId is too long" });
     }
-    const state = await resumeSession(selectedSessionId, clientSignal, parseComposerPatch(body));
+    const state = await resumeSession(
+      selectedSessionId,
+      clientSignal,
+      parseComposerPatch(body),
+      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+    );
     return json(response, 201, publicSession(state));
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
@@ -145,6 +146,7 @@ export async function route(
       ...spawnOptions,
       model: spawnOptions.modelId,
       effort: spawnOptions.reasoningId,
+      ...(isNativeAgentExecutionPolicy(body.policy) ? { policy: body.policy } : {}),
     });
     return json(response, 201, publicSession(state));
   }
@@ -164,12 +166,10 @@ export async function route(
   }
   const action = match[2];
   if (!action && request.method === "GET") {
-    hydrateCursorChildTranscripts(state);
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
   }
   if (action === "messages" && request.method === "GET") {
-    hydrateCursorChildTranscripts(state);
     boundTranscriptForRead(state);
     return json(
       response,
@@ -217,31 +217,13 @@ export async function route(
     configuredAcpMcpServers();
     return json(response, 200, { servers: agentRuntime.mcp ?? [] });
   }
-  /**
-   * Liveness only: no touch, no transcript hydration, no re-attach.
-   *
-   * `working` has to mean a turn or a child is *actually* running. A Cursor
-   * background launch leaves its Task card `active` until something reports the
-   * child's end, and for an unnamed child no such frame ever arrives — so the
-   * bounded terminal probe runs first and drops the ones that already ended on
-   * disk.
-   *
-   * An errored session is not special-cased, and must not be. Every error path
-   * that can strand a child already clears the registry through
-   * `failAllActiveSubagents` — the process-death handler, the sub-agent limit
-   * latch, a failed turn, and the restart sweep in `loadPersistedState`. The one
-   * that does not is `failTranscriptLimit`, which retains its children on
-   * purpose: transcript retention is presentation-only and a display bound is
-   * not evidence that a background child stopped writing files. Reading `error`
-   * as idle there would report a live child as finished.
-   */
+  /** Liveness only: no touch, transcript hydration, or re-attach. */
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: no liveness touch, no transcript hydration, no
     // re-attach.
     return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
   }
   if (action === "activity" && request.method === "GET") {
-    settleTerminalCursorChildren(state);
     return json(response, 200, {
       activity:
         state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
@@ -360,12 +342,30 @@ export async function route(
         acceptedAt: Date.now(),
       });
     let child: AcpProcess;
-    let images: AcpPromptImage[];
+    let promptContents: AcpPromptContent[];
     try {
       // Read the attachments first: an unreadable image must fail before a
       // detached thread is reattached, and it is far cheaper than a spawn.
-      images = await readPromptImages(attachments, workingDirectory);
+      promptContents = await readPromptContents(attachments, workingDirectory);
       child = await ensureSessionProcess(state, clientSignal);
+      if (
+        promptContents.some((attachment) => attachment.type === "file") &&
+        agentRuntime.promptCapabilities?.embeddedContext !== true
+      ) {
+        throw new PromptAttachmentError(
+          "attachment_invalid",
+          `${provider} does not advertise ACP embedded-context support`,
+        );
+      }
+      if (
+        promptContents.some((attachment) => attachment.type === "image") &&
+        agentRuntime.promptCapabilities?.image !== true
+      ) {
+        throw new PromptAttachmentError(
+          "attachment_invalid",
+          `${provider} does not advertise ACP image support`,
+        );
+      }
       const promptPatch = parseComposerPatch(body);
       if (promptPatch) await applyComposerPatch(state, promptPatch, clientSignal);
     } catch (error) {
@@ -400,10 +400,10 @@ export async function route(
               },
             ]
           : []),
-        ...images.map((image, index): BridgeFilePart => ({
+        ...promptContents.map((attachment, index): BridgeFilePart => ({
           type: "file",
-          content: image.filename || image.path,
-          fileUrl: pathToFileURL(image.absolutePath).href,
+          content: attachment.filename || attachment.path,
+          fileUrl: pathToFileURL(attachment.absolutePath).href,
           sourcePartId: `${userMessageId}:${index + 1}`,
           sourceMessageId: userMessageId,
         })),
@@ -417,6 +417,7 @@ export async function route(
     const promptSequence = state.promptSequence;
     state.turnStartedAt = Date.now();
     state.currentTurnUsage = {};
+    state.currentTurnRequestId = requestId || undefined;
     state.currentTurnSawVendorUsage = false;
     state.currentTurnOutput = schema ? "" : null;
     state.revision += 1;
@@ -430,14 +431,22 @@ export async function route(
         sessionId: state.acpSessionId,
         prompt: [
           ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
-          // Inline base64 is the only image form both agents read. Cursor
-          // advertises it; Grok understates its own capability but accepts the
-          // same block, and neither supports ACP embedded resources.
-          ...images.map((image) => ({
-            type: "image",
-            mimeType: image.mimeType,
-            data: image.data,
-          })),
+          ...promptContents.map((attachment) =>
+            attachment.type === "image"
+              ? {
+                  type: "image" as const,
+                  mimeType: attachment.mimeType,
+                  data: attachment.data,
+                }
+              : {
+                  type: "resource" as const,
+                  resource: {
+                    uri: pathToFileURL(attachment.absolutePath).href,
+                    mimeType: "text/plain",
+                    text: attachment.text,
+                  },
+                },
+          ),
         ],
       },
       promptSequence,
@@ -457,6 +466,15 @@ export async function route(
     state.dispatching = false;
     void promptCompletion.then(
       (result) => {
+        const stopReason = promptStopReason(result);
+        if (stopReason !== "end_turn" && stopReason !== "cancelled") {
+          state.health.recordNotice({
+            method: "session/prompt",
+            source: "provider",
+            severity: "warning",
+            message: `${provider} stopped the turn with ${stopReason}`,
+          });
+        }
         // PromptResponse.usage is the ACP carrier; Grok still nests the same
         // numbers under `_meta`. Parse the whole result so either spelling lands
         // before `turnStartedAt` is cleared and the elapsed time is lost.
@@ -465,6 +483,7 @@ export async function route(
         rememberPendingLateTurnUsage(state, promptSequence);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
         if (schema && requestId) {
           const output = state.currentTurnOutput?.trim() ?? "";
@@ -533,6 +552,7 @@ export async function route(
         finalizeTurnUsage(state);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
         // A turn that failed gets no final pass, so a live timer armed moments
         // before the failure has nothing left to complete. Drop it here for the
@@ -572,7 +592,6 @@ export async function route(
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);
-    bumpCursorDiscoveryRevision();
     if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
     await persistState();
     return json(response, 200, { deleted: true });

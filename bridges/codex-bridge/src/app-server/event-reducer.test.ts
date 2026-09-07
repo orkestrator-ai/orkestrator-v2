@@ -221,8 +221,19 @@ describe("usage and limits", () => {
       reasoningTokens: 1_000,
       lastTurnTokens: 25_000,
       sessionTokens: 15_000,
+      turns: [
+        {
+          turnId: "turn-1",
+          inputTokens: 20_000,
+          outputTokens: 5_000,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 2_000,
+          totalTokens: 25_000,
+        },
+      ],
       estimated: false,
-      source: "provider",
+      source: "codex",
     });
     expect(Number.isNaN(Date.parse(event.usage.updatedAt))).toBe(false);
   });

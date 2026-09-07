@@ -1,5 +1,4 @@
 import { acpToolSourceStates, type BridgeToolPart, type SessionState } from "./acp-context.js";
-import { isCursorJsonlPart } from "./acp-cursor-transcript-parts.js";
 import {
   failAllActiveSubagents,
   settleActiveSubagent,
@@ -10,13 +9,6 @@ export function reconcileStaleToolParts(state: SessionState, failActiveSubagents
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
-      // Child JSONL projections are not ACP tool calls and were never
-      // dispatched through this bridge, so "ended without a result" is not a
-      // statement this function can make about them. Hydration owns their
-      // lifecycle and re-derives it from the child transcript on every read;
-      // settling one here would report a running child's tool as failed and
-      // then flicker back to pending on the next poll.
-      if (isCursorJsonlPart(part)) continue;
       const abandoned = part.toolState !== "success" && part.toolState !== "failure";
       if ((failActiveSubagents || abandoned) && part.agentState === "active") {
         part.agentState = "failed";
@@ -36,7 +28,7 @@ export function reconcileStaleToolParts(state: SessionState, failActiveSubagents
   else {
     for (const message of state.messages) {
       for (const part of message.parts) {
-        if (part.type !== "tool-invocation" || isCursorJsonlPart(part)) continue;
+        if (part.type !== "tool-invocation") continue;
         syncActiveSubagentTool(state, part);
       }
     }

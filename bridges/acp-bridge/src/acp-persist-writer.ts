@@ -171,6 +171,7 @@ export function persistedSnapshot(): PersistedState {
     provider,
     sessions: [...sessions.values()].map((state) => ({
       id: state.id,
+      ...(state.policy ? { policy: state.policy } : {}),
       ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
       acpSessionId: state.acpSessionId,
       status: state.status === "running" ? "error" : state.status,

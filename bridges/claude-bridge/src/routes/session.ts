@@ -36,6 +36,7 @@ import {
   readClaudeSteerDispatch,
   configureClaudeSession,
   gracefulInterruptClaudeSession,
+  refreshClaudeContextUsage,
 } from "../services/session-manager.js";
 import {
   AGENT_INTERACTION_LIMITS,
@@ -51,6 +52,7 @@ import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -157,8 +159,11 @@ session.post("/create", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const title = body.title as string | undefined;
     const clientSessionKey = body.clientSessionKey as string | undefined;
+    const policy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
 
-    const newSession = await createOrRecoverSession(title, clientSessionKey);
+    const newSession = policy
+      ? await createOrRecoverSession(title, clientSessionKey, policy)
+      : await createOrRecoverSession(title, clientSessionKey);
     console.debug("[session] Created session", {
       sessionId: newSession.id,
       title: newSession.title,
@@ -273,6 +278,7 @@ session.get("/:id", async (c) => {
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
     contextUsage: sessionData.inProgressUsage ?? sessionData.usage,
+    policy: sessionData.executionPolicy,
     // Authoritative even before the first turn completes: rate-limit events
     // arrive mid-turn, long before there is a usage snapshot to carry them.
     rateLimits: sessionData.rateLimits,
@@ -286,6 +292,24 @@ session.get("/:id", async (c) => {
     completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
   });
+});
+
+/** Full context counting is reserved for an explicit usage-panel read. */
+session.get("/:id/usage", async (c) => {
+  const id = c.req.param("id");
+  const resolved = await resolveSession(id, "Failed to load session usage");
+  if (!resolved.ok) return c.json(resolved.body, resolved.status);
+  if (!resolved.session) return c.json({ error: "Session not found" }, 404);
+  try {
+    const contextUsage = await refreshClaudeContextUsage(resolved.session);
+    return c.json({ contextUsage });
+  } catch (error) {
+    console.warn(
+      "[session] Detailed context usage request failed:",
+      error instanceof Error ? error.message : error,
+    );
+    return c.json({ error: "Context usage is temporarily unavailable" }, 503);
+  }
 });
 
 session.put("/:id/preferences", async (c) => {
@@ -334,6 +358,9 @@ session.post("/:id/config", async (c) => {
   if (!sessionData) return c.json({ error: "Session not found" }, 404);
   if (sessionData.status === "running") return c.json({ error: "Session is running" }, 409);
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  if (Object.hasOwn(body, "policy") && !isNativeAgentExecutionPolicy(body.policy)) {
+    return c.json({ error: "Invalid execution policy" }, 400);
+  }
   const parameterValues =
     body.parameterValues &&
     typeof body.parameterValues === "object" &&
@@ -357,10 +384,13 @@ session.post("/:id/config", async (c) => {
     ...(permissionMode ? { permissionMode } : {}),
     ...(parameterValues ? { parameterValues } : {}),
   });
+  if (isNativeAgentExecutionPolicy(body.policy)) {
+    sessionData.executionPolicy = structuredClone(body.policy);
+  }
   if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
     await setSessionPreferences(sessionData.id, { planMode: permissionMode === "plan" });
   }
-  return c.json({ ok: true });
+  return c.json({ ok: true, policy: sessionData.executionPolicy });
 });
 
 session.get("/:id/commands", async (c) => {

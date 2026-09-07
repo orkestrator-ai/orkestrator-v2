@@ -285,25 +285,32 @@ These APIs only exist in v2:
 
 ### OpenCode Components
 
-| Component              | Purpose                                 |
-| ---------------------- | --------------------------------------- |
-| `OpenCodeChatTab`      | Main chat interface, SSE event handling |
-| `OpenCodeComposeBar`   | Message input with attachments          |
-| `OpenCodeMessage`      | Message rendering with tool display     |
-| `OpenCodeQuestionCard` | Interactive question/answer UI          |
-| `openCodeStore`        | Zustand store for sessions, questions   |
-| `opencode-client.ts`   | SDK wrapper functions                   |
+| Component                         | Purpose                                      |
+| --------------------------------- | -------------------------------------------- |
+| `OpenCodeProvider`                | SDK session surface and backend SSE handling |
+| `OpenCodeInteractionAdapter`      | Questions and permissions                    |
+| `OpenCodeStreamState`             | Bounded incremental SSE projection state     |
+| `AgentNativeTab`                  | Shared native-agent chat UI                   |
+| `NativeAgentQuestionCard`         | Shared question/answer UI                     |
+| `opencode-client.ts`              | Legacy renderer SDK wrapper                   |
 
 ### SSE Event Types
 
 The OpenCode server sends these event types:
 - `message.updated` - Message content changed
 - `message.part.updated` - Streaming part update
-- `session.updated` - Session state changed
+- `message.part.delta` - Streaming text delta
+- `todo.updated` / `session.diff` - Runtime summary changed
+- `session.status` / `session.idle` - Session activity changed
+- `session.updated` / `session.deleted` - Session metadata or existence changed
 - `session.error` - Error occurred
+- `session.compacted` - Context compaction completed
+- `mcp.tools.changed` - MCP inventory changed
+- `permission.replied` - Permission interaction resolved
 - `question.asked` - AI is asking a question
 - `question.replied` - Question was answered
 - `question.rejected` - Question was dismissed
+- `server.connected` / `server.instance.disposed` / `global.disposed` - Reconcile or reconnect
 
 ## Standalone Backend
 
@@ -320,7 +327,7 @@ The OpenCode server sends these event types:
 | -------------------------------------------------------- | --------------------------- |
 | `apps/web/src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
 | `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
-| `apps/web/src/components/opencode/OpenCodeChatTab.tsx`   | OpenCode Native Mode chat   |
+| `apps/web/src/components/native-agent/AgentNativeTab.tsx` | Shared Native Mode chat   |
 | `apps/web/src/lib/codex-client.ts`                       | Codex bridge client wrapper |
 | `apps/web/src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
 | `apps/web/src/stores/codexStore.ts`                      | Codex state management      |

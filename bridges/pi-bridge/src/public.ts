@@ -36,6 +36,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.composer,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
@@ -53,9 +54,10 @@ export function publicStatus(state: SessionState): JsonObject {
     // title Pi reports in `session_info_changed` stranded in bridge state.
     ...(state.title ? { title: state.title } : {}),
     composer: state.composer,
+    ...(state.policy ? { policy: state.policy } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
-    capabilities: { interactions: { kinds: publicInteractionKinds() } },
+    capabilities: { interactions: { kinds: publicInteractionKinds(state) } },
   };
 }
 
@@ -180,7 +182,9 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     lastTurnTokens: turnTokens,
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-    source: "provider",
+    ...(usage.sessionTokens !== undefined ? { sessionTokens: usage.sessionTokens } : {}),
+    ...(usage.turns?.length ? { turns: usage.turns } : {}),
+    source: "pi",
     updatedAt: usage.updatedAt,
   };
 }
@@ -193,8 +197,10 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
  * gate off never asks. Reporting the empty set is what lets the tab say so
  * instead of showing a pending list that looks like it is still loading.
  */
-export function publicInteractionKinds(): string[] {
-  return approvalsEnabled() ? ["command-approval", "file-approval"] : [];
+export function publicInteractionKinds(state?: SessionState): string[] {
+  return (state?.policy ? state.policy.approvals === "ask" : approvalsEnabled())
+    ? ["command-approval", "file-approval"]
+    : [];
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

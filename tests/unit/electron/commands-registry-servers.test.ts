@@ -463,10 +463,9 @@ exit 0
         expect(execLog).toContain(
           "export CURSOR_BRIDGE_AUTH_FILE=/tmp/orkestrator-ai/cursor-sdk-auth.json",
         );
-        // Repository-controlled `.cursor/` settings are readable inside a
-        // container and not on the host — the same boundary the ACP path draws
-        // with ACP_APPROVE_PROJECT_MCPS.
-        expect(execLog).toContain("export CURSOR_BRIDGE_PROJECT_SETTINGS=1");
+        // Project-resource access is now passed as a per-session execution
+        // policy rather than a process-wide launcher flag.
+        expect(execLog).not.toContain("CURSOR_BRIDGE_PROJECT_SETTINGS");
         expect(execLog).toContain("umask 077");
         // The minted key is piped over stdin, so it never reaches docker argv
         // or a process listing.
@@ -771,7 +770,7 @@ exit 0
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
         expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
         expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
-        expect(execLog).toContain("export PI_BRIDGE_PROJECT_RESOURCES=1");
+        expect(execLog).not.toContain("PI_BRIDGE_PROJECT_RESOURCES");
         expect(execLog).toContain("setsid bun /opt/pi-bridge/dist/index.js");
         expect(execLog).toContain("umask 077");
 

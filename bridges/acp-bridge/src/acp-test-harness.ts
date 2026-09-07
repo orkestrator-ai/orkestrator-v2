@@ -231,7 +231,6 @@ export async function spawnBridge(
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
     ACP_STATE_DIR: stateDirectory,
-    ACP_CURSOR_BACKGROUND_CONTINUE: "0",
   };
   delete env.ACP_MAX_SESSIONS;
   Object.assign(env, options.env);
@@ -241,6 +240,22 @@ export async function spawnBridge(
   // it instead of leaking whatever the developer's or CI shell exported.
   for (const [key, value] of Object.entries(options.env ?? {})) {
     if (value === undefined) delete env[key];
+  }
+  if (!("ACP_PROVIDER_CONFIG" in (options.env ?? {}))) delete env.ACP_PROVIDER_CONFIG;
+  if (env.ACP_PROVIDER === "cursor" && options.env?.ACP_PROVIDER_CONFIG === undefined) {
+    env.ACP_PROVIDER_CONFIG = JSON.stringify({
+      id: "cursor",
+      name: "Cursor test fixture",
+      executable: env.ACP_AGENT_PATH,
+      argv: [],
+      env: {},
+      requiresAuthenticate: false,
+      modeMap: { agent: "build", plan: "plan" },
+      extensionPrefixes: ["cursor/"],
+      acknowledgedExtensionMethods: ["cursor/task", "cursor/update_todos"],
+      modelUpdateMethods: ["cursor/models/update"],
+      sessionUpdateMethods: ["cursor/session/update"],
+    });
   }
   const child = spawn(process.execPath, [resolve(here, "index.ts")], {
     cwd: resolve(here, "../../.."),

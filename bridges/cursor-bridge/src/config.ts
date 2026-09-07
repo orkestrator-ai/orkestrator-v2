@@ -60,8 +60,25 @@ applyWorkingDirectory();
  * ordering dependency and not merely a testing inconvenience.
  */
 export function stateFilePath(): string | null {
-  const directory = process.env.CURSOR_BRIDGE_STATE_DIR?.trim();
+  const directory = stateDirectoryPath();
   return directory ? resolve(directory, "state.json") : null;
+}
+
+/** Root shared by the bridge projection and the SDK's local-agent store. */
+export function stateDirectoryPath(): string | null {
+  const directory = process.env.CURSOR_BRIDGE_STATE_DIR?.trim();
+  return directory ? resolve(directory) : null;
+}
+
+/**
+ * Keep the SDK's agent, run and checkpoint files beside this bridge's state.
+ *
+ * The child directory prevents the SDK's fixed JSONL filenames from becoming
+ * part of the bridge projection's own file namespace.
+ */
+export function cursorSdkStateDirectoryPath(): string | null {
+  const directory = stateDirectoryPath();
+  return directory ? resolve(directory, "cursor-sdk") : null;
 }
 
 /**

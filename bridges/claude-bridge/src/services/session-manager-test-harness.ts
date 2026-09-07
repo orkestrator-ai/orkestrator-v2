@@ -98,6 +98,8 @@ export const {
   getAvailableModelCatalog,
   getAvailableModels,
   getClaudeRuntimeVersions,
+  PLAN_MODE_INSTRUCTIONS,
+  refreshClaudeContextUsage,
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_STREAM_CONTENT_BLOCK_INDEX,
   reconcilePersistedSessions,

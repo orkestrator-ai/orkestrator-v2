@@ -25,7 +25,9 @@ import {
   type AgentSession,
   type ExtensionAPI,
   type LoadExtensionsResult,
+  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   NativeAgentResumeEntry,
   NativeAgentSlashCommand,
@@ -36,7 +38,6 @@ import {
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
   MAX_SLASH_COMMANDS,
-  projectResourcesEnabled,
   sessionDirectory,
   workingDirectory,
 } from "./config.js";
@@ -64,7 +65,6 @@ import {
   sessions,
   type BridgeMessage,
   type BridgeMessagePart,
-  type JsonObject,
   type SessionState,
 } from "./state.js";
 
@@ -198,9 +198,13 @@ export async function hydrateSessionComposer(
   return operation;
 }
 
-export function newSessionState(clientSessionKey?: string): SessionState {
+export function newSessionState(
+  clientSessionKey?: string,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): SessionState {
   return {
     id: randomBytes(16).toString("hex"),
+    ...(policy ? { policy } : {}),
     ...(clientSessionKey ? { clientSessionKey } : {}),
     status: "idle",
     messages: [],
@@ -221,7 +225,6 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     openTextParts: new Map(),
     toolInputs: new Map(),
     uncheckedTranscriptBytes: 0,
-    currentTurnOutput: null,
     queue: { steering: [], followUp: [] },
     slashCommands: [],
     compacting: false,
@@ -241,11 +244,13 @@ export function newSessionState(clientSessionKey?: string): SessionState {
 export async function createSession(
   clientSessionKey: string | undefined,
   patch: ComposerPatch | undefined,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
     if (existing) {
+      if (policy) existing.policy = resolvePiExecutionPolicy(policy);
       await hydrateSessionComposer(existing);
       return existing;
     }
@@ -254,7 +259,7 @@ export async function createSession(
   }
 
   const work = (async () => {
-    const state = newSessionState(clientSessionKey);
+    const state = newSessionState(clientSessionKey, resolvePiExecutionPolicy(policy));
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(state.composer);
     sessions.set(state.id, state);
@@ -330,11 +335,13 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       resourceLoaderOptions: {
         // `.pi/` may contain arbitrary TypeScript extensions. The container
         // launcher opts in; host worktrees stay fail-closed.
-        ...projectResourceDiscoveryOptions(),
+        ...projectResourceDiscoveryOptions(state.policy?.projectResources),
         extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
       },
     });
-    await services.resourceLoader.reload();
+    await services.resourceLoader.reload({
+      resolveProjectTrust: async () => state.policy?.projectResources === true,
+    });
     const model = await resolveModelForSession(state.composer.selectedModelId);
     state.composer = await hydrateComposerForSession(
       state.composer,
@@ -347,6 +354,7 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       ...(model ? { model } : {}),
       thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
     });
+    applyPiToolPolicy(created.session, state.policy);
     created.session.setSteeringMode(settingsManager.getSteeringMode());
     created.session.setFollowUpMode(settingsManager.getFollowUpMode());
     if (nonBlank(created.modelFallbackMessage)) {
@@ -474,7 +482,7 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
 }
 
 /** Project-local resource switches passed to Pi's default loader. */
-export function projectResourceDiscoveryOptions(enabled: boolean = projectResourcesEnabled): {
+export function projectResourceDiscoveryOptions(enabled = false): {
   noExtensions: boolean;
   noSkills: boolean;
   noPromptTemplates: boolean;
@@ -483,6 +491,50 @@ export function projectResourceDiscoveryOptions(enabled: boolean = projectResour
     noExtensions: !enabled,
     noSkills: !enabled,
     noPromptTemplates: !enabled,
+  };
+}
+
+function applyPiToolPolicy(
+  session: AgentSession,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): void {
+  if (!policy?.toolPolicy) return;
+  const denied = new Set(policy.toolPolicy.deny ?? []);
+  const available = session.getAllTools().map((tool) => tool.name);
+  const active = policy.toolPolicy.allow
+    ? policy.toolPolicy.allow.filter((name) => available.includes(name) && !denied.has(name))
+    : available.filter((name) => !denied.has(name));
+  session.setActiveToolsByName(active);
+}
+
+let warnedLegacyPolicy = false;
+
+export function resolvePiExecutionPolicy(
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy {
+  const fallback =
+    policy ??
+    ({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    } as const);
+  const approvalOverride = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+  const resourcesOverride = process.env.PI_BRIDGE_PROJECT_RESOURCES;
+  if ((approvalOverride !== undefined || resourcesOverride !== undefined) && !warnedLegacyPolicy) {
+    warnedLegacyPolicy = true;
+    console.warn(
+      "[pi-bridge] PI_BRIDGE_REQUIRE_APPROVAL/PI_BRIDGE_PROJECT_RESOURCES are deprecated; configure the session execution policy instead.",
+    );
+  }
+  return {
+    ...fallback,
+    ...(approvalOverride !== undefined
+      ? { approvals: approvalOverride === "1" ? "ask" : "auto-approve" }
+      : {}),
+    ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
   };
 }
 
@@ -668,7 +720,11 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   // cases the live session is authoritative: using `model` here would clamp
   // thinking against a model the turn is not actually going to run.
   const actualModel = session.model ?? model;
-  const level = thinkingLevel(state.composer.selectedReasoningId, actualModel);
+  const requestedLevel = thinkingLevel(state.composer.selectedReasoningId, actualModel);
+  const availableLevels = session.getAvailableThinkingLevels();
+  const level = availableLevels.includes(requestedLevel as never)
+    ? requestedLevel
+    : (availableLevels[0] ?? requestedLevel);
   if (persist || session.thinkingLevel !== level)
     session.setThinkingLevel(level as never, { persist });
 
@@ -769,6 +825,7 @@ export async function assertResumableSessionFile(sessionFile: string): Promise<s
 export async function resumeSession(
   sessionFile: string,
   patch: ComposerPatch | undefined,
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): Promise<SessionState> {
   const resolved = await assertResumableSessionFile(sessionFile);
   // One JSONL file, one bridge session. Two live `AgentSession`s appending to
@@ -777,6 +834,13 @@ export async function resumeSession(
   // session that already owns the file.
   for (const existing of sessions.values()) {
     if (existing.sessionFile === resolved) {
+      if (policy && JSON.stringify(existing.policy) !== JSON.stringify(policy)) {
+        if (existing.status === "running" || existing.dispatching) {
+          throw new Error("The Pi session is already running");
+        }
+        await detachSession(existing);
+        existing.policy = resolvePiExecutionPolicy(policy);
+      }
       applyComposerPatch(existing, patch);
       existing.lastAccessed = Date.now();
       return existing;
@@ -796,7 +860,7 @@ export async function resumeSession(
   }
 
   const work = (async () => {
-    const state = newSessionState();
+    const state = newSessionState(undefined, resolvePiExecutionPolicy(policy));
     state.sessionFile = resolved;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposerForSession(state.composer);
@@ -835,14 +899,16 @@ export async function forkSession(
     // runtime. Production attachments always do and take `runtime.fork` below.
     const forkedFile = session.sessionManager.createBranchedSession(entryId);
     if (!forkedFile) throw new Error("Pi session runtime is unavailable for forking");
-    return resumeSession(forkedFile, {
+    const forked = await resumeSession(forkedFile, {
       ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
       ...(state.composer.selectedReasoningId
         ? { reasoningId: state.composer.selectedReasoningId }
         : {}),
     });
+    forked.policy = state.policy;
+    return forked;
   }
-  const forked = newSessionState();
+  const forked = newSessionState(undefined, state.policy);
   forked.sessionFile = state.sessionFile;
   forked.composer = structuredClone(state.composer);
   try {
@@ -984,56 +1050,57 @@ function appendHistoricNotice(
  *
  * `label` and `session_info` entries stay out: they are naming, not history.
  */
-function appendHistoricEntry(state: SessionState, entry: unknown): void {
-  if (!isObject(entry)) return;
-  if (entry.type === "compaction") {
-    appendHistoricNotice(state, {
-      type: "compaction",
-      content: nonBlank(entry.summary) ? entry.summary : "",
-      ...(typeof entry.tokensBefore === "number"
-        ? { compactedTokensBefore: entry.tokensBefore }
-        : {}),
-    });
-    return;
-  }
-  if (entry.type === "branch_summary") {
-    if (nonBlank(entry.summary)) {
+function appendHistoricEntry(state: SessionState, entry: SessionEntry): void {
+  switch (entry.type) {
+    case "compaction":
       appendHistoricNotice(state, {
-        type: "status",
-        content: `Branch summary: ${entry.summary}`,
-        severity: "info",
+        type: "compaction",
+        content: entry.summary,
+        compactedTokensBefore: entry.tokensBefore,
       });
+      return;
+    case "branch_summary":
+      if (entry.summary) {
+        appendHistoricNotice(state, {
+          type: "status",
+          content: `Branch summary: ${entry.summary}`,
+          severity: "info",
+        });
+      }
+      return;
+    case "model_change": {
+      const model = `${entry.provider}/${entry.modelId}`;
+      if (model !== "/") {
+        appendHistoricNotice(state, {
+          type: "status",
+          content: `Model changed to ${model}`,
+          severity: "info",
+        });
+      }
+      return;
     }
-    return;
+    case "thinking_level_change":
+      if (entry.thinkingLevel) {
+        appendHistoricNotice(state, {
+          type: "status",
+          content: `Thinking level changed to ${entry.thinkingLevel}`,
+          severity: "info",
+        });
+      }
+      return;
+    case "custom":
+    case "custom_message":
+    case "label":
+    case "session_info":
+      return;
+    case "message":
+      break;
   }
-  if (entry.type === "model_change") {
-    const model = [entry.provider, entry.modelId].filter(nonBlank).join("/");
-    if (model) {
-      appendHistoricNotice(state, {
-        type: "status",
-        content: `Model changed to ${model}`,
-        severity: "info",
-      });
-    }
-    return;
-  }
-  if (entry.type === "thinking_level_change") {
-    if (nonBlank(entry.thinkingLevel)) {
-      appendHistoricNotice(state, {
-        type: "status",
-        content: `Thinking level changed to ${entry.thinkingLevel}`,
-        severity: "info",
-      });
-    }
-    return;
-  }
-  if (entry.type !== "message") return;
   const message = entry.message;
-  if (!isObject(message) || !nonBlank(message.role)) return;
 
   if (message.role === "user") {
     const text = readContentText(message.content);
-    if (text) pushMessage(state, "user", text, [], nonBlank(entry.id) ? entry.id : undefined);
+    if (text) pushMessage(state, "user", text, [], entry.id);
     return;
   }
   if (message.role === "toolResult") {
@@ -1042,13 +1109,12 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
   }
   if (message.role !== "assistant") return;
 
-  const messageId = nonBlank(entry.id) ? entry.id : randomBytes(12).toString("hex");
+  const messageId = entry.id;
   const parts: BridgeMessagePart[] = [];
   let content = "";
   const blocks = Array.isArray(message.content) ? message.content : [];
   for (const block of blocks) {
-    if (!isObject(block)) continue;
-    if (block.type === "text" && nonBlank(block.text)) {
+    if (block.type === "text" && block.text) {
       content += block.text;
       parts.push({
         type: "text",
@@ -1056,7 +1122,7 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
         sourcePartId: `${messageId}:${parts.length}`,
         sourceMessageId: messageId,
       });
-    } else if (block.type === "thinking" && nonBlank(block.thinking)) {
+    } else if (block.type === "thinking" && block.thinking) {
       parts.push({
         type: "thinking",
         content: block.thinking,
@@ -1065,7 +1131,7 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
       });
     } else if (block.type === "toolCall") {
       const rendered = renderToolCall({
-        toolName: nonBlank(block.name) ? block.name : "tool",
+        toolName: block.name || "tool",
         input: block.arguments,
       });
       parts.push({
@@ -1075,7 +1141,7 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
         sourceMessageId: messageId,
         // Keyed on the call id when the entry kept one, so a tool result
         // entry later in the branch patches the right card.
-        toolUseId: nonBlank(block.id) ? block.id : `${messageId}:tool:${parts.length}`,
+        toolUseId: block.id || `${messageId}:tool:${parts.length}`,
         toolName: rendered.toolName,
         toolTitle: rendered.toolTitle,
         ...(rendered.toolArgs ? { toolArgs: rendered.toolArgs } : {}),
@@ -1095,11 +1161,12 @@ function appendHistoricEntry(state: SessionState, entry: unknown): void {
  * Pi stores the call and its result as separate entries, so without this a
  * resumed transcript shows every tool as having produced nothing.
  */
-function applyHistoricToolResult(state: SessionState, message: JsonObject): void {
-  const toolCallId = nonBlank(message.toolCallId) ? message.toolCallId : undefined;
-  if (!toolCallId) return;
+function applyHistoricToolResult(state: SessionState, message: ToolResultMessage): void {
+  const toolCallId = message.toolCallId;
   const rendered = renderToolCall({
-    toolName: nonBlank(message.toolName) ? message.toolName : "tool",
+    // `toolName` is required by Pi's ToolResultMessage type; it is not a
+    // best-effort field inferred from the corresponding call.
+    toolName: message.toolName,
     input: {},
     result: message,
     isError: message.isError === true,

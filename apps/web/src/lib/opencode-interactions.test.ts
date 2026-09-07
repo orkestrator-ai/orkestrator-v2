@@ -4,9 +4,7 @@ import {
   getPendingPermissions,
   getPendingQuestions,
   rejectQuestion,
-  replyToPermission,
   replyToQuestion,
-  subscribeToEvents,
   type OpencodeClient,
 } from "./opencode-client";
 
@@ -23,34 +21,7 @@ afterEach(() => {
   mock.restore();
 });
 
-describe("opencode-client events and pending requests", () => {
-  test("subscribes through stream and directly iterable response shapes", async () => {
-    const stream = (async function* () {
-      yield { type: "session.updated" };
-    })();
-    const wrapped = { event: { subscribe: async () => ({ stream }) } } as unknown as OpencodeClient;
-    expect(await subscribeToEvents(wrapped)).toBe(stream);
-
-    const direct = (async function* () {
-      yield { type: "session.updated" };
-    })();
-    const directClient = { event: { subscribe: async () => direct } } as unknown as OpencodeClient;
-    expect(await subscribeToEvents(directClient)).toBe(direct);
-  });
-
-  test("returns null for invalid or failed event subscriptions", async () => {
-    const invalid = { event: { subscribe: async () => ({}) } } as unknown as OpencodeClient;
-    const failed = {
-      event: {
-        subscribe: async () => {
-          throw new Error("stream failed");
-        },
-      },
-    } as unknown as OpencodeClient;
-    expect(await subscribeToEvents(invalid)).toBeNull();
-    expect(await subscribeToEvents(failed)).toBeNull();
-  });
-
+describe("opencode-client pending requests", () => {
   test("lists pending questions and permissions, including empty and failed responses", async () => {
     const client = {
       question: { list: async () => ({ data: [{ id: "question-1", questions: [] }] }) },
@@ -215,21 +186,14 @@ describe("opencode-client events and pending requests", () => {
   test("replies to and rejects requests with the v2 SDK shape", async () => {
     const questionReply = mock(async () => ({}));
     const questionReject = mock(async () => ({}));
-    const permissionReply = mock(async () => ({}));
     const client = {
       question: { reply: questionReply, reject: questionReject },
-      permission: { reply: permissionReply },
     } as unknown as OpencodeClient;
 
     expect(await replyToQuestion(client, "question-1", [["Yes"]])).toBe("applied");
-    expect(await replyToPermission(client, "permission-1", "always", "remember")).toBe("applied");
     expect(await rejectQuestion(client, "question-1")).toBe("applied");
     expect(questionReply).toHaveBeenCalledWith(
       { requestID: "question-1", answers: [["Yes"]] },
-      { throwOnError: true },
-    );
-    expect(permissionReply).toHaveBeenCalledWith(
-      { requestID: "permission-1", reply: "always", message: "remember" },
       { throwOnError: true },
     );
     expect(questionReject).toHaveBeenCalledWith(
@@ -270,7 +234,6 @@ describe("opencode-client events and pending requests", () => {
       },
     } as unknown as OpencodeClient;
     expect(await replyToQuestion(failed, "question-1", [])).toBe("pending");
-    expect(await replyToPermission(failed, "permission-1", "reject")).toBe("pending");
     expect(await rejectQuestion(failed, "question-1")).toBe("pending");
   });
 
@@ -294,7 +257,6 @@ describe("opencode-client events and pending requests", () => {
     } as unknown as OpencodeClient;
 
     expect(await replyToQuestion(reconciled, "question-1", [["Yes"]])).toBe("gone");
-    expect(await replyToPermission(reconciled, "permission-1", "once")).toBe("gone");
     expect(await rejectQuestion(reconciled, "question-1")).toBe("gone");
   });
 
@@ -322,7 +284,6 @@ describe("opencode-client events and pending requests", () => {
     } as unknown as OpencodeClient;
 
     expect(await replyToQuestion(unavailable, "question-1", [["Yes"]])).toBe("unknown");
-    expect(await replyToPermission(unavailable, "permission-1", "reject")).toBe("unknown");
     expect(await rejectQuestion(unavailable, "question-1")).toBe("unknown");
   });
 

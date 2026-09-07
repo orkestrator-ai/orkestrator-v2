@@ -149,6 +149,7 @@ function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionContro
     setThinkingLevel: function (next: string) {
       this.thinkingLevel = next;
     },
+    getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
     // Pi starts its extension runtime here: `session_start` fires and
@@ -242,6 +243,98 @@ describe("session ownership", () => {
 
     expect(first).toBe(second);
     expect(Array.from(sessions.values())).toEqual([first]);
+  });
+
+  test("applies the backend policy while resuming a Pi session", async () => {
+    const sessionFile = join(sessionDirectory, "policy-resume.jsonl");
+    await writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "policy-resume",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: workingDirectory,
+      })}\n`,
+      "utf8",
+    );
+
+    const resumed = await resumeSession(sessionFile, undefined, {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      toolPolicy: { deny: ["shell"] },
+      networkAccess: "restricted",
+    });
+
+    expect(resumed.policy).toEqual({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      toolPolicy: { deny: ["shell"] },
+      networkAccess: "restricted",
+    });
+  });
+
+  test("rehydrates Pi's typed message entries and required tool result name", async () => {
+    const sessionFile = join(sessionDirectory, "typed-history.jsonl");
+    const timestamp = "2026-08-25T00:00:00.000Z";
+    const entries = [
+      { type: "session", version: 3, id: "typed-history", timestamp, cwd: workingDirectory },
+      {
+        type: "message",
+        id: "assistant-entry",
+        parentId: null,
+        timestamp,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Running it" },
+            { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "pwd" } },
+          ],
+          api: "openai-completions",
+          provider: "test",
+          model: "test",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.parse(timestamp),
+        },
+      },
+      {
+        type: "message",
+        id: "tool-result-entry",
+        parentId: "assistant-entry",
+        timestamp,
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bash",
+          content: [{ type: "text", text: "/workspace" }],
+          isError: false,
+          timestamp: Date.parse(timestamp),
+        },
+      },
+    ];
+    await writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const resumed = await resumeSession(sessionFile, undefined);
+    const tool = resumed.messages[0]?.parts.find((part) => part.type === "tool-invocation");
+    expect(resumed.messages[0]?.content).toBe("Running it");
+    expect(tool).toMatchObject({
+      toolUseId: "call-1",
+      toolName: "bash",
+      toolState: "success",
+      toolOutput: "/workspace",
+    });
   });
 
   test("waits for a cold attach and disposes it when the owner closes", async () => {

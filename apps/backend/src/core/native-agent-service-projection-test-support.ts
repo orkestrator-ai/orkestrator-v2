@@ -66,7 +66,7 @@ export async function waitForCondition(condition: () => boolean | Promise<boolea
 export function createProviderStub(
   agent: BuildPipelineAgent,
   behaviour: {
-    createSession?: () => Promise<string>;
+    createSession?: NativeAgentRuntimeProvider["createSession"];
     send?: (sessionId: string, prompt: string, options: ProviderSendOptions) => Promise<void>;
     status?: (sessionId: string) => Promise<ProviderStatus>;
     activity?: (sessionId: string) => Promise<ProviderActivityState>;
@@ -82,6 +82,7 @@ export function createProviderStub(
     updateInteractiveControls?: NativeAgentRuntimeProvider["updateInteractiveControls"];
     slashCommands?: NativeAgentRuntimeProvider["slashCommands"];
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
+    refreshUsage?: NativeAgentRuntimeProvider["refreshUsage"];
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
     dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
     steerSupported?: NativeAgentRuntimeProvider["steerSupported"];
@@ -89,7 +90,9 @@ export function createProviderStub(
     setSessionTitle?: NativeAgentRuntimeProvider["setSessionTitle"];
   } = {},
 ) {
-  const createSession = mock(behaviour.createSession ?? (async () => "provider-session"));
+  const createSession = mock(
+    behaviour.createSession ?? (async (_phase, _label, _options) => "provider-session"),
+  );
   const send = mock(behaviour.send ?? (async () => undefined));
   const status = mock(behaviour.status ?? (async () => "idle" as ProviderStatus));
   const activity = behaviour.activity ? mock(behaviour.activity) : undefined;
@@ -113,6 +116,7 @@ export function createProviderStub(
     : undefined;
   const slashCommands = behaviour.slashCommands ? mock(behaviour.slashCommands) : undefined;
   const refreshCatalog = behaviour.refreshCatalog ? mock(behaviour.refreshCatalog) : undefined;
+  const refreshUsage = behaviour.refreshUsage ? mock(behaviour.refreshUsage) : undefined;
   const prepareDispatch = behaviour.prepareDispatch ? mock(behaviour.prepareDispatch) : undefined;
   const dispatchStatus = behaviour.dispatchStatus ? mock(behaviour.dispatchStatus) : undefined;
   const steerSupported = nativeAgentCapabilities(agent).actions?.steer
@@ -138,6 +142,7 @@ export function createProviderStub(
     updateInteractiveControls,
     slashCommands,
     refreshCatalog,
+    refreshUsage,
     structured: async () => null,
     abort,
     stopBackgroundTask,
@@ -171,6 +176,7 @@ export function createProviderStub(
     updateInteractiveControls,
     slashCommands,
     refreshCatalog,
+    refreshUsage,
     dispose,
   };
 }

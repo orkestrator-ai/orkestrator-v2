@@ -8,7 +8,11 @@
  * so nothing downstream needs to know which engine produced a transcript.
  */
 import type { Run, SDKAgent } from "@cursor/sdk";
-import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentAccountUsageWindow,
+  NativeAgentComposerState,
+  NativeAgentTurnUsage,
+} from "@orkestrator/protocol/native-agent";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 
 export type JsonObject = Record<string, unknown>;
@@ -197,6 +201,10 @@ export interface PersistedUsage {
   sessionTokenFloor?: number;
   /** Amount actually charged by Cursor, including discounts, in US dollars. */
   costUsd?: number;
+  /** Provider-reported per-run usage, newest last and bounded to twenty. */
+  turns?: NativeAgentTurnUsage[];
+  /** Agent-scoped cumulative billing data exposed through the generic panel. */
+  account?: NativeAgentAccountUsageWindow[];
   updatedAt: string;
 }
 
@@ -215,6 +223,7 @@ export interface ActiveSubagentDescriptor {
 
 export interface SessionState {
   id: string;
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   /** The SDK's own agent id. Stable across bridge restarts; what resume takes. */
   agentId?: string;
@@ -239,6 +248,8 @@ export interface SessionState {
   composer: NativeAgentComposerState;
   /** The attached SDK agent, or null when this session is detached. */
   agent: SDKAgent | null;
+  /** Holds the SDK's prewarmed executor alive for the attached agent. */
+  workspaceWarmRelease?: () => Promise<void>;
   /** The in-flight attach, shared by every caller that wants this attached. */
   attaching?: Promise<SDKAgent>;
   /** Cancels the turn in flight. Never persisted. */
@@ -331,6 +342,7 @@ export interface SessionState {
 
 export interface PersistedSession {
   id: string;
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
   agentId?: string;
   status: SessionStatus;

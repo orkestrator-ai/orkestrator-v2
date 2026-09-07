@@ -1,6 +1,6 @@
 # 12 — Execution policy and host/container parity
 
-**Status:** ⬜ Not started · 0/13 tasks · Depends on: 04
+**Status:** 🟨 In progress · implementation complete, awaiting Docker/browser QA and merge · Depends on: 04
 
 ## Goal
 
@@ -119,3 +119,18 @@ approvals off, project rules on"). The existing coordinator
 
 Changing the coordinator's read-only boundary. Network allowlist contents
 (already environment settings).
+
+## Implementation notes
+
+- The backend resolves and persists one policy for each provider session;
+  policy-only settings tiers are retained and the renderer displays the
+  effective policy without making trust decisions.
+- Claude, Codex, Cursor, ACP/Grok, Pi and OpenCode translate the normalized
+  axes at their SDK boundary. Legacy environment variables remain temporary,
+  warning overrides, but normal launchers no longer set them.
+- Codex maps a deny policy to `approvalPolicy: never` plus a read-only sandbox,
+  so denying escalation cannot silently leave workspace-write authority.
+  Project-resource MCP passthrough remains governed by plan 07's inventory
+  work rather than being inferred in the bridge.
+- Resolver and adapter tests are automated. The container matrix and host
+  browser summary check remain required before merge.

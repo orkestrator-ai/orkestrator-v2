@@ -672,7 +672,7 @@ export interface NativeAgentContextUsage {
   durationMs?: number;
   apiDurationMs?: number;
   estimated?: boolean;
-  source?: "claude" | "opencode" | "codex" | "heuristic" | "provider";
+  source?: "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "heuristic" | "provider";
   updatedAt?: string;
   rateLimits?: Array<{
     label: string;
@@ -687,8 +687,120 @@ export interface NativeAgentContextUsage {
   };
   contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
   permissionDenials?: number;
+  /** Bounded, non-secret descriptions of permission denials from the provider. */
+  permissionDenialDetails?: Array<{
+    toolName: string;
+    toolUseId?: string;
+    reason?: string;
+  }>;
+  /** Newest last. Providers and the backend retain at most twenty entries. */
+  turns?: NativeAgentTurnUsage[];
+  /** Account-level quota or billing windows reported by the provider. */
+  account?: NativeAgentAccountUsageWindow[];
   linesAdded?: number;
   linesRemoved?: number;
+}
+
+export interface NativeAgentTurnUsage {
+  turnId: string;
+  costUsd?: number;
+  /** Cursor's undiscounted price, retained separately from charged cost. */
+  rawCostUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  ttftMs?: number;
+  numTurns?: number;
+  toolCalls?: number;
+  requestId?: string;
+  modelId?: string;
+}
+
+export interface NativeAgentAccountUsageWindow {
+  window: string;
+  label?: string;
+  /** Provider-reported token consumption for this account window. */
+  tokens?: number;
+  usedPercent?: number;
+  resetsAt?: string;
+  spendUsd?: number;
+  creditsRemaining?: number;
+  limitUsd?: number;
+}
+
+export type NativeAgentExecutionPolicyId =
+  | "interactive-host"
+  | "interactive-container"
+  | "coordinator-read-only"
+  | "pipeline";
+
+export interface NativeAgentExecutionPolicy {
+  id: NativeAgentExecutionPolicyId;
+  sandbox: "provider" | "container" | "none";
+  approvals: "ask" | "auto-approve" | "deny";
+  projectResources: boolean;
+  toolPolicy?: { allow?: string[]; deny?: string[] };
+  networkAccess: "restricted" | "full";
+  /** Provider caveat when one policy axis cannot be enforced exactly. */
+  note?: string;
+}
+
+/** User-editable axes layered over the backend's environment/origin defaults. */
+export type NativeAgentExecutionPolicyOverride = Partial<
+  Pick<
+    NativeAgentExecutionPolicy,
+    "sandbox" | "approvals" | "projectResources" | "toolPolicy" | "networkAccess"
+  >
+>;
+
+export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAgentExecutionPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  const toolPolicy = policy.toolPolicy as Record<string, unknown> | undefined;
+  return (
+    (policy.id === "interactive-host" ||
+      policy.id === "interactive-container" ||
+      policy.id === "coordinator-read-only" ||
+      policy.id === "pipeline") &&
+    (policy.sandbox === "provider" ||
+      policy.sandbox === "container" ||
+      policy.sandbox === "none") &&
+    (policy.approvals === "ask" ||
+      policy.approvals === "auto-approve" ||
+      policy.approvals === "deny") &&
+    typeof policy.projectResources === "boolean" &&
+    (policy.networkAccess === "restricted" || policy.networkAccess === "full") &&
+    (policy.note === undefined || typeof policy.note === "string") &&
+    (toolPolicy === undefined ||
+      ((toolPolicy.allow === undefined ||
+        (Array.isArray(toolPolicy.allow) &&
+          toolPolicy.allow.every((item) => typeof item === "string"))) &&
+        (toolPolicy.deny === undefined ||
+          (Array.isArray(toolPolicy.deny) &&
+            toolPolicy.deny.every((item) => typeof item === "string")))))
+  );
+}
+
+/** Stable, provider-neutral copy for the agent information panel. */
+export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionPolicy): string {
+  const sandbox =
+    policy.sandbox === "container"
+      ? "Container sandbox"
+      : policy.sandbox === "provider"
+        ? "Provider sandbox"
+        : "No sandbox";
+  const approvals =
+    policy.approvals === "ask"
+      ? "approvals on request"
+      : policy.approvals === "deny"
+        ? "approvals denied"
+        : "approvals off";
+  return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${policy.networkAccess} network`;
 }
 
 export interface NativeAgentRateLimitWindow {
@@ -1103,6 +1215,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   /** Content-free durable delivery state for transcript-native async questions. */
   asyncQuestionResponses?: NativeAgentAsyncQuestionResponse[];
   contextUsage?: NativeAgentContextUsage;
+  /** Backend-owned policy actually supplied to the provider session. */
+  policy?: NativeAgentExecutionPolicy;
   /** Provider limits can arrive before the first token-usage snapshot. */
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;

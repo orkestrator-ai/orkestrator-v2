@@ -1,4 +1,4 @@
-import type { Part as OpenCodePart } from "@opencode-ai/sdk";
+import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
 import { countTextLines, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import { isEditTool } from "./tool-names";
 import { createUuid } from "./uuid";

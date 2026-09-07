@@ -35,7 +35,7 @@
     },
     "apps/backend": {
       "name": "@orkestrator/backend",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0",
         "@modelcontextprotocol/server": "2.0.0",
@@ -54,7 +54,7 @@
     },
     "apps/desktop": {
       "name": "@orkestrator/desktop",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@orkestrator/backend": "workspace:*",
         "@orkestrator/protocol": "workspace:*",
@@ -72,7 +72,7 @@
     },
     "apps/web": {
       "name": "@orkestrator/web",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -139,7 +139,7 @@
     },
     "apps/web-public": {
       "name": "@orkestrator/web-public",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/web": "workspace:*",
@@ -159,8 +159,9 @@
     },
     "bridges/acp-bridge": {
       "name": "acp-bridge",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
+        "@agentclientprotocol/sdk": "1.4.0",
         "@orkestrator/protocol": "workspace:*",
       },
       "devDependencies": {
@@ -171,7 +172,7 @@
     },
     "bridges/claude-bridge": {
       "name": "claude-bridge",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.261",
         "@anthropic-ai/sdk": "0.123.0",
@@ -189,7 +190,7 @@
     },
     "bridges/codex-bridge": {
       "name": "codex-bridge",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@hono/node-server": "^1.13.0",
         "@orkestrator/protocol": "workspace:*",
@@ -203,7 +204,7 @@
     },
     "bridges/cursor-bridge": {
       "name": "cursor-bridge",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@cursor/sdk": "1.0.31",
         "@orkestrator/protocol": "workspace:*",
@@ -216,7 +217,7 @@
     },
     "bridges/pi-bridge": {
       "name": "pi-bridge",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.85.0",
         "@earendil-works/pi-ai": "0.85.0",
@@ -232,7 +233,7 @@
     },
     "packages/cli": {
       "name": "orkestrator",
-      "version": "2.12.10",
+      "version": "2.12.11",
       "bin": {
         "orkestrator": "bin/orkestrator.js",
       },
@@ -243,10 +244,12 @@
     },
     "packages/protocol": {
       "name": "@orkestrator/protocol",
-      "version": "2.12.10",
+      "version": "2.12.11",
     },
   },
   "packages": {
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.4.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg=="],
+
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.261", "", { "optionalDependencies": { "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.261", "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.261", "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.261", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.261", "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.261", "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.261", "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.261", "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.261" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.93.0", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" } }, "sha512-CDG9z14JVKYRHjpp/g6zJ2k8xM5uSoRgjGdpTiK9woLDZxXtXcxV93ipCh55jQ3REj7M7H3GieMsETGZXB/ydw=="],
 
     "@anthropic-ai/claude-agent-sdk-darwin-arm64": ["@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.261", "", { "os": "darwin", "cpu": "arm64" }, "sha512-oI8SPd6g+xUF6EnEqIInxz5CjSSJXoDlaqefjbSJvTFCawGGBhxlQs0g9jzsYou6Rdu+i2tJBToJZLsKSnN/0Q=="],

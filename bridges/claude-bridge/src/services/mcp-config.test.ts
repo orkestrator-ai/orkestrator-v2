@@ -318,6 +318,21 @@ describe("mcp config resolution", () => {
       });
     });
 
+    test("excludes both forms of project MCP configuration when requested", async () => {
+      await writeClaudeJson({
+        mcpServers: { global: { command: "global-command" } },
+        projects: { [cwd]: { mcpServers: { projectEntry: { command: "entry-command" } } } },
+      });
+      await writeFile(
+        join(cwd, ".mcp.json"),
+        JSON.stringify({ mcpServers: { projectFile: { command: "file-command" } } }),
+      );
+
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {}, undefined, false);
+      expect(Object.keys(servers)).toEqual(["global"]);
+      expect([...names]).toEqual(["global"]);
+    });
+
     test("injects the agent server into runtime servers and names", async () => {
       const { servers, names } = await getMcpRuntimeConfig(cwd, {
         ORKESTRATOR_AGENT_MCP_URL: "http://host.docker.internal:4567/mcp",

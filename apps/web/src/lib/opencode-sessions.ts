@@ -55,19 +55,11 @@ export function createClient(
   return client;
 }
 
-/**
- * Check server health.
- *
- * Mirrors claude-client's checkHealth. The SDK client does not expose its base
- * URL, so this takes the URL directly and probes the same GET /global/health
- * route the backend polls for readiness.
- */
-export async function checkHealth(baseUrl: string, authToken?: string): Promise<boolean> {
+/** Check server health through the SDK's typed v1 global surface. */
+export async function checkHealth(client: OpencodeClient): Promise<boolean> {
   try {
-    const response = await fetch(`${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`, {
-      headers: openCodeAuthHeaders(authToken),
-    });
-    return response.ok;
+    const response = await client.global.health();
+    return !response.error && response.data?.healthy === true;
   } catch {
     return false;
   }
@@ -80,9 +72,8 @@ export async function checkHealth(baseUrl: string, authToken?: string): Promise<
  * renderer stuck retrying an obsolete Basic password.
  */
 export function checkClientHealth(client: OpencodeClient): Promise<boolean> {
-  const connection = openCodeClientConnections.get(client);
-  if (!connection) return Promise.resolve(false);
-  return checkHealth(connection.baseUrl, connection.authToken);
+  if (!openCodeClientConnections.has(client)) return Promise.resolve(false);
+  return checkHealth(client);
 }
 
 type ProviderLike = {

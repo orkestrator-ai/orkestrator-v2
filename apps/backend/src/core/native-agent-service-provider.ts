@@ -366,7 +366,10 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         agentSessionOwnerKey(session.owner) !== agentSessionOwnerKey(input.owner)) ||
       (input.executionPolicy !== undefined &&
         session.executionPolicy !== undefined &&
-        session.executionPolicy !== input.executionPolicy)
+        session.executionPolicy !== input.executionPolicy) ||
+      (input.policy !== undefined &&
+        session.policy !== undefined &&
+        JSON.stringify(session.policy) !== JSON.stringify(input.policy))
     ) {
       throw new Error("Native agent session key collision");
     }
@@ -402,6 +405,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       mode: input.sessionMode,
       fastMode: input.fastMode,
       agentMcp,
+      policy: input.policy,
       interaction: {
         origin: input.origin ?? "interactive-native",
         interactionPolicy:

@@ -28,6 +28,7 @@ import {
 import { join } from "node:path";
 import type { EngineTurnConfig } from "../engine/types.js";
 import type { SessionTitleSource } from "./thread-registry.js";
+import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   isStructuredOutputResult,
   type StructuredOutputResult,
@@ -76,6 +77,7 @@ function isEngineTurnConfig(value: unknown): value is EngineTurnConfig {
   if (!value || typeof value !== "object") return false;
   const config = value as Record<string, unknown>;
   if (config.mode !== "build" && config.mode !== "plan") return false;
+  if (config.policy !== undefined && !isNativeAgentExecutionPolicy(config.policy)) return false;
   if (config.model !== undefined && typeof config.model !== "string") return false;
   if (config.reasoningEffort !== undefined && typeof config.reasoningEffort !== "string") {
     return false;

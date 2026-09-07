@@ -46,12 +46,6 @@ export const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
     source: "builtin",
   },
   {
-    name: "/goal",
-    description: "Set or view an experimental goal for a long-running task.",
-    argumentHint: "<objective|pause|resume|clear>",
-    source: "builtin",
-  },
-  {
     name: "/models",
     description: "List available Codex models and current selection.",
     source: "builtin",
@@ -95,7 +89,11 @@ export function parseCodexSteerCommand(prompt: string): { args: string } | null 
 }
 
 export function isCodexCliNativeSlashCommand(name: string): boolean {
-  return name.toLowerCase() === "/goal";
+  // Codex advertises an experimental goals feature, but app-server exposes no
+  // stable goal RPC in the pinned protocol. Keep the predicate for the prompt
+  // runtime's compatibility seam while refusing to route any command around
+  // Orkestrator's normal prompt handling.
+  return false;
 }
 
 export function extractFrontmatter(content: string): {

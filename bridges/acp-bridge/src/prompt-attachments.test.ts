@@ -51,9 +51,9 @@ describe("parsePromptAttachments", () => {
     // agent was never shown, so every one of these has to reject the request.
     expect(() => parsePromptAttachments("nope")).toThrow(PromptAttachmentError);
     expect(() => parsePromptAttachments([null])).toThrow(PromptAttachmentError);
-    expect(() => parsePromptAttachments([{ type: "file", path: "a.txt" }])).toThrow(
-      "Cursor and Grok accept image attachments only",
-    );
+    expect(parsePromptAttachments([{ type: "file", path: "a.txt" }])).toEqual([
+      { type: "file", path: "a.txt" },
+    ]);
     expect(() => parsePromptAttachments([{ type: "image" }])).toThrow(
       "Each attachment needs a workspace path",
     );

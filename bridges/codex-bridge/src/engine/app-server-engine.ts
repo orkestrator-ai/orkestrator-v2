@@ -56,6 +56,7 @@ import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
   type EngineCapabilities,
+  type EngineAccountUsageWindow,
   type EngineError,
   type EngineEvent,
   type EngineEventListener,
@@ -259,6 +260,40 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
     if (Object.keys(allowed).length > 0) rateLimits[key] = allowed;
   }
   return { rateLimits };
+}
+
+function safeUsageCount(value: unknown): number | undefined {
+  let parsed: number;
+  if (typeof value === "bigint") parsed = Number(value);
+  else if (typeof value === "number") parsed = value;
+  else if (typeof value === "string" && /^\d+$/.test(value)) parsed = Number(value);
+  else return undefined;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/** Allowlist the non-sensitive account token activity returned by app-server. */
+export function accountUsageWindows(value: unknown): EngineAccountUsageWindow[] {
+  const response = objectRecord(value);
+  const summary = objectRecord(response.summary);
+  const windows: EngineAccountUsageWindow[] = [];
+  const lifetimeTokens = safeUsageCount(summary.lifetimeTokens);
+  if (lifetimeTokens !== undefined) {
+    windows.push({ window: "lifetime", label: "Lifetime", tokens: lifetimeTokens });
+  }
+  const peakDailyTokens = safeUsageCount(summary.peakDailyTokens);
+  if (peakDailyTokens !== undefined) {
+    windows.push({ window: "peak-daily", label: "Peak day", tokens: peakDailyTokens });
+  }
+  if (Array.isArray(response.dailyUsageBuckets)) {
+    for (const candidate of response.dailyUsageBuckets.slice(-90)) {
+      const bucket = objectRecord(candidate);
+      const startDate = optionalPublicString(bucket.startDate);
+      const tokens = safeUsageCount(bucket.tokens);
+      if (!startDate || tokens === undefined) continue;
+      windows.push({ window: `daily:${startDate}`, label: startDate, tokens });
+    }
+  }
+  return windows;
 }
 
 export interface AppServerEngineOptions {
@@ -979,6 +1014,11 @@ export class AppServerEngine implements CodexEngine {
 
   async readAccount(): Promise<unknown> {
     return this.supervisor.request("account/read", { refreshToken: true });
+  }
+
+  async readAccountUsage(): Promise<EngineAccountUsageWindow[]> {
+    const response = await this.supervisor.request("account/usage/read", undefined);
+    return accountUsageWindows(response);
   }
 
   async beginAccountLogin(): Promise<unknown> {

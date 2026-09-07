@@ -41,6 +41,59 @@ export function openCodeContextUsage(
   });
   const latestTurn = usageTurns.at(-1);
   if (!latestTurn) return undefined;
+  const turns = rawMessages
+    .flatMap((message) => {
+      const envelope = asRecord(message);
+      const info = asRecord(envelope?.info);
+      const providerId = nonEmptyString(info?.providerID);
+      const modelId = nonEmptyString(info?.modelID);
+      const qualifiedModelId = modelId
+        ? providerId
+          ? `${providerId}/${modelId}`
+          : modelId
+        : undefined;
+      return Array.isArray(envelope?.parts)
+        ? envelope.parts.flatMap((candidate) => {
+            const part = asRecord(candidate);
+            if (part?.type !== "step-finish") return [];
+            const tokens = asRecord(part.tokens);
+            const turnId = nonEmptyString(part.id) ?? nonEmptyString(part.messageID);
+            if (!tokens || !turnId) return [];
+            const cache = asRecord(tokens.cache);
+            const number = (value: unknown) =>
+              typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+            const inputTokens = number(tokens.input);
+            const outputTokens = number(tokens.output);
+            const reasoningTokens = number(tokens.reasoning);
+            const cacheReadTokens = number(cache?.read);
+            const cacheWriteTokens = number(cache?.write);
+            const totalTokens =
+              inputTokens === undefined &&
+              outputTokens === undefined &&
+              cacheReadTokens === undefined &&
+              cacheWriteTokens === undefined
+                ? undefined
+                : (inputTokens ?? 0) +
+                  (outputTokens ?? 0) +
+                  (cacheReadTokens ?? 0) +
+                  (cacheWriteTokens ?? 0);
+            return [
+              {
+                turnId,
+                ...(number(part.cost) === undefined ? {} : { costUsd: number(part.cost) }),
+                ...(inputTokens === undefined ? {} : { inputTokens }),
+                ...(outputTokens === undefined ? {} : { outputTokens }),
+                ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+                ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+                ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+                ...(totalTokens === undefined ? {} : { totalTokens }),
+                ...(qualifiedModelId ? { modelId: qualifiedModelId } : {}),
+              },
+            ];
+          })
+        : [];
+    })
+    .slice(-20);
   return usageTurns.reduce<NativeAgentContextUsage>(
     (usage, turn) => ({
       ...usage,
@@ -65,6 +118,7 @@ export function openCodeContextUsage(
       estimated: false,
       source: "opencode",
       updatedAt: new Date().toISOString(),
+      ...(turns.length > 0 ? { turns } : {}),
     },
   );
 }

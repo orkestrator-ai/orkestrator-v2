@@ -714,6 +714,7 @@ export function EnvironmentSettingsDialog({
   const menuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
     { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
+    { id: "policy", label: "Execution policy", icon: <Shield className="h-4 w-4" /> },
     ...enabledPlatforms.map((platform) => ({
       id: platform,
       label: AGENT_PLATFORM_LABELS[platform],
@@ -780,6 +781,143 @@ export function EnvironmentSettingsDialog({
             scopeLabel="this environment"
           />
         );
+      case "policy": {
+        const policy = agentSettings.executionPolicy ?? {};
+        const updatePolicy = (
+          field: "sandbox" | "approvals" | "projectResources" | "networkAccess",
+          value: string,
+        ) => {
+          const next = { ...policy };
+          if (value === "inherit") delete next[field];
+          else if (field === "projectResources") next[field] = value === "on";
+          else Object.assign(next, { [field]: value });
+          setAgentSettings({
+            ...agentSettings,
+            ...(Object.keys(next).length > 0
+              ? { executionPolicy: next }
+              : { executionPolicy: undefined }),
+          });
+        };
+        const updateTools = (field: "allow" | "deny", value: string) => {
+          const values = value
+            .split(/[\n,]/)
+            .map((item) => item.trim())
+            .filter(Boolean);
+          const toolPolicy = {
+            ...policy.toolPolicy,
+            [field]: values.length > 0 ? values : undefined,
+          };
+          if (!toolPolicy.allow && !toolPolicy.deny)
+            delete (toolPolicy as { allow?: string[] }).allow;
+          const next = {
+            ...policy,
+            ...(toolPolicy.allow || toolPolicy.deny ? { toolPolicy } : { toolPolicy: undefined }),
+          };
+          setAgentSettings({ ...agentSettings, executionPolicy: next });
+        };
+        return (
+          <div className="max-w-2xl space-y-5">
+            <p className="text-sm text-muted-foreground">
+              These overrides apply to new native-agent sessions in this environment. Inherit uses
+              the backend&apos;s host or container default.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Sandbox</Label>
+                <Select
+                  value={policy.sandbox ?? "inherit"}
+                  onValueChange={(value) => updatePolicy("sandbox", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    <SelectItem value="provider">Provider sandbox</SelectItem>
+                    <SelectItem value="container">Container sandbox</SelectItem>
+                    <SelectItem value="none">No sandbox</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Approvals</Label>
+                <Select
+                  value={policy.approvals ?? "inherit"}
+                  onValueChange={(value) => updatePolicy("approvals", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    <SelectItem value="ask">Ask</SelectItem>
+                    <SelectItem value="auto-approve">Auto-approve</SelectItem>
+                    <SelectItem value="deny">Deny</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Project resources</Label>
+                <Select
+                  value={
+                    policy.projectResources === undefined
+                      ? "inherit"
+                      : policy.projectResources
+                        ? "on"
+                        : "off"
+                  }
+                  onValueChange={(value) => updatePolicy("projectResources", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    <SelectItem value="on">On</SelectItem>
+                    <SelectItem value="off">Off</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Network</Label>
+                <Select
+                  value={policy.networkAccess ?? "inherit"}
+                  onValueChange={(value) => updatePolicy("networkAccess", value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    <SelectItem value="restricted">Restricted</SelectItem>
+                    <SelectItem value="full">Full</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="policy-tools-allow">Allowed tools</Label>
+                <Textarea
+                  id="policy-tools-allow"
+                  value={(policy.toolPolicy?.allow ?? []).join("\n")}
+                  onChange={(event) => updateTools("allow", event.target.value)}
+                  placeholder="One tool name per line"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="policy-tools-deny">Denied tools</Label>
+                <Textarea
+                  id="policy-tools-deny"
+                  value={(policy.toolPolicy?.deny ?? []).join("\n")}
+                  onChange={(event) => updateTools("deny", event.target.value)}
+                  placeholder="One tool name per line"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      }
       case "claude":
       case "codex":
       case "cursor":

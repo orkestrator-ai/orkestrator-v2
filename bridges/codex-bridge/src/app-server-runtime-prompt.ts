@@ -164,6 +164,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         modelReasoningEffort: session.config.reasoningEffort,
         fastMode: session.config.serviceTier === "fast",
         agentMcp: input.agentMcp,
+        policy: session.config.policy,
       }).agentMcp;
       if (scoped) session.config = { ...session.config, agentMcp: scoped };
     }
@@ -1160,7 +1161,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       };
     }
 
-    // `/goal` is handled by the Codex CLI itself, so it must reach the model.
+    // Compatibility seam for provider-native commands. The pinned app-server
+    // currently exposes none; experimental goals stay disabled until a stable
+    // RPC can make their state authoritative.
     if (isCodexCliNativeSlashCommand(parsed.name)) return null;
 
     const commands = await getAvailableSlashCommandDefinitions(cwd);

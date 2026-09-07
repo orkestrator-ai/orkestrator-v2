@@ -204,6 +204,26 @@ export interface EngineCreditSnapshot {
   balance?: string;
 }
 
+export interface EngineTurnUsage {
+  turnId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+}
+
+export interface EngineAccountUsageWindow {
+  window: string;
+  label?: string;
+  usedPercent?: number;
+  resetsAt?: string;
+  creditsRemaining?: number;
+  /** Account token activity reported by `account/usage/read`. */
+  tokens?: number;
+}
+
 export interface EngineUsageSnapshot {
   usedTokens: number;
   totalTokens: number;
@@ -217,8 +237,10 @@ export interface EngineUsageSnapshot {
   sessionTokens?: number;
   credits?: EngineCreditSnapshot;
   rateLimits?: EngineRateLimitWindow[];
+  turns?: EngineTurnUsage[];
+  account?: EngineAccountUsageWindow[];
   estimated: false;
-  source: "provider";
+  source: "codex";
   updatedAt: string;
 }
 
@@ -243,6 +265,8 @@ export type EngineConversationMode = "build" | "plan";
 
 /** Per-turn execution policy. Passed explicitly on every turn, never inherited. */
 export interface EngineTurnConfig {
+  /** Backend-owned normalized policy this vendor config implements. */
+  policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   mode: EngineConversationMode;
   model?: string;
   reasoningEffort?: string;
@@ -466,6 +490,9 @@ export interface CodexEngine {
   info(): EngineInfo;
 
   listModels(): Promise<EngineModel[]>;
+
+  /** Account-wide token activity, loaded only when the usage panel asks. */
+  readAccountUsage?(): Promise<EngineAccountUsageWindow[]>;
 
   startThread(options: StartThreadOptions): Promise<EngineThread>;
   resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread>;

@@ -96,6 +96,16 @@ function cursorSessionResult() {
 }
 
 describe("normalizeAcpSessionConfig", () => {
+  test("preserves an unmapped ACP mode instead of silently dropping it", () => {
+    const normalized = normalizeAcpSessionConfig("grok", {
+      modes: {
+        currentModeId: "review",
+        availableModes: [{ id: "review", name: "Review" }],
+      },
+    });
+    expect(normalized.composer.modes).toEqual([{ id: "review", label: "Review" }]);
+    expect(normalized.composer.selectedModeId).toBe("review");
+  });
   test("maps Cursor modes and parameterized config options into the shared composer", () => {
     const { composer, wire } = normalizeAcpSessionConfig("cursor", {
       sessionId: "sess",

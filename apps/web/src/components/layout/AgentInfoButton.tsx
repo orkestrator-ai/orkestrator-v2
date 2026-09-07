@@ -153,6 +153,7 @@ import {
   codexLimitsFromHealth,
   describeRewindTarget,
   formatCount,
+  McpServersPanel,
   readOpenCodeShareUrl,
   summarizeRewindPreview,
 } from "./AgentInfoButton.panels";
@@ -1782,56 +1783,24 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                   </div>
                 ) : null}
                 {(neutralProjection?.runtime?.mcp?.length ?? 0) > 0 ? (
-                  <div className="space-y-1.5" aria-label="MCP servers">
-                    {neutralProjection!.runtime!.mcp!.map((server) => (
-                      <div
-                        key={server.id}
-                        className="rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium text-foreground">
-                              {server.name}
-                            </div>
-                            <div className="mt-0.5 text-muted-foreground">
-                              {server.status.replaceAll("-", " ")}
-                              {server.toolCount === undefined ? "" : ` · ${server.toolCount} tools`}
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                            {server.actions.map((action) => (
-                              <Button
-                                key={action}
-                                size="sm"
-                                variant="outline"
-                                className="h-7 px-2"
-                                disabled={busyAction !== null}
-                                onClick={() =>
-                                  void runAction(`mcp-${server.id}-${action}`, async () => {
-                                    const result = await performNativeAgentMcpAction({
-                                      environmentId: activeSession.environmentId,
-                                      agent: activeSession.provider,
-                                      logicalSessionKey: activeSession.sessionKey,
-                                      serverId: server.id,
-                                      action,
-                                    });
-                                    if (result.url) {
-                                      window.open(result.url, "_blank", "noopener,noreferrer");
-                                    }
-                                  })
-                                }
-                              >
-                                {action.replaceAll("-", " ")}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                        {server.error ? (
-                          <p className="mt-2 break-words text-destructive">{server.error}</p>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
+                  <McpServersPanel
+                    servers={neutralProjection!.runtime!.mcp!}
+                    busyAction={busyAction}
+                    onAction={(server, action) =>
+                      void runAction(`mcp-${server.id}-${action}`, async () => {
+                        const result = await performNativeAgentMcpAction({
+                          environmentId: activeSession.environmentId,
+                          agent: activeSession.provider,
+                          logicalSessionKey: activeSession.sessionKey,
+                          serverId: server.id,
+                          action,
+                        });
+                        if (result.url) {
+                          window.open(result.url, "_blank", "noopener,noreferrer");
+                        }
+                      })
+                    }
+                  />
                 ) : null}
                 {activeSession.provider === "claude" ? (
                   <div className="grid grid-cols-3 gap-2 text-center text-xs">

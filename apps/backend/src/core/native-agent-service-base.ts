@@ -1,5 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
-import { COORDINATOR_EXECUTION_POLICY } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_CONTEXT_CLOSE_TAG,
+  COORDINATOR_CONTEXT_OPEN_TAG,
+  COORDINATOR_EXECUTION_POLICY,
+} from "@orkestrator/protocol/coordinator";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -113,6 +117,23 @@ export type NativeAgentServiceLayerTypes = [
   OpenCodeRecoveryCandidate,
   PromptDispatchPreparation,
 ];
+
+/**
+ * In-process marker that `trustedSessionInput` already prepended the coordinator
+ * preamble to this input.
+ *
+ * The injection has to be idempotent: `dispatchPromptInternal` runs
+ * `trustedSessionInput` and then hands the same object to `ensureSession`, which
+ * runs it again. That used to be detected by testing the prompt for a leading
+ * `<orkestrator-coordinator-context>`, which any caller could satisfy by
+ * submitting text that opens with a block of their own — suppressing the real
+ * authority block and substituting a forged one, which transcript stripping then
+ * hid from view. A module-private symbol cannot be reached or serialized by a
+ * caller across the JSON RPC boundary, so only this function can set it, while
+ * object spreads inside the dispatch path carry it forward.
+ */
+const COORDINATOR_CONTEXT_APPLIED = Symbol("orkestrator.coordinatorContextApplied");
+
 export abstract class NativeAgentServiceBase {
   protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
   /**
@@ -433,7 +454,7 @@ export abstract class NativeAgentServiceBase {
     if (
       "prompt" in input &&
       typeof input.prompt === "string" &&
-      !input.prompt.startsWith("<orkestrator-coordinator-context>")
+      !(COORDINATOR_CONTEXT_APPLIED in input)
     ) {
       const status = workspace.repositoryStatus;
       const delegation = this.options.coordinatorDelegationAvailable?.(
@@ -443,8 +464,9 @@ export abstract class NativeAgentServiceBase {
         : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,
+        [COORDINATOR_CONTEXT_APPLIED]: true,
         prompt:
-          `<orkestrator-coordinator-context>\n` +
+          `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
           `Project: ${workspace.projectId}\n` +
           `Coordinator: ${coordinatorId}\n` +
           `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
@@ -452,7 +474,7 @@ export abstract class NativeAgentServiceBase {
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +
           `Commit: ${status?.headCommit ?? "unknown"}\n` +
-          `</orkestrator-coordinator-context>\n\n${input.prompt}`,
+          `${COORDINATOR_CONTEXT_CLOSE_TAG}\n\n${input.prompt}`,
       } as T;
     }
     return trusted;

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -11,6 +11,7 @@ import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   nativeAgentCapabilities,
+  type NativeAgentAccountUsageWindow,
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -290,6 +291,24 @@ function seedPaneLayout() {
 
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
+}
+
+/** Publish one account window list as the active Claude tab's usage snapshot. */
+function seedDailyUsage(account: NativeAgentAccountUsageWindow[]) {
+  useClaudeStore.setState({
+    contextUsage: new Map([[CLAUDE_KEY, usage({ account })]]),
+  } as never);
+}
+
+/** `count` consecutive UTC days from 2026-08-01, newest last, as the provider reports them. */
+function dailyBuckets(
+  count: number,
+  tokensFor: (index: number) => number,
+): NativeAgentAccountUsageWindow[] {
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 7, 1 + index)).toISOString().slice(0, 10);
+    return { window: `daily:${date}`, label: date, tokens: tokensFor(index) };
+  });
 }
 
 /** Open the panel from either state — several actions deliberately leave it open. */
@@ -1440,6 +1459,131 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getByText("Weekly quota")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Turn usage" })).toBeTruthy();
     expect(screen.getByText("600 · $0.25")).toBeTruthy();
+  });
+
+  test("charts daily token buckets instead of one card per day", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            account: [
+              { window: "lifetime", label: "Lifetime", tokens: 1_200_000_000 },
+              { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
+              { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
+              { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(chart).toBeTruthy();
+    expect(within(chart).getAllByRole("img").length).toBe(3);
+    expect(within(chart).getByLabelText("Aug 25: 417M tokens")).toBeTruthy();
+    // The peak is scoped to the plotted range so it cannot be read as the
+    // account-lifetime "Peak day" window rendered as a card beside it.
+    expect(within(chart).getByText("Peak 3d 417M")).toBeTruthy();
+    // The newest day is the standing readout before anything is hovered.
+    expect(within(chart).getByText("375M")).toBeTruthy();
+    // Non-daily windows keep their cards; the days no longer get one each.
+    expect(
+      within(screen.getByRole("region", { name: "Account usage" })).getByText("Lifetime"),
+    ).toBeTruthy();
+    expect(screen.queryByText("2026-08-24")).toBe(null);
+  });
+
+  test("hovering a column reads that day out and releasing restores the newest", () => {
+    seedDailyUsage([
+      { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
+      { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
+      { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+    ]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    const bars = within(chart).getAllByRole("img");
+    expect(within(chart).getByText("375M")).toBeTruthy();
+
+    fireEvent.mouseEnter(bars[0]!);
+    expect(within(chart).getByText("60M")).toBeTruthy();
+    expect(within(chart).queryByText("375M")).toBe(null);
+
+    fireEvent.mouseEnter(bars[1]!);
+    expect(within(chart).getByText("417M")).toBeTruthy();
+
+    fireEvent.mouseLeave(bars[1]!.parentElement!);
+    expect(within(chart).getByText("375M")).toBeTruthy();
+    expect(within(chart).queryByText("417M")).toBe(null);
+  });
+
+  test("plots only the trailing thirty days and scopes the peak to them", () => {
+    // Day zero is both the largest bucket and the one truncation must drop, so
+    // a slice that kept the wrong end would show up in the bars and the peak.
+    seedDailyUsage(
+      dailyBuckets(35, (index) => (index === 0 ? 999_000_000 : (index + 1) * 1_000_000)),
+    );
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(within(chart).getAllByRole("img").length).toBe(30);
+    expect(within(chart).queryByLabelText("Aug 1: 999M tokens")).toBe(null);
+    expect(within(chart).getByLabelText("Aug 6: 6.0M tokens")).toBeTruthy();
+    // The footer brackets the plotted range, not the full reported history.
+    const footer = within(chart).getByText("Peak 30d 35M").parentElement!;
+    expect(within(footer).getByText("Aug 6")).toBeTruthy();
+    expect(within(footer).getByText("Sep 4")).toBeTruthy();
+  });
+
+  test("keeps a daily bucket as a card when the chart cannot show all of it", () => {
+    seedDailyUsage([
+      // No token count: nothing to plot.
+      { window: "daily:2026-08-24", label: "2026-08-24", resetsAt: "2026-08-25T00:00:00.000Z" },
+      // A token count the chart could plot, but spend the chart would swallow.
+      { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000, spendUsd: 12.5 },
+      { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+    ]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const cards = screen.getByRole("region", { name: "Account usage" });
+    expect(within(cards).getByText("2026-08-24")).toBeTruthy();
+    expect(within(cards).getByText("2026-08-25")).toBeTruthy();
+    expect(within(cards).getByText("$12.50")).toBeTruthy();
+    // Only the bucket the chart can represent in full becomes a bar.
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(within(chart).getAllByRole("img").length).toBe(1);
+    expect(within(chart).getByLabelText("Aug 26: 375M tokens")).toBeTruthy();
+  });
+
+  test("drops the account card list when every window is a plottable day", () => {
+    seedDailyUsage(dailyBuckets(3, (index) => (index + 1) * 1_000_000));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
+    expect(
+      within(screen.getByRole("region", { name: "Daily tokens" })).getAllByRole("img").length,
+    ).toBe(3);
+  });
+
+  test("renders flat bars rather than NaN heights when every day is zero", () => {
+    seedDailyUsage(dailyBuckets(3, () => 0));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    const bars = within(chart).getAllByRole("img");
+    expect(bars.length).toBe(3);
+    for (const bar of bars) {
+      expect((bar.firstElementChild as HTMLElement).style.height).toBe("2%");
+    }
+    expect(within(chart).getByText("Peak 3d 0")).toBeTruthy();
   });
 
   test("retains provider-neutral account and turn rows beside legacy live counters", () => {
@@ -4897,6 +5041,181 @@ describe("AgentInfoButton ACP agents", () => {
       ...overrides,
     } as NativeAgentSessionProjection;
   }
+
+  /** Seed an ACP session whose runtime carries exactly this MCP inventory. */
+  function seedMcp(servers: unknown[]): void {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage" ? new Promise(() => undefined) : {},
+    );
+    useNativeAgentProjectionStore.getState().setProjection(
+      ACP_KEY,
+      acpProjection("cursor", {
+        runtime: { state: "attached", mcp: servers },
+      } as Partial<NativeAgentSessionProjection>),
+    );
+  }
+
+  function mcpActionCalls(): Array<{ serverId?: string; action?: string }> {
+    return nativeInvokeMock.mock.calls
+      .filter(([command]) => command === "perform_native_agent_mcp_action")
+      .map(([, input]) => input as { serverId?: string; action?: string });
+  }
+
+  test("collapses the MCP inventory into a tool total that expands and reconnects on click", async () => {
+    // A session with a dozen servers used to render a dozen cards; the popover
+    // now leads with the tool total and only expands the dense list on demand,
+    // where the row itself is the reconnect control.
+    seedMcp([
+      {
+        id: "codex_apps",
+        name: "codex_apps",
+        status: "connected",
+        toolCount: 256,
+        actions: ["reconnect"],
+      },
+      {
+        id: "github",
+        name: "github",
+        status: "failed",
+        toolCount: 0,
+        error: "spawn failed",
+        actions: ["reconnect"],
+      },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    const summary = await waitFor(() => screen.getByRole("button", { name: /Tools 256/ }));
+    // Collapsed, but a server that is down still says so.
+    expect(summary.textContent).toContain("2 servers");
+    expect(summary.textContent).toContain("1 down");
+    expect(screen.queryByRole("button", { name: /codex_apps/ })).toBeNull();
+
+    fireEvent.click(summary);
+    const row = screen.getByRole("button", { name: /codex_apps/ });
+    expect(screen.getByRole("button", { name: /github/ })).toBeTruthy();
+
+    fireEvent.click(row);
+    await waitFor(() =>
+      expect(
+        mcpActionCalls().some(
+          (input) => input.serverId === "codex_apps" && input.action === "reconnect",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  test("shows a failed server's error as text rather than only a tooltip", async () => {
+    // The popover is rendered on touch too, where a `title` never appears, so
+    // the reason a server is down has to survive as readable content.
+    seedMcp([
+      {
+        id: "github",
+        name: "github",
+        status: "failed",
+        toolCount: 0,
+        error: "spawn failed: ENOENT",
+        actions: ["reconnect"],
+      },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 0/ })));
+    expect(screen.getByText("spawn failed: ENOENT")).toBeTruthy();
+  });
+
+  test("never makes disable the implicit row action for a connected OpenCode server", async () => {
+    // OpenCode advertises `disable` as the only action on a healthy server. The
+    // row is not labelled as destructive, so clicking it must do nothing and the
+    // teardown must live behind its own labelled button.
+    seedMcp([{ id: "context7", name: "context7", status: "connected", actions: ["disable"] }]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools/ })));
+    // The name region is inert: the only button carrying the server name is the
+    // explicit `disable` control.
+    const named = screen.getAllByRole("button", { name: /context7/ });
+    expect(named.length).toBe(1);
+    expect(named[0]?.textContent).toBe("disable");
+
+    fireEvent.click(screen.getByText("context7"));
+    await waitFor(() => expect(screen.getByText("context7")).toBeTruthy());
+    expect(mcpActionCalls()).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "disable context7" }));
+    await waitFor(() =>
+      expect(
+        mcpActionCalls().some(
+          (input) => input.serverId === "context7" && input.action === "disable",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  test("keeps every non-primary action reachable on a multi-action server", async () => {
+    // Claude offers three actions on a signed-out server. Collapsing the card
+    // must not silently drop the two the row click does not run.
+    seedMcp([
+      {
+        id: "linear",
+        name: "linear",
+        status: "needs-auth",
+        toolCount: 12,
+        actions: ["reconnect", "disable", "sign-in"],
+      },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 12/ })));
+    expect(screen.getByRole("button", { name: "reconnect linear" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "disable linear" })).toBeTruthy();
+
+    // `sign-in` unblocks a signed-out server, so it wins the row itself even
+    // though the adapter listed it last.
+    fireEvent.click(screen.getByRole("button", { name: /^linear/ }));
+    await waitFor(() =>
+      expect(
+        mcpActionCalls().some((input) => input.serverId === "linear" && input.action === "sign-in"),
+      ).toBe(true),
+    );
+  });
+
+  test("reports an unknown tool inventory as unknown rather than zero", async () => {
+    // OpenCode never sends `toolCount`. `Tools 0` would be a claim about a
+    // connected server that the adapter never made.
+    seedMcp([
+      { id: "context7", name: "context7", status: "connected", actions: ["disable"] },
+      { id: "sentry", name: "sentry", status: "connected", actions: ["disable"] },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    const summary = await waitFor(() => screen.getByRole("button", { name: /Tools/ }));
+    expect(summary.textContent).toContain("Tools —");
+    expect(summary.textContent).not.toContain("Tools 0");
+
+    fireEvent.click(summary);
+    // Scoped to the inventory: other panels in the popover use the same dash.
+    const panel = screen.getByLabelText("MCP servers");
+    expect(within(panel).getAllByText("—").length).toBe(2);
+  });
+
+  test("leaves a server with no advertised actions readable instead of disabled", async () => {
+    // Cursor publishes `actions: []`. Rendering those rows as disabled buttons
+    // greyed out servers that are perfectly healthy.
+    seedMcp([
+      { id: "orkestrator", name: "orkestrator", status: "connected", toolCount: 9, actions: [] },
+    ]);
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 9/ })));
+    expect(screen.getByText("orkestrator")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /orkestrator/ })).toBeNull();
+  });
 
   test("renders drift and notices for a non-Codex platform through the same panel", async () => {
     // The point of the generalization: nothing in `AgentRuntimePanel` is

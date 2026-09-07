@@ -10,10 +10,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type {
   NativeAgentAccountUsageWindow,
+  NativeAgentMcpServer,
+  NativeAgentMcpServerAction,
   NativeAgentRuntimeNotice,
   NativeAgentRuntimeSummary,
   NativeAgentTurnUsage,
@@ -550,13 +553,155 @@ export type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | 
   percentUsed?: number;
 };
 
+const DAILY_WINDOW_PREFIX = "daily:";
+/** Trailing days the chart plots; providers report up to ninety buckets. */
+const DAILY_CHART_DAYS = 30;
+
+interface DailyTokenPoint {
+  key: string;
+  date: string;
+  tokens: number;
+}
+
+/**
+ * A day the chart can draw in full: a token count and nothing else.
+ *
+ * The chart plots one number per day, so any other populated field would be
+ * dropped on the floor. Keep this in step with the payload fields of
+ * `NativeAgentAccountUsageWindow`; a field missing here is a field the chart
+ * would silently swallow.
+ */
+function isPlainTokenBucket(
+  entry: NativeAgentAccountUsageWindow,
+): entry is NativeAgentAccountUsageWindow & { tokens: number } {
+  return (
+    entry.tokens !== undefined &&
+    entry.usedPercent === undefined &&
+    entry.resetsAt === undefined &&
+    entry.spendUsd === undefined &&
+    entry.creditsRemaining === undefined &&
+    entry.limitUsd === undefined
+  );
+}
+
+/**
+ * Separate the per-day token buckets from the account's quota windows.
+ *
+ * A provider can report months of daily buckets. Rendering one card per day
+ * pushed the quota and credit windows the panel exists for far below the fold,
+ * so the days become a single chart and only the remaining windows stay as
+ * cards. A daily bucket the chart cannot represent in full — no token count to
+ * plot, or a quota, reset or spend alongside it — falls back to a card where
+ * every one of its fields can still be read.
+ */
+function splitAccountUsage(account: NativeAgentAccountUsageWindow[]): {
+  windows: NativeAgentAccountUsageWindow[];
+  daily: DailyTokenPoint[];
+} {
+  const windows: NativeAgentAccountUsageWindow[] = [];
+  const daily: DailyTokenPoint[] = [];
+  for (const entry of account) {
+    const date = entry.window.startsWith(DAILY_WINDOW_PREFIX)
+      ? entry.window.slice(DAILY_WINDOW_PREFIX.length)
+      : null;
+    if (date === null || !isPlainTokenBucket(entry)) {
+      windows.push(entry);
+      continue;
+    }
+    daily.push({ key: entry.window, date: entry.label ?? date, tokens: entry.tokens });
+  }
+  return { windows, daily };
+}
+
+/** Short day label, falling back to the provider's own string when unparseable. */
+function formatDayLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (!Number.isFinite(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * Daily token consumption as a compact bar chart.
+ *
+ * Bars are scaled against the peak day rather than any quota, because the
+ * provider reports consumption without a daily ceiling. Hovering a column
+ * reads its day out above the plot; the newest day is the standing readout so
+ * the chart says something before it is touched.
+ */
+function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const plotted = points.slice(-DAILY_CHART_DAYS);
+  const oldest = plotted[0];
+  const latest = plotted[plotted.length - 1];
+  if (!oldest || !latest) return null;
+
+  const peak = plotted.reduce((highest, point) => Math.max(highest, point.tokens), 0);
+  const readout = plotted.find((point) => point.key === hoveredKey) ?? latest;
+
+  return (
+    <section className="space-y-2" aria-label="Daily tokens">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          Daily tokens
+        </div>
+        <div className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+          {formatDayLabel(readout.date)}{" "}
+          <span className="text-foreground">{formatTokenCount(readout.tokens)}</span>
+        </div>
+      </div>
+      <div className="flex h-14 items-stretch gap-[2px]" onMouseLeave={() => setHoveredKey(null)}>
+        {plotted.map((point) => (
+          <div
+            key={point.key}
+            role="img"
+            aria-label={`${formatDayLabel(point.date)}: ${formatTokenCount(point.tokens)} tokens`}
+            title={`${formatDayLabel(point.date)} · ${formatTokenCount(point.tokens)}`}
+            className="flex min-w-[3px] flex-1 cursor-default items-end"
+            onMouseEnter={() => setHoveredKey(point.key)}
+          >
+            <div
+              className={`w-full rounded-t-[2px] ${
+                point.key === readout.key ? "bg-primary" : "bg-primary/50"
+              }`}
+              style={{
+                height: `${peak > 0 ? Math.max(2, (point.tokens / peak) * 100) : 2}%`,
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground">
+        <span className="truncate">{formatDayLabel(oldest.date)}</span>
+        <span className="shrink-0 font-mono tabular-nums">
+          Peak {plotted.length}d {formatTokenCount(peak)}
+        </span>
+        <span className="truncate">{formatDayLabel(latest.date)}</span>
+      </div>
+    </section>
+  );
+}
+
 function AccountUsageSection({ account }: { account: NativeAgentAccountUsageWindow[] }) {
+  const { windows, daily } = splitAccountUsage(account);
+  return (
+    <>
+      {windows.length > 0 ? <AccountWindowsSection windows={windows} /> : null}
+      {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
+    </>
+  );
+}
+
+function AccountWindowsSection({ windows }: { windows: NativeAgentAccountUsageWindow[] }) {
   return (
     <section className="space-y-2" aria-label="Account usage">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         Account
       </div>
-      {account.map((window) => (
+      {windows.map((window) => (
         <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 text-xs font-medium text-foreground">
@@ -881,6 +1026,207 @@ export function AgentInteractionCapability({
               .map((kind) => INTERACTION_KIND_LABELS[kind] ?? kind)
               .join(", ")}.`}
       </div>
+    </div>
+  );
+}
+
+const MCP_STATUS_DOT: Record<NativeAgentMcpServer["status"], string> = {
+  connected: "bg-emerald-500",
+  connecting: "bg-amber-500",
+  failed: "bg-destructive",
+  "needs-auth": "bg-amber-500",
+  disabled: "bg-muted-foreground/50",
+  unknown: "bg-muted-foreground/50",
+};
+
+/**
+ * Adapters list actions in their own order, so rank them here: a signed-out or
+ * disabled server is better served by the action that actually unblocks it than
+ * by a reconnect that would fail the same way again, and `disable` is last
+ * because it takes a working server away.
+ */
+const MCP_ACTION_ORDER = ["sign-in", "enable", "reconnect", "disable"] as const;
+
+function orderedMcpActions(server: NativeAgentMcpServer): NativeAgentMcpServerAction[] {
+  // The list arrives over the bridge wire; a provider that omits it entirely
+  // means "no actions", not a crash on every row.
+  const advertised = Array.isArray(server.actions) ? server.actions : [];
+  return MCP_ACTION_ORDER.filter((action) => advertised.includes(action));
+}
+
+/**
+ * The action a click on the server row itself performs.
+ *
+ * `disable` is deliberately excluded: OpenCode offers it as the *only* action
+ * on a connected server, and a row whose visible text is just a name and a tool
+ * count must not tear down a working connection on a stray click. It stays
+ * reachable as an explicitly labelled button instead.
+ */
+function primaryMcpAction(server: NativeAgentMcpServer): NativeAgentMcpServerAction | null {
+  return orderedMcpActions(server).find((action) => action !== "disable") ?? null;
+}
+
+function mcpActionLabel(action: NativeAgentMcpServerAction): string {
+  return action.replaceAll("-", " ");
+}
+
+/**
+ * One MCP server: an informational region that doubles as the primary control,
+ * plus a labelled button for every remaining action.
+ *
+ * The region is only a button when there is a primary action to run; Cursor
+ * publishes no actions at all, and rendering those rows as disabled buttons
+ * greyed out healthy servers.
+ */
+function McpServerRow({
+  server,
+  busyAction,
+  onAction,
+}: {
+  server: NativeAgentMcpServer;
+  busyAction: string | null;
+  onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+}) {
+  const actions = orderedMcpActions(server);
+  const primary = primaryMcpAction(server);
+  const secondary = actions.filter((action) => action !== primary);
+  const busy = busyAction !== null;
+  // Exact keys rather than a prefix test, so `github` does not read `github-2`'s
+  // pending action as its own.
+  const pending = actions.some((action) => busyAction === `mcp-${server.id}-${action}`);
+  const status = server.status.replaceAll("-", " ");
+  // A connected server that reports no inventory is unknown, not empty: OpenCode
+  // never sends `toolCount`, and rendering `0` there would be a claim, not a gap.
+  const detail = pending
+    ? "…"
+    : server.status === "connected"
+      ? (server.toolCount?.toString() ?? "—")
+      : status;
+  const title = [
+    `${server.name} · ${status}`,
+    server.error,
+    primary ? `click to ${mcpActionLabel(primary)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+  const summary = (
+    <>
+      <span
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", MCP_STATUS_DOT[server.status])}
+        aria-hidden="true"
+      />
+      <span className="truncate text-foreground">{server.name}</span>
+      <span className="ml-auto shrink-0 font-mono tabular-nums text-muted-foreground">
+        {detail}
+      </span>
+    </>
+  );
+  const summaryClassName = "flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1 text-left";
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center gap-1 pr-2.5">
+        {primary ? (
+          <button
+            type="button"
+            disabled={busy}
+            title={title}
+            className={cn(
+              summaryClassName,
+              "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent",
+            )}
+            onClick={() => onAction(server, primary)}
+          >
+            {summary}
+          </button>
+        ) : (
+          <div className={summaryClassName} title={title}>
+            {summary}
+          </div>
+        )}
+        {secondary.map((action) => (
+          <button
+            key={action}
+            type="button"
+            disabled={busy}
+            aria-label={`${mcpActionLabel(action)} ${server.name}`}
+            className="shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent"
+            onClick={() => onAction(server, action)}
+          >
+            {mcpActionLabel(action)}
+          </button>
+        ))}
+      </div>
+      {server.error ? (
+        <p className="break-words px-2.5 pb-1 pl-6 text-destructive">{server.error}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * MCP inventory as a single "Tools N" line that expands into a dense list.
+ *
+ * A session can carry hundreds of tools across a dozen servers; rendering one
+ * card per server pushed everything else in the popover below the fold. The
+ * collapsed line keeps the total visible, and still surfaces how many servers
+ * are not connected so a failed server is not hidden by the collapse.
+ */
+export function McpServersPanel({
+  servers,
+  busyAction,
+  onAction,
+}: {
+  servers: NativeAgentMcpServer[];
+  busyAction: string | null;
+  onAction: (server: NativeAgentMcpServer, action: NativeAgentMcpServerAction) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (servers.length === 0) return null;
+  // Only servers that actually report an inventory contribute. When none does,
+  // the total is unknown and saying `Tools 0` would be wrong rather than empty.
+  const counted = servers.filter((server) => server.toolCount !== undefined);
+  const toolTotal = counted.reduce((total, server) => total + (server.toolCount ?? 0), 0);
+  const unhealthy = servers.filter(
+    (server) => server.status === "failed" || server.status === "needs-auth",
+  ).length;
+  return (
+    <div
+      className="rounded-md border border-border/60 bg-muted/20 text-xs"
+      aria-label="MCP servers"
+    >
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+        <span className="font-medium text-foreground">
+          Tools {counted.length === 0 ? "—" : toolTotal}
+        </span>
+        <span className="ml-auto text-muted-foreground">
+          {formatCount(servers.length, "server")}
+          {unhealthy > 0 ? <span className="text-destructive"> · {unhealthy} down</span> : null}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="border-t border-border/60 py-1">
+          {servers.map((server) => (
+            <McpServerRow
+              key={server.id}
+              server={server}
+              busyAction={busyAction}
+              onAction={onAction}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

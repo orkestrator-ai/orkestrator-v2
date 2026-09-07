@@ -344,6 +344,7 @@ interface TerminalWaiter {
 interface RuntimeNotice {
   global: boolean;
   method: string;
+  severity: "info" | "warning" | "error";
   detail?: string;
   receivedAt: string;
   threadId?: string;
@@ -352,8 +353,33 @@ interface RuntimeNotice {
 interface RuntimeHealthNotice {
   method: string;
   message: string;
+  severity: "info" | "warning" | "error";
   detail?: string;
   receivedAt: string;
+}
+
+function runtimeNoticeSeverity(
+  method: string,
+  params: Record<string, unknown>,
+): RuntimeNotice["severity"] {
+  if (method === "mcpServer/startupStatus/updated") {
+    const hasFailureDetail = [params.error, params.failureReason].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    );
+    if (params.status === "failed" || hasFailureDetail) return "error";
+    // Only known non-failure lifecycle states are inventory. An unfamiliar or
+    // malformed shape stays visible so a protocol change cannot hide a real
+    // startup failure.
+    if (
+      params.status === "starting" ||
+      params.status === "ready" ||
+      params.status === "cancelled"
+    ) {
+      return "info";
+    }
+    return "warning";
+  }
+  return "warning";
 }
 
 function redactRuntimeNoticeDetail(value: string): string {
@@ -658,6 +684,7 @@ export class AppServerEngine implements CodexEngine {
         global:
           notification.method === "configWarning" || notification.method === "deprecationNotice",
         method: notification.method,
+        severity: runtimeNoticeSeverity(notification.method, params),
         // Redacted at *capture*, not on the way out: MCP-server startup errors
         // are the likeliest place for a real token or a credentialed URL to
         // appear. Truncate afterwards so redaction sees whole tokens.
@@ -983,6 +1010,7 @@ export class AppServerEngine implements CodexEngine {
         .map((notice) => ({
           method: notice.method,
           message: `Codex reported ${notice.method.replaceAll("/", " ")}`,
+          severity: notice.severity,
           ...(notice.detail ? { detail: notice.detail } : {}),
           receivedAt: notice.receivedAt,
         })),

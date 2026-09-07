@@ -1192,7 +1192,7 @@ describe("BuildPipelineService retry review", () => {
       expect(retried.sessions).toHaveLength(sessionCount + 2);
       expect(retried.sessions.at(-2)?.phase).toBe("fix");
       expect(retried.sessions.at(-1)?.phase).toBe("review");
-      expect(provider.sent.at(-1)?.prompt).toContain("immutable evidence package");
+      expect(provider.sent.at(-1)?.prompt).toContain("pins the exact committed range");
       expect(packageGeneration.count).toBe(2);
       expect(retried.reviewPackage?.headRef).not.toBe(originalHead);
       expect(provider.sent.at(-1)?.prompt).toContain(

@@ -131,6 +131,6 @@ export function createPackagedMultiReviewerPrompt(input: {
   return [
     `You are independent reviewer ${input.reviewerNumber} of ${input.reviewerCount}. Do not coordinate with, defer to, or speculate about the other reviewers.`,
     createDiscoveryPrompt(input),
-    "This is a read-only review session. Use read tools only to consume the package. Narrate progress in ordinary prose as you examine the evidence; the final message alone must contain the structured report. Record missing evidence as a limitation instead of running commands to recreate it.",
+    "Narrate progress in ordinary prose as you examine the evidence; the final message alone must contain the structured report. Record evidence you could not reach as a limitation.",
   ].join("\n\n");
 }

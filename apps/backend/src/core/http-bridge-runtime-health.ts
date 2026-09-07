@@ -113,7 +113,16 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
         typeof item?.method === "string" && item.method.length > 0
           ? item.method.slice(0, 128)
           : undefined;
-      const key = `${method ?? ""}\u0000${bounded}`;
+      const severity = NATIVE_AGENT_NOTICE_SEVERITIES.includes(
+        item?.severity as NativeAgentNoticeSeverity,
+      )
+        ? (item?.severity as NativeAgentNoticeSeverity)
+        : "warning";
+      // Severity is part of the group identity because informational lifecycle
+      // updates and actionable failures deliberately share Codex's generic
+      // method-derived message. Combining them would either hide the failure or
+      // make later inventory look like a new error occurrence.
+      const key = `${method ?? ""}\u0000${bounded}\u0000${severity}`;
       const existing = groupedNotices.get(key);
       const detail =
         typeof item?.detail === "string" && item.detail.length > 0
@@ -136,11 +145,7 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
         message: bounded,
         ...(method ? { method } : {}),
         count: (existing?.count ?? 0) + 1,
-        severity: NATIVE_AGENT_NOTICE_SEVERITIES.includes(
-          item?.severity as NativeAgentNoticeSeverity,
-        )
-          ? (item?.severity as NativeAgentNoticeSeverity)
-          : "warning",
+        severity,
         // These are Codex's own diagnostics rather than this bridge's
         // observations about Codex, which is what `provider` means.
         source: "provider" as const,

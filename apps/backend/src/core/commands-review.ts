@@ -12,7 +12,11 @@ import {
   resolveGitHubRepository,
 } from "./commands-dependencies.js";
 import type { Environment, PrState } from "./commands-dependencies.js";
-import type { ReviewPackage, ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
+import {
+  REVIEW_PACKAGE_FORMAT,
+  type ReviewPackage,
+  type ReviewPackageReference,
+} from "@orkestrator/protocol/review-workflow";
 import {
   deletingLocalServerEnvironments,
   mergingEnvironments,
@@ -440,35 +444,126 @@ export async function readEnvironmentWorkspaceFile(
   return Buffer.from(base64, "base64");
 }
 
-export async function readEnvironmentGitBlob(
-  runner: EnvironmentCommandRunner,
-  headRef: string,
+/**
+ * Separates the two ways a resolved artifact can be wrong. Both refuse the
+ * package, but "escaped the workspace" and "reached its target through a
+ * symlink" send a retrying agent to different fixes.
+ */
+function assertArtifactStayedInWorkspace(
   relativePath: string,
-): Promise<{ type: string; bytes: Buffer }> {
-  const object = `${headRef}:${relativePath}`;
-  const type = (await runner("git", ["cat-file", "-t", object], 30_000)).trim();
-  if (type !== "blob") return { type, bytes: Buffer.alloc(0) };
-  const base64 = await runner(
+  resolved: string,
+  expected: string,
+  insideWorkspace: boolean,
+): void {
+  if (!insideWorkspace) {
+    throw new Error(`Review artifact escapes the environment worktree: ${relativePath}`);
+  }
+  if (resolved !== expected) {
+    throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
+  }
+}
+
+/** One validation artifact's verified size, keyed by workspace-relative path. */
+export type ReviewArtifactSizes = Map<string, number>;
+
+export function parseReviewArtifactStatOutput(
+  output: string,
+  expected: string[],
+): ReviewArtifactSizes {
+  const sizes: ReviewArtifactSizes = new Map();
+  for (const line of output.split("\n")) {
+    if (line.length === 0) continue;
+    const [kind, resolved, bytes, relativePath] = line.split("\t");
+    if (kind !== "file" || relativePath === undefined || resolved === undefined) {
+      throw reviewArtifactMissingError(relativePath ?? line, new Error(kind ?? "unreadable"));
+    }
+    assertArtifactStayedInWorkspace(
+      relativePath,
+      resolved,
+      workspaceFilePath(relativePath),
+      resolved.startsWith("/workspace/"),
+    );
+    const size = Number(bytes);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`Review artifact size could not be read: ${relativePath}`);
+    }
+    sizes.set(relativePath, size);
+  }
+  for (const relativePath of expected) {
+    if (!sizes.has(relativePath)) {
+      throw reviewArtifactMissingError(relativePath, new Error("not reported by the environment"));
+    }
+  }
+  return sizes;
+}
+
+/**
+ * Confirms every validation artifact exists and records its size.
+ *
+ * One command for the whole round, not two per artifact. The reviewer reads the
+ * bytes itself, so the backend only has to prove preparation actually wrote
+ * each file where it said it did — and that no path leaves the workspace.
+ */
+export async function statEnvironmentReviewArtifacts(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  relativePaths: string[],
+): Promise<ReviewArtifactSizes> {
+  if (relativePaths.length === 0) return new Map();
+
+  if (environment.environmentType === "local") {
+    const worktreePath = environment.worktreePath!;
+    const root = await fs.realpath(worktreePath);
+    const entries = await Promise.all(
+      relativePaths.map(async (relativePath) => {
+        const resolved = await fs
+          .realpath(path.join(worktreePath, relativePath))
+          .catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") throw reviewArtifactMissingError(relativePath, error);
+            throw error;
+          });
+        const relative = path.relative(root, resolved);
+        assertArtifactStayedInWorkspace(
+          relativePath,
+          resolved,
+          path.resolve(root, relativePath),
+          relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative),
+        );
+        const info = await fs.stat(resolved);
+        if (!info.isFile()) {
+          throw new Error(`Review artifact is not a regular file: ${relativePath}`);
+        }
+        return [relativePath, info.size] as const;
+      }),
+    );
+    return new Map(entries);
+  }
+
+  const output = await runner(
     "sh",
-    ["-lc", `git cat-file blob ${quoteShell(object)} | base64`],
+    [
+      "-c",
+      REVIEW_ARTIFACT_STAT_SCRIPT,
+      "sh",
+      ...relativePaths.map((relativePath) =>
+        validateWorkspaceMutationPath(relativePath, "review artifact path"),
+      ),
+    ],
     60_000,
   );
-  return { type, bytes: Buffer.from(base64, "base64") };
+  return parseReviewArtifactStatOutput(output, relativePaths);
 }
 
-export function decodeReviewText(bytes: Buffer): string | null {
-  if (bytes.includes(0)) return null;
-  const text = bytes.toString("utf8");
-  return Buffer.from(text, "utf8").equals(bytes) ? text : null;
-}
-
-export function decodeValidationOutput(bytes: Buffer, artifactPath: string): string {
-  const text = bytes.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(bytes)) {
-    throw new Error(`Validation artifact is not valid UTF-8: ${artifactPath}`);
-  }
-  return text;
-}
+/**
+ * Emits one tab-separated record per artifact. `realpath` is reported rather
+ * than compared in the shell so the backend — not a script running inside the
+ * environment — decides whether a path stayed in the workspace.
+ */
+export const REVIEW_ARTIFACT_STAT_SCRIPT = `cd /workspace 2>/dev/null || exit 9
+for p in "$@"; do
+  if [ ! -f "$p" ]; then printf 'missing\t\t\t%s\n' "$p"; continue; fi
+  printf 'file\t%s\t%s\t%s\n' "$(realpath -- "$p")" "$(wc -c < "$p")" "$p"
+done`;
 
 async function ensureReviewPackageIsGitExcluded(
   environment: Environment,
@@ -693,12 +788,6 @@ export function parseGitPorcelainPaths(output: string): string[] {
   return paths;
 }
 
-export function parseNullDelimitedPaths(output: string, label: string): string[] {
-  const fields = output.split("\0");
-  if (fields.at(-1) === "") fields.pop();
-  return fields.map((filePath) => validateWorkspaceMutationPath(filePath, label));
-}
-
 export async function generateLoopedReviewPackage(
   environmentId: string,
   packageId: string,
@@ -726,50 +815,31 @@ export async function generateLoopedReviewPackage(
   if (!/^[a-f0-9]{40}$/i.test(headRef) || !/^[a-f0-9]{40}$/i.test(baseRef)) {
     throw new Error("Git did not resolve full review package commit SHAs");
   }
-  // From this point on, Git evidence is anchored to immutable object IDs. The
-  // preparation agent supplies no refs, diff text, file bytes, or hashes.
+  // From this point on the evidence is anchored to immutable object IDs. The
+  // reviewer reproduces the diff from them, so the package never has to carry
+  // — or the backend to extract — the bytes themselves.
   const range = `${baseRef}...${headRef}`;
-  const diffArgs = [
-    "diff",
-    "--binary",
-    "--full-index",
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-renames",
-    "--submodule=short",
-    range,
-  ];
-  const [
-    completeDiff,
-    nameStatus,
-    preparedAtOutput,
-    worktreeStatus,
-    commitSubject,
-    committedFileOutput,
-  ] = await Promise.all([
-    runner("git", diffArgs, 120_000),
-    runner("git", ["diff", "--name-status", "-z", "--no-renames", range], 60_000),
-    runner("git", ["show", "-s", "--format=%cI", headRef], 30_000),
-    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
-    runner("git", ["show", "-s", "--format=%s", headRef], 30_000),
-    runner(
-      "git",
-      ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", "--no-renames", headRef],
-      30_000,
-    ),
-  ]);
-
-  const changes = parseGitNameStatus(nameStatus);
-  const changeKeys = changes.map((file) => `${file.status}\0${file.path}`);
-  if (
-    new Set(changeKeys).size !== changes.length ||
-    (changes.length > 0 && completeDiff.length === 0)
-  ) {
-    throw new Error("Git returned an incomplete or ambiguous review diff");
-  }
+  const diffCommand = `git diff --no-color --no-ext-diff --no-renames ${range}`;
 
   const artifactDirectory = reviewArtifactDirectory(packageId);
+  const artifactPaths = validation.flatMap((entry) =>
+    entry.stdoutPath && entry.stderrPath ? [entry.stdoutPath, entry.stderrPath] : [],
+  );
+  const [nameStatus, commitOutput, worktreeStatus, artifactSizes] = await Promise.all([
+    runner("git", ["diff", "--name-status", "-z", "--no-renames", range], 60_000),
+    runner("git", ["show", "-s", "--format=%cI%n%s", headRef], 30_000),
+    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
+    statEnvironmentReviewArtifacts(environment, runner, artifactPaths),
+  ]);
+
+  const changedFiles = parseGitNameStatus(nameStatus);
+  const changeKeys = changedFiles.map((file) => `${file.status}\0${file.path}`);
+  if (new Set(changeKeys).size !== changedFiles.length) {
+    throw new Error("Git returned an incomplete or ambiguous review diff");
+  }
+  const [preparedAt, ...subjectLines] = commitOutput.split("\n");
+  const commitSubject = subjectLines.join("\n").trimEnd();
+
   const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus).filter(
     (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
   );
@@ -790,118 +860,64 @@ export async function generateLoopedReviewPackage(
     );
   }
 
-  const changedFiles = await Promise.all(
-    changes.map(async (file) => {
-      if (file.status === "D") {
-        const omittedReason = "Deleted file has no content at the prepared HEAD.";
-        return {
-          ...file,
-          content: null,
-          contentSha256: null,
-          omittedReason,
-        };
-      }
-      const object = await readEnvironmentGitBlob(runner, headRef, file.path);
-      if (object.type !== "blob") {
-        const omittedReason = `Git object type ${object.type || "unknown"} has no text file content.`;
-        return {
-          ...file,
-          content: null,
-          contentSha256: null,
-          omittedReason,
-        };
-      }
-      const content = decodeReviewText(object.bytes);
-      if (content === null) {
-        const omittedReason = "Binary content is represented by the complete binary Git diff.";
-        return {
-          ...file,
-          content: null,
-          contentSha256: null,
-          omittedReason,
-        };
-      }
-      return {
-        ...file,
-        content,
-        contentSha256: createHash("sha256").update(object.bytes).digest("hex"),
-        omittedReason: null,
-      };
-    }),
-  );
-  const skippedFiles = changedFiles.flatMap((file) =>
-    file.omittedReason === null ? [] : [{ path: file.path, reason: file.omittedReason }],
-  );
-
-  const hydratedValidation = await Promise.all(
-    validation.map(async (entry) => {
-      // The preparation agent reports `limitation: null` for a command that ran
-      // without one, but the persisted contract is `limitation?: string` and its
-      // guard rejects null. Carrying the null through made the finished package
-      // unpersistable — the whole workflow snapshot failed validation on save and
-      // the round died with a `package` failure that a retry reproduced exactly.
-      const limitation = entry.limitation === null ? {} : { limitation: entry.limitation };
-      if (entry.status === "skipped") {
-        return {
-          command: entry.command,
-          status: entry.status,
-          exitCode: null,
-          stdout: "",
-          stderr: "",
-          durationMs: entry.durationMs,
-          ...limitation,
-        };
-      }
-      const [stdoutBytes, stderrBytes] = await Promise.all([
-        readEnvironmentWorkspaceFile(environment, runner, entry.stdoutPath!),
-        readEnvironmentWorkspaceFile(environment, runner, entry.stderrPath!),
-      ]);
+  const hydratedValidation = validation.map((entry) => {
+    // The preparation agent reports `limitation: null` for a command that ran
+    // without one, but the persisted contract is `limitation?: string` and its
+    // guard rejects null. Carrying the null through made the finished package
+    // unpersistable — the whole workflow snapshot failed validation on save and
+    // the round died with a `package` failure that a retry reproduced exactly.
+    const limitation = entry.limitation === null ? {} : { limitation: entry.limitation };
+    if (entry.status === "skipped") {
       return {
         command: entry.command,
         status: entry.status,
-        exitCode: entry.exitCode,
-        stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
-        stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
+        exitCode: null,
+        stdoutPath: null,
+        stderrPath: null,
+        stdoutBytes: 0,
+        stderrBytes: 0,
         durationMs: entry.durationMs,
         ...limitation,
       };
-    }),
-  );
+    }
+    return {
+      command: entry.command,
+      status: entry.status,
+      exitCode: entry.exitCode,
+      stdoutPath: entry.stdoutPath!,
+      stderrPath: entry.stderrPath!,
+      stdoutBytes: artifactSizes.get(entry.stdoutPath!) ?? 0,
+      stderrBytes: artifactSizes.get(entry.stderrPath!) ?? 0,
+      durationMs: entry.durationMs,
+      ...limitation,
+    };
+  });
 
-  const [finalHeadOutput, finalWorktreeStatus] = await Promise.all([
-    runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
-    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
-  ]);
-  const finalHead = finalHeadOutput.trim();
+  // Nothing above reads file contents, so the window this closes is short. It
+  // still has to close: a package naming a HEAD the environment has already
+  // moved off would send every reviewer to the wrong commit.
+  const finalHead = (
+    await runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000)
+  ).trim();
   if (finalHead !== headRef) {
     throw new Error("Environment HEAD changed while generating the review package");
   }
-  const finalUncommittedPaths = parseGitPorcelainPaths(finalWorktreeStatus).filter(
-    (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
-  );
-  if (
-    finalUncommittedPaths.length !== actualUncommittedPaths.length ||
-    finalUncommittedPaths.some((filePath, index) => filePath !== actualUncommittedPaths[index])
-  ) {
-    throw new Error("Environment worktree changed while generating the review package");
-  }
 
   const generated = {
+    format: REVIEW_PACKAGE_FORMAT,
     id: packageId,
     round,
-    preparedAt: preparedAtOutput.trim(),
+    preparedAt: (preparedAt ?? "").trim(),
     targetBranch: branch,
     baseRef,
     headRef,
     commit: {
       sha: headRef,
-      subject: commitSubject.trimEnd(),
-      committedFiles: parseNullDelimitedPaths(committedFileOutput, "committed file path"),
+      subject: commitSubject,
     },
-    completeDiff,
+    diffCommand,
     changedFiles,
     validation: hydratedValidation,
-    skippedFiles,
     uncommittedFiles: [...uncommittedFiles].sort((left, right) =>
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),

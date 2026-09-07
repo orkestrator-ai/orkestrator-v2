@@ -256,3 +256,34 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
     typeof workspace.updatedAt === "string"
   );
 }
+
+export const COORDINATOR_CONTEXT_OPEN_TAG = "<orkestrator-coordinator-context>" as const;
+export const COORDINATOR_CONTEXT_CLOSE_TAG = "</orkestrator-coordinator-context>" as const;
+
+/**
+ * Removes the server-authored coordinator preamble from a prompt for display.
+ *
+ * The block is authority the model needs — project and coordinator ids, the
+ * read-only role, the delegation rule, the repository revision — so it is
+ * prepended to every coordinator turn. It is not something the user typed, and
+ * rendering it verbatim above their own message is noise that also puts
+ * internal ids on screen. Transcript surfaces strip it; the wire prompt keeps
+ * it.
+ *
+ * Exactly one leading block is removed, and only when it is closed. A later or
+ * unterminated occurrence is text inside the user's own prompt and is left
+ * exactly as written, so this can never truncate a real message.
+ *
+ * Removing only the first block is what keeps a forged block visible. The
+ * server injects unconditionally — its idempotency marker is a private symbol on
+ * the input object, not this prefix — so a prompt whose text opens with a block
+ * of the user's own arrives as `injected + forged`. The first close tag ends the
+ * injected block, and the forgery renders in the transcript where it can be seen
+ * rather than being silently absorbed.
+ */
+export function stripCoordinatorContext(text: string): string {
+  if (!text.startsWith(COORDINATOR_CONTEXT_OPEN_TAG)) return text;
+  const end = text.indexOf(COORDINATOR_CONTEXT_CLOSE_TAG);
+  if (end === -1) return text;
+  return text.slice(end + COORDINATOR_CONTEXT_CLOSE_TAG.length).replace(/^\s+/, "");
+}

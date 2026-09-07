@@ -13,6 +13,7 @@ import {
   Square,
 } from "lucide-react";
 import type { ReviewFindingPool } from "@orkestrator/protocol/structured-review";
+import type { PersistedReviewPackage } from "@orkestrator/protocol/review-workflow";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,16 @@ function sessionLabel(phase: LoopedReviewSessionPhase, round: number, pass?: num
 
 function countLabel(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Packages stopped carrying the diff once reviewers began reading it from Git,
+ * so this is absent for every current round and present only on rounds
+ * persisted by an older build.
+ */
+function diffCharacters(reviewPackage: PersistedReviewPackage): number | undefined {
+  if ("kind" in reviewPackage) return reviewPackage.diffCharacters;
+  return "completeDiff" in reviewPackage ? reviewPackage.completeDiff.length : undefined;
 }
 
 function poolSummary(pool: ReviewFindingPool): string {
@@ -931,16 +942,17 @@ export function LoopedReviewTab({
                           )}
                         </dd>
                       </div>
-                      <div>
-                        <dt className="text-xs text-muted-foreground">Diff size</dt>
-                        <dd className="text-xs">
-                          {("kind" in selectedStage.round.package
-                            ? selectedStage.round.package.diffCharacters
-                            : selectedStage.round.package.completeDiff.length
-                          ).toLocaleString()}{" "}
-                          diff characters
-                        </dd>
-                      </div>
+                      {/* Only packages generated before reviewers read the diff
+                      from Git themselves carry a diff size. */}
+                      {diffCharacters(selectedStage.round.package) !== undefined && (
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Diff size</dt>
+                          <dd className="text-xs">
+                            {diffCharacters(selectedStage.round.package)!.toLocaleString()} diff
+                            characters
+                          </dd>
+                        </div>
+                      )}
                     </dl>
                   ) : (
                     <p className="mt-3 text-sm text-muted-foreground">

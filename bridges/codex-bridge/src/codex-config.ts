@@ -78,15 +78,44 @@ export function codexAppServerConfigOverrides(
     // and extensions stay disabled even if a future Codex release changes the
     // trust side effect of starting a thread with a permission profile.
     overrides[`projects.${JSON.stringify(projectRoot)}.trust_level`] = JSON.stringify("untrusted");
+    // `features.code_mode_host` is deliberately left at its default, unlike
+    // every other entry below. Each model the catalog now serves declares
+    // `tool_mode = "code_mode_only"`, so Codex dispatches *all* tool calls —
+    // shell reads and Orkestrator MCP controls alike — through the code-mode
+    // host. Turning that host off does not narrow the coordinator to
+    // inspection: it fails every tool call with "code-mode host is disabled",
+    // which is what left the coordinator unable to run `launch_environment`.
+    //
+    // The guard this replaces asked for proof that the permission profile and
+    // environment exclusions survive inside the host, because the host is a
+    // separate process (`codex-code-mode-host`, spawned per code-mode turn) and
+    // the coordinator runs on the host machine rather than in a container, so
+    // config is the whole boundary. What the shipped binary shows:
+    //
+    //   - It embeds bare V8 (`rusty_v8`) and no JS runtime layer — no
+    //     `deno_core`/`deno_runtime`, no `Deno.*` bindings, no `allow-read`,
+    //     `allow-write`, or `allow-net` permission surface. Model-authored
+    //     TypeScript therefore has no filesystem, network, or environment
+    //     syscall of its own to reach for.
+    //   - Its only outward edge is a gRPC channel that delegates each tool call
+    //     back to Codex ("code mode delegate request", "code-mode cell closed
+    //     before dispatching its tool call"), where `codex_core::tools::router`
+    //     applies `default_permissions`.
+    //
+    // So the permission profile, the network denial, and the untrusted project
+    // pin set above are the enforcement, and the host toggle is not. The
+    // coordinator overrides are pinned as one unit in `codex-config.test.ts`:
+    // code mode may not be enabled without all three still in place.
+    //
+    // Residual risk, not resolved here: the host also links transport code for
+    // a TCP listener alongside a Unix socket. Which one Codex selects on Linux,
+    // and how that channel is authenticated, is upstream behaviour we cannot
+    // determine from the binary, and it is a local attack surface if it is TCP.
     for (const feature of [
       "apps",
       "browser_use",
       "browser_use_external",
       "browser_use_full_cdp_access",
-      // Code Mode runs model-authored TypeScript in a separate helper process.
-      // Keep that path disabled until an integration test proves the coordinator
-      // permission profile and environment exclusions are enforced inside it.
-      "code_mode_host",
       "computer_use",
       "hooks",
       "image_generation",

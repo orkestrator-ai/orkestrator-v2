@@ -4595,7 +4595,10 @@ test("Multi Review prepares once with the fix model and reviews the same immutab
       for (const sent of reviews) {
         expect(sent.options).toMatchObject({ mode: "plan", readOnly: true });
         expect(sent.prompt).toContain(reviewing.reviewPackage!.filePath);
-        expect(sent.prompt).toContain("Do not modify files, run git, rerun validation");
+        expect(sent.prompt).toContain("Do not modify, create, or delete files");
+        // Validation ran once during preparation; every reviewer reads those
+        // artifacts rather than starting its own suite in parallel.
+        expect(sent.prompt).toContain("Do not rerun the full test suite");
         expect(sent.prompt).not.toContain("Validation commands may write");
       }
       expect(

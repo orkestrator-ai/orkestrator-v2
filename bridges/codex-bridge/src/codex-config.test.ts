@@ -81,8 +81,8 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.bearer_token_env_var": `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
       "mcp_servers.orkestrator.required": "false",
       "mcp_servers.orkestrator.startup_timeout_sec": "3",
-      "mcp_servers.orkestrator.default_tools_approval_mode": '"approve"',
     });
+    expect(overrides["mcp_servers.orkestrator.default_tools_approval_mode"]).toBeUndefined();
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
   });
 
@@ -314,7 +314,6 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.bearer_token_env_var",
       "mcp_servers.orkestrator.required",
       "mcp_servers.orkestrator.startup_timeout_sec",
-      "mcp_servers.orkestrator.default_tools_approval_mode",
     ]);
   });
 

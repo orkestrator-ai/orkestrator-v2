@@ -820,6 +820,9 @@ export class AppServerEngine implements CodexEngine {
   // --------------------------------------------------------------- threads
 
   private toThreadParams(config: EngineTurnConfig): Record<string, unknown> {
+    const approveAgentMcpTools =
+      config.policy?.approvals === "auto-approve" ||
+      (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile));
     return {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
@@ -845,11 +848,12 @@ export class AppServerEngine implements CodexEngine {
               },
               "mcp_servers.orkestrator.required": false,
               "mcp_servers.orkestrator.startup_timeout_sec": 3,
-              // Mutating tools on this server would otherwise be refused
-              // outright whenever the thread is not sandboxed for full disk
-              // write; see `codexAppServerConfigOverrides` for why approving
-              // the backend's own control surface is safe.
-              "mcp_servers.orkestrator.default_tools_approval_mode": "approve",
+              // `approve` bypasses the thread's approval policy, so reserve it
+              // for an explicitly auto-approved policy or the trusted
+              // coordinator profile. Ask/deny must retain Codex's defaults.
+              ...(approveAgentMcpTools
+                ? { "mcp_servers.orkestrator.default_tools_approval_mode": "approve" }
+                : {}),
             },
           }
         : {}),

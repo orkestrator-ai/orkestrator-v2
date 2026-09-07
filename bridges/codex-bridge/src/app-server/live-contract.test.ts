@@ -8,15 +8,20 @@
  *   CODEX_PROTOCOL_BINARY=/path/to/codex RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
  *
+ * The MCP approval canary additionally calls a model and is gated separately:
+ *
+ *   CODEX_PROTOCOL_BINARY=/path/to/codex RUN_LIVE_CODEX_APP_SERVER=1 \
+ *     RUN_LIVE_CODEX_MCP_APPROVAL_CANARY=1 \
+ *     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
+ *
  * The override is optional: `live-binary.ts` otherwise falls back to the managed
  * toolchain copy, then `CODEX_PATH`, then `codex` on PATH, and verifies in every
  * case that the binary reports the version pinned in `config/codex-version.json`
  * — a contract test against the wrong build proves nothing. That resolution is
  * unit-tested by `live-binary.test.ts`, which runs in the default suite.
  *
- * Nothing here starts a turn, so no credits are spent and no model is called.
- * Turn-level behaviour (interrupt, deltas, subagents) needs an authenticated
- * account and is covered by the canary rollout instead.
+ * The default live contract starts no turn, so it spends no credits. Only the
+ * separately gated MCP approval canary copies auth and calls a model.
  */
 import { describe, test, expect } from "bun:test";
 import { spawn } from "node:child_process";
@@ -31,6 +36,8 @@ import type { InboundNotification } from "./envelope-validation.js";
 
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
+const testLiveMcpApproval =
+  LIVE && process.env.RUN_LIVE_CODEX_MCP_APPROVAL_CANARY === "1" ? test : test.skip;
 
 interface LiveSession {
   client: JsonlRpcClient;
@@ -41,7 +48,9 @@ interface LiveSession {
 }
 
 /** Boots a real app-server against a throwaway CODEX_HOME and workspace. */
-async function boot(options: { copyAuth?: boolean } = {}): Promise<LiveSession> {
+async function boot(
+  options: { copyAuth?: boolean; extraArgs?: string[] } = {},
+): Promise<LiveSession> {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-live-home-"));
   const workspace = await mkdtemp(join(tmpdir(), "ork-live-ws-"));
   // A git dir keeps app-server from treating the cwd as unversioned.
@@ -56,7 +65,7 @@ async function boot(options: { copyAuth?: boolean } = {}): Promise<LiveSession> 
   }
 
   const binary = await resolveCodexBinary();
-  const child = spawn(binary, ["app-server", "--stdio"], {
+  const child = spawn(binary, ["app-server", "--stdio", ...(options.extraArgs ?? [])], {
     cwd: workspace,
     env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
     stdio: ["pipe", "pipe", "pipe"],
@@ -82,6 +91,87 @@ async function boot(options: { copyAuth?: boolean } = {}): Promise<LiveSession> 
       client.close();
       child.stdin.end();
       child.kill("SIGTERM");
+    },
+  };
+}
+
+interface McpMutationProbe {
+  url: string;
+  called: Promise<void>;
+  stop: () => Promise<void>;
+}
+
+function startMcpMutationProbe(): McpMutationProbe {
+  let markCalled!: () => void;
+  const called = new Promise<void>((resolve) => {
+    markCalled = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const message = (await request.json()) as {
+        id?: string | number;
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      if (message.id === undefined) return new Response(null, { status: 202 });
+
+      let result: Record<string, unknown>;
+      switch (message.method) {
+        case "initialize":
+          result = {
+            protocolVersion: String(message.params?.protocolVersion ?? "2025-06-18"),
+            capabilities: { tools: {} },
+            serverInfo: { name: "orkestrator-approval-probe", version: "1.0.0" },
+          };
+          break;
+        case "tools/list":
+          result = {
+            tools: [
+              {
+                name: "mutating_probe",
+                description: "Records that Codex dispatched this mutating test tool.",
+                inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                annotations: { readOnlyHint: false },
+              },
+            ],
+          };
+          break;
+        case "tools/call":
+          if (message.params?.name !== "mutating_probe") {
+            return Response.json(
+              {
+                jsonrpc: "2.0",
+                id: message.id,
+                error: { code: -32601, message: "unknown tool" },
+              },
+              { status: 200 },
+            );
+          }
+          markCalled();
+          result = { content: [{ type: "text", text: "probe called" }] };
+          break;
+        default:
+          return Response.json(
+            {
+              jsonrpc: "2.0",
+              id: message.id,
+              error: { code: -32601, message: "unknown method" },
+            },
+            { status: 200 },
+          );
+      }
+      return Response.json({ jsonrpc: "2.0", id: message.id, result }, { status: 200 });
+    },
+  });
+
+  return {
+    url: `http://${server.hostname}:${server.port}/mcp`,
+    called,
+    stop: async () => {
+      await server.stop(true);
     },
   };
 }
@@ -310,6 +400,87 @@ describeLive("live thread history", () => {
 });
 
 describeLive("live config side effects", () => {
+  test("accepts the coordinator MCP approval mode at process and thread scope", async () => {
+    const serverUrl = "http://127.0.0.1:9/mcp";
+    const session = await boot({
+      extraArgs: [
+        "-c",
+        `mcp_servers.orkestrator.url=${JSON.stringify(serverUrl)}`,
+        "-c",
+        'mcp_servers.orkestrator.default_tools_approval_mode="approve"',
+        "-c",
+        "mcp_servers.orkestrator.required=false",
+      ],
+    });
+    try {
+      await handshake(session);
+      const started = await session.client.request<{ thread: { id: string } }>("thread/start", {
+        cwd: session.workspace,
+        sandbox: "read-only",
+        approvalPolicy: "never",
+        config: {
+          "mcp_servers.orkestrator.url": serverUrl,
+          "mcp_servers.orkestrator.default_tools_approval_mode": "approve",
+          "mcp_servers.orkestrator.required": false,
+        },
+      });
+
+      expect(started.thread.id).toMatch(/^[0-9a-f-]{8,}/);
+    } finally {
+      await session.stop();
+    }
+  }, 60_000);
+
+  testLiveMcpApproval(
+    "dispatches a mutating MCP tool for a read-only coordinator without prompting",
+    async () => {
+      const probe = startMcpMutationProbe();
+      const session = await boot({ copyAuth: true });
+      try {
+        await handshake(session);
+        const started = await session.client.request<{ thread: { id: string } }>("thread/start", {
+          cwd: session.workspace,
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          developerInstructions:
+            "Call mcp__orkestrator__mutating_probe exactly once. Do not call any other tool.",
+          config: {
+            "mcp_servers.orkestrator.url": probe.url,
+            "mcp_servers.orkestrator.required": true,
+            "mcp_servers.orkestrator.startup_timeout_sec": 10,
+            "mcp_servers.orkestrator.default_tools_approval_mode": "approve",
+          },
+        });
+
+        await session.client.request("turn/start", {
+          threadId: started.thread.id,
+          clientUserMessageId: "mcp-approval-canary",
+          input: [
+            {
+              type: "text",
+              text: "Run the required mutating probe now.",
+              text_elements: [],
+            },
+          ],
+        });
+
+        await Promise.race([
+          probe.called,
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Codex did not dispatch the mutating MCP probe")),
+              60_000,
+            ),
+          ),
+        ]);
+      } finally {
+        await session.stop();
+        await probe.stop();
+      }
+    },
+    90_000,
+  );
+
   /**
    * Documents a real, deliberate side effect: starting a thread under a writable
    * sandbox marks the project trusted in `config.toml`.

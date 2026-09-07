@@ -275,22 +275,79 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       };
     }
 
+    case "imageGeneration": {
+      // The path, never the bytes: a generated image is a file Codex wrote,
+      // and reading it here would put a data URL in every transcript snapshot.
+      const path = str(raw.savedPath);
+      return {
+        item: {
+          id,
+          type: "image",
+          text: str(raw.revisedPrompt) ?? "Generated image",
+          ...(path ? { path } : {}),
+          source: "generated",
+        },
+      };
+    }
+    case "imageView": {
+      const path = str(raw.path);
+      return {
+        item: {
+          id,
+          type: "image",
+          text: path ? (path.split(/[\\/]/).pop() ?? "Image") : "Image",
+          ...(path ? { path } : {}),
+          source: "viewed",
+        },
+      };
+    }
+    case "contextCompaction":
+      // Codex reports the boundary without a summary. The boundary itself is
+      // the information: the model no longer remembers what is above it.
+      return { item: { id, type: "compaction", text: "" } };
+    case "hookPrompt": {
+      // A hook injected text into the model's context. The user did not write
+      // it and the model did not say it, so it is a status line rather than a
+      // message — but it is not invisible either, because it changes the answer.
+      const fragments = Array.isArray(raw.fragments) ? raw.fragments : [];
+      const text = fragments
+        .filter(isRecord)
+        .map((fragment) => str(fragment.text) ?? "")
+        .filter(Boolean)
+        .join("\n");
+      return text
+        ? { item: { id, type: "status", text: `Hook added context: ${text}`, severity: "info" } }
+        : { item: null, unsupportedType: type };
+    }
+    case "sleep": {
+      const durationMs = typeof raw.durationMs === "number" ? raw.durationMs : undefined;
+      return {
+        item: {
+          id,
+          type: "status",
+          text:
+            durationMs === undefined
+              ? "Waited"
+              : `Waited ${(durationMs / 1_000).toFixed(durationMs < 1_000 ? 2 : 0)}s`,
+          severity: "info",
+        },
+      };
+    }
+
     /**
      * Structurally understood but intentionally not rendered.
      *
      * `userMessage` is the prompt itself — it is used for dispatch reconciliation
-     * via `clientId`, never drawn as part of the assistant's reply. The rest have
-     * no place in the current UI; they are named explicitly so a genuinely new
-     * item type is still distinguishable from these.
+     * via `clientId`, never drawn as part of the assistant's reply.
+     * `enteredReviewMode`/`exitedReviewMode` belong to Codex's own review flow,
+     * which Orkestrator deliberately does not surface (code review here is an
+     * Orkestrator-owned pipeline). `functionCallOutput` is the raw half of a
+     * call whose rendered half is already in the transcript. They are named
+     * explicitly so a genuinely new item type is still distinguishable.
      */
     case "userMessage":
-    case "hookPrompt":
-    case "imageView":
-    case "imageGeneration":
-    case "sleep":
     case "enteredReviewMode":
     case "exitedReviewMode":
-    case "contextCompaction":
     case "functionCallOutput":
       return { item: null, unsupportedType: type };
 

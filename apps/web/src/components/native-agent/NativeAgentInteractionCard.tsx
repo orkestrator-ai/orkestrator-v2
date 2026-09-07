@@ -107,13 +107,17 @@ export function NativeAgentInteractionCard({
     buildAnswers: () =>
       interaction.kind === "mcp-form" && mcpQuestion
         ? [{ questionId: mcpQuestion.id, freeText: JSON.stringify(resolvedForm) }]
-        : questions.map((question) => {
+        : questions.flatMap((question) => {
             const answer = answerFor(question.id, question.secret);
-            return {
-              questionId: question.id,
-              ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
-              ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
-            };
+            const freeText = answer.freeText.trim();
+            if (!answer.optionIds.length && !freeText) return [];
+            return [
+              {
+                questionId: question.id,
+                ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
+                ...(freeText ? { freeText } : {}),
+              },
+            ];
           }),
   });
 
@@ -344,27 +348,33 @@ export function NativeAgentInteractionCard({
                   {question.options.map((option) => {
                     const selected = answer.optionIds.includes(option.id);
                     return (
-                      <Button
-                        key={option.id}
-                        type="button"
-                        size="sm"
-                        variant={selected ? "default" : "outline"}
-                        disabled={submitting || expired}
-                        aria-pressed={selected}
-                        onClick={() =>
-                          setQuestionAnswer(question.id, question.secret, (current) => ({
-                            ...current,
-                            optionIds: question.multiple
-                              ? selected
-                                ? current.optionIds.filter((id) => id !== option.id)
-                                : [...current.optionIds, option.id]
-                              : [option.id],
-                            ...(!question.multiple ? { freeText: "" } : {}),
-                          }))
-                        }
-                      >
-                        {option.label}
-                      </Button>
+                      <div key={option.id} className="max-w-full space-y-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={selected ? "default" : "outline"}
+                          disabled={submitting || expired}
+                          aria-pressed={selected}
+                          onClick={() =>
+                            setQuestionAnswer(question.id, question.secret, (current) => ({
+                              ...current,
+                              optionIds: question.multiple
+                                ? selected
+                                  ? current.optionIds.filter((id) => id !== option.id)
+                                  : [...current.optionIds, option.id]
+                                : [option.id],
+                              ...(!question.multiple ? { freeText: "" } : {}),
+                            }))
+                          }
+                        >
+                          {option.label}
+                        </Button>
+                        {option.description ? (
+                          <p className="max-w-md text-xs text-muted-foreground">
+                            {option.description}
+                          </p>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>

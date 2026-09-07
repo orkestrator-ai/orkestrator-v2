@@ -8,10 +8,10 @@
  * model to answer.
  */
 import { describe, expect, test } from "bun:test";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from "./prompt.js";
-import { publicSteerDispatch } from "./public.js";
+import { publicContextUsage, publicSteerDispatch } from "./public.js";
 import type { SessionState } from "./state.js";
 
 // The timeout is read from the environment at import, and six hours is not a
@@ -35,7 +35,13 @@ interface StubSession {
  * `preflightResult` is how the bridge learns a prompt was accepted, so the
  * stub exposes it directly instead of inferring acceptance from the run.
  */
-function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {}): StubSession {
+function stubSession(
+  options: {
+    autoAccept?: boolean;
+    onAbort?: () => void;
+    contextUsage?: ContextUsage | undefined | (() => never);
+  } = {},
+): StubSession {
   let settleRun: () => void = () => undefined;
   let rejectRun: (error: unknown) => void = () => undefined;
   let announce: (accepted: boolean) => void = () => undefined;
@@ -64,7 +70,8 @@ function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {
       clearCount += 1;
       return { steering: [], followUp: [] };
     },
-    getContextUsage: () => undefined,
+    getContextUsage: () =>
+      typeof options.contextUsage === "function" ? options.contextUsage() : options.contextUsage,
     getSessionStats: () => ({ cost: 0 }),
   } as unknown as AgentSession;
 
@@ -339,5 +346,71 @@ describe("structured output", () => {
     expect(state.structured.size).toBe(64);
     expect(state.structured.has("req-79")).toBe(true);
     expect(state.structured.has("req-0")).toBe(false);
+  });
+});
+
+describe("context usage", () => {
+  async function usageAfterTurn(contextUsage: ContextUsage | undefined | (() => never)) {
+    const state = runningState();
+    state.composer = { ...state.composer, selectedModelId: "anthropic/claude" };
+    const stub = stubSession({ contextUsage });
+    // Occupancy is read from the attached session, not from the handle the
+    // turn was dispatched on.
+    state.session = stub.session;
+    const handle = await dispatchPrompt(state, stub.session, input({ requestId: "usage" }));
+    state.currentTurnUsage = { inputTokens: 700, outputTokens: 300 };
+    stub.finish();
+    await handle.completion;
+    return { state, usage: publicContextUsage(state) };
+  }
+
+  test("reports Pi's own occupancy exactly when it has one", async () => {
+    const { usage } = await usageAfterTurn({ tokens: 42_000, contextWindow: 200_000, percent: 21 });
+
+    expect(usage).toMatchObject({
+      usedTokens: 42_000,
+      maximumTokens: 200_000,
+      percentage: 21,
+      lastTurnTokens: 1_000,
+      source: "provider",
+    });
+    expect(usage?.estimated).toBeUndefined();
+  });
+
+  test("a post-compaction null tokens is reported as estimated, not as a wrong absolute", async () => {
+    // Pi documents `tokens: null` between a compaction and the next model
+    // response. The old probe fell through to a differently-scoped number and
+    // presented it as an exact whole-session total.
+    const { usage } = await usageAfterTurn({ tokens: null, contextWindow: 200_000, percent: null });
+
+    expect(usage).toMatchObject({
+      usedTokens: 1_000,
+      maximumTokens: 200_000,
+      estimated: true,
+    });
+    expect(usage?.percentage).toBeUndefined();
+  });
+
+  test("a session that cannot report usage at all still records the turn", async () => {
+    const { usage } = await usageAfterTurn(undefined);
+
+    expect(usage).toMatchObject({ usedTokens: 1_000, estimated: true });
+    expect(usage?.maximumTokens).toBeUndefined();
+  });
+
+  test("a throwing getContextUsage does not fail the turn that just succeeded", async () => {
+    const { state, usage } = await usageAfterTurn(() => {
+      throw new Error("session disposed");
+    });
+
+    expect(state.status).toBe("idle");
+    expect(usage).toMatchObject({ usedTokens: 1_000, estimated: true });
+  });
+
+  test("a zero-width context window is ignored rather than shown as a full meter", async () => {
+    const { usage } = await usageAfterTurn({ tokens: 5_000, contextWindow: 0, percent: null });
+
+    expect(usage?.usedTokens).toBe(5_000);
+    expect(usage?.maximumTokens).toBeUndefined();
   });
 });

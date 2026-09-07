@@ -580,12 +580,6 @@ export interface SystemCompactEventData {
   trigger?: string;
 }
 
-/** Data payload for system.message event */
-export interface SystemMessageEventData {
-  subtype: string;
-  message?: unknown;
-}
-
 /** SSE event from Claude bridge server */
 export interface ClaudeEvent {
   type:
@@ -606,8 +600,7 @@ export interface ClaudeEvent {
     | "plan.exit-requested"
     | "plan.approval-requested"
     | "plan.approval-responded"
-    | "system.compact"
-    | "system.message";
+    | "system.compact";
   sessionId?: string;
   data?: unknown;
 }
@@ -1687,7 +1680,6 @@ export function subscribeToEvents(
         "plan.approval-requested",
         "plan.approval-responded",
         "system.compact",
-        "system.message",
       ];
 
       for (const eventType of eventTypes) {

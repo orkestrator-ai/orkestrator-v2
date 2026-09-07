@@ -11,6 +11,8 @@
  * and a tool variant added upstream must degrade to a plain card, not throw on
  * the event loop that is streaming a live turn.
  */
+import type { ToolCall } from "@cursor/sdk";
+import type { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_DIFF_BYTES, MAX_TOOL_OUTPUT_BYTES } from "./config.js";
 import { boundText } from "./transcript.js";
 import {
@@ -24,6 +26,13 @@ import {
 } from "./state.js";
 
 export interface RenderedToolCall {
+  /**
+   * A generated image this call wrote to disk.
+   *
+   * The path only. Reading the file here would put a data URL in every
+   * transcript snapshot; the renderer fetches it once, on demand.
+   */
+  generatedImage?: { filePath: string; caption: string };
   toolName: string;
   toolTitle?: string;
   toolArgs?: JsonObject;
@@ -49,7 +58,42 @@ type ToolResult =
   | { status: "error"; error?: unknown }
   | undefined;
 
-export function renderToolCall(call: unknown): RenderedToolCall {
+/**
+ * Which tool kinds this renderer has a dedicated card for.
+ *
+ * A `Record` over the SDK's own `ToolCall` union rather than a list, so a
+ * `@cursor/sdk` release that adds a tool **fails this typecheck** instead of
+ * quietly collapsing to a generic card that nobody notices is generic. `false`
+ * means the generic card is the deliberate answer for that tool.
+ *
+ * Cursor also emits tool names that are not in the typed union at all —
+ * `webSearch`, `askQuestion`, `await`, `readTodos`, `applyAgentDiff` have all
+ * been seen on the wire. Those reach the generic card too, and are counted as
+ * drift, because an untyped name is exactly the case this table cannot see.
+ */
+const RENDERED_TOOL_KINDS: Record<ToolCall["type"], boolean> = {
+  shell: true,
+  read: true,
+  edit: true,
+  write: true,
+  delete: true,
+  glob: true,
+  grep: true,
+  ls: true,
+  readLints: true,
+  semSearch: true,
+  mcp: true,
+  createPlan: true,
+  updateTodos: true,
+  task: true,
+  generateImage: true,
+  // Screen recording has no transcript representation here: the artifact is a
+  // video the bridge does not stage and the renderer cannot play inline. The
+  // generic card at least reports that it ran.
+  recordScreen: false,
+};
+
+export function renderToolCall(call: unknown, health?: RuntimeHealthRecorder): RenderedToolCall {
   const record = isObject(call) ? call : {};
   const toolName = nonBlank(record.type) ? record.type : "tool";
   const args = isObject(record.args) ? record.args : {};
@@ -104,6 +148,12 @@ export function renderToolCall(call: unknown): RenderedToolCall {
       break;
     default:
       renderGeneric(rendered, args, result);
+      // A name the table holds as `false` is a documented generic render; a
+      // name it does not hold at all is either an SDK addition or one of the
+      // untyped names Cursor emits. Both are counted, distinguishably.
+      health?.recordUnknown(
+        toolName in RENDERED_TOOL_KINDS ? `generic-tool:${toolName}` : `tool:${toolName}`,
+      );
       break;
   }
 
@@ -344,7 +394,16 @@ function renderGenerateImage(
   const value = successValue(result);
   // `imageData` is a base64 payload. Report where it landed and never inline
   // it: one generated image would otherwise consume the transcript budget.
-  if (value) rendered.toolOutput = readString(value.filePath) ?? "Image generated";
+  const filePath = value ? readString(value.filePath) : undefined;
+  if (value) rendered.toolOutput = filePath ?? "Image generated";
+  // The path is what makes the image showable at all: the renderer reads it
+  // lazily through the same container-aware fetch every file row uses.
+  if (filePath) {
+    rendered.generatedImage = {
+      filePath,
+      caption: readString(args.description) ?? "Generated image",
+    };
+  }
 }
 
 function renderGeneric(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {

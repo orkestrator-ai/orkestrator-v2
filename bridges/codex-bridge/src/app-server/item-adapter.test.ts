@@ -222,15 +222,13 @@ describe("item adapter edge cases", () => {
   });
 
   test("explicitly classifies every understood non-rendered item", () => {
+    // What remains after plan 03: the prompt itself, Codex's own review-mode
+    // boundaries (review here is an Orkestrator-owned pipeline), and the raw
+    // half of a call whose rendered half is already in the transcript.
     for (const type of [
       "userMessage",
-      "hookPrompt",
-      "imageView",
-      "imageGeneration",
-      "sleep",
       "enteredReviewMode",
       "exitedReviewMode",
-      "contextCompaction",
       "functionCallOutput",
     ]) {
       expect(adaptAppServerItem({ id: "id", type })).toEqual({
@@ -238,6 +236,89 @@ describe("item adapter edge cases", () => {
         unsupportedType: type,
       });
     }
+  });
+
+  test("renders a generated image as an image item, by path and never by bytes", () => {
+    expect(
+      adaptAppServerItem({
+        id: "img-1",
+        type: "imageGeneration",
+        status: "completed",
+        revisedPrompt: "a cat wearing a hard hat",
+        result: "ignored",
+        savedPath: "/workspace/out/cat.png",
+        failure: null,
+      }),
+    ).toEqual({
+      item: {
+        id: "img-1",
+        type: "image",
+        text: "a cat wearing a hard hat",
+        path: "/workspace/out/cat.png",
+        source: "generated",
+      },
+    });
+  });
+
+  test("renders a viewed image titled by its file name", () => {
+    expect(
+      adaptAppServerItem({ id: "img-2", type: "imageView", path: "/workspace/shots/error.png" }),
+    ).toEqual({
+      item: {
+        id: "img-2",
+        type: "image",
+        text: "error.png",
+        path: "/workspace/shots/error.png",
+        source: "viewed",
+      },
+    });
+  });
+
+  test("renders a compaction as a boundary with no invented summary", () => {
+    // Codex reports the boundary and not what the compaction produced. The
+    // boundary itself is the information.
+    expect(adaptAppServerItem({ id: "c-1", type: "contextCompaction" })).toEqual({
+      item: { id: "c-1", type: "compaction", text: "" },
+    });
+  });
+
+  test("renders a hook's injected prompt as a status row", () => {
+    expect(
+      adaptAppServerItem({
+        id: "h-1",
+        type: "hookPrompt",
+        fragments: [
+          { text: "Use tabs.", hookRunId: "r1" },
+          { text: "Never edit generated files.", hookRunId: "r2" },
+        ],
+      }),
+    ).toEqual({
+      item: {
+        id: "h-1",
+        type: "status",
+        text: "Hook added context: Use tabs.\nNever edit generated files.",
+        severity: "info",
+      },
+    });
+  });
+
+  test("a hook prompt with no readable fragments is not a status row", () => {
+    expect(adaptAppServerItem({ id: "h-2", type: "hookPrompt", fragments: [] })).toEqual({
+      item: null,
+      unsupportedType: "hookPrompt",
+    });
+  });
+
+  test("renders a sleep as a status row naming the duration", () => {
+    expect(adaptAppServerItem({ id: "s-1", type: "sleep", durationMs: 4_000 })).toMatchObject({
+      item: { type: "status", text: "Waited 4s" },
+    });
+    expect(adaptAppServerItem({ id: "s-2", type: "sleep", durationMs: 250 })).toMatchObject({
+      item: { type: "status", text: "Waited 0.25s" },
+    });
+    expect(adaptAppServerItem({ id: "s-3", type: "sleep" })).toMatchObject({
+      item: { type: "status", text: "Waited" },
+    });
   });
 
   test("plan and client-id helpers ignore malformed elements", () => {

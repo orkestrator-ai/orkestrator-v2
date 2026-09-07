@@ -28,6 +28,14 @@ export interface PromptStreamState {
   pendingPlanRejectionFeedback: string | null;
   planApprovedThisTurn: boolean;
   pendingPlanApprovalContinuation: string | null;
+  /**
+   * The transcript message holding an unsettled `retry` row.
+   *
+   * Turn-scoped rather than session-scoped: a retry belongs to the request that
+   * failed, and a row still pending when its turn ends is settled by the turn's
+   * outcome rather than carried into the next one.
+   */
+  pendingApiRetryMessageId?: string;
   flushStreamedAssistantMessage: () => void;
   applyPartialAssistantMessage: (partialMessage: any) => boolean;
   clearFlushTimer: () => void;

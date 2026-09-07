@@ -653,13 +653,268 @@ describe("session-wide state", () => {
     });
   });
 
-  test("renders a context compaction as its own card", () => {
+  test("renders a context compaction as a boundary, not a tool card", () => {
+    // The synthetic card this replaces read as something the agent chose to
+    // run. A compaction is a boundary in the conversation.
     const state = running();
     applyInteractionUpdate(state, { type: "summary", summary: "we did three things" });
-    expect(toolParts(state)[0]).toMatchObject({
-      toolName: "compact_context",
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
       toolState: "success",
-      toolOutput: "we did three things",
+      content: "we did three things",
     });
+  });
+
+  test("opens the boundary while the summary is still being produced", () => {
+    // Compaction can take a while; a session that appears to stall with nothing
+    // to explain it is what the pending state fixes.
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "pending",
+      content: "",
+    });
+
+    applyInteractionUpdate(state, { type: "summary-completed", summary: "kept the plan" });
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    // One boundary, settled — not a pending row plus a settled one.
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ toolState: "success", content: "kept the plan" });
+  });
+
+  test("a `summary` that arrives after `summary-started` settles the open boundary", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary", summary: "we did three things" });
+
+    const parts = state.messages.at(-1)!.parts.filter((part) => part.type === "compaction");
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({ toolState: "success", content: "we did three things" });
+  });
+
+  test("a completion with no open boundary still records one", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-completed", summary: "late" });
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "success",
+      content: "late",
+    });
+  });
+
+  test("an appended user message becomes a user row", () => {
+    // This is where a steered prompt lands. Without a row the steer vanished
+    // and the user was left with an answer to a question they could not see.
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "user-message-appended",
+      userMessage: {
+        type: "user_message",
+        session_id: "session-1",
+        text: "actually, use tabs",
+        images: [{ type: "base64", data: "iVBORw0KGgo=" }],
+      },
+    });
+
+    const message = state.messages.at(-1)!;
+    expect(message.role).toBe("user");
+    expect(message.content).toBe("actually, use tabs");
+  });
+
+  test("an appended user message with no text is not a row", () => {
+    const state = running();
+    const before = state.messages.length;
+    applyInteractionUpdate(state, {
+      type: "user-message-appended",
+      userMessage: { type: "user_message", session_id: "session-1", text: "" },
+    });
+    expect(state.messages).toHaveLength(before);
+  });
+});
+
+describe("shell progress", () => {
+  function startShell(state: ReturnType<typeof running>) {
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "call-1",
+      toolCall: { type: "shell", args: { command: "bun test" } },
+    });
+  }
+
+  test("keeps one live progress line beside the accumulating output", () => {
+    const state = running();
+    startShell(state);
+    applyInteractionUpdate(state, {
+      type: "shell-output-delta",
+      event: { output: "compiling\nlinking\n" },
+    });
+    applyInteractionUpdate(state, {
+      type: "shell-output-delta",
+      event: { output: "running tests\n" },
+    });
+
+    const progress = state.messages.at(-1)!.parts.filter((part) => part.type === "progress");
+    // The newest line only: progress is a hint over the tool state, so a
+    // backlog of superseded lines is noise.
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatchObject({ toolUseId: "call-1", content: "running tests" });
+  });
+
+  test("drops the progress line when the call settles", () => {
+    const state = running();
+    startShell(state);
+    applyInteractionUpdate(state, {
+      type: "shell-output-delta",
+      event: { output: "running tests\n" },
+    });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-1",
+      toolCall: {
+        type: "shell",
+        args: { command: "bun test" },
+        result: { status: "success", value: {} },
+      },
+    });
+
+    // A settled row still showing a progress line reports work that has
+    // already stopped.
+    expect(state.messages.at(-1)!.parts.some((part) => part.type === "progress")).toBe(false);
+  });
+});
+
+describe("generated images", () => {
+  test("becomes an image row pointing at the file, never at the bytes", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-img",
+      toolCall: {
+        type: "generateImage",
+        args: { description: "a cat in a hard hat" },
+        result: { status: "success", value: { filePath: "/workspace/cat.png" } },
+      },
+    });
+
+    expect(state.messages.at(-1)!.parts.find((part) => part.type === "image")).toMatchObject({
+      type: "image",
+      imageSource: "generated",
+      content: "a cat in a hard hat",
+      fileUrl: "file:///workspace/cat.png",
+    });
+  });
+
+  test("a re-rendered settled call does not append a second copy", () => {
+    const state = running();
+    const update = {
+      type: "tool-call-completed",
+      callId: "call-img",
+      toolCall: {
+        type: "generateImage",
+        args: {},
+        result: { status: "success", value: { filePath: "/workspace/cat.png" } },
+      },
+    };
+    applyInteractionUpdate(state, update);
+    applyInteractionUpdate(state, update);
+
+    expect(state.messages.at(-1)!.parts.filter((part) => part.type === "image")).toHaveLength(1);
+  });
+});
+
+/**
+ * What this bridge does with a `@cursor/sdk` variant it has no branch for.
+ *
+ * The SDK is a fast-moving dependency. Before drift recording, a new update
+ * type was indistinguishable from a turn that produced nothing at all.
+ */
+describe("update drift", () => {
+  test("an unrecognised update type is counted and named, never thrown", () => {
+    const state = newSessionState();
+
+    expect(() =>
+      applyInteractionUpdate(state, { type: "conversation-forked", detail: {} }),
+    ).not.toThrow();
+
+    expect(state.health.drift()).toEqual({
+      unknownEvents: 1,
+      unknownKinds: ["conversation-forked"],
+    });
+  });
+
+  test("a known-but-unrendered type is counted distinguishably from an SDK addition", () => {
+    // "we chose not to show this" and "we never heard of this" must not look
+    // the same to whoever reads the counter after an SDK bump.
+    const state = newSessionState();
+    applyInteractionUpdate(state, { type: "step-started" });
+    applyInteractionUpdate(state, { type: "invented-by-the-sdk" });
+
+    expect(state.health.drift()?.unknownKinds).toEqual([
+      "unrendered:step-started",
+      "invented-by-the-sdk",
+    ]);
+  });
+
+  test("the payload is never recorded, only the type name", () => {
+    const state = newSessionState();
+    applyInteractionUpdate(state, {
+      type: "secret-update",
+      text: "the user's private prompt",
+      apiKey: "sk-not-a-real-key",
+    });
+
+    const serialized = JSON.stringify(state.health.snapshot());
+    expect(serialized).toContain("secret-update");
+    expect(serialized).not.toContain("private prompt");
+    expect(serialized).not.toContain("sk-not-a-real-key");
+  });
+
+  test("types the switch handles do not count as drift", () => {
+    const state = newSessionState();
+    applyInteractionUpdate(state, { type: "text-delta", text: "hello" });
+    applyInteractionUpdate(state, { type: "thinking-completed" });
+    applyInteractionUpdate(state, { type: "turn-ended", usage: {} });
+
+    expect(state.health.drift()).toBeUndefined();
+  });
+});
+
+describe("the run's own system message", () => {
+  test("an untyped tool name still reaches the generic card and is counted", () => {
+    // `webSearch` and friends are not in the SDK's `ToolCall` union at all, so
+    // the exhaustive table cannot see them; they must still render.
+    const state = newSessionState();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-1",
+      toolCall: { type: "webSearch", args: { query: "orkestrator" } },
+    });
+
+    const parts = state.messages.at(-1)?.parts ?? [];
+    expect(parts.some((part) => part.type === "tool-invocation")).toBe(true);
+    expect(state.health.drift()?.unknownKinds).toEqual(["tool:webSearch"]);
+  });
+
+  test("a typed tool the renderer deliberately leaves generic is counted separately", () => {
+    const state = newSessionState();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-2",
+      toolCall: { type: "recordScreen", args: {} },
+    });
+
+    expect(state.health.drift()?.unknownKinds).toEqual(["generic-tool:recordScreen"]);
+  });
+
+  test("a tool with its own card is not drift", () => {
+    const state = newSessionState();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "call-3",
+      toolCall: { type: "shell", args: { command: "ls" } },
+    });
+
+    expect(state.health.drift()).toBeUndefined();
   });
 });

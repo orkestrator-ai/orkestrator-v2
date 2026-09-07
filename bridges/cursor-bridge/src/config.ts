@@ -117,6 +117,8 @@ export const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
 export const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 export const MAX_MODEL_ID_BYTES = 1_024;
+/** Tool names retained from a run's `system` message, for the runtime panel. */
+export const MAX_RUN_TOOL_NAMES = 128;
 export const MAX_PROMPT_JOURNAL = 256;
 export const MAX_STRUCTURED_RESULTS = 64;
 export const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;

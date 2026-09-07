@@ -1,3 +1,4 @@
+import { publicInteractionKinds } from "./public.js";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -692,9 +693,14 @@ describe("session routes", () => {
   test("does not refresh liveness from the activity or dispatch sweeps", async () => {
     const state = seedSession();
     state.lastAccessed = 0;
+    state.health.recordUnknown("future-event");
 
     await call(`/session/${state.id}/activity`);
     await call(`/session/${state.id}/dispatch?requestId=req-1`);
+    expect(await (await call(`/session/${state.id}/runtime-health`)).json()).toMatchObject({
+      summary: { drift: { unknownEvents: 1, unknownKinds: ["future-event"] } },
+      notices: [],
+    });
     // Refreshing here would put idle detaching permanently out of reach: the
     // backend sweeps every persisted session every couple of seconds.
     expect(state.lastAccessed).toBe(0);
@@ -1527,5 +1533,49 @@ describe("request handling", () => {
     });
     expect(accepted.headers.get("content-encoding")).toBe("gzip");
     await accepted.arrayBuffer();
+  });
+});
+
+/**
+ * What this session can actually stop and ask for.
+ *
+ * The platform table says what Pi *may* raise. A session with the approval gate
+ * off raises nothing, and reporting the platform's list there would promise
+ * approvals that can never arrive.
+ */
+describe("interaction capability", () => {
+  const gate = "PI_BRIDGE_REQUIRE_APPROVAL";
+
+  test("reports nothing while the approval gate is off", () => {
+    const previous = process.env[gate];
+    delete process.env[gate];
+    try {
+      expect(publicInteractionKinds()).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env[gate];
+      else process.env[gate] = previous;
+    }
+  });
+
+  test("reports the approval kinds once the gate is on", () => {
+    const previous = process.env[gate];
+    process.env[gate] = "1";
+    try {
+      expect(publicInteractionKinds()).toEqual(["command-approval", "file-approval"]);
+    } finally {
+      if (previous === undefined) delete process.env[gate];
+      else process.env[gate] = previous;
+    }
+  });
+
+  test("only the exact opt-in value turns the gate on", () => {
+    const previous = process.env[gate];
+    process.env[gate] = "true";
+    try {
+      expect(publicInteractionKinds()).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env[gate];
+      else process.env[gate] = previous;
+    }
   });
 });

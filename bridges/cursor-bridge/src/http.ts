@@ -31,9 +31,11 @@ import {
   parseFromIndex,
   publicActivity,
   publicDispatch,
+  publicRuntime,
   publicSession,
   publicStatus,
 } from "./public.js";
+import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -203,7 +205,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals|runtime-health))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -220,13 +222,19 @@ async function routeSession(
     // "this bridge predates the route" — a 404 here would have it delete a
     // live session mapping against an older bridge.
     if (action === "activity") return json(response, 200, { activity: "missing" });
+    // Same reasoning: a 404 here would read as "this bridge predates the
+    // route" and fail the environment. Health is optional metadata, so an
+    // unknown session answers empty rather than failing.
+    if (action === "runtime-health") return json(response, 200, emptyRuntimeHealth());
     return json(response, 404, { error: "Session not found" });
   }
 
   // Liveness only. `/activity` and `/dispatch` deliberately do not touch it:
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
-  if (action !== "activity" && action !== "dispatch") state.lastAccessed = Date.now();
+  if (action !== "activity" && action !== "dispatch" && action !== "runtime-health") {
+    state.lastAccessed = Date.now();
+  }
 
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);
@@ -253,6 +261,10 @@ async function routeSession(
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, publicActivity(state));
+  }
+  if (action === "runtime-health" && request.method === "GET") {
+    // A read, like `/activity`: no liveness touch, no attach.
+    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));

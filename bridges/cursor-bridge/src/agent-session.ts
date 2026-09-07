@@ -16,6 +16,7 @@ import {
   settingSources,
   workingDirectory,
 } from "./config.js";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
@@ -62,6 +63,7 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     uncheckedTranscriptBytes: 0,
     currentTurnOutput: null,
     lastAccessed: Date.now(),
+    health: new RuntimeHealthRecorder(),
   };
 }
 
@@ -363,7 +365,7 @@ function appendHistoricTurn(state: SessionState, turn: unknown): void {
         sourceMessageId: messageId,
       });
     } else if (step.type === "toolCall") {
-      const rendered = renderToolCall(step.message);
+      const rendered = renderToolCall(step.message, state.health);
       parts.push({
         type: "tool-invocation",
         content: rendered.toolTitle ?? rendered.toolName,

@@ -238,8 +238,14 @@ describe("liveness routes", () => {
   test("activity does not refresh liveness, so idle detaching stays reachable", async () => {
     const state = await createSession();
     state.lastAccessed = 0;
+    state.health.recordUnknown("future-update");
     await call(`/session/${state.id}/activity`);
     await call(`/session/${state.id}/dispatch?requestId=x`);
+    const health = await call(`/session/${state.id}/runtime-health`);
+    expect(await health.json()).toMatchObject({
+      summary: { drift: { unknownEvents: 1, unknownKinds: ["future-update"] } },
+      notices: [],
+    });
     expect(state.lastAccessed).toBe(0);
 
     await call(`/session/${state.id}/status`);

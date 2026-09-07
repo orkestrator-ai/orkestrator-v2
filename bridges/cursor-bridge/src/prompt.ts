@@ -11,7 +11,9 @@ import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk
 import {
   CANCEL_ACK_TIMEOUT_MS,
   CATALOG_TIMEOUT_MS,
+  MAX_MODEL_ID_BYTES,
   MAX_PROMPT_JOURNAL,
+  MAX_RUN_TOOL_NAMES,
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
   PROMPT_TIMEOUT_MS,
@@ -27,6 +29,7 @@ import {
   type SessionState,
   type TurnUsage,
   isObject,
+  nonBlank,
   turnTokenTotal,
 } from "./state.js";
 
@@ -153,6 +156,12 @@ export async function followRun(
         // keeps a pull-driven stream advancing. Usage is the exception: it also
         // has a first-class SDK message shape, and some local runtimes publish
         // that without a usage-bearing delta.
+        // The `system` message is the run's own account of what it is running:
+        // the model it resolved and the toolset it was given. Kept in session
+        // state so the runtime panel reports what the turn *actually* used
+        // rather than what the composer asked for — the two differ whenever
+        // Cursor substitutes a model.
+        recordStreamSystemMessage(state, event);
         const message = streamMessageUsage(event);
         if (!message) continue;
         streamed.total = sumTurnUsage(streamed.total, message);
@@ -514,6 +523,25 @@ function terminalTurnUsage(usage: unknown): TurnUsage | undefined {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) turn[key] = value;
   }
   return Object.keys(turn).length > 0 ? turn : undefined;
+}
+
+/**
+ * Read the run's `system` message into session state.
+ *
+ * Only the model id and the tool *names* are kept, each bounded: a tool
+ * definition carries its full description and JSON schema, which is provider
+ * text this bridge has no reason to retain or to put in front of a user.
+ */
+function recordStreamSystemMessage(state: SessionState, event: unknown): void {
+  if (!isObject(event) || event.type !== "system") return;
+  const model = nonBlank(event.model) ? event.model : undefined;
+  if (model) state.runModelId = model.slice(0, MAX_MODEL_ID_BYTES);
+  const tools = Array.isArray(event.tools) ? event.tools : undefined;
+  if (!tools) return;
+  state.runTools = tools.slice(0, MAX_RUN_TOOL_NAMES).flatMap((tool) => {
+    const name = isObject(tool) ? tool.name : tool;
+    return nonBlank(name) ? [name.slice(0, 128)] : [];
+  });
 }
 
 function streamMessageUsage(message: unknown): TurnUsage | undefined {

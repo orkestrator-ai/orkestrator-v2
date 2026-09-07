@@ -172,6 +172,10 @@ describe("HTTP bridge provider (codex)", () => {
       {
         method: "configWarning",
         message: "Codex reported advisory",
+        // Codex's own diagnostic, so `provider`; `warning` unless it says
+        // otherwise, which is what every notice predating the field was.
+        severity: "warning",
+        source: "provider",
         occurrences: [
           {
             detail: "configuration warning",
@@ -183,6 +187,8 @@ describe("HTTP bridge provider (codex)", () => {
         method: "warning",
         message: "Codex reported advisory",
         count: 7,
+        severity: "warning",
+        source: "provider",
         occurrences: [
           { detail: "warning 2", receivedAt: "2026-08-26T20:02:00.000Z" },
           { detail: "warning 3", receivedAt: "2026-08-26T20:03:00.000Z" },
@@ -244,9 +250,9 @@ describe("HTTP bridge provider (codex)", () => {
     releaseRuntime();
     const refreshes = (
       provider as unknown as {
-        codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+        runtimeMetadataRefreshes: Map<string, Promise<void>>;
       }
-    ).codexRuntimeMetadataRefreshes;
+    ).runtimeMetadataRefreshes;
     await waitUntil(() => refreshes.size === 0);
 
     const third = await provider.interactiveSnapshot?.("codex-1");
@@ -285,7 +291,7 @@ describe("HTTP bridge provider (codex)", () => {
           runtime?: { state?: string };
         }
       >;
-      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+      runtimeMetadataRefreshes: Map<string, Promise<void>>;
     };
     const retained = internals.interactiveMetadata.get("codex-1");
     expect(retained).toBeDefined();
@@ -293,7 +299,7 @@ describe("HTTP bridge provider (codex)", () => {
 
     const stale = await provider.interactiveSnapshot?.("codex-1");
     expect(stale?.runtime?.state).toBe("ready");
-    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    await waitUntil(() => internals.runtimeMetadataRefreshes.size === 0);
     expect(internals.interactiveMetadata.get("codex-1")).toBe(retained);
     expect(retained!.runtime?.state).toBe("ready");
     expect(retained!.expiresAt).toBeGreaterThan(Date.now());
@@ -301,7 +307,7 @@ describe("HTTP bridge provider (codex)", () => {
     retained!.expiresAt = 0;
     const retrying = await provider.interactiveSnapshot?.("codex-1");
     expect(retrying?.runtime?.state).toBe("ready");
-    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    await waitUntil(() => internals.runtimeMetadataRefreshes.size === 0);
     const recovered = await provider.interactiveSnapshot?.("codex-1");
     expect(recovered?.runtime?.state).toBe("recovered");
     expect(runtimeReads).toBe(3);
@@ -345,7 +351,7 @@ describe("HTTP bridge provider (codex)", () => {
           runtime?: { state?: string };
         }
       >;
-      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+      runtimeMetadataRefreshes: Map<string, Promise<void>>;
     };
     internals.interactiveMetadata.get("codex-1")!.expiresAt = 0;
 
@@ -359,7 +365,7 @@ describe("HTTP bridge provider (codex)", () => {
     expect(internals.interactiveMetadata.size).toBe(0);
 
     releaseRuntime();
-    await waitUntil(() => internals.codexRuntimeMetadataRefreshes.size === 0);
+    await waitUntil(() => internals.runtimeMetadataRefreshes.size === 0);
     // The superseded read describes the inventory the refresh just dropped, so
     // it must not repopulate the map the picker is waiting to re-read.
     expect(internals.interactiveMetadata.has("codex-1")).toBe(false);

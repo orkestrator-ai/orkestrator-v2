@@ -138,8 +138,8 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
 }
 
 import {
+  AgentInteractionCapability,
   AgentRuntimePanel,
-  CodexRuntimePanel,
   CursorAccountUsagePanel,
   type AgentInfoUsageSnapshot,
   Metric,
@@ -164,7 +164,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
-  const [codexHealth, setCodexHealth] = useState<unknown>(null);
   const [cursorAccountUsage, setCursorAccountUsage] = useState<CursorUsageResult | null>(null);
   const [cursorAccountUsageLoading, setCursorAccountUsageLoading] = useState(false);
   const [systemUsage, setSystemUsage] = useState<SystemUsageSnapshot | null>(null);
@@ -464,14 +463,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!open || activeSession?.provider !== "codex" || !codexClient || !currentSessionId) {
-      setCodexHealth(null);
       return;
     }
     let cancelled = false;
     void getCodexRuntimeHealth(codexClient, currentSessionId)
       .then((health) => {
         if (cancelled) return;
-        setCodexHealth(health);
         if (activeSession) {
           const limits = codexLimitsFromHealth(health);
           const store = useCodexStore.getState();
@@ -485,9 +482,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           }
         }
       })
-      .catch(() => {
-        if (!cancelled) setCodexHealth({ error: "Runtime health unavailable" });
-      });
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -1745,19 +1740,22 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       )}
                     />
                   </div>
-                ) : activeSession.provider === "codex" ? (
-                  <CodexRuntimePanel
-                    health={codexHealth}
-                    runtime={neutralProjection?.runtime}
-                    openNoticeId={runtimeNoticeDialogId}
-                    onOpenNoticeChange={setRuntimeNoticeDialogId}
-                  />
                 ) : (
+                  // One panel for every platform, including Codex. Inventory,
+                  // drift and provider notices all arrive on the neutral
+                  // projection, so there is nothing left for a provider-shaped
+                  // panel to add.
                   <AgentRuntimePanel
                     runtime={neutralProjection?.runtime}
                     providerLabel={activeSession.providerLabel}
+                    openNoticeId={runtimeNoticeDialogId}
+                    onOpenNoticeChange={setRuntimeNoticeDialogId}
                   />
                 )}
+                <AgentInteractionCapability
+                  kinds={neutralProjection?.capabilities?.interactions?.kinds}
+                  providerLabel={activeSession.providerLabel}
+                />
               </div>
             </div>
           ) : (

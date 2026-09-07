@@ -14,6 +14,7 @@ import {
   describeApprovalOutcome,
   isApprovalDecision,
   isInteractiveApprovalMethod,
+  type ApprovalDecision,
   type ApprovalRequest,
 } from "./approvals.js";
 
@@ -72,6 +73,38 @@ describe("describeApproval", () => {
     // countdown cannot be skewed by a clock difference in the child.
     expect(approval.requestedAt).toBe(1_000);
     expect(approval.expiresAt).toBe(301_000);
+  });
+
+  test("reads every bounded v2 policy amendment with its source index", () => {
+    const approval = describeWith("item/commandExecution/requestApproval", {
+      threadId: "thread-1",
+      command: "curl https://one.example",
+      proposedExecpolicyAmendment: ["allow curl"],
+      proposedNetworkPolicyAmendments: [
+        { host: "one.example", action: "allow" },
+        { host: "two.example", action: "deny" },
+      ],
+    });
+
+    expect(approval.amendments).toEqual([
+      {
+        kind: "exec-policy",
+        detail: "allow curl",
+        decision: "approve-with-execpolicy-amendment",
+      },
+      {
+        kind: "network-policy",
+        detail: "allow one.example",
+        decision: "approve-with-network-amendment",
+        amendmentIndex: 0,
+      },
+      {
+        kind: "network-policy",
+        detail: "deny two.example",
+        decision: "approve-with-network-amendment",
+        amendmentIndex: 1,
+      },
+    ]);
   });
 
   test("uses commandActions when the top-level command is absent", () => {
@@ -196,6 +229,58 @@ describe("buildApprovalResponse", () => {
     expect(buildApprovalResponse(method, "deny", {}).result).toEqual({ decision: "decline" });
   });
 
+  test("returns the exact selected v2 amendment and degrades safely when absent", () => {
+    const params = {
+      proposedExecpolicyAmendment: ["allow bun test"],
+      proposedNetworkPolicyAmendments: [
+        { host: "one.example", action: "allow" },
+        { host: "two.example", action: "deny" },
+      ],
+    };
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        "approve-with-execpolicy-amendment",
+        params,
+      ).result,
+    ).toEqual({
+      decision: {
+        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["allow bun test"] },
+      },
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        "approve-with-network-amendment",
+        params,
+        1,
+      ).result,
+    ).toEqual({
+      decision: {
+        applyNetworkPolicyAmendment: {
+          network_policy_amendment: { host: "two.example", action: "deny" },
+        },
+      },
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        "approve-with-network-amendment",
+        params,
+        99,
+      ).result,
+    ).toEqual({ decision: "accept" });
+  });
+
+  test("legacy amendment approvals degrade to approved for session", () => {
+    expect(
+      buildApprovalResponse("execCommandApproval", "approve-with-execpolicy-amendment", {}).result,
+    ).toEqual({ decision: "approved_for_session" });
+    expect(
+      buildApprovalResponse("applyPatchApproval", "approve-with-network-amendment", {}).result,
+    ).toEqual({ decision: "approved_for_session" });
+  });
+
   test("maps legacy decisions onto ReviewDecision", () => {
     const method = "execCommandApproval" as const;
     expect(buildApprovalResponse(method, "approve", {}).result).toEqual({ decision: "approved" });
@@ -243,6 +328,15 @@ describe("buildApprovalResponse", () => {
     expect(denied.permissions).toEqual({});
     expect(denied.scope).toBe("turn");
   });
+
+  test("an unknown future decision fails closed for permission grants", () => {
+    const result = buildApprovalResponse(
+      "item/permissions/requestApproval",
+      "future-decision" as ApprovalDecision,
+      { permissions: { network: { allowAll: true } } },
+    ).result as { permissions: Record<string, unknown> };
+    expect(result.permissions).toEqual({});
+  });
 });
 
 describe("describeApprovalOutcome", () => {
@@ -265,6 +359,11 @@ describe("describeApprovalOutcome", () => {
     // An approval needs no transcript note; the command itself is the evidence.
     expect(describeApprovalOutcome(base, "approve", "answered")).toBeNull();
     expect(describeApprovalOutcome(base, "approve-for-session", "answered")).toBeNull();
+    expect(
+      describeApprovalOutcome(base, "approve-with-execpolicy-amendment", "answered"),
+    ).toBeNull();
+    expect(describeApprovalOutcome(base, "approve-with-network-amendment", "answered")).toBeNull();
+    expect(describeApprovalOutcome(base, "withdrawn", "withdrawn")).toBeNull();
   });
 
   test("explains each non-approval outcome and names the command", () => {
@@ -299,7 +398,7 @@ describe("describeApprovalOutcome", () => {
 });
 
 describe("isApprovalDecision", () => {
-  test("accepts the four decisions and nothing else", () => {
+  test("accepts the six decisions and nothing else", () => {
     for (const decision of APPROVAL_DECISIONS) expect(isApprovalDecision(decision)).toBe(true);
     for (const input of ["accept", "yes", "", null, undefined, 1, {}]) {
       expect(isApprovalDecision(input)).toBe(false);

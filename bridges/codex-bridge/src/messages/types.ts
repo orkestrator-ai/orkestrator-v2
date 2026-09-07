@@ -22,7 +22,17 @@ export interface ToolDiffMetadata {
 }
 
 export interface NormalizedPart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file" | "subagent";
+  type:
+    | "text"
+    | "thinking"
+    | "tool-invocation"
+    | "tool-result"
+    | "file"
+    | "subagent"
+    | "compaction"
+    | "image"
+    | "status"
+    | "progress";
   content: string;
   /**
    * Original attachment name, when `content` holds a staged path whose basename
@@ -48,6 +58,16 @@ export interface NormalizedPart {
   subagentPrompt?: string;
   subagentActions?: NormalizedPart[];
   subagentActionCount?: number;
+  /** Context occupancy before a compaction boundary. */
+  compactedTokensBefore?: number;
+  /** Where an `image` part came from. */
+  imageSource?: "attachment" | "generated" | "viewed";
+  /** Severity of a `status` row. */
+  severity?: "info" | "warning" | "error";
+  /** The call a `progress` sub-line describes. */
+  toolUseId?: string;
+  /** How long that call has been running. */
+  elapsedMs?: number;
 }
 
 export interface NormalizedMessage {

@@ -296,6 +296,31 @@ describe("effectiveItem", () => {
 });
 
 describe("renderTurn", () => {
+  test("correlates a live progress line with its rendered tool row", async () => {
+    const accumulator = turn();
+    accumulator.onItemStarted({
+      id: "mcp-1",
+      type: "mcp_tool_call",
+      server: "docs",
+      tool: "search",
+      arguments: { query: "events" },
+      status: "in_progress",
+    });
+    accumulator.onItemProgress("mcp-1", "Reading documentation");
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts).toMatchObject([
+      { type: "tool-invocation", toolUseId: "mcp-1", toolName: "search" },
+      { type: "progress", toolUseId: "mcp-1", content: "Reading documentation" },
+    ]);
+  });
+
   test("reuses normalized parts for immutable completed items", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({

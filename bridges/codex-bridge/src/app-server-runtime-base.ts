@@ -15,9 +15,11 @@ import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type {
   ApprovalDecision,
+  ApprovalResolvedDecision,
   ApprovalRequest,
   ApprovalResolution,
 } from "./app-server/approvals.js";
+import { isGrantingApprovalDecision } from "./app-server/approvals.js";
 import {
   isInteractionAnswerMap,
   type InteractionAnswer,
@@ -739,7 +741,7 @@ export abstract class AppServerRuntimeBase {
 
   protected onApprovalResolved(
     request: ApprovalRequest,
-    decision: ApprovalDecision,
+    decision: ApprovalResolvedDecision,
     resolution: ApprovalResolution,
   ): void {
     this.pendingApprovals.delete(request.approvalId);
@@ -789,6 +791,7 @@ export abstract class AppServerRuntimeBase {
     sessionId: string,
     approvalId: string,
     decision: ApprovalDecision,
+    amendmentIndex?: number,
   ): "applied" | "unknown" | "wrong-session" | "not-actionable" {
     const entry = this.pendingApprovals.get(approvalId);
     if (!entry) return "unknown";
@@ -805,14 +808,11 @@ export abstract class AppServerRuntimeBase {
      * tab, another client, a cross-origin page — must not be able to approve an
      * action no human was ever shown.
      */
-    if (
-      !entry.request.actionable &&
-      (decision === "approve" || decision === "approve-for-session")
-    ) {
+    if (!entry.request.actionable && isGrantingApprovalDecision(decision)) {
       return "not-actionable";
     }
 
-    if (this.options.engine.resolveApproval(approvalId, decision)) {
+    if (this.options.engine.resolveApproval(approvalId, decision, amendmentIndex)) {
       if (decision === "cancel") {
         void this.abort(sessionId).catch((error: unknown) => {
           console.error("[codex-bridge] Failed to cancel turn after approval response:", error);

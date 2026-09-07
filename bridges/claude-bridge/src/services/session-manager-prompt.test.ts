@@ -3062,6 +3062,361 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("counts an SDK message type it has no branch for, without throwing", async () => {
+    // The union grows between SDK releases. Before drift recording, a new type
+    // arriving mid-turn was indistinguishable from nothing arriving at all.
+    const session = createSession("drift-unknown-type");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "invented_by_the_sdk", payload: { prompt: "the user's private prompt" } });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const drift = getSession(session.id)?.health?.drift();
+    expect(drift).toEqual({ unknownEvents: 1, unknownKinds: ["invented_by_the_sdk"] });
+    // Names only: an SDK message body carries prompts, file contents and tool
+    // output, and this reaches the renderer and the logs.
+    expect(JSON.stringify(drift)).not.toContain("private prompt");
+  });
+
+  test("counts a known type this bridge has not consumed yet, distinguishably", async () => {
+    const session = createSession("drift-unconsumed-type");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    // `auth_status` is the remaining documented gap: plan 08 renders it.
+    call.push({ type: "auth_status", authenticated: true });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(getSession(session.id)?.health?.drift()?.unknownKinds).toEqual([
+      "unconsumed:auth_status",
+    ]);
+  });
+
+  test("records an unbranched system subtype as a bounded provider notice", async () => {
+    const session = createSession("system-subtype-notice");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "api_retry", message: "Overloaded, retrying" });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const notices = getSession(session.id)?.health?.listNotices() ?? [];
+    expect(notices[0]).toMatchObject({
+      message: "Claude reported api retry",
+      method: "system/api_retry",
+      // Retrying an overloaded API changes what the user is reading, so it is
+      // promoted into the tab rather than left in the health panel.
+      severity: "warning",
+      source: "provider",
+    });
+    expect(notices[0]?.occurrences?.[0]?.detail).toBe("Overloaded, retrying");
+  });
+
+  test("a merely informational system subtype stays out of the tab", async () => {
+    const session = createSession("system-subtype-info");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "status" });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(getSession(session.id)?.health?.listNotices()[0]?.severity).toBe("info");
+    expect(getSession(session.id)?.health?.advisories()).toEqual([]);
+  });
+
+  test("records a compaction boundary in the transcript, not only as an event", async () => {
+    // The live event is a hint. Without a durable row, a reload showed a
+    // transcript with no boundary in it — and a compacted session with no
+    // visible boundary is the single most confusing thing a user can be shown.
+    const session = createSession("compaction-part");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 142_000 },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const part = getSession(session.id)!.messages.at(-1)!.parts[0]!;
+    expect(part).toMatchObject({
+      type: "compaction",
+      compactedTokensBefore: 142_000,
+      tokenCountText: "auto compaction",
+    });
+    // The SDK reports the boundary, not what the compaction produced. An
+    // invented summary would read as the model's words.
+    expect(part.content).toBe("");
+  });
+
+  test("folds tool progress onto the running call rather than adding a row", async () => {
+    const session = createSession("tool-progress");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: {
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "ls" } }],
+      },
+    });
+    call.push({
+      type: "tool_progress",
+      tool_use_id: "tool-1",
+      tool_name: "Bash",
+      elapsed_time_seconds: 12,
+      subagent_type: "explorer",
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const parts = getSession(session.id)!.messages.at(-1)!.parts;
+    const progress = parts.find((part) => part.type === "progress")!;
+    expect(progress).toMatchObject({
+      toolUseId: "tool-1",
+      content: "explorer running",
+      elapsedMs: 12_000,
+    });
+    // In the same message as the tool row, which is what lets the backend
+    // projection fold it onto that row.
+    expect(
+      parts.some((part) => part.toolUseId === "tool-1" && part.type === "tool-invocation"),
+    ).toBe(true);
+  });
+
+  test("keeps only the newest progress report for one call", async () => {
+    const session = createSession("tool-progress-supersede");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: {
+        model: "claude-sonnet-4-6",
+        content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: {} }],
+      },
+    });
+    for (const seconds of [3, 9, 27]) {
+      call.push({
+        type: "tool_progress",
+        tool_use_id: "tool-1",
+        tool_name: "Bash",
+        elapsed_time_seconds: seconds,
+      });
+    }
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const progressParts = getSession(session.id)!
+      .messages.at(-1)!
+      .parts.filter((part) => part.type === "progress");
+    expect(progressParts).toHaveLength(1);
+    expect(progressParts[0]?.elapsedMs).toBe(27_000);
+  });
+
+  test("shows a tool-use summary as a status row", async () => {
+    const session = createSession("tool-use-summary");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "tool_use_summary",
+      summary: "Read four files and ran the tests",
+      preceding_tool_use_ids: ["a", "b"],
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    expect(getSession(session.id)!.messages.at(-1)!.parts[0]).toMatchObject({
+      type: "status",
+      content: "Read four files and ran the tests",
+      severity: "info",
+    });
+  });
+
+  test("opens a retry row and settles it when the model answers", async () => {
+    const session = createSession("api-retry-settles");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      call.push({ type: "system", subtype: "api_retry", attempt: 2, error_status: 529 });
+      call.push({
+        type: "assistant",
+        uuid: "asst-1",
+        message: { model: "claude-sonnet-4-6", content: [{ type: "text", text: "done" }] },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // Two frames for the one row: the open and the settle. The point of the
+      // part kind is that the user sees the retry happening, not only its
+      // outcome, so publishing it once — at either end — would defeat it.
+      // The frames carry the live message object, so their *content* is the
+      // settled state by the time this runs; the count is what proves both
+      // edges reached a client.
+      const retryFrames = events.filter(
+        (event) =>
+          event.type === "message.updated" &&
+          (event.data as { message?: { parts?: Array<{ type?: string }> } }).message?.parts?.[0]
+            ?.type === "retry",
+      );
+      expect(retryFrames).toHaveLength(2);
+
+      const retryMessage = session.messages.find((message) => message.parts[0]?.type === "retry")!;
+      expect(retryMessage.parts[0]).toMatchObject({
+        type: "retry",
+        retryAttempt: 2,
+        content: "The API answered 529",
+        // A retry row that never settles reports a request still in flight long
+        // after the turn ended, which is the stale card this replaces.
+        toolState: "success",
+      });
+    } finally {
+      stop();
+    }
+  });
+
+  test("settles every row across consecutive API retries", async () => {
+    const session = createSession("api-retry-consecutive");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "api_retry", attempt: 1, error_status: 529 });
+    call.push({ type: "system", subtype: "api_retry", attempt: 2, error_status: 529 });
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: { model: "claude-sonnet-4-6", content: [{ type: "text", text: "done" }] },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const retries = session.messages
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "retry");
+    expect(retries).toHaveLength(2);
+    expect(retries.map((part) => part.toolState)).toEqual(["failure", "success"]);
+    expect(retries.some((part) => part.toolState === "pending")).toBe(false);
+  });
+
+  test("settles an unanswered retry as failed when the turn dies", async () => {
+    const session = createSession("api-retry-fails");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "system", subtype: "api_retry", attempt: 1, error_status: null });
+    call.push({ type: "result", subtype: "error_during_execution", errors: ["gave up"] });
+    call.finish();
+    await expect(promptPromise).rejects.toThrow("gave up");
+
+    const retryMessage = session.messages.find((message) => message.parts[0]?.type === "retry")!;
+    expect(retryMessage.parts[0]).toMatchObject({
+      toolState: "failure",
+      content: "The API request failed",
+    });
+  });
+
+  test("clears the transcript on a conversation reset and says so", async () => {
+    const session = createSession("conversation-reset");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: { model: "claude-sonnet-4-6", content: [{ type: "text", text: "earlier answer" }] },
+    });
+    call.push({ type: "conversation_reset", new_conversation_id: "new-id" });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const stored = getSession(session.id)!;
+    // Only the marker survives: showing history the model has no memory of is
+    // worse than showing nothing.
+    expect(stored.messages).toHaveLength(1);
+    expect(stored.messages[0]?.parts[0]).toMatchObject({
+      type: "status",
+      severity: "warning",
+      content: "Conversation cleared. The agent no longer has the earlier history.",
+    });
+  });
+
+  test("treats a success subtype carrying is_error as a failed turn", async () => {
+    const session = createSession("result-success-is-error");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      call.push({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        errors: ["Overloaded: upstream API error"],
+      });
+      call.finish();
+
+      await expect(promptPromise).rejects.toThrow("Overloaded: upstream API error");
+      expect(session.status).toBe("error");
+      expect(session.error).toBe("Overloaded: upstream API error");
+      expect(events.find((event) => event.type === "session.error")?.data).toEqual({
+        error: "Overloaded: upstream API error",
+      });
+      expect(events.some((event) => event.type === "session.idle")).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+
+  test("names the API error when a success subtype sets is_error without an errors list", async () => {
+    const session = createSession("result-success-is-error-bare");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "hello");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success", is_error: true });
+    call.finish();
+
+    await expect(promptPromise).rejects.toThrow("Claude ended the turn on an API error.");
+    expect(session.status).toBe("error");
+  });
+
   test("keeps task settlement at receive time when an API error ends the turn", async () => {
     const session = createSession("result-error-task-settlement");
     track(session.id);
@@ -3760,7 +4115,10 @@ describe("sendPrompt", () => {
         ],
       });
       expect(events.some((event) => event.type === "system.compact")).toBe(true);
-      expect(events.some((event) => event.type === "system.message")).toBe(true);
+      // A system subtype with no branch is a diagnostic, not transcript
+      // content. It used to be re-emitted as an untyped `system.message` frame
+      // carrying the whole SDK message; it is now a bounded, redacted notice.
+      expect(events.some((event) => event.type === "system.message")).toBe(false);
 
       // Pinned in full. Every field here is rendered by the UI, and an
       // `objectContaining` on four of them cannot notice the other fourteen

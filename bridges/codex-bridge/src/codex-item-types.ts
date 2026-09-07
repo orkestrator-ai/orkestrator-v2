@@ -109,6 +109,41 @@ export interface TodoListItem {
   items: TodoItem[];
 }
 
+/**
+ * An image the turn produced or looked at.
+ *
+ * `path` is where the bytes live; the bridge does not read them, so a large
+ * generated image costs a path in the transcript rather than a data URL in it.
+ */
+export interface ImageItem {
+  id: string;
+  type: "image";
+  /** Alt text or the revised prompt Codex generated the image from. */
+  text: string;
+  path?: string;
+  source: "generated" | "viewed";
+}
+
+/** A context compaction boundary reported as a thread item. */
+export interface CompactionItem {
+  id: string;
+  type: "compaction";
+  text: string;
+}
+
+/**
+ * A short status line: a hook's injected prompt, a sleep, a rerouted model.
+ *
+ * One kind rather than three because the transcript treatment is identical and
+ * the distinction is carried in the text.
+ */
+export interface StatusItem {
+  id: string;
+  type: "status";
+  text: string;
+  severity?: "info" | "warning" | "error";
+}
+
 /** Canonical union of rendered thread items. */
 export type ThreadItem =
   | AgentMessageItem
@@ -119,6 +154,9 @@ export type ThreadItem =
   | DynamicToolCallItem
   | WebSearchItem
   | TodoListItem
+  | ImageItem
+  | CompactionItem
+  | StatusItem
   | ErrorItem;
 
 /** One element of a user turn's input. */

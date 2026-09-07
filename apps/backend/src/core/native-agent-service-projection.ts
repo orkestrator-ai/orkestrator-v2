@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import { recoverBackgroundTaskLaunchId } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
@@ -160,6 +161,73 @@ function backgroundTaskIdFromProjectedLaunch(part: Record<string, unknown>): str
   return recoverBackgroundTaskLaunchId(part);
 }
 
+/**
+ * Fold `progress` parts onto the tool rows they describe.
+ *
+ * A provider reports progress as its own event, so an adapter can only emit it
+ * as a loose part; but a progress line beside a tool row rather than on it
+ * reads as a second thing happening. Matching by `toolUseId` here means the
+ * renderer receives a tool row with a `progress` field and needs no notion of
+ * a progress part at all.
+ *
+ * Only the newest report per call survives — progress is a hint over the
+ * authoritative `toolState`, so a backlog of superseded lines is noise. A
+ * progress part naming a call this message does not contain is dropped rather
+ * than kept as an orphan row: it belongs to a tool the transcript no longer
+ * holds, and there is nothing for a reader to relate it to.
+ */
+export function attachProgressToToolRows(parts: unknown[]): unknown[] {
+  const progressByToolUseId = new Map<string, Record<string, unknown>>();
+  for (const candidate of parts) {
+    const part = progressRecord(candidate);
+    if (part?.type !== "progress") continue;
+    const toolUseId = part.toolUseId;
+    if (typeof toolUseId !== "string" || !toolUseId) continue;
+    progressByToolUseId.set(toolUseId, {
+      content: typeof part.content === "string" ? part.content : "",
+      ...(typeof part.elapsedMs === "number" &&
+      Number.isFinite(part.elapsedMs) &&
+      part.elapsedMs >= 0
+        ? { elapsedMs: part.elapsedMs }
+        : {}),
+      ...(typeof part.createdAt === "string" ? { createdAt: part.createdAt } : {}),
+    });
+  }
+  // Nothing to fold *and* nothing to drop: return the same array so the common
+  // case allocates nothing.
+  const hasProgressPart = parts.some((candidate) => progressRecord(candidate)?.type === "progress");
+  if (!hasProgressPart) return parts;
+  return parts.flatMap((candidate) => {
+    const part = progressRecord(candidate);
+    if (part?.type === "progress") return [];
+    const toolUseId = part?.toolUseId;
+    if (typeof toolUseId !== "string") return [candidate];
+    const progress = progressByToolUseId.get(toolUseId);
+    return progress ? [{ ...part, progress }] : [candidate];
+  });
+}
+
+function progressRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * A session's own report of what it can raise, bounded and validated.
+ *
+ * Absent means "not reported", which leaves the platform table standing.
+ * Present-and-empty is a real answer — "this session never asks" — and is the
+ * whole reason the two are distinguished.
+ */
+function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const kinds = value.filter((kind): kind is AgentInteractionKind =>
+    (AGENT_INTERACTION_KINDS as readonly string[]).includes(kind as string),
+  );
+  return [...new Set(kinds)];
+}
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   protected cacheToolDetails(
     sessionKey: string,
@@ -304,8 +372,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         id: message.id,
         role,
         content: message.content,
-        parts: message.parts.map((part, index) =>
-          this.projectionPart(sessionKey, message.id as string, part, String(index)),
+        parts: attachProgressToToolRows(
+          message.parts.map((part, index) =>
+            this.projectionPart(sessionKey, message.id as string, part, String(index)),
+          ),
         ),
         createdAt: message.createdAt,
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
@@ -1221,7 +1291,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           slashCommandsPromise,
           steerSupportedPromise,
         ]);
-      const capabilities =
+      const steerQualified =
         !advertisedCapabilities.actions?.steer || steerSupported
           ? advertisedCapabilities
           : {
@@ -1231,6 +1301,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 steer: false,
               },
             };
+      // A live session's own answer wins over the platform table. The table
+      // says what a platform *may* raise; a Pi session with its approval gate
+      // off raises nothing, and reporting the platform's list there would
+      // promise approvals that can never arrive.
+      const liveInteractionKinds = normalizeInteractionKinds(snapshot.interactionKinds);
+      const capabilities =
+        liveInteractionKinds === undefined
+          ? steerQualified
+          : { ...steerQualified, interactions: { kinds: liveInteractionKinds } };
       // Runtime action commands are merged from the static table before the
       // bridge qualification finishes. Never leave `/steer` behind when this
       // exact bridge cannot prove the reliable steering surface.
@@ -1295,7 +1374,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // set, a later transient miss would inherit a spent deadline and report a
       // reconnect that is still in its first moment as a failure.
       this.projectionMissingSince.delete(key);
-      const blocked = interactionSnapshot.requests.length > 0;
+      const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
       const composer = await this.projectionComposer(
         input,
         resolved.session,

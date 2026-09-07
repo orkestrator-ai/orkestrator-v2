@@ -520,11 +520,110 @@ export function truncateDisplayText(value: string, maximumBytes: number, notice:
   return truncateUtf8(value, Math.max(0, maximumBytes - noticeBytes)) + notice;
 }
 
+/**
+ * Largest data URL carried for an inbound image.
+ *
+ * Over this the block is named rather than shown: half a data URL renders as a
+ * broken image, which is worse than a row that says an image was there.
+ */
+const MAX_CONTENT_IMAGE_BYTES = 4 * 1024 * 1024;
+
+/** Content blocks read from one update. An agent cannot make this unbounded. */
+const MAX_CONTENT_BLOCKS = 16;
+
 export function contentText(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("");
   if (!isObject(value)) return "";
   return typeof value.text === "string" ? value.text : "";
+}
+
+/**
+ * One ACP content block, as a transcript part.
+ *
+ * ACP content is a union — text, image, audio, resource, resource_link — and
+ * only the text arm was read. Everything else made `contentText` return "" and
+ * the whole update was then discarded, so an agent that answered with a
+ * screenshot or a file reference produced a transcript that said nothing
+ * happened.
+ *
+ * Bytes never travel inline: an image becomes a data URL only when the agent
+ * already supplied one and it is small enough to be worth carrying; otherwise
+ * the block is represented by its name and MIME type.
+ */
+export function contentBlockPart(
+  value: unknown,
+  source: { sourcePartId: string; sourceMessageId: string },
+): BridgeMessagePart | null {
+  if (!isObject(value)) return null;
+  const mimeType = typeof value.mimeType === "string" ? value.mimeType : undefined;
+
+  if (value.type === "image") {
+    const data = typeof value.data === "string" ? value.data : undefined;
+    const uri = typeof value.uri === "string" ? value.uri : undefined;
+    const fileUrl = data
+      ? data.startsWith("data:")
+        ? data
+        : `data:${mimeType ?? "image/png"};base64,${data}`
+      : uri;
+    // An oversized data URL is dropped rather than truncated: half of one
+    // renders as a broken image, which is worse than a row that names it.
+    if (fileUrl && fileUrl.length > MAX_CONTENT_IMAGE_BYTES) {
+      return {
+        type: "file",
+        content: "Image (too large to display)",
+        ...source,
+      };
+    }
+    return {
+      type: "image",
+      content: typeof value.alt === "string" && value.alt ? value.alt : "Image",
+      ...(fileUrl ? { fileUrl } : {}),
+      imageSource: "viewed",
+      ...source,
+    };
+  }
+
+  if (value.type === "audio") {
+    return {
+      type: "file",
+      content: mimeType ? `Audio (${mimeType})` : "Audio",
+      ...source,
+    };
+  }
+
+  if (value.type === "resource" || value.type === "resource_link") {
+    const resource = isObject(value.resource) ? value.resource : value;
+    const uri = typeof resource.uri === "string" ? resource.uri : undefined;
+    const name = typeof resource.name === "string" ? resource.name : undefined;
+    return {
+      type: "file",
+      content: name ?? uri ?? "Resource",
+      ...(uri ? { fileUrl: uri } : {}),
+      ...source,
+    };
+  }
+
+  return null;
+}
+
+/** Non-text content blocks in one update, as parts. */
+export function contentBlockParts(
+  value: unknown,
+  messageId: string,
+  startIndex: number,
+): BridgeMessagePart[] {
+  const blocks = Array.isArray(value) ? value : [value];
+  const parts: BridgeMessagePart[] = [];
+  for (const block of blocks.slice(0, MAX_CONTENT_BLOCKS)) {
+    if (isObject(block) && typeof block.text === "string") continue;
+    const part = contentBlockPart(block, {
+      sourcePartId: `${messageId}:${startIndex + parts.length}`,
+      sourceMessageId: messageId,
+    });
+    if (part) parts.push(part);
+  }
+  return parts;
 }
 
 /**

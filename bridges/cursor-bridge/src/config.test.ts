@@ -176,3 +176,43 @@ describe("the bridge process", () => {
     expect(cwd).toBe(realpathSync(workspace));
   });
 });
+
+/**
+ * The host-run execution posture, pinned so it cannot drift silently.
+ *
+ * `sandboxEnabled` being false means a Cursor host tab runs `shell`, `write`
+ * and `delete` against the user's machine with no approval surface — the SDK
+ * offers no approval hook this bridge could park a call on. That is the same
+ * answer every platform here gives locally (Grok's `--always-approve`, Pi's
+ * default-off approval gate, Claude's local allow), and it is stated in
+ * `docs/technical-architecture/agent-engines.md` rather than left implicit.
+ * Plan 12 replaces it with a uniform backend-owned policy; until then, changing
+ * this default is a documentation change too.
+ */
+describe("the host execution posture", () => {
+  function readSandboxDefault(env: NodeJS.ProcessEnv): string {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `const c = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "config.ts")).href)});
+         process.stdout.write(String(c.sandboxEnabled));`,
+      ],
+      { env: { ...process.env, ...env }, encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  }
+
+  test("is ungated unless a launcher explicitly opts in", () => {
+    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "" })).toBe("false");
+  });
+
+  test("only the exact opt-in value turns the SDK sandbox on", () => {
+    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "1" })).toBe("true");
+    // Anything else fails closed towards the documented default rather than
+    // half-enabling a sandbox on a typo.
+    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "true" })).toBe("false");
+    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "0" })).toBe("false");
+  });
+});

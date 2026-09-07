@@ -428,6 +428,18 @@ export async function renderTurn(
             options.state.completedItemParts.delete(itemId);
           }
           parts.push(...stampedParts);
+          // A live progress line for a still-running item, in the same message
+          // as the row it describes so the backend projection can fold it on.
+          // Only for uncompleted items: the accumulator clears `progress` when
+          // an item settles, and a settled row must not claim to be busy.
+          if (accumulator?.progress && !accumulator.completed) {
+            parts.push({
+              type: "progress",
+              content: accumulator.progress,
+              toolUseId: itemId,
+              ...(createdAt ? { createdAt } : {}),
+            });
+          }
         }
       }
       continue;

@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
 import {
   emptyComposerState,
@@ -331,6 +332,9 @@ export async function loadPersistedState(): Promise<void> {
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
       historyReplay: false,
+      // Drift and notices describe a process that is gone. A restored session
+      // starts clean and re-observes whatever the agent still sends.
+      health: new RuntimeHealthRecorder(),
       ...(usage ? { usage } : {}),
       ...(Number.isSafeInteger(candidate.commandCount) && Number(candidate.commandCount) >= 0
         ? { commandCount: Number(candidate.commandCount) }

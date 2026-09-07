@@ -4,6 +4,7 @@ export type InteractionMethod = "item/tool/requestUserInput" | "mcpServer/elicit
 
 export type InteractionResolution =
   | "answered"
+  | "withdrawn"
   | "declined"
   | "cancelled"
   | "timed-out"
@@ -34,6 +35,15 @@ export interface InteractionRequest {
   generation: EngineGeneration;
   requestedAt: number;
   expiresAt: number;
+  /**
+   * Whether the turn is waiting on this request.
+   *
+   * app-server publishes it as `isBlocking`; the older `autoResolutionMs` is
+   * deprecated in favour of it and is read only when `isBlocking` is absent.
+   * A non-blocking question is still shown, but it must not hold the turn's
+   * activity at `waiting`.
+   */
+  blocking: boolean;
   autoResolutionMs?: number;
   questions?: InteractionQuestion[];
   serverName?: string;
@@ -132,6 +142,13 @@ export function describeInteraction(options: {
       typeof params.autoResolutionMs === "number" && params.autoResolutionMs > 0
         ? params.autoResolutionMs
         : undefined;
+    // `isBlocking` supersedes `autoResolutionMs`, which the generated protocol
+    // marks deprecated. Read the new field first; only when app-server omits it
+    // entirely does the presence of an auto-resolution deadline stand in, and a
+    // request with neither is treated as blocking so nothing silently proceeds
+    // past a question the user has not seen.
+    const blocking =
+      typeof params.isBlocking === "boolean" ? params.isBlocking : autoResolutionMs === undefined;
     const questions = Array.isArray(params.questions)
       ? params.questions.flatMap((raw) => {
           const question = record(raw);
@@ -176,13 +193,20 @@ export function describeInteraction(options: {
       expiresAt: autoResolutionMs
         ? Math.min(options.defaultExpiresAt, options.requestedAt + autoResolutionMs)
         : options.defaultExpiresAt,
+      blocking,
       ...(autoResolutionMs ? { autoResolutionMs } : {}),
       questions,
     };
   }
 
+  // `openaiForm` is the same payload as `openai/form` under a second spelling
+  // the generated protocol also defines. The handshake advertises
+  // `mcpServerOpenaiFormElicitation`, so app-server can send either; omitting
+  // one auto-cancelled a form the user was meant to fill in.
   const mode = params.mode;
-  if (mode !== "form" && mode !== "openai/form" && mode !== "url") return null;
+  if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm" && mode !== "url") {
+    return null;
+  }
   return {
     interactionId: options.interactionId,
     kind: mode === "url" ? "mcp-url" : "mcp-form",
@@ -193,6 +217,9 @@ export function describeInteraction(options: {
     generation: options.generation,
     requestedAt: options.requestedAt,
     expiresAt: options.defaultExpiresAt,
+    // An elicitation is always a blocking request: the MCP server is waiting
+    // on the response before its tool call can continue.
+    blocking: true,
     serverName: text(params.serverName),
     message: text(params.message),
     ...(mode === "url"

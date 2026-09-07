@@ -217,6 +217,55 @@ describe("NativeAgentInteractionCard", () => {
     expect(screen.getByRole("button", { name: "Cancel turn" })).toBeTruthy();
   });
 
+  test("submits an explicitly selected provider amendment with an approval", async () => {
+    const request: AgentInteractionRequest = {
+      ...interaction(false),
+      provider: "codex",
+      kind: "command-approval",
+      presentation: {
+        title: "Approve command",
+        questions: [
+          {
+            id: "codex-approval-amendment",
+            prompt: "Broader approval (optional)",
+            required: false,
+            multiple: false,
+            secret: false,
+            allowFreeText: false,
+            options: [
+              {
+                id: "amendment-0",
+                label: "Approve with network policy",
+                providerValue: "approve-with-network-amendment:1",
+                description: "allow registry.example",
+                amendment: { kind: "network-policy", detail: "allow registry.example" },
+              },
+            ],
+          },
+        ],
+        confirmLabel: "Approve",
+      },
+    };
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 2,
+    }));
+    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+
+    expect(screen.getByText("allow registry.example")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Approve with network policy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]![0]).toMatchObject({
+      action: "answer",
+      answer: {
+        answers: [{ questionId: "codex-approval-amendment", optionIds: ["amendment-0"] }],
+      },
+    });
+  });
+
   test("fails closed when an approval has no actionable details", () => {
     render(
       <NativeAgentInteractionCard

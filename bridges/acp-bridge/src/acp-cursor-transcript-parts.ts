@@ -175,10 +175,12 @@ export function syncCursorChildTranscriptParts(
 }
 
 function isCursorJsonlChildPart(part: BridgeMessagePart, parentToolUseId: string): boolean {
-  // A projection is only ever a text or tool part; `file` has no parent link.
-  return (
-    part.type !== "file" && isCursorJsonlPart(part) && part.parentTaskUseId === parentToolUseId
-  );
+  // A projection is only ever a text or tool part. The rest — `file`, `image`,
+  // `status` — carry no parent link because nothing nests them under a task.
+  if (part.type !== "text" && part.type !== "thinking" && part.type !== "tool-invocation") {
+    return false;
+  }
+  return isCursorJsonlPart(part) && part.parentTaskUseId === parentToolUseId;
 }
 
 function hasNativeNestedChildren(owner: BridgeMessage, parentToolUseId: string): boolean {

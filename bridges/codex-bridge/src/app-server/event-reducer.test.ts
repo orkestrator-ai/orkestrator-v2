@@ -750,6 +750,18 @@ describe("deltas", () => {
 });
 
 describe("unknown and ignored notifications", () => {
+  test("preserves the generated server-request resolution identity", () => {
+    expect(reduce("serverRequest/resolved", { threadId: "thread-1", requestId: 7101 })).toEqual([
+      {
+        kind: "serverRequest.resolved",
+        threadId: "thread-1",
+        requestId: 7101,
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
+  });
+
   test("an unrecognised method is reported, never thrown", () => {
     const result = reduceNotification(notify("codex/brand/new", { threadId: "t1" }), 1);
 
@@ -762,6 +774,31 @@ describe("unknown and ignored notifications", () => {
   test("known-but-irrelevant methods are silently ignored", () => {
     for (const method of ["account/updated", "warning"]) {
       const result = reduceNotification(notify(method, {}), 1);
+      expect(result.events).toEqual([]);
+      expect(result.unknownMethod).toBeUndefined();
+      expect(isIgnoredNotification(method)).toBe(true);
+    }
+  });
+
+  test("every realtime notification is ignored, so voice cannot inflate the drift counter", () => {
+    // All eleven `thread/realtime/*` methods the generated protocol defines.
+    // Three of them (`item/started`, `item/completed`, `item/transcript/delta`)
+    // were missing and counted as unknown for the length of a voice session.
+    const realtime = [
+      "thread/realtime/started",
+      "thread/realtime/itemAdded",
+      "thread/realtime/item/started",
+      "thread/realtime/item/completed",
+      "thread/realtime/item/transcript/delta",
+      "thread/realtime/transcript/delta",
+      "thread/realtime/transcript/done",
+      "thread/realtime/outputAudio/delta",
+      "thread/realtime/sdp",
+      "thread/realtime/error",
+      "thread/realtime/closed",
+    ];
+    for (const method of realtime) {
+      const result = reduceNotification(notify(method, { threadId: "t1" }), 1);
       expect(result.events).toEqual([]);
       expect(result.unknownMethod).toBeUndefined();
       expect(isIgnoredNotification(method)).toBe(true);
@@ -1154,7 +1191,8 @@ describe("historical turn rehydration", () => {
           id: "turn-1",
           status: "completed",
           items: [
-            { id: "x", type: "contextCompaction" },
+            // `contextCompaction` renders as a boundary now, so only a
+            // genuinely unrecognised type is left to count.
             { id: "y", type: "somethingNew" },
           ],
         },
@@ -1162,7 +1200,7 @@ describe("historical turn rehydration", () => {
       1,
       "thread-1",
     );
-    expect(unsupportedItemTypes).toEqual(["contextCompaction", "somethingNew"]);
+    expect(unsupportedItemTypes).toEqual(["somethingNew"]);
   });
 
   test("skips malformed turns and turns without a usable id", () => {

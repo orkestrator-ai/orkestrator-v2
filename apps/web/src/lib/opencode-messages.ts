@@ -1,3 +1,4 @@
+import type { Part as OpenCodePart } from "@opencode-ai/sdk";
 import { countTextLines, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import { isEditTool } from "./tool-names";
 import { createUuid } from "./uuid";
@@ -356,7 +357,41 @@ function stripOpenCodeReasoningBoldMarkers(
     : content;
 }
 
-export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null {
+/**
+ * Which OpenCode part kinds this normalizer accounts for.
+ *
+ * A `Record` over the SDK's own `Part` union rather than a list, so an OpenCode
+ * release that adds a part kind **fails this typecheck** instead of the part
+ * quietly disappearing from the transcript. `true` means a branch below renders
+ * it; `false` means known and deliberately dropped. This mirrors the backend's
+ * table in `apps/backend/src/core/opencode-messages.ts` — the two normalizers
+ * are separate on purpose (one feeds the projection, one the live SSE stream),
+ * so both need the same guard.
+ */
+export const KNOWN_OPEN_CODE_PART_TYPES: Record<OpenCodePart["type"], boolean> = {
+  text: true,
+  reasoning: true,
+  file: true,
+  tool: true,
+  subtask: false,
+  compaction: false,
+  retry: false,
+  "step-start": false,
+  "step-finish": false,
+  snapshot: false,
+  patch: false,
+  agent: false,
+};
+
+export function isKnownOpenCodePartType(type: unknown): boolean {
+  return typeof type === "string" && type in KNOWN_OPEN_CODE_PART_TYPES;
+}
+
+export function normalizeOpenCodePart(
+  part: unknown,
+  /** Called with the *kind name* of a part this normalizer has no branch for. */
+  onUnknownPart?: (type: string) => void,
+): OpenCodeMessagePart | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const p = part as any;
   if (!p || typeof p !== "object") return null;
@@ -593,6 +628,11 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
     });
   }
 
+  // A kind the table does not name is an SDK addition and is counted; a kind it
+  // names as `false` is a documented drop and is not.
+  if (!isKnownOpenCodePartType(partType)) {
+    onUnknownPart?.(typeof partType === "string" ? partType : "(untyped)");
+  }
   return null;
 }
 

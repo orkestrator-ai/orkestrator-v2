@@ -14,7 +14,6 @@ import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-u
 import { formatTokenCount } from "@/lib/context-usage";
 import type {
   NativeAgentRuntimeNotice,
-  NativeAgentRuntimeNoticeOccurrence,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
@@ -231,58 +230,10 @@ function epochSecondsToIso(value: unknown): string | undefined {
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
-function inventoryCount(value: unknown): number {
-  if (Array.isArray(value)) return value.length;
-  const data = record(value).data;
-  if (Array.isArray(data)) {
-    return data.reduce((count, entry) => {
-      const item = record(entry);
-      const nested = item.skills ?? item.hooks ?? item.servers;
-      return count + (Array.isArray(nested) ? nested.length : 1);
-    }, 0);
-  }
-  return Object.keys(record(value)).filter((key) => key !== "error").length;
-}
-
 function formatNoticeTime(value: string | undefined): string | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : null;
-}
-
-function runtimeNoticeGroups(
-  health: unknown,
-  runtime?: NativeAgentRuntimeSummary,
-): NativeAgentRuntimeNotice[] {
-  if (runtime) return (runtime.notices ?? []).slice(-5);
-  const snapshot = record(health);
-  const notices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
-  const grouped = new Map<string, NativeAgentRuntimeNotice>();
-  for (const candidate of notices) {
-    const item = record(candidate);
-    if (typeof item.message !== "string" || item.message.length === 0) continue;
-    const method = typeof item.method === "string" ? item.method : undefined;
-    const key = `${method ?? ""}\u0000${item.message}`;
-    const existing = grouped.get(key);
-    const occurrence: NativeAgentRuntimeNoticeOccurrence = {
-      ...(typeof item.detail === "string" && item.detail.length > 0 ? { detail: item.detail } : {}),
-      ...(typeof item.receivedAt === "string" && item.receivedAt.length > 0
-        ? { receivedAt: item.receivedAt }
-        : {}),
-    };
-    const occurrences = [
-      ...(existing?.occurrences ?? []),
-      ...(Object.keys(occurrence).length > 0 ? [occurrence] : []),
-    ].slice(-5);
-    if (existing) grouped.delete(key);
-    grouped.set(key, {
-      message: item.message,
-      ...(method ? { method } : {}),
-      count: (existing?.count ?? 0) + 1,
-      ...(occurrences.length > 0 ? { occurrences } : {}),
-    });
-  }
-  return [...grouped.values()].slice(-5);
 }
 
 function RuntimeNoticeCard({
@@ -498,104 +449,32 @@ export function codexLimitsFromHealth(health: unknown): {
   };
 }
 
-export function CodexRuntimePanel({
-  health,
-  runtime,
-  openNoticeId,
-  onOpenNoticeChange,
-}: {
-  health: unknown;
-  runtime?: NativeAgentRuntimeSummary;
-  openNoticeId: string | null;
-  onOpenNoticeChange: (noticeId: string | null) => void;
-}) {
-  const notices = runtimeNoticeGroups(health, runtime);
-  if (runtime) {
-    return (
-      <div className="space-y-3">
-        <div className="grid grid-cols-3 gap-2">
-          <Metric label="MCP" value={String(runtime.mcpServers ?? 0)} />
-          <Metric label="Skills" value={String(runtime.skills ?? 0)} />
-          <Metric label="Hooks" value={String(runtime.hooks ?? 0)} />
-        </div>
-        <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-          <span>{runtime.state ?? "state unavailable"}</span>
-          <span>{runtime.version ? `Codex ${runtime.version}` : "version unavailable"}</span>
-        </div>
-        {notices.length > 0 ? (
-          <div className="space-y-1.5">
-            {notices.map((notice) => {
-              const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
-              return (
-                <RuntimeNoticeCard
-                  key={noticeId}
-                  notice={notice}
-                  noticeId={noticeId}
-                  openNoticeId={openNoticeId}
-                  onOpenNoticeChange={onOpenNoticeChange}
-                />
-              );
-            })}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-  if (!health) {
-    return <div className="text-xs text-muted-foreground">Loading Codex runtime…</div>;
-  }
-  const snapshot = record(health);
-  const engine = record(snapshot.engine);
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-2">
-        <Metric label="MCP" value={String(inventoryCount(snapshot.mcp))} />
-        <Metric label="Skills" value={String(inventoryCount(snapshot.skills))} />
-        <Metric label="Hooks" value={String(inventoryCount(snapshot.hooks))} />
-      </div>
-      <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-        <span>{typeof engine.state === "string" ? engine.state : "state unavailable"}</span>
-        <span>
-          {typeof engine.codexVersion === "string"
-            ? `Codex ${engine.codexVersion}`
-            : "version unavailable"}
-        </span>
-      </div>
-      {notices.length > 0 ? (
-        <div className="space-y-1.5">
-          {notices.map((notice) => {
-            const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
-            return (
-              <RuntimeNoticeCard
-                key={noticeId}
-                notice={notice}
-                noticeId={noticeId}
-                openNoticeId={openNoticeId}
-                onOpenNoticeChange={onOpenNoticeChange}
-              />
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 /**
- * Runtime facts for an agent with no bespoke panel of its own.
+ * Runtime facts for any agent, from the neutral projection alone.
  *
- * Every count is optional because the neutral summary is assembled from
- * whatever the provider volunteered: Grok advertises its MCP servers, its
- * commands and its version, Cursor only its commands. Rendering a missing count
- * as "0" would report an absence of servers rather than an absence of an
+ * There is deliberately no per-provider variant of this. Every count is
+ * optional because the summary is assembled from whatever the provider
+ * volunteered: Codex advertises MCP servers, skills and hooks, Grok its MCP
+ * servers, commands and version, Cursor only its commands. Rendering a missing
+ * count as "0" would report an absence of servers rather than an absence of an
  * answer, so unknown fields are omitted instead.
+ *
+ * Drift and notices are shown for every platform on the same terms: the count
+ * of events the bridge did not recognise, the names of the most recent ones,
+ * and each provider diagnostic as its own expandable card. This is
+ * presentation only — the bounding, redaction and grouping all happened in the
+ * bridge and the backend before it got here.
  */
 export function AgentRuntimePanel({
   runtime,
   providerLabel,
+  openNoticeId,
+  onOpenNoticeChange,
 }: {
   runtime: NativeAgentRuntimeSummary | undefined;
   providerLabel: string;
+  openNoticeId?: string | null;
+  onOpenNoticeChange?: (noticeId: string | null) => void;
 }) {
   const metrics = (
     [
@@ -606,7 +485,16 @@ export function AgentRuntimePanel({
     ] as const
   ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]));
 
-  if (metrics.length === 0 && !runtime?.state && !runtime?.version) {
+  const drift = runtime?.drift;
+  const notices = (runtime?.notices ?? []).slice(-5);
+
+  if (
+    metrics.length === 0 &&
+    !runtime?.state &&
+    !runtime?.version &&
+    !drift &&
+    notices.length === 0
+  ) {
     return (
       <div className="text-xs text-muted-foreground">
         {providerLabel} does not report runtime details.
@@ -629,6 +517,36 @@ export function AgentRuntimePanel({
           <span>
             {runtime.version ? `${providerLabel} ${runtime.version}` : "version unavailable"}
           </span>
+        </div>
+      ) : null}
+      {drift ? (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <div className="text-[11px] font-medium text-amber-100/90">
+            {drift.unknownEvents === 1
+              ? "1 event this bridge did not recognise"
+              : `${drift.unknownEvents} events this bridge did not recognise`}
+          </div>
+          {drift.unknownKinds.length > 0 ? (
+            <div className="mt-1 break-words font-mono text-[10px] leading-relaxed text-muted-foreground">
+              {drift.unknownKinds.join(", ")}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {notices.length > 0 ? (
+        <div className="space-y-1.5">
+          {notices.map((notice) => {
+            const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
+            return (
+              <RuntimeNoticeCard
+                key={noticeId}
+                notice={notice}
+                noticeId={noticeId}
+                openNoticeId={openNoticeId ?? null}
+                onOpenNoticeChange={onOpenNoticeChange ?? (() => undefined)}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -943,6 +861,51 @@ export function RateLimitsSection({ rateLimits }: { rateLimits: AgentRateLimitWi
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const INTERACTION_KIND_LABELS: Record<string, string> = {
+  question: "questions",
+  "plan-approval": "plan approvals",
+  "command-approval": "command approvals",
+  "file-approval": "file approvals",
+  permission: "permission requests",
+  "mcp-form": "MCP forms",
+  "mcp-url": "MCP sign-in links",
+  elicitation: "dialogs",
+  "terminal-selection": "terminal selections",
+};
+
+/**
+ * What this agent can stop and ask for.
+ *
+ * The empty case is the reason this exists: an agent that never asks is
+ * indistinguishable, from an empty pending list, from one whose questions are
+ * failing to arrive. Saying so is the difference between "nothing to do" and
+ * "something is wrong". Absent — rather than empty — means the platform did not
+ * report, and nothing is claimed.
+ */
+export function AgentInteractionCapability({
+  kinds,
+  providerLabel,
+}: {
+  kinds: string[] | undefined;
+  providerLabel: string;
+}) {
+  if (kinds === undefined) return null;
+  return (
+    <div className="mt-3 border-t border-border/60 pt-3">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+        Approvals
+      </div>
+      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        {kinds.length === 0
+          ? `${providerLabel} never stops to ask — it has no approval surface.`
+          : `${providerLabel} can ask for ${kinds
+              .map((kind) => INTERACTION_KIND_LABELS[kind] ?? kind)
+              .join(", ")}.`}
+      </div>
     </div>
   );
 }

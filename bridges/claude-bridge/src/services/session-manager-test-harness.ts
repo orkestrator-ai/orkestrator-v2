@@ -81,6 +81,7 @@ export const {
   createOrRecoverSession,
   sessionIdForClientKey,
   getSession,
+  peekSession,
   listSessions,
   deleteSession,
   abortSession,

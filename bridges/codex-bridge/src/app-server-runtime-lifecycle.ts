@@ -895,6 +895,20 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         this.stateFor(threadId).coalescer.schedule(this.now());
         return;
       }
+      case "serverRequest.resolved": {
+        // Withdraw only; never answer. app-server has the answer already, and
+        // sending a second response would be answering a question it stopped
+        // asking. Routed through the router because it owns the parked cards.
+        this.options.engine.withdrawResolvedServerRequest(event.requestId);
+        return;
+      }
+      case "item.progress": {
+        const turn = context.activeTurn;
+        if (!turn || !turn.accepts(event)) return;
+        turn.onItemProgress(event.itemId, event.message);
+        this.stateFor(threadId).coalescer.schedule(this.now());
+        return;
+      }
       case "item.command.outputDelta": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;

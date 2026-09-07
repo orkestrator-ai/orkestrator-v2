@@ -12,6 +12,7 @@ import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
 
 export type JsonObject = Record<string, unknown>;
@@ -83,7 +84,71 @@ export interface BridgeToolPart {
   toolDiff?: BridgeToolDiff;
 }
 
-export type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
+/**
+ * A context compaction boundary.
+ *
+ * Its own kind rather than a tool card: the previous synthetic card dropped
+ * both token counts and read as something the agent chose to run, when it is a
+ * boundary in the conversation itself.
+ */
+export interface BridgeCompactionPart {
+  type: "compaction";
+  /** Pi's own summary of what it compacted, or "" when it produced none. */
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  compactedTokensBefore?: number;
+  tokenCountText?: string;
+}
+
+/**
+ * A retry that settles.
+ *
+ * `toolState` is the lifecycle: `pending` from `auto_retry_start`, settled by
+ * `auto_retry_end`. The previous synthetic card was published settled and
+ * never updated, so a retry that ultimately failed read as one that worked.
+ */
+export interface BridgeRetryPart {
+  type: "retry";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  toolState?: "success" | "failure" | "pending";
+  retryAttempt?: number;
+}
+
+/** A short provider status line in the transcript flow. */
+export interface BridgeStatusPart {
+  type: "status";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  severity?: "info" | "warning" | "error";
+}
+
+/** An image the agent produced or read. Bytes stay behind `fileUrl`. */
+export interface BridgeImagePart {
+  type: "image";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  fileUrl?: string;
+  filename?: string;
+  imageSource?: "attachment" | "generated" | "viewed";
+}
+
+export type BridgeMessagePart =
+  | BridgeTextPart
+  | BridgeFilePart
+  | BridgeToolPart
+  | BridgeCompactionPart
+  | BridgeRetryPart
+  | BridgeStatusPart
+  | BridgeImagePart;
 
 export interface PromptJournalEntry {
   requestId: string;
@@ -115,6 +180,14 @@ export interface PersistedUsage {
   /** Whole-session context occupancy, which Pi reports directly. */
   contextTokens?: number;
   contextWindow?: number;
+  /** Pi's own percentage of the window, which accounts for compaction. */
+  contextPercent?: number;
+  /**
+   * True when Pi could not report a real occupancy — it answers `tokens: null`
+   * between a compaction and the next model response — so `contextTokens` is
+   * absent and the meter is showing the per-turn sum instead.
+   */
+  estimated?: boolean;
   updatedAt: string;
 }
 
@@ -225,6 +298,13 @@ export interface SessionState {
   compacting: boolean;
   /** Wall clock the session was last touched by a tab-facing route. */
   lastAccessed: number;
+  /**
+   * What this bridge saw and did not understand, and what Pi told it.
+   *
+   * Runtime-only: a restart re-observes whatever is still true, and persisting
+   * it would report a dead process's drift against a live one.
+   */
+  health: RuntimeHealthRecorder;
 }
 
 export interface PersistedSession {

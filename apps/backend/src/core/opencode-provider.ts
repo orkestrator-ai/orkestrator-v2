@@ -1,4 +1,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { isKnownOpenCodeEvent } from "./opencode-events.js";
+import { openCodeExecutionProfiles } from "./opencode-execution-profiles.js";
 import {
   boundedOpenCodeMessageHistory,
   findOpenCodeMessageId,
@@ -50,6 +53,7 @@ import {
   type ProviderSessionRegistration,
   type ProviderStatus,
   ProviderUnavailableError,
+  type ProviderRuntimeHealth,
 } from "./agent-provider-contract.js";
 import {
   asRecord,
@@ -223,6 +227,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly now: () => number;
   private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
+  /**
+   * SSE event types this provider had no branch for.
+   *
+   * Shared across sessions because the subscription is: one stream serves the
+   * whole OpenCode server, so drift is a property of the connection rather than
+   * of any one session.
+   */
+  private readonly health = new RuntimeHealthRecorder();
   private activeStreamController: AbortController | null = null;
   private reconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
@@ -501,6 +513,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       raw && typeof raw === "object"
         ? (raw as { type?: unknown; properties?: Record<string, unknown> })
         : {};
+    // Before any session filtering: an event type this provider does not know
+    // is drift regardless of whose session it belonged to, and the session
+    // filter below would otherwise hide every new type on someone else's
+    // session. Names only — `properties` carries prompts and file contents.
+    if (typeof event.type !== "string" || !isKnownOpenCodeEvent(event.type)) {
+      this.health.recordUnknown(typeof event.type === "string" ? event.type : "(untyped)");
+      return;
+    }
     const properties = event.properties ?? {};
     const requestId = typeof properties.id === "string" ? properties.id : undefined;
     const sessionId = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
@@ -578,6 +598,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         );
         assertSdkResponse(response, "OpenCode question rejection");
         this.blockedSessions.delete(sessionId);
+        // Terminal, not blocked. The rejection is delivered, so the supervisor
+        // must stop parking on it — this set is what unparks it, and is
+        // deliberately *not* conditional on the interaction policy. Whether a
+        // refusal fails the workflow or merely declines one request is decided
+        // by the pipeline that owns the session, from
+        // `agentInteractionPolicyAction`; gating this here instead would leave
+        // a declined session parked forever.
         setBoundedSetEntry(
           this.failedQuestionSessions,
           sessionId,
@@ -935,7 +962,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.readInteractiveMetadata(sessionId),
     ]);
     const normalizedMessages = rawMessages.flatMap((message, index) => {
-      const normalized = normalizeOpenCodeInteractiveMessage(message, index);
+      const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
+        this.health.recordUnknown(`part:${type}`),
+      );
       return normalized ? [normalized] : [];
     });
     const messages = await this.hydrateSubagentTranscripts(
@@ -970,6 +999,23 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ...(terminal ? { notices: [terminal] } : {}),
       ...(terminal?.kind === "error" ? { phase: "error" as const, error: terminal.message } : {}),
     };
+  }
+
+  /**
+   * Bounded inventory, drift and diagnostics for one session.
+   *
+   * The inventory comes from the same cached fan-out the interactive snapshot
+   * uses, so asking for health does not multiply SDK calls. A read that fails
+   * answers empty rather than throwing: health is optional metadata, and the
+   * authoritative liveness answer is the session status.
+   */
+  async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    try {
+      const metadata = await this.readInteractiveMetadata(sessionId);
+      return { summary: metadata.runtime, notices: metadata.runtime.notices ?? [] };
+    } catch {
+      return { summary: {}, notices: [] };
+    }
   }
 
   private async readInteractiveMetadata(sessionId: string): Promise<{
@@ -1009,27 +1055,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       const result = results[index];
       return result?.status === "fulfilled" ? (asRecord(result.value)?.data ?? fallback) : fallback;
     };
-    const agents = data(0, []);
-    const executionProfiles = (Array.isArray(agents) ? agents : [])
-      .slice(0, 128)
-      .flatMap((candidate) => {
-        const agent = asRecord(candidate);
-        const name = nonEmptyString(agent?.name);
-        if (!name || agent?.hidden === true || agent?.mode === "subagent") return [];
-        const model = asRecord(agent?.model);
-        const providerId = nonEmptyString(model?.providerID);
-        const modelId = nonEmptyString(model?.modelID);
-        return [
-          {
-            id: name,
-            label: name,
-            ...(typeof agent?.description === "string"
-              ? { description: agent.description.slice(0, 1_000) }
-              : {}),
-            ...(providerId && modelId ? { modelId: `${providerId}/${modelId}` } : {}),
-          },
-        ];
-      });
+    const executionProfiles = openCodeExecutionProfiles(data(0, []));
+    const drift = this.health.drift();
+    const notices = this.health.listNotices();
     const runtime: NativeAgentRuntimeSummary = {
       skills: providerInventoryCount(data(1, [])),
       mcpServers: providerInventoryCount(data(2, {})),
@@ -1037,6 +1065,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       formatters: providerInventoryCount(data(4, [])),
       todos: providerInventoryCount(data(5, [])),
       files: providerInventoryCount(data(6, [])),
+      // The event subscription serves the whole server, so drift observed on it
+      // belongs to every session's panel rather than to one of them.
+      ...(drift ? { drift } : {}),
+      ...(notices.length > 0 ? { notices } : {}),
     };
     const sessionResult = results[7];
     const sessionData =
@@ -1099,7 +1131,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
             limit: OPENCODE_SUBAGENT_MESSAGE_LIMIT,
           });
           const messages = raw.flatMap((message, index) => {
-            const normalized = normalizeOpenCodeInteractiveMessage(message, index);
+            const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
+              this.health.recordUnknown(`part:${type}`),
+            );
             return normalized ? [normalized] : [];
           });
           return { messages, nestedIds: collectRawOpenCodeSubagentIds(raw) };

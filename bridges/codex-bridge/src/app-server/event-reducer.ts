@@ -124,8 +124,34 @@ const IGNORED_METHODS = new Set([
   // stream. `rawResponseItem/completed` is handled narrowly below for custom
   // apply_patch failures, which app-server does not promote to `fileChange`.
   "rawResponse/completed",
+  // Project and thread metadata Orkestrator owns from its own environment
+  // record. The bridge is told which workspace it serves at launch and never
+  // follows app-server's view of it, so adopting these would let the agent's
+  // idea of the project disagree with the environment's.
+  "project/changed",
+  "thread/project/updated",
+  // Codex's own queue of user turns. Orkestrator's queue is backend-owned and
+  // is the one the composer shows; mirroring a second one would give the user
+  // two lists that can disagree. Plan 05 reconciles the queues that matter.
+  "thread/queue/changed",
+  // The review-mode counterpart of the approval flow. Code review is an
+  // Orkestrator-owned pipeline (see the plan index), so the strict-review
+  // demand has no surface here to raise; the approval itself still arrives as
+  // a normal `item/permissions/requestApproval`.
+  "autoApprovalReview/strictReviewRequired",
+  // Raw pass-through of an MCP server's own notification stream. The tool call
+  // it belongs to is already rendered from `item/*`; this is the untyped
+  // duplicate underneath it.
+  "mcpServer/event/stream/notification",
+  // A thread rewound by another client. Consumed by plan 09, which owns
+  // message-level rewind; until then adopting it would drop transcript the
+  // bridge is still serving, with nothing able to put it back.
+  "thread/reverted",
+  // Codex re-authenticating a model provider mid-session. Surfaced as
+  // sign-in state by plan 08 rather than as a transcript event.
+  "modelProvider/authRecoveryStarted",
+  "modelProvider/authRecoveryCompleted",
   // Bookkeeping the bridge tracks itself.
-  "serverRequest/resolved",
   "thread/status/changed",
   "thread/archived",
   "thread/unarchived",
@@ -139,16 +165,18 @@ const IGNORED_METHODS = new Set([
   "hook/completed",
   "item/autoApprovalReview/started",
   "item/autoApprovalReview/completed",
-  "item/mcpToolCall/progress",
   "item/commandExecution/terminalInteraction",
-  "item/fileChange/outputDelta",
-  "item/plan/delta",
   "command/exec/outputDelta",
   "process/outputDelta",
   "process/exited",
-  // Realtime voice sessions are not part of native chat.
+  // Realtime voice sessions are not part of native chat. All eleven
+  // `thread/realtime/*` methods the generated protocol defines are listed, so
+  // a realtime session cannot inflate `protocol.unknownNotifications`.
   "thread/realtime/started",
   "thread/realtime/itemAdded",
+  "thread/realtime/item/started",
+  "thread/realtime/item/completed",
+  "thread/realtime/item/transcript/delta",
   "thread/realtime/transcript/delta",
   "thread/realtime/transcript/done",
   "thread/realtime/outputAudio/delta",
@@ -447,6 +475,34 @@ export function reduceNotification(
     case "item/reasoning/summaryPartAdded":
       // Only a boundary marker; the index on subsequent deltas carries the split.
       return { events: [] };
+
+    case "serverRequest/resolved": {
+      // Another client answered a request this bridge may still be showing a
+      // card for. Withdrawing it is what stops the user staring at a question
+      // that has already been decided until it times out.
+      if (!isRecord(params)) return { events: [] };
+      const requestId = params.requestId;
+      if (typeof requestId !== "string" && typeof requestId !== "number") return { events: [] };
+      return {
+        events: [{ kind: "serverRequest.resolved", threadId, requestId, ...base }],
+      };
+    }
+
+    case "item/mcpToolCall/progress":
+    case "item/fileChange/outputDelta":
+    case "item/plan/delta": {
+      // Three shapes, one meaning: "this item is still working, and here is
+      // what it is doing". They carry different field names — `message` for an
+      // MCP call, `delta` for a file change or a streaming plan — so they are
+      // normalized here rather than three times downstream.
+      if (!isRecord(params) || !turnId) return { events: [] };
+      const itemId = str(params.itemId);
+      const message = str(params.message) ?? str(params.delta);
+      if (!itemId || !message) return { events: [] };
+      return {
+        events: [{ kind: "item.progress", threadId, turnId, itemId, message, ...base }],
+      };
+    }
 
     case "item/commandExecution/outputDelta": {
       if (!isRecord(params) || !turnId) return { events: [] };

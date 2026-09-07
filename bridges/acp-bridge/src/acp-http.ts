@@ -42,6 +42,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
@@ -115,13 +116,17 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   if (!state) {
     if (match[2] === "activity") return json(response, 200, { activity: "missing" });
+    // Same reasoning: a 404 here would read as "this bridge predates the
+    // route" and fail the environment. Health is optional metadata, so an
+    // unknown session answers empty rather than failing.
+    if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
     return json(response, 404, { error: "Session not found" });
   }
   const action = match[2];
@@ -190,6 +195,11 @@ export async function route(
    * not evidence that a background child stopped writing files. Reading `error`
    * as idle there would report a live child as finished.
    */
+  if (action === "runtime-health" && request.method === "GET") {
+    // A read, like `/activity`: no liveness touch, no transcript hydration, no
+    // re-attach.
+    return json(response, 200, { summary: publicRuntime(state), ...state.health.snapshot() });
+  }
   if (action === "activity" && request.method === "GET") {
     settleTerminalCursorChildren(state);
     return json(response, 200, {

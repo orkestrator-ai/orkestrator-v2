@@ -22,6 +22,47 @@ export type {
 // These types represent messages from the Claude Agent SDK streaming interface
 // ============================================================================
 
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+
+/**
+ * Which top-level SDK message types the prompt loop accounts for.
+ *
+ * A `Record` over the SDK's own union rather than a list, so a Claude Agent SDK
+ * release that adds a message type **fails this typecheck** instead of the
+ * message arriving as an unexplained gap. `true` means the dispatch has a
+ * branch that does something with it; `false` means known, deliberately not
+ * consumed yet, and recorded as drift so the gap is visible rather than
+ * invisible.
+ *
+ * The union has thirty-odd members but only eleven `type` values, because most
+ * variants are `system` subtypes. That is why the `system` branch does its own
+ * subtype dispatch and this table cannot stand in for it.
+ */
+export const HANDLED_SDK_MESSAGE_TYPES: Record<SDKMessage["type"], boolean> = {
+  assistant: true,
+  user: true,
+  result: true,
+  system: true,
+  stream_event: true,
+  rate_limit_event: true,
+  prompt_suggestion: true,
+  // A live sub-line on the tool row it names, folded onto that row by the
+  // backend projection.
+  tool_progress: true,
+  // A one-line summary of a completed tool call, shown as a status row.
+  tool_use_summary: true,
+  // Clears the bridge transcript and says so, because the model no longer has
+  // the history the old messages showed.
+  conversation_reset: true,
+  // Sign-in state changing mid-session. Surfaced by plan 08.
+  auth_status: false,
+};
+
+export function isHandledSdkMessageType(type: unknown): boolean {
+  return typeof type === "string" && type in HANDLED_SDK_MESSAGE_TYPES;
+}
+
 /** Base SDK message with common fields */
 export interface SdkMessageBase {
   type: string;
@@ -114,7 +155,17 @@ export interface ToolDiffMetadata {
 
 /** Normalized message part */
 export interface NormalizedPart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
+  type:
+    | "text"
+    | "thinking"
+    | "tool-invocation"
+    | "tool-result"
+    | "file"
+    | "compaction"
+    | "retry"
+    | "image"
+    | "status"
+    | "progress";
   content: string;
   /** When this content block first arrived from the SDK. */
   createdAt?: string;
@@ -156,6 +207,22 @@ export interface NormalizedPart {
    * rather than a list it cannot vouch for.
    */
   taskSnapshot?: TaskListSnapshot;
+  /** Context occupancy before a compaction, on a `compaction` part. */
+  compactedTokensBefore?: number;
+  /** Attempt number on a `retry` part. */
+  retryAttempt?: number;
+  /** Where an `image` part came from. */
+  imageSource?: "attachment" | "generated" | "viewed";
+  /** How long the tool a `progress` part describes has been running. */
+  elapsedMs?: number;
+  /** Severity of a `status` row. */
+  severity?: "info" | "warning" | "error";
+  /** Readable summary of a token count, shown beside a compaction boundary. */
+  tokenCountText?: string;
+  /** Resolvable location of an `image` part's bytes. */
+  fileUrl?: string;
+  /** Original attachment name when the readable path is a staged one. */
+  filename?: string;
 }
 
 /** Normalized message format */
@@ -254,6 +321,24 @@ export interface SessionState {
    * not when anyone in this process last looked at it.
    */
   lastAccessedAt?: number;
+  /**
+   * What this bridge saw and did not understand, and what Claude reported.
+   *
+   * Runtime-only and not persisted: drift describes a process that is gone once
+   * the bridge restarts, and reporting a dead process's counters against a live
+   * one would be worse than reporting nothing. Optional so the three
+   * construction sites and every test fixture stay valid; read it through
+   * `sessionHealth`, which creates one on first use.
+   */
+  health?: RuntimeHealthRecorder;
+  /**
+   * Protocol capabilities the CLI advertised on `system/init`.
+   *
+   * An open set the SDK documents as "ignore unknown values; check each
+   * capability for exactly the behaviour you use". Held so feature detection
+   * reads what this CLI said rather than inferring it from a version number.
+   */
+  sdkCapabilities?: string[];
   /**
    * Epoch millis at which the most recent turn in this process stopped
    * streaming.
@@ -529,8 +614,7 @@ export type SSEEventType =
   | "plan.exit-requested"
   | "plan.approval-requested"
   | "plan.approval-responded"
-  | "system.compact"
-  | "system.message";
+  | "system.compact";
 
 /** MCP server status from SDK init message */
 export interface McpServerRuntimeStatus {
@@ -672,4 +756,15 @@ export interface ModelsResponse {
 export interface HealthResponse {
   status: "ok";
   version: string;
+}
+
+/**
+ * This session's drift and notice recorder, created on first use.
+ *
+ * A session that never sees an unrecognised message never allocates one, which
+ * is the common case: this is called from the SDK message loop.
+ */
+export function sessionHealth(session: SessionState): RuntimeHealthRecorder {
+  session.health ??= new RuntimeHealthRecorder();
+  return session.health;
 }

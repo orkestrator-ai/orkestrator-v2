@@ -100,6 +100,15 @@ export const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_PARTS_PER_MESSAGE = 512;
 export const MAX_TOOL_ARGUMENT_BYTES = 512 * 1024;
 export const MAX_TOOL_OUTPUT_BYTES = 512 * 1024;
+/** Images retained from one tool result. */
+export const MAX_TOOL_RESULT_IMAGES = 4;
+/**
+ * Largest data URL retained for a tool-result image.
+ *
+ * An image over this is dropped rather than truncated: half a data URL renders
+ * as a broken image, which is worse than not showing one.
+ */
+export const MAX_TOOL_RESULT_IMAGE_BYTES = 4 * 1024 * 1024;
 export const MAX_TOOL_DIFF_BYTES = 1024 * 1024;
 export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 export const MAX_MODEL_ID_BYTES = 1_024;

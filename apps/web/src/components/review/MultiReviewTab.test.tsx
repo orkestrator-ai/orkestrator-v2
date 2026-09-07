@@ -16,9 +16,10 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
-  fixSessionActivity,
+  consolidationActivity,
   fixSessionRuntimeSummary,
   multiReviewFixSessionTabOptions,
+  reviewPackageGenerationActivity,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
   reviewerStatusNote,
@@ -1701,7 +1702,7 @@ test("renders backend-owned package preparation after remount with cancel availa
   expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
 });
 
-describe("MultiReviewTab fix model card", () => {
+describe("MultiReviewTab preparation and consolidation steps", () => {
   function preparingWorkflow(): MultiReviewWorkflow {
     const workflow = reviewingWorkflow();
     workflow.phase = "preparing";
@@ -1745,9 +1746,9 @@ describe("MultiReviewTab fix model card", () => {
       </TerminalProvider>,
     );
 
-    expect(screen.getByText("Preparing review package")).toBeTruthy();
-    expect(screen.getByLabelText("Fix model runtime")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(screen.getByText("Generating package")).toBeTruthy();
+    expect(screen.getByLabelText("Review package generation runtime")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(false);
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
@@ -1778,28 +1779,68 @@ describe("MultiReviewTab fix model card", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", { name: "Open fix model session" });
+    const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(true);
     fireEvent.click(card);
     expect(createTab).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Fix model runtime") === null).toBe(true);
+    expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
   });
 
-  test("labels the fix model by workflow phase, then by session status once settled", () => {
+  test("keeps package generation and consolidation as distinct workflow statuses", () => {
     const ready = readyWorkflow();
-    expect(fixSessionActivity({ ...ready, phase: "preparing" })).toBe("Preparing review package");
-    expect(fixSessionActivity({ ...ready, phase: "consolidating" })).toBe("Consolidating findings");
-    expect(fixSessionActivity({ ...ready, phase: "fixing" })).toBe("Addressing findings");
-    expect(fixSessionActivity(ready)).toBe("Idle");
+    const preparing = preparingWorkflow();
+    expect(reviewPackageGenerationActivity(preparing)).toBe("Generating package");
+    expect(consolidationActivity(preparing)).toBe("Waiting for review package");
+    expect(reviewPackageGenerationActivity({ ...ready, phase: "consolidating" })).toBe(
+      "Package ready",
+    );
     expect(
-      fixSessionActivity({
-        ...ready,
+      consolidationActivity({ ...ready, consolidatedReport: undefined, phase: "consolidating" }),
+    ).toBe("Consolidating findings");
+    expect(consolidationActivity(ready)).toBe("Complete");
+    expect(
+      reviewPackageGenerationActivity({
+        ...preparing,
         phase: "failed",
-        fixSession: { ...ready.fixSession!, status: "failed" },
+        fixSession: { ...preparing.fixSession!, status: "failed" },
       }),
     ).toBe("Failed");
-    const { fixSession: _none, ...withoutSession } = ready;
-    expect(fixSessionActivity({ ...withoutSession, phase: "completed" })).toBe("Not started");
+  });
+
+  test("renders package generation above the reviewers and consolidation underneath", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "consolidating",
+      consolidatedReport: undefined,
+      fixSession: { ...ready.fixSession!, status: "running" },
+      activeRequest: {
+        kind: "consolidate",
+        requestId: "consolidate-1",
+        state: "sent",
+        createdAt: "2026-08-14T00:00:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    const workflowHeadings = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(workflowHeadings.slice(0, 3)).toEqual([
+      "Review package generation",
+      "Review panel",
+      "Consolidation",
+    ]);
+    expect(screen.queryByRole("heading", { name: "Fix model" }) === null).toBe(true);
+    expect(screen.getByText("Package ready")).toBeTruthy();
+    expect(screen.getByText("Consolidating findings")).toBeTruthy();
   });
 
   test("formats fix session runtime for live and settled sessions", () => {

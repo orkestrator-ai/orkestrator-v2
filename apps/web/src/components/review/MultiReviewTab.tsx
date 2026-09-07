@@ -115,33 +115,40 @@ export function multiReviewFixSessionTabOptions(
   };
 }
 
-/**
- * What the fix model is doing right now, from the workflow's point of view.
- * The supervisor drives this session through several phases (package
- * preparation, consolidation, fixing), so the phase is a better label than
- * the session's own status while the workflow is active.
- */
-export function fixSessionActivity(workflow: MultiReviewWorkflow): string {
-  switch (workflow.phase) {
-    case "preparing":
-      return "Preparing review package";
-    case "consolidating":
-      return "Consolidating findings";
-    case "fixing":
-      return "Addressing findings";
-    case "interactive":
-      return "Interactive fix session";
-    case "cancelling":
-      return "Cancelling";
-    default:
-      break;
+/** Keep preparation visible as a completed step after the workflow moves on. */
+export function reviewPackageGenerationActivity(workflow: MultiReviewWorkflow): string {
+  if (workflow.phase === "preparing") return "Generating package";
+  if (workflow.reviewPackage) return "Package ready";
+  if (workflow.phase === "failed" && workflow.activeRequest?.kind === "prepare") return "Failed";
+  if (workflow.phase === "cancelling" && workflow.activeRequest?.kind === "prepare") {
+    return "Cancelling";
   }
-  const session = workflow.fixSession;
-  if (!session) return "Not started";
-  if (session.status === "running") return "Running";
-  if (session.status === "failed") return "Failed";
-  if (session.status === "cancelled") return "Cancelled";
-  return "Idle";
+  if (workflow.phase === "cancelled") return "Cancelled";
+  // Workflows persisted before file-backed packages were introduced can have
+  // advanced beyond preparation without carrying a reviewPackage pointer.
+  return workflow.phase === "reviewing" ||
+    workflow.phase === "consolidating" ||
+    workflow.phase === "ready" ||
+    workflow.phase === "fixing" ||
+    workflow.phase === "interactive" ||
+    workflow.phase === "completed"
+    ? "Package ready"
+    : "Not started";
+}
+
+/** Consolidation is a separate step which waits for the independent reviewers. */
+export function consolidationActivity(workflow: MultiReviewWorkflow): string {
+  if (workflow.consolidatedReport) return "Complete";
+  if (workflow.phase === "consolidating") return "Consolidating findings";
+  if (workflow.phase === "reviewing") return "Waiting for reviews";
+  if (workflow.phase === "preparing") return "Waiting for review package";
+  if (workflow.phase === "failed" && workflow.activeRequest?.kind === "prepare") {
+    return "Waiting for review package";
+  }
+  if (workflow.phase === "failed") return "Failed";
+  if (workflow.phase === "cancelling") return "Cancelling";
+  if (workflow.phase === "cancelled") return "Cancelled";
+  return "Not started";
 }
 
 export function fixSessionRuntimeSummary(
@@ -498,6 +505,19 @@ function MultiReviewOverviewTab({
   const fixRuntimeSummary = workflow.fixSession
     ? fixSessionRuntimeSummary(workflow.fixSession, reviewPanelNow)
     : null;
+  const packageActivity = reviewPackageGenerationActivity(workflow);
+  const packageRunning =
+    workflow.phase === "preparing" && workflow.fixSession?.status === "running";
+  const packageFailed = packageActivity === "Failed";
+  const packageCancelled = packageActivity === "Cancelled" || packageActivity === "Cancelling";
+  const packageComplete = packageActivity === "Package ready";
+  const consolidationStatus = consolidationActivity(workflow);
+  const consolidationRunning =
+    workflow.phase === "consolidating" && workflow.fixSession?.status === "running";
+  const consolidationFailed = consolidationStatus === "Failed";
+  const consolidationCancelled =
+    consolidationStatus === "Cancelled" || consolidationStatus === "Cancelling";
+  const consolidationComplete = consolidationStatus === "Complete";
   const canCancel =
     workflow.phase !== "completed" &&
     workflow.phase !== "cancelled" &&
@@ -545,38 +565,40 @@ function MultiReviewOverviewTab({
           )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Fix model</h2>
-              <span className="text-xs text-muted-foreground">{fixSessionActivity(workflow)}</span>
+              <h2 className="text-sm font-semibold">Review package generation</h2>
+              <span className="text-xs text-muted-foreground">{packageActivity}</span>
             </div>
             <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
               <button
                 type="button"
-                disabled={!workflow.fixSession?.providerSessionId || !createTab}
-                aria-label="Open fix model session"
+                disabled={!packageRunning || !workflow.fixSession?.providerSessionId || !createTab}
+                aria-label="Open review package generation session"
                 title={
-                  workflow.fixSession?.providerSessionId
-                    ? "Open the fix model's session in a new tab"
-                    : "The fix model has not opened a session yet"
+                  packageRunning && workflow.fixSession?.providerSessionId
+                    ? "Open the review package generation session in a new tab"
+                    : packageComplete
+                      ? "Review package generation is complete"
+                      : "The review package generation session has not opened yet"
                 }
                 className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
                 onClick={() => presentFixSession(workflow, "manual")}
               >
-                {fixSessionStalled ? (
+                {workflow.phase === "preparing" && fixSessionStalled ? (
                   <AlertTriangle className="size-4 shrink-0 text-amber-500" />
-                ) : workflow.fixSession?.status === "running" ? (
+                ) : packageRunning ? (
                   <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
-                ) : workflow.fixSession?.status === "failed" ? (
+                ) : packageFailed ? (
                   <AlertCircle className="size-4 shrink-0 text-destructive" />
-                ) : workflow.fixSession?.status === "cancelled" ? (
+                ) : packageCancelled ? (
                   <Square className="size-4 shrink-0 text-muted-foreground" />
-                ) : workflow.fixSession?.status === "idle" ? (
+                ) : packageComplete ? (
                   <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
                 ) : (
                   <Circle className="size-4 shrink-0 text-muted-foreground" />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">
-                    Fix model · {workflow.fixModel.agent}
+                    Preparation · {workflow.fixModel.agent}
                   </p>
                   <p className="truncate text-[11px] text-muted-foreground">
                     {workflow.fixModel.model}
@@ -584,10 +606,10 @@ function MultiReviewOverviewTab({
                       ? ` · ${workflow.fixModel.reasoningEffort}`
                       : ""}
                   </p>
-                  {fixRuntimeSummary ? (
+                  {packageRunning && fixRuntimeSummary ? (
                     <p
                       className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                      aria-label="Fix model runtime"
+                      aria-label="Review package generation runtime"
                     >
                       {fixRuntimeSummary}
                     </p>
@@ -770,6 +792,67 @@ function MultiReviewOverviewTab({
                   </ContextMenu>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border/60 bg-card/35 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Consolidation</h2>
+              <span className="text-xs text-muted-foreground">{consolidationStatus}</span>
+            </div>
+            <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
+              <button
+                type="button"
+                disabled={
+                  (!consolidationRunning && !consolidationComplete) ||
+                  !workflow.fixSession?.providerSessionId ||
+                  !createTab
+                }
+                aria-label="Open consolidation session"
+                title={
+                  (consolidationRunning || consolidationComplete) &&
+                  workflow.fixSession?.providerSessionId
+                    ? "Open the consolidation session in a new tab"
+                    : "Consolidation starts after the independent reviews finish"
+                }
+                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+                onClick={() => presentFixSession(workflow, "manual")}
+              >
+                {workflow.phase === "consolidating" && fixSessionStalled ? (
+                  <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                ) : consolidationRunning ? (
+                  <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+                ) : consolidationFailed ? (
+                  <AlertCircle className="size-4 shrink-0 text-destructive" />
+                ) : consolidationCancelled ? (
+                  <Square className="size-4 shrink-0 text-muted-foreground" />
+                ) : consolidationComplete ? (
+                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <Circle className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium">
+                    Consolidation · {workflow.fixModel.agent}
+                  </p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {workflow.fixModel.model}
+                    {workflow.fixModel.reasoningEffort
+                      ? ` · ${workflow.fixModel.reasoningEffort}`
+                      : ""}
+                  </p>
+                  {(consolidationRunning ||
+                    (workflow.phase === "ready" && consolidationComplete)) &&
+                  fixRuntimeSummary ? (
+                    <p
+                      className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                      aria-label="Consolidation runtime"
+                    >
+                      {fixRuntimeSummary}
+                    </p>
+                  ) : null}
+                </div>
+              </button>
             </div>
           </section>
 

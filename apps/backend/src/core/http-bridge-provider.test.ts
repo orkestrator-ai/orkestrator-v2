@@ -1145,12 +1145,15 @@ describe("HTTP bridge provider", () => {
     await expect(provider.activeSteerRun!("codex-session")).resolves.toEqual(expected);
   });
 
-  test.each([
+  const snapshotRoutes = [
     ["claude" as const, claudeConnection, "http://claude.test/session/session%2F1"],
     ["codex" as const, codexConnection, "http://codex.test/session/session%2F1/status"],
     ["cursor" as const, cursorConnection, "http://cursor.test/session/session%2F1/status"],
+    ["grok" as const, grokConnection, "http://grok.test/session/session%2F1/status"],
     ["pi" as const, piConnection, "http://pi.test/session/session%2F1/status"],
-  ])(
+  ] as const;
+
+  test.each(snapshotRoutes)(
     "reads the %s steer run from the snapshot route that bridge actually serves",
     async (_agent, connection, expectedUrl) => {
       // Claude has no `/status` child route. Asking for one 404s, and the 404
@@ -1168,6 +1171,59 @@ describe("HTTP bridge provider", () => {
       expect(requests.map((request) => request.url)).toEqual([expectedUrl]);
     },
   );
+
+  test.each(snapshotRoutes)(
+    "observes the %s session over the same snapshot route the steer read uses",
+    async (_agent, connection, expectedUrl) => {
+      // `observeSession` and `activeSteerRun` share one path helper. Pin both
+      // ends so a future edit made for the steer read cannot silently reroute
+      // the far busier status poll.
+      const { provider, requests } = httpProvider(
+        () => Response.json({ status: "running" }),
+        connection,
+      );
+
+      await expect(provider.status("session/1")).resolves.toBe("running");
+      expect(requests.map((request) => request.url)).toEqual([expectedUrl]);
+    },
+  );
+
+  test("accepts a Claude steer snapshot larger than the default payload budget", async () => {
+    // Claude answers from the whole session resource, so `structuredOutput`
+    // alone can dwarf the 256 KB default that the `/status` bridges live within.
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "running",
+          turnId: "turn-4",
+          structuredOutput: { report: "x".repeat(400 * 1024) },
+        }),
+      claudeConnection,
+    );
+
+    await expect(provider.activeSteerRun!("session-1")).resolves.toEqual({
+      state: "running",
+      runId: "turn-4",
+    });
+  });
+
+  test("still rejects an oversized steer snapshot from a /status bridge", async () => {
+    // The widened budget is Claude-only. Every other bridge serves a small,
+    // dedicated status document, so an outsized one stays a transport fault.
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "running",
+          turnId: "turn-4",
+          padding: "x".repeat(400 * 1024),
+        }),
+      codexConnection,
+    );
+
+    await expect(provider.activeSteerRun!("session-1")).rejects.toThrow(
+      "codex steer status read is oversized",
+    );
+  });
 
   test("refreshes Pi's bridge-owned model runtime before re-listing", async () => {
     const timeouts: number[] = [];

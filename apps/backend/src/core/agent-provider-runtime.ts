@@ -262,6 +262,9 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
         if (typeof value === "number" && Number.isFinite(value) && value >= 0)
           normalized[key] = value;
       }
+      if (typeof window.creditBalance === "string" && window.creditBalance.length > 0) {
+        normalized.creditBalance = window.creditBalance.slice(0, 64);
+      }
       if (typeof window.resetsAt === "string" && Number.isFinite(Date.parse(window.resetsAt))) {
         normalized.resetsAt = window.resetsAt;
       }

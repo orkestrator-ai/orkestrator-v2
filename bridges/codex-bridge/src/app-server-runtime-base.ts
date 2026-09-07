@@ -440,17 +440,25 @@ export function accountUsageFromLimits(
 ): EngineAccountUsageWindow[] {
   const windows: EngineAccountUsageWindow[] = limits.map((limit) => ({
     window: limit.slot,
-    label: limit.label,
+    label: accountRateLimitLabel(limit),
     ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
     ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
   }));
-  if (credits?.balance !== undefined) {
-    const balance = Number(credits.balance);
-    if (Number.isFinite(balance) && balance >= 0) {
-      windows.push({ window: "credits", label: "Credits", creditsRemaining: balance });
-    }
+  if (credits?.balance !== undefined && credits.balance.trim().length > 0) {
+    windows.push({ window: "credits", label: "Credits", creditBalance: credits.balance });
   }
   return windows;
+}
+
+function accountRateLimitLabel(limit: EngineRateLimitWindow): string {
+  if (limit.label !== "Primary" && limit.label !== "Secondary") return limit.label;
+  if (limit.windowMinutes === 7 * 24 * 60) return "Weekly limit";
+  if (limit.windowMinutes === 24 * 60) return "Daily limit";
+  if (limit.windowMinutes && limit.windowMinutes % 60 === 0) {
+    const hours = limit.windowMinutes / 60;
+    return `${hours}-hour limit`;
+  }
+  return limit.label === "Primary" ? "Usage limit" : "Secondary limit";
 }
 
 /** A JSON object, as opposed to a scalar, an array or null. */

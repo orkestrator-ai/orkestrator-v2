@@ -141,13 +141,12 @@ export function formatCount(value: number, singular: string): string {
 }
 
 const RESET_DATE_TIME_FORMAT_OPTIONS = {
-  weekday: "long",
+  weekday: "short",
   year: "numeric",
-  month: "numeric",
+  month: "short",
   day: "numeric",
   hour: "numeric",
   minute: "numeric",
-  second: "numeric",
 } satisfies Intl.DateTimeFormatOptions;
 
 const WEEK_MINUTES = 7 * 24 * 60;
@@ -401,47 +400,95 @@ export function codexLimitsFromHealth(health: unknown): {
   credits?: NonNullable<ContextUsageSnapshot["credits"]>;
 } {
   const response = record(record(health).rateLimits);
-  const snapshot = record(response.rateLimits);
   const rateLimits: NonNullable<ContextUsageSnapshot["rateLimits"]> = [];
-  for (const [key, fallback] of [
-    ["primary", "Primary"],
-    ["secondary", "Secondary"],
-  ] as const) {
-    const window = record(snapshot[key]);
-    if (Object.keys(window).length === 0) continue;
-    const rawUsedPercent = finiteNumber(window.usedPercent);
-    const usedPercent =
-      rawUsedPercent === undefined ? undefined : Math.max(0, Math.min(100, rawUsedPercent));
-    const resetsAt = epochSecondsToIso(window.resetsAt);
-    const rawWindowMinutes = finiteNumber(window.windowDurationMins);
-    const windowMinutes =
-      rawWindowMinutes !== undefined && rawWindowMinutes >= 0 ? rawWindowMinutes : undefined;
-    if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
-      continue;
+  const byLimitId = record(response.rateLimitsByLimitId);
+  const keyedSnapshots = Object.entries(byLimitId).slice(0, 16);
+  const snapshots =
+    keyedSnapshots.length > 0
+      ? keyedSnapshots.map(([limitId, value]) => ({ limitId, snapshot: record(value) }))
+      : [{ limitId: undefined, snapshot: record(response.rateLimits) }];
+  let credits: NonNullable<ContextUsageSnapshot["credits"]> | undefined;
+
+  for (const { limitId, snapshot } of snapshots) {
+    for (const [key, fallback] of [
+      ["primary", "Primary"],
+      ["secondary", "Secondary"],
+    ] as const) {
+      const window = record(snapshot[key]);
+      if (Object.keys(window).length === 0) continue;
+      const rawUsedPercent = finiteNumber(window.usedPercent);
+      const usedPercent =
+        rawUsedPercent === undefined ? undefined : Math.max(0, Math.min(100, rawUsedPercent));
+      const resetsAt = epochSecondsToIso(window.resetsAt);
+      const rawWindowMinutes = finiteNumber(window.windowDurationMins);
+      const windowMinutes =
+        rawWindowMinutes !== undefined && rawWindowMinutes >= 0 ? rawWindowMinutes : undefined;
+      if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+        continue;
+      }
+      rateLimits.push({
+        label: codexRateLimitLabel({
+          snapshot,
+          limitId,
+          slot: key,
+          fallback,
+          windowMinutes,
+          multiBucket: keyedSnapshots.length > 0,
+        }),
+        ...(usedPercent !== undefined ? { usedPercent } : {}),
+        ...(resetsAt !== undefined ? { resetsAt } : {}),
+        ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+      });
     }
-    rateLimits.push({
-      label:
-        typeof snapshot.limitName === "string" && key === "primary" ? snapshot.limitName : fallback,
-      ...(usedPercent !== undefined ? { usedPercent } : {}),
-      ...(resetsAt !== undefined ? { resetsAt } : {}),
-      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-    });
+    credits ??= creditSnapshot(snapshot.credits);
   }
-  const rawCredits = record(snapshot.credits);
-  const credits =
-    Object.keys(rawCredits).length > 0
-      ? {
-          ...(typeof rawCredits.balance === "string" ? { balance: rawCredits.balance } : {}),
-          ...(typeof rawCredits.hasCredits === "boolean"
-            ? { hasCredits: rawCredits.hasCredits }
-            : {}),
-          ...(typeof rawCredits.unlimited === "boolean" ? { unlimited: rawCredits.unlimited } : {}),
-        }
-      : undefined;
+  credits ??= creditSnapshot(record(response.rateLimits).credits);
   return {
     rateLimits,
     ...(credits ? { credits } : {}),
   };
+}
+
+function creditSnapshot(value: unknown): NonNullable<ContextUsageSnapshot["credits"]> | undefined {
+  const raw = record(value);
+  const credits = {
+    ...(typeof raw.balance === "string" ? { balance: raw.balance } : {}),
+    ...(typeof raw.hasCredits === "boolean" ? { hasCredits: raw.hasCredits } : {}),
+    ...(typeof raw.unlimited === "boolean" ? { unlimited: raw.unlimited } : {}),
+  };
+  return Object.keys(credits).length > 0 ? credits : undefined;
+}
+
+function codexRateLimitLabel({
+  snapshot,
+  limitId,
+  slot,
+  fallback,
+  windowMinutes,
+  multiBucket,
+}: {
+  snapshot: Record<string, unknown>;
+  limitId: string | undefined;
+  slot: "primary" | "secondary";
+  fallback: string;
+  windowMinutes: number | undefined;
+  multiBucket: boolean;
+}): string {
+  const duration =
+    windowMinutes === WEEK_MINUTES
+      ? "Weekly limit"
+      : windowMinutes === 24 * 60
+        ? "Daily limit"
+        : windowMinutes && windowMinutes % 60 === 0
+          ? `${windowMinutes / 60}-hour limit`
+          : undefined;
+  const bucket =
+    typeof snapshot.limitName === "string" && snapshot.limitName.trim().length > 0
+      ? snapshot.limitName.trim()
+      : limitId;
+  if (multiBucket && bucket) return `${bucket} · ${duration ?? fallback}`;
+  if (slot === "primary" && bucket) return bucket;
+  return duration ?? (slot === "primary" ? "Usage limit" : "Secondary limit");
 }
 
 /**
@@ -580,6 +627,7 @@ function isPlainTokenBucket(
     entry.resetsAt === undefined &&
     entry.spendUsd === undefined &&
     entry.creditsRemaining === undefined &&
+    entry.creditBalance === undefined &&
     entry.limitUsd === undefined
   );
 }
@@ -695,48 +743,117 @@ function AccountUsageSection({ account }: { account: NativeAgentAccountUsageWind
   );
 }
 
+function creditSnapshotValue(credits: NonNullable<ContextUsageSnapshot["credits"]>): string {
+  if (credits.unlimited) return "Unlimited";
+  if (credits.balance !== undefined) return credits.balance;
+  return credits.hasCredits ? "Available" : "Unavailable";
+}
+
+/**
+ * Codex reports its account limits through both the compatibility rate-limit
+ * fields and provider-neutral account windows. Build one authoritative set for
+ * presentation so the same quota and balance are not repeated later in the
+ * pane. The freshly read rate-limit snapshot wins over retained account rows.
+ */
+function codexAccountUsage(
+  account: NativeAgentAccountUsageWindow[] | undefined,
+  rateLimits: AgentRateLimitWindow[] | undefined,
+  credits: ContextUsageSnapshot["credits"],
+): NativeAgentAccountUsageWindow[] {
+  const retained = account ?? [];
+  const otherWindows = retained.filter(
+    (entry) =>
+      entry.window !== "primary" && entry.window !== "secondary" && entry.window !== "credits",
+  );
+  const limitWindows = rateLimits?.length
+    ? rateLimits.map((limit, index) => ({
+        window: `codex-limit:${index}`,
+        label: limit.label,
+        ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
+        ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+      }))
+    : retained.filter((entry) => entry.window === "primary" || entry.window === "secondary");
+  const retainedCredits = retained.find((entry) => entry.window === "credits");
+  const creditWindow = credits
+    ? {
+        window: "credits",
+        label: "Credits",
+        creditBalance: creditSnapshotValue(credits),
+      }
+    : retainedCredits;
+  return [...limitWindows, ...(creditWindow ? [creditWindow] : []), ...otherWindows];
+}
+
 function AccountWindowsSection({ windows }: { windows: NativeAgentAccountUsageWindow[] }) {
   return (
     <section className="space-y-2" aria-label="Account usage">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         Account
       </div>
-      {windows.map((window) => (
-        <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 text-xs font-medium text-foreground">
-              {window.label ?? window.window}
+      {windows.map((window) => {
+        const resetLabel = window.resetsAt ? formatResetDateTime(window.resetsAt) : null;
+        const creditValue =
+          window.creditBalance ??
+          (window.creditsRemaining !== undefined ? String(window.creditsRemaining) : undefined);
+        const isCreditOnly =
+          creditValue !== undefined &&
+          window.tokens === undefined &&
+          window.usedPercent === undefined &&
+          window.spendUsd === undefined &&
+          window.limitUsd === undefined &&
+          resetLabel === null;
+        const hasMetrics =
+          window.tokens !== undefined ||
+          window.spendUsd !== undefined ||
+          window.limitUsd !== undefined ||
+          (!isCreditOnly && creditValue !== undefined);
+
+        return (
+          <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 truncate text-xs font-medium text-foreground">
+                {window.label ?? window.window}
+              </div>
+              {isCreditOnly ? (
+                <div className="shrink-0 font-mono text-sm tabular-nums text-foreground">
+                  {creditValue}
+                </div>
+              ) : resetLabel ? (
+                <div
+                  className="shrink-0 text-[10px] text-muted-foreground"
+                  title={new Date(window.resetsAt!).toLocaleString()}
+                >
+                  Resets {resetLabel}
+                </div>
+              ) : null}
             </div>
-            {window.resetsAt ? (
-              <div className="shrink-0 text-[10px] text-muted-foreground">
-                Resets {formatResetDateTime(window.resetsAt)}
+            {window.usedPercent !== undefined ? (
+              <div className="mt-2">
+                <div className="mb-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {window.usedPercent.toFixed(window.usedPercent >= 10 ? 0 : 1)}% used
+                </div>
+                <Progress value={window.usedPercent} aria-label={`${window.usedPercent}% used`} />
+              </div>
+            ) : null}
+            {hasMetrics ? (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {window.tokens !== undefined ? (
+                  <Metric label="Tokens" value={formatTokenCount(window.tokens)} />
+                ) : null}
+                {window.spendUsd !== undefined ? (
+                  <Metric label="Spend" value={formatUsd(window.spendUsd)} />
+                ) : null}
+                {window.limitUsd !== undefined ? (
+                  <Metric label="Limit" value={formatUsd(window.limitUsd)} />
+                ) : null}
+                {!isCreditOnly && creditValue !== undefined ? (
+                  <Metric label="Credits" value={creditValue} />
+                ) : null}
               </div>
             ) : null}
           </div>
-          {window.usedPercent !== undefined ? (
-            <div className="mt-2">
-              <div className="mb-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                {window.usedPercent.toFixed(window.usedPercent >= 10 ? 0 : 1)}%
-              </div>
-              <Progress value={window.usedPercent} aria-label={`${window.usedPercent}% used`} />
-            </div>
-          ) : null}
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            {window.tokens !== undefined ? (
-              <Metric label="Tokens" value={formatTokenCount(window.tokens)} />
-            ) : null}
-            {window.spendUsd !== undefined ? (
-              <Metric label="Spend" value={formatUsd(window.spendUsd)} />
-            ) : null}
-            {window.limitUsd !== undefined ? (
-              <Metric label="Limit" value={formatUsd(window.limitUsd)} />
-            ) : null}
-            {window.creditsRemaining !== undefined ? (
-              <Metric label="Credits" value={String(window.creditsRemaining)} />
-            ) : null}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -817,6 +934,13 @@ export function UsagePanel({
   }
 
   const used = Math.max(0, usage.usedTokens);
+  const isCodex = usage.source === "codex";
+  const displayedAccount = isCodex
+    ? codexAccountUsage(usage.account, displayedRateLimits, usage.credits)
+    : (usage.account ?? []);
+  const creditsRenderedInAccount =
+    isCodex && displayedAccount.some((entry) => entry.window === "credits");
+  const limitsRenderedInAccount = isCodex && Boolean(displayedRateLimits?.length);
   const contextWindow =
     usage.totalTokens !== undefined &&
     Number.isFinite(usage.totalTokens) &&
@@ -831,7 +955,7 @@ export function UsagePanel({
 
   return (
     <div className="space-y-4">
-      {usage.account?.length ? <AccountUsageSection account={usage.account} /> : null}
+      {displayedAccount.length ? <AccountUsageSection account={displayedAccount} /> : null}
       {contextWindow ? (
         <div>
           <div className="mb-2 flex items-end justify-between gap-3">
@@ -887,7 +1011,7 @@ export function UsagePanel({
             detail="tool permissions"
           />
         ) : null}
-        {usage.credits !== undefined ? (
+        {usage.credits !== undefined && !creditsRenderedInAccount ? (
           <Metric
             label="Credits"
             value={
@@ -902,7 +1026,7 @@ export function UsagePanel({
 
       {usage.turns?.length ? <TurnUsageSection turns={usage.turns} /> : null}
 
-      {displayedRateLimits && displayedRateLimits.length > 0 ? (
+      {displayedRateLimits && displayedRateLimits.length > 0 && !limitsRenderedInAccount ? (
         <RateLimitsSection rateLimits={displayedRateLimits} />
       ) : null}
 

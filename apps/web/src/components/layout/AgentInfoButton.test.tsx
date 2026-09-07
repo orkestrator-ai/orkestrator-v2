@@ -1968,13 +1968,12 @@ describe("AgentInfoButton usage panel", () => {
     const resetValue = "2026-07-27T09:00:00.000Z";
     const resetDate = new Date(resetValue);
     const options = {
-      weekday: "long",
+      weekday: "short",
       year: "numeric",
-      month: "numeric",
+      month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "numeric",
-      second: "numeric",
     } satisfies Intl.DateTimeFormatOptions;
 
     for (const locale of ["en-US", "en-GB", "ja-JP", "zh-CN", "ar-EG"]) {
@@ -2372,7 +2371,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     // health response arrived.
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Primary", usedPercent: 20 },
+        { label: "Usage limit", usedPercent: 20 },
       ]),
     );
     expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-2");
@@ -2384,7 +2383,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     });
 
     expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-      { label: "Primary", usedPercent: 20 },
+      { label: "Usage limit", usedPercent: 20 },
     ]);
   });
 
@@ -2441,7 +2440,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
-        { label: "Primary", usedPercent: 30 },
+        { label: "Usage limit", usedPercent: 30 },
       ]),
     );
     expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(2);
@@ -2453,7 +2452,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     });
 
     expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
-      { label: "Primary", usedPercent: 30 },
+      { label: "Usage limit", usedPercent: 30 },
     ]);
     expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeUndefined();
   });
@@ -2497,7 +2496,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         resetsAt: new Date(resetsAtSeconds * 1_000).toISOString(),
         windowMinutes: 10_080,
       },
-      { label: "Secondary", usedPercent: 80 },
+      { label: "Secondary limit", usedPercent: 80 },
     ]);
     expect(stored.credits).toEqual({
       balance: "$20.00",
@@ -2508,6 +2507,63 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText(`Resets ${formatResetDateTime(resetValue)}`)).toBeTruthy();
     // The rest of the snapshot survives the merge.
     expect(stored.usedTokens).toBe(25_000);
+  });
+
+  test("renders multi-bucket Codex account details once with formatted credits", async () => {
+    seedCodex();
+    seedCodexProjection({ state: "ready" });
+    const projection = useNativeAgentProjectionStore.getState().projections.get(CODEX_KEY)!;
+    useNativeAgentProjectionStore.getState().setProjection(CODEX_KEY, {
+      ...projection,
+      contextUsage: {
+        usedTokens: 25_000,
+        maximumTokens: 100_000,
+        percentage: 25,
+        source: "codex",
+        credits: { balance: "0.00", hasCredits: false, unlimited: false },
+        account: [
+          {
+            window: "primary",
+            label: "Primary",
+            usedPercent: 10,
+            resetsAt: "2026-09-14T10:12:23.000Z",
+          },
+          { window: "credits", label: "Credits", creditBalance: "0.00" },
+        ],
+      },
+    });
+    useCodexStore.setState({
+      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
+    } as never);
+    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+      rateLimits: {
+        rateLimits: { primary: { usedPercent: 99 } },
+        rateLimitsByLimitId: {
+          codex: {
+            limitName: "Codex",
+            primary: { usedPercent: 10, windowDurationMins: 300 },
+            secondary: { usedPercent: 20, windowDurationMins: 10_080 },
+          },
+          review: {
+            limitName: "Review",
+            primary: { usedPercent: 30, windowDurationMins: 1_440 },
+          },
+        },
+      },
+    }));
+
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Codex · 5-hour limit")).toBeTruthy());
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByText("Codex · Weekly limit")).toBeTruthy();
+    expect(within(account).getByText("Review · Daily limit")).toBeTruthy();
+    expect(within(account).getByText("10% used")).toBeTruthy();
+    expect(within(account).getByText("0.00")).toBeTruthy();
+    expect(screen.getAllByText("Credits")).toHaveLength(1);
+    expect(screen.queryByText("Limits")).toBeNull();
+    expect(screen.queryByText("99% used")).toBeNull();
   });
 
   test("drops malformed rate-limit numbers without discarding valid fields", async () => {
@@ -2537,7 +2593,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Primary", usedPercent: 100 },
+        { label: "Usage limit", usedPercent: 100 },
       ]),
     );
     expect(screen.queryByText(/Runtime health unavailable/) === null).toBe(true);
@@ -2556,7 +2612,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Secondary", usedPercent: 3 },
+        { label: "Secondary limit", usedPercent: 3 },
       ]),
     );
   });
@@ -2584,7 +2640,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
-        { label: "Secondary", windowMinutes: 60 },
+        { label: "1-hour limit", windowMinutes: 60 },
       ]),
     );
   });

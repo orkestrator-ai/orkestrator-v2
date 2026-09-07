@@ -2,8 +2,14 @@
 // Handles session state and interacts with Claude Agent SDK
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  CanUseTool,
   HookCallback,
   PreToolUseHookInput,
+  SDKAPIRetryMessage,
+  SDKAssistantMessage,
+  SDKSystemMessage,
+  SDKToolProgressMessage,
+  SDKToolUseSummaryMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -16,6 +22,7 @@ import type {
   SessionState,
   NormalizedMessage,
   NormalizedPart,
+  SSEEvent,
   ToolDiffMetadata,
   QuestionInfo,
   QuestionRequest,
@@ -35,7 +42,12 @@ import type {
   SessionRateLimitWindow,
   StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
+import {
+  isHandledSdkMessageType,
+  isSdkCompactBoundaryMessage,
+  isSdkResultMessage,
+  sessionHealth,
+} from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -165,6 +177,112 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  * keeps iteration proportional to the number of blocks actually received.
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
+
+/**
+ * Settle a retry row this turn opened.
+ *
+ * A retry is only interesting until it resolves; a row left pending reports a
+ * request still in flight long after the turn ended, which is the failure mode
+ * this part kind exists to fix. Every terminal path calls this — the next
+ * assistant message, the turn's own end, and its error branch.
+ */
+function settlePendingApiRetry(
+  session: SessionState,
+  sessionId: string,
+  emit: (event: SSEEvent) => void,
+  stream: { pendingApiRetryMessageId?: string },
+  outcome: { state: "success" | "failure" },
+): void {
+  const messageId = stream.pendingApiRetryMessageId;
+  if (!messageId) return;
+  stream.pendingApiRetryMessageId = undefined;
+  const message = session.messages.find((candidate) => candidate.id === messageId);
+  const part = message?.parts[0];
+  if (!message || part?.type !== "retry") return;
+  part.toolState = outcome.state;
+  emit({ type: "message.updated", sessionId, data: { message } });
+}
+
+/**
+ * Append a one-part standalone message to the transcript.
+ *
+ * Used for rows that belong to the conversation but to no assistant turn: a
+ * compaction boundary, a status line, a settled retry. Role `system` so the
+ * renderer styles them as markers rather than as anything the user or the
+ * model said.
+ */
+function appendTranscriptNotice(
+  session: SessionState,
+  sessionId: string,
+  emit: (event: SSEEvent) => void,
+  part: NormalizedPart,
+): NormalizedMessage {
+  const message: NormalizedMessage = {
+    id: generateMessageId(),
+    role: "system",
+    content: part.content,
+    parts: [part],
+    createdAt: new Date().toISOString(),
+  };
+  session.messages.push(message);
+  emit({ type: "message.updated", sessionId, data: { message } });
+  return message;
+}
+
+/**
+ * How loudly to report one Claude system subtype.
+ *
+ * These are the SDK's own diagnostics, so they are recorded as `provider`
+ * notices. The severity split is what decides whether the tab shows the notice
+ * at all: `info` stays in the health panel, `warning` and `error` are promoted
+ * into the transcript by the backend, because a refused model or an exhausted
+ * retry changes what the user is reading and a hook that started does not.
+ */
+/** Bound on the open capability set, which the CLI, not this bridge, sizes. */
+const MAX_SDK_CAPABILITIES = 64;
+
+const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
+  status: "info",
+  informational: "info",
+  notification: "info",
+  // A hook running and reporting progress is inventory. A hook *response* is
+  // graded by its own outcome below, because a failed hook is the case this
+  // bridge cannot otherwise notice.
+  hook_started: "info",
+  hook_progress: "info",
+  api_retry: "warning",
+  model_refusal_fallback: "warning",
+  model_refusal_no_fallback: "error",
+  mirror_error: "error",
+};
+
+/**
+ * Record a system subtype the dispatch above had no branch for.
+ *
+ * Only the subtype name and, where the SDK supplies a plain string, a bounded
+ * message travel: the rest of an SDK system message can carry prompts, file
+ * contents and tool output, and a notice reaches the renderer and the logs.
+ */
+function recordSystemMessageNotice(session: SessionState, message: SdkSystemMessage): void {
+  const subtype = message.subtype ?? "unknown";
+  const outcome = (message as { outcome?: unknown }).outcome;
+  const severity =
+    subtype === "hook_response"
+      ? // The hook this bridge registers observes plan writes. If it fails,
+        // plan observation is broken and nothing else would report it.
+        outcome === "error"
+        ? "error"
+        : "info"
+      : (SYSTEM_MESSAGE_SEVERITIES[subtype] ?? "info");
+  const detail = (message as { message?: unknown }).message;
+  sessionHealth(session).recordNotice({
+    message: `Claude reported ${subtype.replaceAll("_", " ")}`,
+    method: `system/${subtype}`,
+    severity,
+    source: "provider",
+    ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
+  });
+}
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
   if (typeof content !== "string" || content.trim().length === 0) return {};
@@ -827,6 +945,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         hooks: {
           PreToolUse: [{ matcher: "Write|Edit", hooks: [observePlanWrite] }],
         },
+        // This bridge always registers the `observePlanWrite` hook above, so
+        // its outcome is always worth hearing about: a hook that fails silently
+        // leaves plan observation broken with nothing to say so. The flag is
+        // off by default in the SDK, which is right for a session with no hooks
+        // — a stream of hook events nobody consumes is drift noise. Tie it to
+        // the registration rather than turning it on unconditionally.
+        includeHookEvents: true,
         // Pinned against @anthropic-ai/claude-agent-sdk 0.3.261: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
@@ -837,10 +962,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // equivalent provider-authoritative policy path.
         // Handle AskUserQuestion tool to get user input.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        canUseTool: async (
+        // The SDK's own type, rather than a hand-written subset. The third
+        // argument carries `suggestions`, `blockedPath`, `decisionReason` and
+        // `title` — the last of which is the prompt sentence the CLI already
+        // composed, so reconstructing one from `toolName` and `input` produces
+        // a worse question than the one the SDK offered.
+        canUseTool: (async (
           toolName: string,
-          input: any,
-          permissionContext?: { toolUseID?: string },
+          input: Record<string, unknown>,
+          permissionContext: Parameters<CanUseTool>[2],
         ) => {
           if (toolName === "AskUserQuestion") {
             const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
@@ -1079,9 +1209,52 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             }
           }
 
-          // Allow all other tools - pass input through unchanged
-          return { behavior: "allow" as const, updatedInput: input };
+          // Allow this invocation only. SDK permission suggestions are durable
+          // policy updates and belong behind an explicit "always allow" choice;
+          // this host does not currently present one, so returning suggestions
+          // here would silently widen permissions after an allow-once decision.
+          return {
+            behavior: "allow" as const,
+            updatedInput: input,
+          };
+        }) as CanUseTool,
+        /**
+         * An MCP server asking the user for input.
+         *
+         * Answered rather than left to the CLI's park deadline. Unset, these
+         * requests sat unanswered until the deadline expired, which the user
+         * saw as the tab freezing for minutes with nothing to explain it.
+         *
+         * Declined, not accepted: this host has no form to render an arbitrary
+         * JSON Schema into and no browser to complete a `url` flow in, and MCP
+         * defines `decline` as an outcome the server is expected to handle. The
+         * status row is what turns a silent refusal into something the user can
+         * act on — the elicitation names its server, so they know where to go.
+         */
+        onElicitation: async (request) => {
+          appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+            type: "status",
+            severity: "warning",
+            content:
+              request.mode === "url"
+                ? `${request.serverName} asked you to sign in through a link, which this tab cannot open. Complete it in a terminal and try again.`
+                : `${request.serverName} asked for input this tab cannot collect, so it was declined.`,
+            createdAt: new Date().toISOString(),
+          });
+          return { action: "decline" };
         },
+        /**
+         * The CLI asking the host to render a blocking dialog.
+         *
+         * `supportedDialogKinds` is deliberately not declared: this host can
+         * render none of them. The SDK documents that a kind is only *sent* to
+         * clients that declared it, so in practice this callback should not
+         * fire — but a multi-client transport delivers the request to every
+         * attached client, so it can. `cancelled` is the correct answer for a
+         * kind this host cannot render: the CLI then applies the dialog's own
+         * default rather than waiting out its deadline.
+         */
+        onUserDialog: async () => ({ behavior: "cancelled" as const }),
       },
     });
     session.queryControl = queryIterator;
@@ -1149,8 +1322,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         debugLog("[session-manager] SDK event received", {
           sessionId,
           type: message.type,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          subtype: (message as any)?.subtype,
+          subtype: "subtype" in message ? message.subtype : undefined,
           sdkMessageCount,
         });
       }
@@ -1171,8 +1343,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       // Handle different message types from SDK
       if (message.type === "system" && message.subtype === "init") {
         // Store the SDK session ID for resume functionality
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const initMsg = message as any;
+        const initMsg = message as SDKSystemMessage & Record<string, unknown>;
         const sdkSessionId = initMsg.session_id;
         if (sdkSessionId) {
           const gainedDurableIdentity = session.sdkSessionId !== sdkSessionId;
@@ -1181,6 +1352,18 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           // A plan-mode preference set before the first turn had no durable key
           // to be written under; the id assigned here is that key.
           if (gainedDurableIdentity) await persistSessionMetadata(session);
+        }
+
+        // Protocol capabilities the CLI advertises. Kept so later work can
+        // feature-detect — `interrupt_receipt_v1` is what plan 05's interrupt
+        // ladder needs to know whether a receipt will name the turns that
+        // survived — rather than version-sniffing the CLI. An open set: unknown
+        // values are retained verbatim and never interpreted here.
+        if (Array.isArray(initMsg.capabilities)) {
+          session.sdkCapabilities = initMsg.capabilities
+            .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+            .slice(0, MAX_SDK_CAPABILITIES)
+            .map((entry) => entry.slice(0, 128));
         }
 
         // Capture MCP servers and plugins from init message
@@ -1263,6 +1446,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             postTokens: compactMetadata.post_tokens,
             trigger: compactMetadata.trigger,
           },
+        });
+        // The event above is a live hint; this is the durable record. Without
+        // it a reload showed a transcript with no boundary in it at all, which
+        // is the one thing that makes a compacted session confusing — the model
+        // no longer remembers what is above this point and nothing said so.
+        //
+        // No summary text: the SDK reports the boundary and its token counts,
+        // not what the compaction produced. An empty `content` renders as the
+        // boundary rule alone, which is the honest thing to show.
+        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+          type: "compaction",
+          content: "",
+          createdAt: new Date().toISOString(),
+          ...(typeof compactMetadata.pre_tokens === "number"
+            ? { compactedTokensBefore: compactMetadata.pre_tokens }
+            : {}),
+          ...(compactMetadata.trigger
+            ? { tokenCountText: `${compactMetadata.trigger} compaction` }
+            : {}),
         });
       } else if (message.type === "prompt_suggestion") {
         const suggestion =
@@ -1569,18 +1771,48 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         }
         finishTurnInputIfSettled();
 
-        // Emit generic system event for other subtypes
-        if (sysMsg.subtype && sysMsg.subtype !== "init") {
-          eventEmitter.emit({
-            type: "system.message",
-            sessionId,
-            data: {
-              subtype: sysMsg.subtype,
-              message: sysMsg,
-            },
+        // System subtypes with no branch above are diagnostics, not transcript
+        // content. They used to be re-emitted as an untyped `system.message`
+        // frame carrying the whole SDK message — which nothing consumed, and
+        // which put arbitrary provider payload on the wire. Record them as
+        // runtime notices instead, where they are bounded, redacted, carry a
+        // severity, and reach the health panel and the tab.
+        if (sysMsg.subtype === "api_retry") {
+          // A retry the user can see, rather than a silent stall. Recorded as a
+          // pending row and settled by the next assistant message or by the
+          // turn's own outcome — a retry row that never settles is exactly the
+          // stale card this replaces.
+          const retry = sysMsg as unknown as SDKAPIRetryMessage;
+          // A later retry proves the preceding attempt failed. Settle that row
+          // before opening the next one so no superseded spinner can survive.
+          settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
+            state: "failure",
           });
+          stream.pendingApiRetryMessageId = appendTranscriptNotice(
+            session,
+            sessionId,
+            (event) => eventEmitter.emit(event),
+            {
+              type: "retry",
+              content:
+                typeof retry.error_status === "number"
+                  ? `The API answered ${retry.error_status}`
+                  : "The API request failed",
+              toolState: "pending",
+              ...(typeof retry.attempt === "number" ? { retryAttempt: retry.attempt } : {}),
+              createdAt: new Date().toISOString(),
+            },
+          ).id;
+        }
+        if (sysMsg.subtype && sysMsg.subtype !== "init") {
+          recordSystemMessageNotice(session, sysMsg);
         }
       } else if (message.type === "assistant") {
+        // The retry above worked: the model answered. Settle the row rather
+        // than leaving a spinner on a request that has already succeeded.
+        settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
+          state: "success",
+        });
         reclaimReleasedTurnForAssistant(message as SdkMessageBase);
 
         // If we receive a new assistant message after a plan denial, it means
@@ -1630,8 +1862,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // events that streamed them (see `blocksByApiMessage`). The SDK sends one
         // assistant message per content block, all sharing `message.id`, so the
         // running finalized-block count gives each block its stream index.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const apiMessageId = (message as any).message?.id as string | undefined;
+        const apiMessageId = (message as SDKAssistantMessage).message?.id;
         const messageKey =
           apiMessageId ??
           (message.uuid as string | undefined) ??
@@ -1859,7 +2090,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           });
         }
 
-        if (resultMsg.subtype === "success") {
+        // `is_error` is authoritative over `subtype`. The SDK documents
+        // `subtype: "success"` with `is_error: true` as "the turn ended on an
+        // API error", so reading the subtype alone reported a failed turn as a
+        // completed one and left the error text in `errors` unpublished.
+        const resultIsError = resultMsg.is_error === true;
+        if (resultMsg.subtype === "success" && !resultIsError) {
           if (options?.outputSchema) {
             if (resultMsg.structured_output === undefined) {
               const failure = structuredOutputFailure(
@@ -1881,10 +2117,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           debugLog("[session-manager] Query completed successfully", { sessionId });
           finishTurnInputIfSettled();
         } else {
-          console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
+          console.error("[session-manager] Query error:", resultMsg.subtype, {
+            sessionId,
+            isError: resultIsError,
+          });
           const resultError =
             resultMsg.errors?.filter(Boolean).join("\n") ||
-            `Claude query failed: ${resultMsg.subtype}`;
+            (resultMsg.subtype === "success"
+              ? "Claude ended the turn on an API error."
+              : `Claude query failed: ${resultMsg.subtype}`);
           if (options?.outputSchema) {
             const failure = structuredOutputFailure(
               "claude",
@@ -1905,6 +2146,73 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       } else if (message.type === "stream_event") {
         publishStreamUsage(message);
         stream.applyPartialAssistantMessage(message);
+      } else if (message.type === "tool_progress") {
+        // A live sub-line on the tool row it names, not a row of its own. It is
+        // pushed into the *current assistant message* so the backend's
+        // projection can fold it onto the matching call — a progress part in
+        // its own message would have nothing to attach to.
+        const progress = message as SDKToolProgressMessage;
+        if (stream.currentAssistantMessage && progress.tool_use_id) {
+          const elapsedMs =
+            typeof progress.elapsed_time_seconds === "number"
+              ? Math.max(0, Math.round(progress.elapsed_time_seconds * 1_000))
+              : undefined;
+          // Only the newest report per call survives: progress is a hint over
+          // the authoritative tool state, so superseded lines are noise.
+          const parts = stream.currentAssistantMessage.parts.filter(
+            (candidate) =>
+              candidate.type !== "progress" || candidate.toolUseId !== progress.tool_use_id,
+          );
+          parts.push({
+            type: "progress",
+            // The subagent type is the only thing the SDK says about *what* is
+            // taking the time; without it the line is just a clock.
+            content: progress.subagent_type
+              ? `${progress.subagent_type} running`
+              : `${progress.tool_name ?? "Tool"} running`,
+            toolUseId: progress.tool_use_id,
+            ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+            createdAt: new Date().toISOString(),
+          });
+          stream.currentAssistantMessage.parts = parts;
+          stream.emitCurrentAssistantMessage();
+        }
+      } else if (message.type === "tool_use_summary") {
+        const summary = (message as SDKToolUseSummaryMessage).summary?.trim();
+        if (summary) {
+          appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+            type: "status",
+            content: summary,
+            severity: "info",
+            createdAt: new Date().toISOString(),
+          });
+        }
+      } else if (message.type === "conversation_reset") {
+        // The conversation this transcript describes no longer exists. Leaving
+        // the old messages would show history the model has no memory of and
+        // will not answer questions about.
+        session.messages = [];
+        // No bespoke "cleared" event: the backend re-reads the whole transcript
+        // on every projection poll, so the authoritative snapshot already
+        // reflects the clear. The status row below is what a live client needs.
+        appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
+          type: "status",
+          content: "Conversation cleared. The agent no longer has the earlier history.",
+          severity: "warning",
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        // Everything the chain above did not claim. `HANDLED_SDK_MESSAGE_TYPES`
+        // is a `Record` over the SDK's own union, so a type it does not name is
+        // an SDK addition and is counted; a type it names as `false` is a
+        // documented gap this bridge has not filled yet and is counted too —
+        // the point is that neither is silent. Names only: an SDK message body
+        // carries prompts, file contents and tool output.
+        sessionHealth(session).recordUnknown(
+          isHandledSdkMessageType(message.type)
+            ? `unconsumed:${message.type}`
+            : String(message.type ?? "(untyped)"),
+        );
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
     }
@@ -1912,6 +2220,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // The stream can end on a delta (abort, SDK hang-up) with a snapshot still
     // pending; publish it so the transcript holds everything that streamed.
     stream.flushStreamedAssistantMessage();
+    // A retry still open when the stream ends never got its answer. Whatever
+    // the turn's own outcome, the row has to stop claiming to be in flight.
+    settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
+      state: receivedResult ? "success" : "failure",
+    });
 
     if (abortController.signal.aborted) {
       if (options?.outputSchema && structuredRequestId) {
@@ -2032,6 +2345,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Ordered before the failure is recorded so the client sees the completed
     // message first and `session.error` stays terminal.
     stream.flushStreamedAssistantMessage();
+    settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
+      state: "failure",
+    });
 
     if (abortController.signal.aborted) {
       recordInterruptedStructuredOutputIfCurrent();

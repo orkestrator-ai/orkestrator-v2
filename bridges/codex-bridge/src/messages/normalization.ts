@@ -326,6 +326,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: item.command,
           toolName: "bash",
           toolArgs: { command: item.command },
@@ -348,6 +349,7 @@ export async function itemToParts(
       return Promise.all(
         item.changes.map(async (change, index) => ({
           type: "tool-invocation" as const,
+          toolUseId: item.id,
           content: change.path,
           toolName: "apply_patch",
           toolState: item.status === "failed" ? "failure" : "success",
@@ -365,6 +367,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: item.tool,
           toolName: item.tool,
           toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
@@ -389,6 +392,7 @@ export async function itemToParts(
         if (patchParts.length > 0) {
           return patchParts.map((part) => ({
             ...part,
+            toolUseId: item.id,
             toolOutput: item.status === "failed" ? undefined : output,
             toolError: item.status === "failed" ? (output ?? "Tool failed") : undefined,
           }));
@@ -397,6 +401,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: item.tool,
           toolName: item.tool,
           toolArgs: normalizeTranscriptToolArgs(item.tool, item.arguments),
@@ -413,6 +418,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: item.query,
           toolName: "web_search",
           toolArgs: { query: item.query },
@@ -424,6 +430,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: summarizeTodoList(item.items),
           toolName: "todo_list",
           toolState: "success",
@@ -453,6 +460,7 @@ export async function itemToParts(
       return [
         {
           type: "tool-invocation",
+          toolUseId: item.id,
           content: item.text,
           toolName: "plan",
           toolState: "success",
@@ -466,8 +474,48 @@ export async function itemToParts(
      * plus rollout transcripts, which is the same source both engines use.
      */
     case "subagent_activity":
+    // The sub-agent timeline is assembled from these plus rollout transcripts,
+    // in `subagentParts`. Rendering the raw call here would duplicate every
+    // child row beside the card that already presents it.
+    case "collab_tool_call":
       return [];
-    default:
-      return [];
+    case "image":
+      return [
+        {
+          type: "image",
+          content: item.text,
+          ...(item.path ? { fileUrl: `file://${item.path}`, filename: item.path } : {}),
+          imageSource: item.source,
+        },
+      ];
+    case "compaction":
+      return [{ type: "compaction", content: item.text }];
+    case "status":
+      return [
+        {
+          type: "status",
+          content: item.text,
+          ...(item.severity ? { severity: item.severity } : {}),
+        },
+      ];
+    default: {
+      // A generic card rather than silence. `item` is `never` here, so an item
+      // kind added upstream fails this file's typecheck first; this branch is
+      // for a payload that reached the runtime without matching any of them.
+      const unknown = item as { type?: unknown; id?: unknown };
+      const name = typeof unknown.type === "string" ? unknown.type : "unknown";
+      return [
+        {
+          type: "tool-invocation",
+          toolUseId: typeof unknown.id === "string" ? unknown.id : undefined,
+          // Names only. An item's own fields carry prompts, file contents and
+          // command output.
+          content: `Codex reported a ${name} item this bridge cannot render`,
+          toolName: name,
+          toolState: "success",
+          toolTitle: `Unrendered ${name}`,
+        },
+      ];
+    }
   }
 }

@@ -170,8 +170,14 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
+  const drift = state.health.drift();
+  const notices = state.health.listNotices();
   return {
     ...(state.todos.length > 0 ? { todos: state.todos.length } : {}),
+    // What the run reported it was given, not what the composer asked for.
+    ...(state.runTools ? { commands: state.runTools.length } : {}),
     state: state.agent ? "attached" : "detached",
+    ...(drift ? { drift } : {}),
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }

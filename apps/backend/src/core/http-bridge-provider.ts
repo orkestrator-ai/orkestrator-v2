@@ -22,6 +22,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
 import type {
@@ -37,6 +38,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
+import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
   asRecord,
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
@@ -47,7 +49,6 @@ import {
   normalizeProviderContextUsage,
   normalizeProviderRateLimits,
   normalizeProviderRuntimeSummary,
-  providerInventoryCount,
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
@@ -201,8 +202,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   >();
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
-  private readonly codexRuntimeMetadataRefreshes = new Map<string, Promise<void>>();
-  private codexRuntimeMetadataGeneration = 0;
+  private readonly runtimeMetadataRefreshes = new Map<string, Promise<void>>();
+  private runtimeMetadataGeneration = 0;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -665,99 +666,58 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return messages.length > limit ? messages.slice(-limit) : messages;
   }
 
-  private codexRuntimeSummary(payload: unknown): NativeAgentRuntimeSummary | undefined {
-    const health = asRecord(payload);
-    if (!health) return undefined;
-    const engine = asRecord(health.engine);
-    const groupedNotices = new Map<
-      string,
-      NonNullable<NativeAgentRuntimeSummary["notices"]>[number]
-    >();
-    if (Array.isArray(health.notices)) {
-      for (const candidate of health.notices.slice(-128)) {
-        const item = asRecord(candidate);
-        const message = item?.message;
-        if (typeof message !== "string" || message.length === 0) continue;
-        const bounded = message.slice(0, 1_000);
-        const method =
-          typeof item?.method === "string" && item.method.length > 0
-            ? item.method.slice(0, 128)
-            : undefined;
-        const key = `${method ?? ""}\u0000${bounded}`;
-        const existing = groupedNotices.get(key);
-        const detail =
-          typeof item?.detail === "string" && item.detail.length > 0
-            ? item.detail.slice(0, 1_000)
-            : undefined;
-        const receivedAt =
-          typeof item?.receivedAt === "string" && item.receivedAt.length > 0
-            ? item.receivedAt.slice(0, 64)
-            : undefined;
-        const occurrences = [
-          ...(existing?.occurrences ?? []),
-          ...(detail || receivedAt
-            ? [{ ...(detail ? { detail } : {}), ...(receivedAt ? { receivedAt } : {}) }]
-            : []),
-        ].slice(-5);
-        // Reinsert repeated groups so the five-group limit follows the most
-        // recent occurrence, not the first time that method appeared.
-        if (existing) groupedNotices.delete(key);
-        groupedNotices.set(key, {
-          message: bounded,
-          ...(method ? { method } : {}),
-          count: (existing?.count ?? 0) + 1,
-          ...(occurrences.length > 0 ? { occurrences } : {}),
-        });
-      }
+  /**
+   * Bounded inventory, drift and provider diagnostics for one session.
+   *
+   * Answers in band for a bridge that predates the route and for a session it
+   * does not have. A failure here must never fail the environment: this hop
+   * cannot tell "older bridge" from "gone session", and health is optional
+   * metadata either way — the authoritative liveness answer is `/activity`.
+   */
+  async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
+    try {
+      const response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+        {},
+        this.fetchImpl,
+      );
+      if (!response.ok) return { summary: {}, notices: [] };
+      const summary = bridgeRuntimeSummary(
+        await boundedJson(response, `${this.agent} runtime health read`, {
+          remaining: 512 * 1024,
+        }),
+      );
+      return { summary: summary ?? {}, notices: summary?.notices ?? [] };
+    } catch {
+      return { summary: {}, notices: [] };
     }
-    return {
-      mcpServers: providerInventoryCount(health.mcp),
-      skills: providerInventoryCount(health.skills),
-      hooks: providerInventoryCount(health.hooks),
-      ...(typeof engine?.state === "string" ? { state: engine.state.slice(0, 64) } : {}),
-      ...(typeof engine?.codexVersion === "string"
-        ? { version: engine.codexVersion.slice(0, 64) }
-        : {}),
-      ...(groupedNotices.size > 0
-        ? {
-            notices: [...groupedNotices.values()].slice(-5).map(({ count, ...notice }) => ({
-              ...notice,
-              ...(count !== undefined && count > 1 ? { count } : {}),
-            })),
-          }
-        : {}),
-    };
   }
 
-  private refreshCodexRuntimeMetadata(sessionId: string): Promise<void> {
-    const pending = this.codexRuntimeMetadataRefreshes.get(sessionId);
+  private refreshRuntimeMetadata(sessionId: string): Promise<void> {
+    const pending = this.runtimeMetadataRefreshes.get(sessionId);
     if (pending) return pending;
     const retained = this.interactiveMetadata.get(sessionId);
-    const generation = this.codexRuntimeMetadataGeneration;
+    const generation = this.runtimeMetadataGeneration;
     const operation = (async () => {
       try {
-        const response = await bridgeFetch(
-          this.connection,
-          `/session/${encodeURIComponent(sessionId)}/runtime-health`,
-          {},
-          this.fetchImpl,
-        );
-        assertOk(response, "Codex runtime health read");
-        const runtime = this.codexRuntimeSummary(
-          await boundedJson(response, "Codex runtime health read", { remaining: 512 * 1024 }),
-        );
-        if (!runtime) {
-          throw new ProviderUnavailableError(
-            "Codex runtime health read returned malformed metadata",
-          );
+        const { summary: runtime } = await this.runtimeHealth(sessionId);
+        if (generation !== this.runtimeMetadataGeneration) return;
+        if (Object.keys(runtime).length === 0 && retained) {
+          if (this.interactiveMetadata.get(sessionId) === retained) {
+            retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
+          }
+          return;
         }
-        if (generation !== this.codexRuntimeMetadataGeneration) return;
         setBoundedMapEntry(
           this.interactiveMetadata,
           sessionId,
           {
             expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-            runtime,
+            ...(retained?.executionProfiles && {
+              executionProfiles: retained.executionProfiles,
+            }),
+            runtime: { ...retained?.runtime, ...runtime },
           },
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
@@ -765,7 +725,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         // Keep known inventory usable and avoid retrying a failed optional
         // endpoint on every 500ms projection poll.
         if (
-          generation === this.codexRuntimeMetadataGeneration &&
+          generation === this.runtimeMetadataGeneration &&
           retained &&
           this.interactiveMetadata.get(sessionId) === retained
         ) {
@@ -773,17 +733,24 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         }
       }
     })();
-    this.codexRuntimeMetadataRefreshes.set(sessionId, operation);
+    this.runtimeMetadataRefreshes.set(sessionId, operation);
     return operation.finally(() => {
-      if (this.codexRuntimeMetadataRefreshes.get(sessionId) === operation) {
-        this.codexRuntimeMetadataRefreshes.delete(sessionId);
+      if (this.runtimeMetadataRefreshes.get(sessionId) === operation) {
+        this.runtimeMetadataRefreshes.delete(sessionId);
       }
     });
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
+    const cachedMetadata = this.interactiveMetadata.get(sessionId);
+    const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
+    if (cachedMetadata && refreshMetadata) {
+      // Runtime health is optional and no-touch. Keep the previous snapshot on
+      // the foreground path while a bounded refresh runs for every bridge.
+      void this.refreshRuntimeMetadata(sessionId);
+    }
     if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
-      const [response, transcript] = await Promise.all([
+      const [response, transcript, health] = await Promise.all([
         bridgeFetch(
           this.connection,
           `/session/${encodeURIComponent(sessionId)}/status`,
@@ -791,6 +758,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           this.fetchImpl,
         ),
         this.readTranscript(sessionId),
+        refreshMetadata && !cachedMetadata
+          ? this.runtimeHealth(sessionId)
+          : Promise.resolve(undefined),
       ]);
       if (response.status === 404) return { status: "missing", messages: [] };
       assertOk(response, `${this.agent} interactive status`);
@@ -820,8 +790,37 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         );
       }
       const contextUsage = normalizeProviderContextUsage(payload?.contextUsage);
-      const runtime = normalizeProviderRuntimeSummary(payload?.runtime);
+      const statusRuntime = normalizeProviderRuntimeSummary(payload?.runtime);
+      const healthRuntime =
+        health && Object.keys(health.summary).length > 0 ? health.summary : undefined;
+      const runtime =
+        healthRuntime || statusRuntime || cachedMetadata?.runtime
+          ? {
+              ...cachedMetadata?.runtime,
+              ...statusRuntime,
+              ...healthRuntime,
+            }
+          : undefined;
+      if (refreshMetadata && !cachedMetadata) {
+        setBoundedMapEntry(
+          this.interactiveMetadata,
+          sessionId,
+          {
+            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+            ...(runtime ? { runtime } : {}),
+          },
+          MAX_TRACKED_INTERACTION_SESSIONS,
+        );
+      }
       const readiness = normalizeProviderReadiness(payload?.readiness);
+      const reportedKinds = asRecord(asRecord(payload?.capabilities)?.interactions)?.kinds;
+      const interactionKinds = Array.isArray(reportedKinds)
+        ? reportedKinds.filter((kind): kind is string => typeof kind === "string")
+        : undefined;
+      const statusNotices = snapshotNotices({
+        transcriptTruncated: transcript.truncated,
+        ...(runtime ? { runtime } : {}),
+      });
       return {
         status,
         messages,
@@ -834,17 +833,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
         ...(runtime ? { runtime } : {}),
-        ...(transcript.truncated
-          ? {
-              notices: [
-                {
-                  kind: "warning" as const,
-                  message:
-                    "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-                },
-              ],
-            }
-          : {}),
+        // The bridge's own answer for this session, which overrides the
+        // platform table. Pi reports it; the others do not, and absent leaves
+        // the table standing.
+        ...(interactionKinds ? { interactionKinds } : {}),
+        ...(statusNotices.length > 0 ? { notices: statusNotices } : {}),
         ...(typeof providerError === "string" ? { error: providerError } : {}),
       };
     }
@@ -853,14 +846,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.agent === "codex"
         ? `/session/${encodeURIComponent(sessionId)}/status`
         : `/session/${encodeURIComponent(sessionId)}`;
-    const cachedMetadata = this.interactiveMetadata.get(sessionId);
-    const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
-    if (this.agent === "codex" && cachedMetadata && refreshMetadata) {
-      // `/runtime-health` fans out to several app-server inventory RPCs. The
-      // previous inventory remains useful while that optional refresh runs;
-      // message/status/config reads below are the foreground critical path.
-      void this.refreshCodexRuntimeMetadata(sessionId);
-    }
     const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] =
       await Promise.all([
         bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
@@ -881,13 +866,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
               this.fetchImpl,
             )
           : Promise.resolve(undefined),
-        this.agent === "codex" && refreshMetadata && !cachedMetadata
-          ? bridgeFetch(
-              this.connection,
-              `/session/${encodeURIComponent(sessionId)}/runtime-health`,
-              {},
-              this.fetchImpl,
-            )
+        refreshMetadata && !cachedMetadata
+          ? this.runtimeHealth(sessionId)
           : Promise.resolve(undefined),
       ]);
     const messages = transcript.messages;
@@ -914,13 +894,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       );
       const rawPhase = payload?.phase;
       let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
-      if (runtimeResponse?.ok) {
-        runtime = this.codexRuntimeSummary(
-          await boundedJson(runtimeResponse, "Codex runtime health read", {
-            remaining: 512 * 1024,
-          }),
-        );
-      }
+      if (runtimeResponse) runtime = runtimeResponse.summary;
       if (refreshMetadata && !cachedMetadata) {
         setBoundedMapEntry(
           this.interactiveMetadata,
@@ -932,6 +906,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
       }
+      const codexNotices = snapshotNotices({
+        transcriptTruncated: transcript.truncated,
+        ...(runtime ? { runtime } : {}),
+      });
       const phase: NativeAgentTurnPhase | undefined =
         rawPhase === "cancelling"
           ? "cancelling"
@@ -974,29 +952,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
           : {}),
         ...(runtime ? { runtime } : {}),
-        ...(transcript.truncated
-          ? {
-              notices: [
-                {
-                  kind: "warning" as const,
-                  message:
-                    "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-                },
-              ],
-            }
-          : {}),
+        ...(codexNotices.length > 0 ? { notices: codexNotices } : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
       };
     }
     let executionProfiles: NativeAgentComposerState["executionProfiles"] =
       cachedMetadata?.executionProfiles;
     let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
+    if (runtimeResponse) runtime = { ...runtime, ...runtimeResponse.summary };
     if (initResponse?.ok) {
       const initPayload = asRecord(
         await boundedJson(initResponse, "Claude init read", { remaining: 256 * 1024 }),
       );
       const initData = asRecord(initPayload?.initData);
       runtime = {
+        ...runtime,
         mcpServers: Array.isArray(initData?.mcpServers) ? initData.mcpServers.length : 0,
         plugins: Array.isArray(initData?.plugins) ? initData.plugins.length : 0,
         commands: Array.isArray(initData?.slashCommands) ? initData.slashCommands.length : 0,
@@ -1029,6 +999,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         MAX_TRACKED_INTERACTION_SESSIONS,
       );
     }
+    const claudeNotices = snapshotNotices({
+      transcriptTruncated: transcript.truncated,
+      ...(runtime ? { runtime } : {}),
+    });
     return {
       status,
       messages,
@@ -1052,17 +1026,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
       ...(runtime ? { runtime } : {}),
-      ...(transcript.truncated
-        ? {
-            notices: [
-              {
-                kind: "warning" as const,
-                message:
-                  "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-              },
-            ],
-          }
-        : {}),
+      ...(claudeNotices.length > 0 ? { notices: claudeNotices } : {}),
       ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
         ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }
         : {}),
@@ -1133,7 +1097,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     // Execution profiles and runtime inventory are discovered alongside models,
     // so an explicit refresh has to drop them too or the picker re-renders the
     // same stale list it was asked to replace.
-    this.codexRuntimeMetadataGeneration += 1;
+    this.runtimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
     if (this.agent !== "pi") return;
 

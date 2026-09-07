@@ -5,6 +5,7 @@ import type {
   NativeAgentComposerState,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
@@ -150,7 +151,33 @@ export interface AcpToolReplayCollector {
   byId: Map<string, AcpReplayToolMetadata>;
 }
 
-export type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
+/** An image an agent returned. Bytes travel only as a bounded data URL. */
+export interface BridgeImagePart {
+  type: "image";
+  content: string;
+  fileUrl?: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  imageSource?: "attachment" | "generated" | "viewed";
+}
+
+/** A short provider status line in the transcript flow. */
+export interface BridgeStatusPart {
+  type: "status";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  severity?: "info" | "warning" | "error";
+}
+
+export type BridgeMessagePart =
+  | BridgeTextPart
+  | BridgeFilePart
+  | BridgeToolPart
+  | BridgeImagePart
+  | BridgeStatusPart;
 
 export interface PromptJournalEntry {
   requestId: string;
@@ -317,6 +344,15 @@ export interface SessionState {
   commandCount?: number;
   /** Whether session/load is replaying transcript updates into this state. */
   historyReplay: false | "hydrate" | "ignore";
+  /**
+   * Update kinds this bridge had no branch for, and provider diagnostics.
+   *
+   * ACP is a versioned wire the agent, not this bridge, decides the shape of,
+   * so an added `session/update` kind used to return silently and be
+   * indistinguishable from an update that never arrived. Runtime-only: a
+   * restart re-observes whatever the agent still sends.
+   */
+  health: RuntimeHealthRecorder;
 }
 
 export interface PersistedUsage {
@@ -1072,11 +1108,15 @@ function rememberVendorRuntime(method: string, params: JsonObject): void {
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
+  const drift = state.health.drift();
+  const notices = state.health.listNotices();
   return {
     ...(agentRuntime.mcpServers === undefined ? {} : { mcpServers: agentRuntime.mcpServers }),
     ...(state.commandCount === undefined ? {} : { commands: state.commandCount }),
     ...(agentRuntime.version ? { version: agentRuntime.version } : {}),
     state: state.status,
+    ...(drift ? { drift } : {}),
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 

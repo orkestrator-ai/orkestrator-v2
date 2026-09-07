@@ -570,6 +570,76 @@ describe("provider-neutral interaction adapters", () => {
     ]);
   });
 
+  test("Codex preserves amendment choices and sends the exact selected proposal", async () => {
+    const requestedAt = Date.now();
+    let approvals: Array<Record<string, unknown>> = [
+      {
+        approvalId: "command-amendment",
+        kind: "command",
+        requestedAt,
+        expiresAt: requestedAt + 60_000,
+        command: "curl https://two.example",
+        actionable: true,
+        amendments: [
+          {
+            kind: "exec-policy",
+            detail: "allow curl",
+            decision: "approve-with-execpolicy-amendment",
+          },
+          {
+            kind: "network-policy",
+            detail: "allow two.example",
+            decision: "approve-with-network-amendment",
+            amendmentIndex: 1,
+          },
+        ],
+      },
+    ];
+    const bodies: unknown[] = [];
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      if (url.endsWith("/command-amendment")) {
+        bodies.push(JSON.parse(String(init.body)));
+        approvals = [];
+        return Response.json({ status: "applied" });
+      }
+      return new Response(null, { status: 404 });
+    }, codexConnection);
+
+    const request = (await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    const question = request.presentation.questions[0]!;
+    expect(question.required).toBe(false);
+    expect(question.options).toMatchObject([
+      {
+        providerValue: "approve-with-execpolicy-amendment",
+        amendment: { kind: "exec-policy", detail: "allow curl" },
+      },
+      {
+        providerValue: "approve-with-network-amendment:1",
+        amendment: { kind: "network-policy", detail: "allow two.example" },
+      },
+    ]);
+
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", request.id, {
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: request.id,
+        sessionId: request.sessionId,
+        action: "answer",
+        answer: {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          interactionId: request.id,
+          sessionId: request.sessionId,
+          answers: [{ questionId: question.id, optionIds: [question.options[1]!.id] }],
+        },
+        resolvedAt: Math.max(Date.now(), request.createdAt),
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(bodies).toEqual([{ decision: "approve-with-network-amendment", amendmentIndex: 1 }]);
+  });
+
   test("Codex isolates malformed siblings and degrades large file and MCP payloads", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;

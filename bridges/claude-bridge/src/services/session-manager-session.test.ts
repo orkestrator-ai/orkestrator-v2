@@ -13,6 +13,7 @@ import {
   getPendingPlanApprovals,
   getPendingQuestions,
   getSession,
+  peekSession,
   getSessionActivity,
   hydratePersistedSessionMessages,
   materializePersistedSession,
@@ -544,6 +545,9 @@ describe("getSessionActivity", () => {
     state.lastAccessedAt = readAt;
 
     expect(await getSessionActivity(state.id)).toBe("idle");
+    expect(state.lastAccessedAt).toBe(readAt);
+
+    expect(peekSession(state.id)).toBe(state);
     expect(state.lastAccessedAt).toBe(readAt);
 
     // The contrast is the point: `GET /:id` goes through `getSession`, which

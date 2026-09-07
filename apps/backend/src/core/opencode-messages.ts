@@ -1,8 +1,46 @@
+import type { Part as OpenCodePart } from "@opencode-ai/sdk";
 import {
   tryParseStructuredOutputText,
   type JsonSchema,
 } from "@orkestrator/protocol/structured-output";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
+
+/**
+ * Which OpenCode part kinds this normalizer accounts for.
+ *
+ * A `Record` over the SDK's own `Part` union rather than a list, so an OpenCode
+ * release that adds a part kind **fails this typecheck** instead of the part
+ * disappearing from transcripts with nothing to show for it. `true` means a
+ * branch below renders it; `false` means known and deliberately dropped —
+ * documented one by one because "we chose not to show this" and "we never
+ * heard of this" must not look the same in the drift counter.
+ */
+export const KNOWN_OPEN_CODE_PART_TYPES: Record<OpenCodePart["type"], boolean> = {
+  text: true,
+  reasoning: true,
+  file: true,
+  tool: true,
+  // OpenCode's first-class sub-agent record. Preferred over the `tool`
+  // heuristic, and deduplicated against it by child session id.
+  subtask: true,
+  // Context compaction and provider retry, each its own transcript row.
+  compaction: true,
+  retry: true,
+  // Per-step accounting carriers. No user-facing content of their own; their
+  // cost/token fields feed the usage meter in plan 11.
+  "step-start": false,
+  "step-finish": false,
+  // Internal bookkeeping with nothing a reader could act on: a workspace
+  // snapshot id, a raw patch already represented by the tool row that made it,
+  // and the agent identity already carried on the message.
+  snapshot: false,
+  patch: false,
+  agent: false,
+};
+
+export function isKnownOpenCodePartType(type: unknown): boolean {
+  return typeof type === "string" && type in KNOWN_OPEN_CODE_PART_TYPES;
+}
 
 /**
  * The schema constrains the *final* message, not the whole turn.
@@ -167,6 +205,13 @@ export function hydrateNormalizedOpenCodeSubagents(
 export function normalizeOpenCodeInteractiveMessage(
   value: unknown,
   index: number,
+  /**
+   * Called once per part kind this normalizer has no branch for.
+   *
+   * The *kind name* only. Optional so the pure normalizer stays callable from
+   * tests and from the renderer's copy without threading a recorder through.
+   */
+  onUnknownPart?: (type: string) => void,
 ): Record<string, unknown> | null {
   const envelope = asRecord(value);
   const info = asRecord(envelope?.info);
@@ -184,6 +229,25 @@ export function normalizeOpenCodeInteractiveMessage(
         ? new Date(rawCreatedAt).toISOString()
         : "1970-01-01T00:00:00.000Z";
   const parts: Record<string, unknown>[] = [];
+  /**
+   * Child sessions already represented by a first-class `subtask` part.
+   *
+   * OpenCode reports the same child twice — once as `subtask`, once as the
+   * task-shaped tool call that launched it — so without this the transcript
+   * carries two cards for one sub-agent. The `subtask` record wins because it
+   * is the provider's own, and the heuristic is the fallback for servers that
+   * do not emit one.
+   */
+  const subtaskSessionIds = new Set<string>();
+  // Pre-scanned rather than filled as the loop goes: OpenCode does not
+  // guarantee the `subtask` part precedes the tool call that launched the same
+  // child, and a dedupe that depends on ordering silently stops deduping.
+  for (const candidate of Array.isArray(envelope.parts) ? envelope.parts.slice(0, 2_048) : []) {
+    const part = asRecord(candidate);
+    if (part?.type !== "subtask") continue;
+    const childSessionId = nonEmptyString(part.sessionID) ?? nonEmptyString(part.sessionId);
+    if (childSessionId) subtaskSessionIds.add(childSessionId);
+  }
   let content = "";
   for (const candidate of Array.isArray(envelope.parts) ? envelope.parts.slice(0, 2_048) : []) {
     const part = asRecord(candidate);
@@ -204,15 +268,74 @@ export function normalizeOpenCodeInteractiveMessage(
     }
     if (part.type === "file") {
       const path = nonEmptyString(part.filename) ?? nonEmptyString(part.url) ?? "Attached file";
+      const mime = nonEmptyString(part.mime);
       parts.push({
-        type: "file",
+        // An image attachment is something to look at, not a file row to open.
+        // `mime` is what says which; a file row for a screenshot buries it.
+        type: mime?.startsWith("image/") ? "image" : "file",
         content: path,
+        ...(mime?.startsWith("image/") ? { imageSource: "attachment" } : {}),
+        ...(mime ? { mime } : {}),
+        ...(nonEmptyString(part.source) ? { fileSource: part.source } : {}),
         ...(typeof part.url === "string" ? { fileUrl: part.url } : {}),
         ...source,
       });
       continue;
     }
-    if (part.type !== "tool") continue;
+    if (part.type === "compaction") {
+      parts.push({
+        type: "compaction",
+        // OpenCode reports the boundary; the summary, when it has one, lives
+        // on the message that follows it rather than on the part.
+        content: nonEmptyString(part.summary) ?? "",
+        ...(typeof part.tokens === "number" ? { compactedTokensBefore: part.tokens } : {}),
+        ...source,
+      });
+      continue;
+    }
+    if (part.type === "retry") {
+      parts.push({
+        type: "retry",
+        content: nonEmptyString(part.error) ?? nonEmptyString(part.reason) ?? "The request failed",
+        // A `retry` part in a persisted message is a retry that already
+        // happened: the message it belongs to exists, so the request it
+        // describes resolved one way or another.
+        toolState: "success",
+        ...(typeof part.attempt === "number" ? { retryAttempt: part.attempt } : {}),
+        ...source,
+      });
+      continue;
+    }
+    if (part.type === "subtask") {
+      const childSessionId = nonEmptyString(part.sessionID) ?? nonEmptyString(part.sessionId);
+      const model = asRecord(part.model);
+      const providerId = nonEmptyString(model?.providerID);
+      const modelId = nonEmptyString(model?.modelID);
+      parts.push({
+        type: "subagent",
+        content: nonEmptyString(part.description) ?? nonEmptyString(part.agent) ?? "Sub-agent",
+        // Which of the two sources produced this row, so the dedupe below is
+        // legible rather than implicit.
+        subagentSource: "part",
+        ...(childSessionId ? { subagentId: childSessionId } : {}),
+        ...(nonEmptyString(part.description) ? { subagentName: part.description } : {}),
+        ...(nonEmptyString(part.agent) ? { subagentRole: part.agent } : {}),
+        ...(nonEmptyString(part.prompt) ? { subagentPrompt: part.prompt } : {}),
+        ...(providerId && modelId ? { subagentModelId: `${providerId}/${modelId}` } : {}),
+        subagentActions: [],
+        subagentActionCount: 0,
+        ...source,
+      });
+      continue;
+    }
+    if (part.type !== "tool") {
+      // A kind the table does not name is an SDK addition and is counted;
+      // a kind it names as `false` is a documented drop and is not.
+      if (!isKnownOpenCodePartType(part.type)) {
+        onUnknownPart?.(typeof part.type === "string" ? part.type : "(untyped)");
+      }
+      continue;
+    }
     const state = asRecord(part.state);
     const toolName = nonEmptyString(part.tool) ?? "Unknown tool";
     const rawStatus = state?.status;
@@ -249,6 +372,9 @@ export function normalizeOpenCodeInteractiveMessage(
           : taskEnvelope.state === "error"
             ? "failure"
             : toolState;
+    // The provider's own `subtask` record for this child already produced a
+    // row. Keeping the heuristic one too would show one sub-agent twice.
+    if (isSubagent && subagentId && subtaskSessionIds.has(subagentId)) continue;
     parts.push({
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
@@ -260,6 +386,9 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
       ...(isSubagent
         ? {
+            // The fallback path: recognised from the tool call's shape rather
+            // than reported as a sub-agent by the server.
+            subagentSource: "tool" as const,
             ...(subagentId ? { subagentId } : {}),
             ...(subagentName ? { subagentName } : {}),
             ...(subagentRole ? { subagentRole } : {}),

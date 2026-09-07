@@ -373,6 +373,32 @@ export type EngineEvent = EngineEventMeta &
       }
     | {
         /**
+         * A server request another client already answered.
+         *
+         * app-server will not wait for a second answer, so any card this bridge
+         * is showing for it is asking about something already decided.
+         */
+        kind: "serverRequest.resolved";
+        threadId: string | null;
+        requestId: string | number;
+      }
+    | {
+        /**
+         * A live progress report for one item.
+         *
+         * A hint over the item's authoritative state, never a substitute: the
+         * accumulator attaches the newest one to the matching row and drops it
+         * once the item settles, so a missed report costs a sub-line rather
+         * than correctness.
+         */
+        kind: "item.progress";
+        threadId: string | null;
+        turnId: string;
+        itemId: string;
+        message: string;
+      }
+    | {
+        /**
          * Raw custom-tool result used only when app-server has no structured
          * item for the call. The accumulator pairs it with the call by item id.
          */

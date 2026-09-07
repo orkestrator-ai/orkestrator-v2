@@ -201,6 +201,28 @@ them only inside containers. Its SDK and native runtime closure are vendored
 into the packaged bridge; see `docs/upgrade-agents.md` for the build and upgrade
 checks.
 
+### Cursor host tabs are ungated
+
+The SDK's own sandbox is off unless `CURSOR_BRIDGE_SANDBOX=1`, and no launcher
+sets it. On a **host worktree** that means Cursor's `shell`, `write` and
+`delete` tools run against the user's machine with no approval surface, because
+the SDK exposes no approval hook this bridge could park a call on.
+
+This is the same posture every platform here takes locally, not a Cursor
+oversight: Grok launches with `--always-approve`, Pi's approval gate is off
+unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, and Claude's local default allows the
+tools it does not explicitly branch on. Sandboxing Cursor alone would give one
+platform a different answer to the same question without making the product any
+safer — a user who wants isolation gets it from a container environment, which
+is the boundary Orkestrator actually enforces.
+
+What is *not* acceptable is leaving that difference unstated, which is what this
+paragraph fixes. Making the gate a real, uniform, backend-owned decision rather
+than a per-bridge default is
+[plan 12](../plans/sdk-coverage/12-execution-policy-and-host-container-parity.md);
+until it lands, `sandboxEnabled` staying `false` by default is a documented
+choice with a test pinning it, not an accident.
+
 ## Grok Build
 
 **Bridge:** `bridges/acp-bridge/` · **Transport:** ACP JSON-RPC over stdio

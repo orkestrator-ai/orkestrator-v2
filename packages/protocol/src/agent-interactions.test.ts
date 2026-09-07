@@ -11,6 +11,7 @@ import {
   AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
   AGENT_INTERACTION_ORIGINS,
+  AGENT_INTERACTION_POLICY_VERSION,
   AGENT_INTERACTION_OUTCOMES,
   AGENT_INTERACTION_PROVIDERS,
   AGENT_INTERACTION_STATES,
@@ -166,6 +167,29 @@ describe("agent interaction request contract", () => {
         origin: "looped-review-v2",
       }),
     ).toBe(false);
+  });
+
+  test("validates bounded provider amendments and rejects malformed grants", () => {
+    const amended = request();
+    amended.presentation.questions[0]!.options[0]!.amendment = {
+      kind: "network-policy",
+      detail: "allow registry.example.test",
+    };
+    expect(isAgentInteractionRequest(amended)).toBe(true);
+
+    const unknownKind = clone(amended) as unknown as Record<string, any>;
+    unknownKind.presentation.questions[0].options[0].amendment.kind = "everything";
+    expect(isAgentInteractionRequest(unknownKind)).toBe(false);
+
+    const missingDetail = clone(amended) as unknown as Record<string, any>;
+    delete missingDetail.presentation.questions[0].options[0].amendment.detail;
+    expect(isAgentInteractionRequest(missingDetail)).toBe(false);
+
+    const oversized = clone(amended) as unknown as Record<string, any>;
+    oversized.presentation.questions[0].options[0].amendment.detail = "x".repeat(
+      AGENT_INTERACTION_LIMITS.maxTextLength + 1,
+    );
+    expect(isAgentInteractionRequest(oversized)).toBe(false);
   });
 
   test("keeps duplicate labels and comma-containing provider values valid", () => {
@@ -627,9 +651,14 @@ describe("interaction policy", () => {
     expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "question")).toBe(
       "decline-and-continue",
     );
+    // `permission` is deliberately still a denial: the kind is overloaded
+    // across providers, and OpenCode maps a per-tool approval onto it.
     expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "permission")).toBe(
       "deny-and-fail",
     );
+    expect(
+      agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "command-approval"),
+    ).toBe("deny-and-fail");
     expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "future-kind")).toBe(
       "deny-and-fail",
     );
@@ -663,8 +692,12 @@ describe("interaction policy", () => {
       expect(agentInteractionPolicyAction(INTERACTIVE_AGENT_INTERACTION_POLICY, kind)).toBe(
         "await-user",
       );
+      // The per-kind overrides sit on top of the partition, so this reads them
+      // rather than re-deriving the bucket: `permission` is an authorization
+      // kind that is nonetheless declined.
       expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind)).toBe(
-        input.has(kind) ? "decline-and-continue" : "deny-and-fail",
+        UNATTENDED_AGENT_INTERACTION_POLICY.kinds?.[kind] ??
+          (input.has(kind) ? "decline-and-continue" : "deny-and-fail"),
       );
     }
   });
@@ -1437,5 +1470,110 @@ describe("privacy-safe serializers", () => {
     expect(serialized).not.toContain("private prompt content");
     expect(serialized).not.toContain("example.invalid");
     expect(serialized).not.toContain("first,value");
+  });
+});
+
+describe("per-kind interaction policy", () => {
+  test("sorts kinds into the bucket that can act on the user's machine", () => {
+    for (const kind of [
+      "command-approval",
+      "file-approval",
+      "permission",
+      "plan-approval",
+    ] as const) {
+      expect(AGENT_INTERACTION_AUTHORIZATION_KINDS as readonly string[]).toContain(kind);
+    }
+    for (const kind of [
+      "question",
+      "mcp-form",
+      "mcp-url",
+      "elicitation",
+      "terminal-selection",
+    ] as const) {
+      expect(AGENT_INTERACTION_INPUT_KINDS as readonly string[]).toContain(kind);
+    }
+  });
+
+  test("every kind is sorted, so a new one cannot fall through", () => {
+    const sorted = new Set<string>([
+      ...AGENT_INTERACTION_INPUT_KINDS,
+      ...AGENT_INTERACTION_AUTHORIZATION_KINDS,
+    ]);
+    for (const kind of AGENT_INTERACTION_KINDS) expect(sorted.has(kind)).toBe(true);
+  });
+
+  test("interactive mode awaits the user for every kind", () => {
+    for (const kind of AGENT_INTERACTION_KINDS) {
+      expect(agentInteractionPolicyAction(INTERACTIVE_AGENT_INTERACTION_POLICY, kind)).toBe(
+        "await-user",
+      );
+    }
+  });
+
+  test("unattended mode declines what the agent can route around", () => {
+    // Declining lets the turn continue; the agent carries on with the
+    // permissions it already has, or the MCP server handles its own refusal.
+    for (const kind of ["mcp-form", "mcp-url", "elicitation"] as const) {
+      expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind)).toBe(
+        "decline-and-continue",
+      );
+    }
+  });
+
+  test("unattended mode still fails a turn that wants to run a command or write a file", () => {
+    // The case the unattended policy exists to prevent.
+    for (const kind of ["command-approval", "file-approval"] as const) {
+      expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind)).toBe(
+        "deny-and-fail",
+      );
+    }
+  });
+
+  test("a kind with no override falls back to its bucket", () => {
+    expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "question")).toBe(
+      "decline-and-continue",
+    );
+    expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, "plan-approval")).toBe(
+      "deny-and-fail",
+    );
+  });
+
+  test("a policy with no per-kind map at all still resolves", () => {
+    // Every policy predating the field. It must not read as "no answer", and
+    // without overrides it falls back to the coarse bucket exactly as before.
+    const legacy = {
+      version: AGENT_INTERACTION_POLICY_VERSION,
+      mode: "unattended" as const,
+      input: "decline-and-continue" as const,
+      authorization: "deny-and-fail" as const,
+      unknown: "deny-and-fail" as const,
+    };
+    expect(agentInteractionPolicyAction(legacy, "permission")).toBe("deny-and-fail");
+    expect(agentInteractionPolicyAction(legacy, "question")).toBe("decline-and-continue");
+  });
+
+  test("an override naming an unknown kind or action invalidates the whole policy", () => {
+    // A policy is a fail-closed authority. An override it cannot interpret must
+    // not be quietly ignored, because the ignored entry is the one someone
+    // added on purpose.
+    expect(
+      isAgentInteractionPolicy({
+        ...UNATTENDED_AGENT_INTERACTION_POLICY,
+        kinds: { "future-kind": "decline-and-continue" },
+      }),
+    ).toBe(false);
+    expect(
+      isAgentInteractionPolicy({
+        ...UNATTENDED_AGENT_INTERACTION_POLICY,
+        kinds: { permission: "allow-everything" },
+      }),
+    ).toBe(false);
+    // A policy that resolves to nothing denies.
+    expect(
+      agentInteractionPolicyAction(
+        { ...UNATTENDED_AGENT_INTERACTION_POLICY, kinds: { permission: "nonsense" } } as never,
+        "question",
+      ),
+    ).toBe("deny-and-fail");
   });
 });

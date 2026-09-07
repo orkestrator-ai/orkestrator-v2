@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSession,
+  LoadExtensionsResult,
+  ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
+
+/** Not re-exported from the package root, so it is named through the method. */
+type ExtensionBindings = Parameters<AgentSession["bindExtensions"]>[0];
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   applyComposerPatch,
@@ -16,6 +23,7 @@ import {
   hydrateSessionComposer,
   newSessionState,
   projectResourceDiscoveryOptions,
+  recordExtensionLoadDiagnostics,
   resumeSession,
   sessionManagerFor,
   setAgentSessionTestHooks,
@@ -107,6 +115,8 @@ interface FakeSessionControl {
   subscribed: () => number;
   unsubscribed: () => number;
   disposed: () => number;
+  /** The bindings the session was started with, or undefined if never bound. */
+  bindings: () => ExtensionBindings | undefined;
 }
 
 function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionControl {
@@ -114,6 +124,7 @@ function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionContro
   let unsubscribed = 0;
   let disposed = 0;
   let listener: ((event: unknown) => void) | undefined;
+  let bindings: ExtensionBindings | undefined;
   const session = {
     sessionId: "pi-session-1",
     sessionFile: join(sessionDirectory, "attached.jsonl"),
@@ -139,6 +150,12 @@ function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionContro
     },
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
+    // Pi starts its extension runtime here: `session_start` fires and
+    // `resources_discover` contributes prompt templates. The default is a
+    // no-op that contributes nothing; tests that care override it.
+    bindExtensions: async (next: ExtensionBindings) => {
+      bindings = next;
+    },
     ...overrides,
   } as unknown as AgentSession;
   return {
@@ -147,6 +164,7 @@ function fakeSession(overrides: Record<string, unknown> = {}): FakeSessionContro
     subscribed: () => subscribed,
     unsubscribed: () => unsubscribed,
     disposed: () => disposed,
+    bindings: () => bindings,
   };
 }
 
@@ -418,6 +436,115 @@ describe("Pi SDK lifecycle", () => {
     await handle.completion;
     expect(state.status).toBe("idle");
     expect(state.promptJournal.get("req-happy")?.state).toBe("completed");
+  });
+});
+
+describe("extension binding", () => {
+  test("binds the extension runtime before the command list is read", async () => {
+    // `resources_discover` only runs inside bindExtensions, so a template an
+    // extension contributes exists on the session solely afterwards. Reading
+    // the commands first left every extension-contributed command missing.
+    const templates: Array<{ name: string; description?: string }> = [];
+    const fake = fakeSession({
+      promptTemplates: templates,
+      bindExtensions: async () => {
+        templates.push({ name: "deploy", description: "Ship it" });
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    await ensureSession(state);
+
+    expect(state.slashCommands).toEqual([{ name: "/deploy", description: "Ship it" }]);
+  });
+
+  test("binds in a non-terminal mode with an error listener and no UI context", async () => {
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+
+    await ensureSession(newSessionState());
+
+    const bindings = fake.bindings();
+    expect(bindings?.mode).toBe("rpc");
+    expect(typeof bindings?.onError).toBe("function");
+    // This host has no terminal to show an extension dialog on, so it does not
+    // claim one. See the comment on bindSessionExtensions.
+    expect(bindings?.uiContext).toBeUndefined();
+  });
+
+  test("an extension error becomes a redacted, bounded notice rather than being swallowed", async () => {
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+    await ensureSession(state);
+
+    fake.bindings()?.onError?.({
+      extensionPath: "/home/someone/.pi/extensions/telemetry.ts",
+      event: "session_start",
+      error: "boom",
+    });
+
+    const notice = state.health.listNotices()[0]!;
+    expect(notice).toMatchObject({
+      message: "Pi extension telemetry.ts failed handling session_start",
+      method: "extension/session_start",
+      severity: "error",
+      source: "provider",
+    });
+    // The absolute path names the user's home directory; only the basename is
+    // kept, and it never appears in the message or the detail.
+    expect(notice.message).not.toContain("/home/someone");
+    expect(notice.occurrences?.[0]?.detail).toBe("boom");
+  });
+
+  test("a bind that throws costs extension commands, not the session", async () => {
+    const fake = fakeSession({
+      bindExtensions: async () => {
+        throw new Error("extension runtime refused to start");
+      },
+    });
+    installTestHooks({ createAgentSession: async () => fake.session });
+    const state = newSessionState();
+
+    const session = await ensureSession(state);
+
+    expect(session).toBe(fake.session);
+    expect(state.session).toBe(fake.session);
+    expect(state.health.listNotices()[0]).toMatchObject({
+      message: "Pi extensions failed to start; extension commands and skills are unavailable",
+      severity: "error",
+      source: "bridge",
+    });
+  });
+
+  test("extensions Pi could not load at all are reported one notice each", () => {
+    const state = newSessionState();
+    recordExtensionLoadDiagnostics(state, {
+      extensions: [],
+      errors: [
+        { path: "/home/someone/.pi/extensions/broken.ts", error: "SyntaxError" },
+        { path: "/opt/pi/extensions/other.ts", error: "" },
+      ],
+      runtime: undefined,
+    } as unknown as LoadExtensionsResult);
+
+    const notices = state.health.listNotices();
+    expect(notices.map((notice) => notice.message)).toEqual([
+      "Pi extension broken.ts failed to load",
+      "Pi extension other.ts failed to load",
+    ]);
+    expect(notices[0]?.occurrences?.[0]?.detail).toBe("SyntaxError");
+    expect(notices[1]?.occurrences?.[0]?.detail).toBeUndefined();
+  });
+
+  test("no extension trouble means no notices at all", () => {
+    const state = newSessionState();
+    recordExtensionLoadDiagnostics(state, {
+      extensions: [],
+      errors: [],
+    } as unknown as LoadExtensionsResult);
+    expect(state.health.listNotices()).toEqual([]);
   });
 });
 

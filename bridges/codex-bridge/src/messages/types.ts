@@ -29,6 +29,10 @@ export interface NormalizedPart {
     | "tool-result"
     | "file"
     | "subagent"
+    | "compaction"
+    | "image"
+    | "status"
+    | "progress"
     | "async-question";
   content: string;
   asyncQuestion?: {
@@ -59,6 +63,16 @@ export interface NormalizedPart {
   subagentPrompt?: string;
   subagentActions?: NormalizedPart[];
   subagentActionCount?: number;
+  /** Context occupancy before a compaction boundary. */
+  compactedTokensBefore?: number;
+  /** Where an `image` part came from. */
+  imageSource?: "attachment" | "generated" | "viewed";
+  /** Severity of a `status` row. */
+  severity?: "info" | "warning" | "error";
+  /** The call a `progress` sub-line describes. */
+  toolUseId?: string;
+  /** How long that call has been running. */
+  elapsedMs?: number;
 }
 
 export interface NormalizedMessage {

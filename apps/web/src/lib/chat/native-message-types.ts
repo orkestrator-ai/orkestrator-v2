@@ -121,6 +121,45 @@ export interface NativeBasePart {
   subagentPrompt?: string;
   subagentActions?: NativeMessagePart[];
   subagentActionCount?: number;
+  /** The model the child ran on, when the provider names one. */
+  subagentModelId?: string;
+  /**
+   * How this sub-agent row was discovered.
+   *
+   * `part` is a provider's own first-class sub-agent record; `tool` is the
+   * heuristic that recognises a task-shaped tool call. Both exist for OpenCode,
+   * so the two are deduplicated by child session id and this says which
+   * survived.
+   */
+  subagentSource?: "tool" | "part";
+  /**
+   * Context occupancy immediately *before* a compaction, on a `compaction`
+   * part. The tokens after are not reported: providers disagree on whether the
+   * post-compaction number is known at the boundary, and a wrong "after" reads
+   * as a measurement rather than the guess it would be.
+   */
+  compactedTokensBefore?: number;
+  /** Attempt number on a `retry` part, when the provider counts them. */
+  retryAttempt?: number;
+  /**
+   * Where an `image` part came from: a user attachment, a model-generated
+   * image, or an image the agent read from the workspace. The three are shown
+   * the same way but mean different things in a transcript.
+   */
+  imageSource?: "attachment" | "generated" | "viewed";
+  /** How long a `progress` sub-line's tool call has been running. */
+  elapsedMs?: number;
+  /** Severity of a `status` row, and of an advisory rendered as one. */
+  severity?: "info" | "warning" | "error";
+  /**
+   * Live progress for this tool call, attached at projection time by matching
+   * `toolUseId`.
+   *
+   * A hint over the authoritative `toolState`, never a substitute: a missed
+   * progress event costs a sub-line, not correctness, so nothing downstream may
+   * read the absence of one as "not running".
+   */
+  progress?: { content: string; elapsedMs?: number; createdAt?: string };
 }
 
 export interface NativeTextPart extends NativeBasePart {
@@ -155,6 +194,51 @@ export interface NativeSubagentPart extends NativeBasePart {
   type: "subagent";
 }
 
+/**
+ * A context compaction boundary.
+ *
+ * `content` is the summary the provider produced, which may be empty — several
+ * providers report the boundary without one. The row is worth showing either
+ * way: it is the point after which the model no longer remembers what is above
+ * it, which is the single most confusing thing about a long session.
+ */
+export interface NativeCompactionPart extends NativeBasePart {
+  type: "compaction";
+}
+
+/**
+ * A provider retrying a request.
+ *
+ * `toolState` carries the lifecycle: `pending` while retrying, `success` or
+ * `failure` once it settles. A retry that never settles is a bug in the
+ * adapter, not a state to render — a permanently pending retry row is exactly
+ * the stale card this kind exists to replace.
+ */
+export interface NativeRetryPart extends NativeBasePart {
+  type: "retry";
+}
+
+/**
+ * An image in the transcript.
+ *
+ * Bytes never travel inline: `fileUrl` or `detailRef` locates them and the
+ * renderer fetches lazily. `content` is the caption or alt text.
+ */
+export interface NativeImagePart extends NativeBasePart {
+  type: "image";
+}
+
+/**
+ * A short provider status line that belongs in the flow.
+ *
+ * For things the user should see where they happen rather than in a panel: a
+ * rerouted model, a cleared conversation, a tool-use summary. Not for errors
+ * that end a turn — those are the turn's own failure.
+ */
+export interface NativeStatusPart extends NativeBasePart {
+  type: "status";
+}
+
 export interface NativeToolGroupPart extends NativeBasePart {
   type: "tool-group";
   parts: NativeMessagePart[];
@@ -184,7 +268,11 @@ export type NativeMessagePart =
   | NativeSubagentPart
   | NativeAgentGroupPart
   | NativeToolGroupPart
-  | NativeTaskGroupPart;
+  | NativeTaskGroupPart
+  | NativeCompactionPart
+  | NativeRetryPart
+  | NativeImagePart
+  | NativeStatusPart;
 
 export interface NativeMessage {
   id: string;

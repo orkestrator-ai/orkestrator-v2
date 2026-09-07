@@ -9,6 +9,7 @@ import {
   planComposerApply,
   type AcpComposerPatch,
 } from "./session-config.js";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
@@ -49,6 +50,7 @@ import {
   workingDirectory,
   type AcpSpawnOptions,
   type BridgeMessage,
+  type BridgeMessagePart,
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
@@ -58,6 +60,7 @@ import {
   appendSaturating,
   boundTranscript,
   boundedString,
+  contentBlockParts,
   contentText,
   failTranscriptLimit,
   findHistoryMessage,
@@ -251,6 +254,7 @@ export async function resumeSessionReserved(
       sessionConfig: emptySessionConfig(),
       dispatching: true,
       historyReplay: "hydrate",
+      health: new RuntimeHealthRecorder(),
     };
     attachChild(state, child);
     sessions.set(state.id, state);
@@ -386,6 +390,7 @@ export async function createSessionReserved(
       // routes take rather than leaving a window where both see it idle.
       dispatching: true,
       historyReplay: false,
+      health: new RuntimeHealthRecorder(),
     };
     attachChild(state, child);
     sessions.set(id, state);
@@ -628,6 +633,44 @@ export function permissionTitle(params: JsonObject): string {
   return title.slice(0, 500);
 }
 
+/**
+ * Append the non-text blocks of an update that carried no text at all.
+ *
+ * Its own message rather than an append to the last one: without text there is
+ * no chunk to continue, and folding an image into whatever preceded it would
+ * attribute it to the wrong turn.
+ */
+function appendNonTextContent(
+  state: SessionState,
+  update: JsonObject,
+  role: "user" | "assistant",
+): void {
+  const messageId = randomBytes(12).toString("hex");
+  const parts = contentBlockParts(update.content, messageId, 0);
+  if (parts.length === 0) return;
+  const modelId =
+    role === "assistant" ? boundedModelId(state.sessionConfig.composer.selectedModelId) : undefined;
+  state.messages.push({
+    id: messageId,
+    role,
+    content: parts.map((part) => part.content).join("\n"),
+    parts,
+    createdAt: new Date().toISOString(),
+    ...(modelId ? { modelId } : {}),
+  });
+  state.revision += 1;
+  state.uncheckedTranscriptBytes += parts.reduce(
+    // The data URL, not just the caption: an image's bytes are what the
+    // transcript budget is protecting against.
+    (total, part) =>
+      total +
+      Buffer.byteLength(part.content) +
+      ("fileUrl" in part && part.fileUrl ? Buffer.byteLength(part.fileUrl) : 0),
+    0,
+  );
+  if (state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES) boundTranscript(state);
+}
+
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
@@ -711,8 +754,14 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     kind !== "agent_message" &&
     kind !== "agent_message_chunk" &&
     kind !== "agent_thought_chunk"
-  )
+  ) {
+    // ACP is a wire the agent versions, not this bridge, so an added kind used
+    // to return here indistinguishably from an update that never arrived.
+    // Names only — an update's payload carries prompts, file contents and
+    // terminal output, and this reaches the renderer and the logs.
+    state.health.recordUnknown(kind || "(unnamed)");
     return;
+  }
   // User content is authored by `/session/prompt`, which pushes the
   // authoritative message before dispatching the turn. An agent that echoes the
   // prompt back mid-turn would append the same text onto that message a second
@@ -725,8 +774,16 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   )
     return;
   const text = contentText(update.content);
-  if (!text) return;
   const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
+  if (!text) {
+    // Not necessarily empty: ACP content is a union, and an update carrying
+    // only an image, a resource or an audio block has no text at all. Before
+    // this, `contentText` returned "" for those and the whole update was
+    // discarded, so an agent that answered with a screenshot produced a
+    // transcript that said nothing had happened.
+    appendNonTextContent(state, update, role);
+    return;
+  }
   if (role === "user" && state.historyReplay === "hydrate") {
     finalizeHistoryReplayTurnUsage(state);
   }
@@ -796,6 +853,26 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // A single chunk can exceed the cap on its own, so the freshly pushed part
     // can already be saturated.
     if (nextPartText.truncated) saturatedText.add(created);
+  }
+  // ACP permits text beside images, resources, links, and audio in one update.
+  // Keep those blocks on the same message instead of losing them to the text
+  // branch above.
+  const nonTextParts = contentBlockParts(update.content, message.id, message.parts.length);
+  if (nonTextParts.length > 0) {
+    const available = Math.max(0, MAX_PARTS_PER_MESSAGE - message.parts.length);
+    const retained = nonTextParts.slice(0, available);
+    message.parts.push(...retained);
+    state.uncheckedTranscriptBytes += retained.reduce(
+      (total, part) =>
+        total +
+        Buffer.byteLength(part.content) +
+        ("fileUrl" in part && part.fileUrl ? Buffer.byteLength(part.fileUrl) : 0),
+      0,
+    );
+    if (retained.length < nonTextParts.length) {
+      state.droppedParts += nonTextParts.length - retained.length;
+      state.transcriptTruncated = true;
+    }
   }
   const nextContent =
     partType === "text"

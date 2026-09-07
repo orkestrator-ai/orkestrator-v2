@@ -3621,6 +3621,17 @@ describe("activity polling", () => {
     expect(h.runtime.getActivity(sessionId)).toBe("waiting");
   });
 
+  test("a serverRequest/resolved notification withdraws a parked approval", async () => {
+    const { h, sessionId } = await workingSession();
+    await parkApproval(h);
+
+    h.child().notify("serverRequest/resolved", { threadId: "thread-1", requestId: 9101 });
+    await h.drain();
+
+    expect(h.runtime.listApprovals(sessionId)).toEqual([]);
+    expect(h.runtime.getActivity(sessionId)).toBe("working");
+  });
+
   test("a parked interaction is waiting rather than working", async () => {
     const { h, sessionId } = await workingSession();
     h.child().stdout.pushMessage({
@@ -3645,6 +3656,35 @@ describe("activity polling", () => {
 
     expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
     expect(h.runtime.getActivity(sessionId)).toBe("waiting");
+  });
+
+  test("a serverRequest/resolved notification withdraws a parked interaction", async () => {
+    const { h, sessionId } = await workingSession();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7101,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [
+          {
+            id: "language",
+            header: "Language",
+            question: "Which language?",
+            options: [{ label: "TypeScript" }],
+          },
+        ],
+      },
+    });
+    await h.drain();
+
+    h.child().notify("serverRequest/resolved", { threadId: "thread-1", requestId: 7101 });
+    await h.drain();
+
+    expect(h.runtime.listInteractions(sessionId)).toEqual([]);
+    expect(h.runtime.getActivity(sessionId)).toBe("working");
   });
 
   test("cancelling, recovering and starting are never reported idle", async () => {

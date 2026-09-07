@@ -9,10 +9,19 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
-import type {
-  NativeAgentContextUsage,
-  NativeAgentRateLimitWindow,
-  NativeAgentRuntimeSummary,
+import {
+  MAX_NATIVE_AGENT_DRIFT_KINDS,
+  MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH,
+  NATIVE_AGENT_NOTICE_SEVERITIES,
+  NATIVE_AGENT_NOTICE_SOURCES,
+  type NativeAgentContextUsage,
+  type NativeAgentNotice,
+  type NativeAgentNoticeSeverity,
+  type NativeAgentNoticeSource,
+  type NativeAgentRateLimitWindow,
+  type NativeAgentRuntimeDrift,
+  type NativeAgentRuntimeNotice,
+  type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import type {
   ProviderActivityState,
@@ -38,6 +47,10 @@ export const MAX_TRACKED_PROVIDER_INTERACTIONS = 4_096;
 // This page is only a bounded positive-existence cache seed. Absence from it
 // never proves deletion; only a per-session 404 may manufacture `missing`.
 export const INTERACTIVE_RUNTIME_METADATA_TTL_MS = 30_000;
+/** Distinct runtime notices the backend accepts from one bridge read. */
+export const MAX_PROVIDER_RUNTIME_NOTICES = 32;
+/** Advisories promoted into a session projection, newest kept. */
+export const MAX_PROJECTION_ADVISORIES = 5;
 export const INTERACTIVE_RUNTIME_METADATA_RETRY_MS = 5_000;
 export function setBoundedMapEntry<K, V>(
   map: Map<K, V>,
@@ -251,7 +264,105 @@ export function normalizeProviderRuntimeSummary(
   }
   if (typeof raw.state === "string" && raw.state) summary.state = raw.state.slice(0, 64);
   if (typeof raw.version === "string" && raw.version) summary.version = raw.version.slice(0, 64);
+  const drift = normalizeProviderDrift(raw.drift);
+  if (drift) summary.drift = drift;
+  const notices = normalizeProviderRuntimeNotices(raw.notices);
+  if (notices.length > 0) summary.notices = notices;
   return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+/**
+ * What the bridge saw and did not understand, bounded again at this hop.
+ *
+ * The bridge already bounds this, but the bridge is a separate process serving
+ * a JSON body: the backend must not take a count or a list on trust. Names
+ * only — a payload never crosses this boundary, by construction.
+ */
+export function normalizeProviderDrift(value: unknown): NativeAgentRuntimeDrift | undefined {
+  const raw = asRecord(value);
+  if (!raw) return undefined;
+  const unknownEvents = raw.unknownEvents;
+  if (typeof unknownEvents !== "number" || !Number.isSafeInteger(unknownEvents)) return undefined;
+  if (unknownEvents <= 0) return undefined;
+  const unknownKinds = Array.isArray(raw.unknownKinds)
+    ? raw.unknownKinds
+        .filter((kind): kind is string => typeof kind === "string" && kind.length > 0)
+        .slice(-MAX_NATIVE_AGENT_DRIFT_KINDS)
+        .map((kind) => kind.slice(0, MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH))
+    : [];
+  return { unknownEvents: Math.min(unknownEvents, 1_000_000), unknownKinds };
+}
+
+export function normalizeProviderRuntimeNotices(value: unknown): NativeAgentRuntimeNotice[] {
+  if (!Array.isArray(value)) return [];
+  const notices: NativeAgentRuntimeNotice[] = [];
+  for (const candidate of value.slice(-MAX_PROVIDER_RUNTIME_NOTICES)) {
+    const item = asRecord(candidate);
+    const message = item?.message;
+    if (!item || typeof message !== "string" || message.length === 0) continue;
+    const method = typeof item.method === "string" && item.method ? item.method : undefined;
+    const count = item.count;
+    const severity = NATIVE_AGENT_NOTICE_SEVERITIES.includes(
+      item.severity as NativeAgentNoticeSeverity,
+    )
+      ? (item.severity as NativeAgentNoticeSeverity)
+      : // Everything predating the field was a warning from the bridge itself.
+        "warning";
+    const source = NATIVE_AGENT_NOTICE_SOURCES.includes(item.source as NativeAgentNoticeSource)
+      ? (item.source as NativeAgentNoticeSource)
+      : "bridge";
+    const occurrences = Array.isArray(item.occurrences)
+      ? item.occurrences.slice(-5).flatMap((rawOccurrence) => {
+          const occurrence = asRecord(rawOccurrence);
+          if (!occurrence) return [];
+          const detail =
+            typeof occurrence.detail === "string" && occurrence.detail
+              ? occurrence.detail.slice(0, 1_000)
+              : undefined;
+          const receivedAt =
+            typeof occurrence.receivedAt === "string" && occurrence.receivedAt
+              ? occurrence.receivedAt.slice(0, 64)
+              : undefined;
+          return detail || receivedAt
+            ? [{ ...(detail ? { detail } : {}), ...(receivedAt ? { receivedAt } : {}) }]
+            : [];
+        })
+      : [];
+    notices.push({
+      message: message.slice(0, 1_000),
+      ...(method ? { method: method.slice(0, 128) } : {}),
+      ...(typeof count === "number" && Number.isSafeInteger(count) && count > 1
+        ? { count: Math.min(count, 1_000_000) }
+        : {}),
+      severity,
+      source,
+      ...(occurrences.length > 0 ? { occurrences } : {}),
+    });
+  }
+  return notices;
+}
+
+/**
+ * Provider advisories the tab should show, not only the health panel.
+ *
+ * Only `warning` and `error` cross: an `info` notice is inventory. Bounded to
+ * five and deduplicated by message, because these are appended to a projection
+ * a renderer holds for the life of a session.
+ */
+export function providerAdvisoryNotices(
+  notices: readonly NativeAgentRuntimeNotice[],
+  limit = MAX_PROJECTION_ADVISORIES,
+): NativeAgentNotice[] {
+  const seen = new Set<string>();
+  const advisories: NativeAgentNotice[] = [];
+  for (const notice of notices) {
+    const severity = notice.severity ?? "warning";
+    if (severity !== "warning" && severity !== "error") continue;
+    if (seen.has(notice.message)) continue;
+    seen.add(notice.message);
+    advisories.push({ kind: "advisory", message: notice.message, severity });
+  }
+  return advisories.slice(-limit);
 }
 
 export function providerInventoryCount(value: unknown): number {

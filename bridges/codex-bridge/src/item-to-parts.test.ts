@@ -95,6 +95,7 @@ describe("itemToParts", () => {
     expect(await itemToParts(item, DUMMY_CWD)).toEqual([
       {
         type: "tool-invocation",
+        toolUseId: "plan-1",
         content: "1. Inspect\n2. Implement",
         toolName: "plan",
         toolState: "success",
@@ -137,6 +138,7 @@ describe("itemToParts", () => {
     expect(parts).toEqual([
       {
         type: "tool-invocation",
+        toolUseId: "cmd-1",
         content: "ls -la",
         toolName: "bash",
         toolArgs: { command: "ls -la" },
@@ -197,6 +199,7 @@ describe("itemToParts", () => {
     expect(await itemToParts(item, DUMMY_CWD)).toEqual([
       {
         type: "tool-invocation",
+        toolUseId: "dynamic-1",
         content: "exec",
         toolName: "exec",
         toolArgs: {
@@ -395,6 +398,7 @@ describe("itemToParts", () => {
     expect(parts).toEqual([
       {
         type: "tool-invocation",
+        toolUseId: "search-1",
         content: "how to test async functions",
         toolName: "web_search",
         toolArgs: { query: "how to test async functions" },
@@ -785,6 +789,7 @@ describe("itemToParts", () => {
     expect(parts).toEqual([
       expect.objectContaining({
         type: "tool-invocation",
+        toolUseId: "mcp-pending",
         toolName: "slow_tool",
         toolState: "pending",
         toolTitle: "pending-server:slow_tool",
@@ -793,12 +798,36 @@ describe("itemToParts", () => {
     ]);
   });
 
-  test("returns empty array for unknown item type", async () => {
-    const item = { id: "unknown-1", type: "future_type" } as unknown as ThreadItem;
+  test("renders an unknown item type as a generic card rather than dropping it", async () => {
+    // A Codex upgrade that adds an item type must not make the turn look like
+    // it did less work than it did. The card says what happened without
+    // claiming to know what the item contained.
+    const item = {
+      id: "unknown-1",
+      type: "future_type",
+      secret: "the user's private prompt",
+    } as unknown as ThreadItem;
 
     const parts = await itemToParts(item, DUMMY_CWD);
 
-    expect(parts).toEqual([]);
+    expect(parts).toEqual([
+      {
+        type: "tool-invocation",
+        toolUseId: "unknown-1",
+        content: "Codex reported a future_type item this bridge cannot render",
+        toolName: "future_type",
+        toolState: "success",
+        toolTitle: "Unrendered future_type",
+      },
+    ]);
+    // Names only: an item's own fields carry prompts, file contents and command
+    // output, and this reaches the renderer and the logs.
+    expect(JSON.stringify(parts)).not.toContain("private prompt");
+  });
+
+  test("an item with no type at all still produces a card", async () => {
+    const parts = await itemToParts({ id: "x" } as unknown as ThreadItem, DUMMY_CWD);
+    expect(parts[0]).toMatchObject({ toolName: "unknown" });
   });
 });
 

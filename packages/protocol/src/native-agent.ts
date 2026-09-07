@@ -1,4 +1,8 @@
-import type { AgentInteractionRequest } from "./agent-interactions.js";
+import {
+  AGENT_INTERACTION_KINDS,
+  type AgentInteractionKind,
+  type AgentInteractionRequest,
+} from "./agent-interactions.js";
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
 /** Provider-neutral identity for one native-agent tab. */
@@ -421,6 +425,16 @@ export interface NativeAgentCapabilities {
     steer?: boolean;
     review?: boolean;
   };
+  /**
+   * The interaction kinds this platform can raise.
+   *
+   * Absent means "not reported"; present-and-empty means "this agent never
+   * asks", which is a different and more useful answer — it lets the renderer
+   * say so rather than showing an empty pending-interactions list that looks
+   * like a loading state forever. Cursor's SDK has no approval hook at all, so
+   * it is the empty case.
+   */
+  interactions?: { kinds: AgentInteractionKind[] };
 }
 
 /**
@@ -450,6 +464,7 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
       promptSuggestions: false,
     },
     actions: { compact: true },
+    interactions: { kinds: [...AGENT_INTERACTION_KINDS] },
   };
 }
 
@@ -478,6 +493,14 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       // per-build, not per-platform, so the flag means "this platform may offer
       // it" and the live composer's `fastModeAvailable` / `modes` decides.
       actions: {},
+      // Cursor's SDK exposes no approval hook at all, so a Cursor tab never
+      // raises anything. Grok's ACP wire does: it answers
+      // `session/request_permission` for tool calls. Reporting the empty set
+      // rather than omitting the field lets the renderer say "this agent does
+      // not ask" instead of showing a list that looks like it is still loading.
+      interactions: {
+        kinds: agent === "cursor" ? [] : ["command-approval", "file-approval", "permission"],
+      },
     };
   }
   if (agent === "claude") {
@@ -491,6 +514,21 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         promptSuggestions: true,
       },
       actions: { compact: true, rewindFiles: true },
+      // Questions through `AskUserQuestion`, plan approvals through
+      // `ExitPlanMode`, tool approvals through `canUseTool`, and MCP
+      // elicitations and host dialogs through the SDK's own callbacks.
+      interactions: {
+        kinds: [
+          "question",
+          "plan-approval",
+          "command-approval",
+          "file-approval",
+          "permission",
+          "mcp-form",
+          "mcp-url",
+          "elicitation",
+        ],
+      },
     };
   }
   if (agent === "opencode") {
@@ -508,6 +546,9 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         executionProfile: true,
       },
       actions: { compact: true, undo: true, redo: true, share: true },
+      // `permission.asked` and the v2-only `question.asked`. No MCP
+      // elicitation surface on the v1 wire this repo uses.
+      interactions: { kinds: ["question", "permission", "command-approval", "file-approval"] },
     };
   }
   if (agent === "pi") {
@@ -524,12 +565,22 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
         mode: false,
       },
       actions: { compact: true, steer: true },
+      // Pi's approval gate is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so
+      // this is what the platform *may* raise. The live session reports the
+      // empty set when the gate is off — see the bridge's status projection.
+      interactions: { kinds: ["command-approval", "file-approval"] },
     };
   }
   return {
     ...capabilities,
     attachments: { files: false, images: true },
     actions: { compact: true, steer: true, review: true },
+    // Codex: `item/tool/requestUserInput` questions, MCP elicitations in both
+    // form and url modes, and command/file approvals through
+    // `item/permissions/requestApproval`.
+    interactions: {
+      kinds: ["question", "command-approval", "file-approval", "permission", "mcp-form", "mcp-url"],
+    },
   };
 }
 
@@ -632,13 +683,53 @@ export interface NativeAgentRuntimeNoticeOccurrence {
   receivedAt?: string;
 }
 
+export const NATIVE_AGENT_NOTICE_SEVERITIES = ["info", "warning", "error"] as const;
+export type NativeAgentNoticeSeverity = (typeof NATIVE_AGENT_NOTICE_SEVERITIES)[number];
+
+/**
+ * Who said it.
+ *
+ * `provider` is the agent's own diagnostic, reported verbatim within its
+ * bounds; `bridge` is Orkestrator's own observation about the provider, such as
+ * an event shape it did not recognise. The distinction matters because only the
+ * first is something the user can act on with the vendor.
+ */
+export const NATIVE_AGENT_NOTICE_SOURCES = ["provider", "bridge"] as const;
+export type NativeAgentNoticeSource = (typeof NATIVE_AGENT_NOTICE_SOURCES)[number];
+
 export interface NativeAgentRuntimeNotice {
   message: string;
   method?: string;
   count?: number;
+  /**
+   * Defaults to `warning` when a provider omits it, which is what every notice
+   * predating this field was.
+   */
+  severity?: NativeAgentNoticeSeverity;
+  /** Defaults to `bridge`, matching every notice predating this field. */
+  source?: NativeAgentNoticeSource;
   /** Most recent redacted occurrences, bounded by the provider projection. */
   occurrences?: NativeAgentRuntimeNoticeOccurrence[];
 }
+
+/**
+ * What a bridge saw and did not understand.
+ *
+ * An SDK that adds a variant must not be able to make an event vanish without
+ * a trace: every bridge counts what it dropped and keeps the *names* of the
+ * most recent kinds. Names only — a payload can hold prompts, file contents or
+ * credentials, and this travels to the renderer and the logs.
+ */
+export interface NativeAgentRuntimeDrift {
+  unknownEvents: number;
+  unknownKinds: string[];
+}
+
+/** Longest drift-kind list any projection carries. */
+export const MAX_NATIVE_AGENT_DRIFT_KINDS = 16;
+
+/** Longest a single drift kind name may be. */
+export const MAX_NATIVE_AGENT_DRIFT_KIND_LENGTH = 128;
 
 /** Bounded runtime inventory for the agent-information panel. */
 export interface NativeAgentRuntimeSummary {
@@ -654,6 +745,7 @@ export interface NativeAgentRuntimeSummary {
   state?: string;
   version?: string;
   notices?: NativeAgentRuntimeNotice[];
+  drift?: NativeAgentRuntimeDrift;
 }
 
 export type NativeAgentNotice =
@@ -661,7 +753,14 @@ export type NativeAgentNotice =
   | { kind: "incomplete-turn"; message: string }
   | { kind: "error"; message: string }
   | { kind: "stopped"; message: string }
-  | { kind: "warning"; message: string };
+  | { kind: "warning"; message: string }
+  /**
+   * A provider advisory that belongs in the tab rather than only in the health
+   * panel — a deprecation, a rerouted model, a configuration warning. The user
+   * is reading the transcript, not the panel, when the thing it is about
+   * happens.
+   */
+  | { kind: "advisory"; message: string; severity: NativeAgentNoticeSeverity };
 
 export interface NativeAgentBackgroundTaskSummary {
   id: string;

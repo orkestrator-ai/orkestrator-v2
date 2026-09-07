@@ -325,6 +325,8 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     ...readNumber(value, "costUsd"),
     ...readNumber(value, "contextTokens"),
     ...readNumber(value, "contextWindow"),
+    ...readNumber(value, "contextPercent"),
+    ...(value.estimated === true ? { estimated: true as const } : {}),
     updatedAt: nonBlank(value.updatedAt) ? value.updatedAt : new Date().toISOString(),
   };
 }

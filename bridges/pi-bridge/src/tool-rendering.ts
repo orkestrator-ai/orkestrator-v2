@@ -14,6 +14,8 @@ import {
   MAX_TOOL_ARGUMENT_BYTES,
   MAX_TOOL_DIFF_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
+  MAX_TOOL_RESULT_IMAGES,
+  MAX_TOOL_RESULT_IMAGE_BYTES,
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
 import { boundText } from "./transcript.js";
@@ -36,6 +38,14 @@ export interface RenderedToolCall {
   toolDiff?: BridgeToolDiff;
   /** Present when this call carried a whole todo list, not a delta. */
   todos?: TodoItem[];
+  /**
+   * Images the tool returned, as data URLs the renderer can show.
+   *
+   * Rendered as their own transcript rows rather than as the literal `[image]`
+   * the text projection used to produce — a screenshot the model looked at is
+   * something the user should be able to look at too.
+   */
+  images?: Array<{ fileUrl: string; content: string }>;
 }
 
 export interface ToolCallSource {
@@ -76,9 +86,36 @@ export function renderToolCall(source: ToolCallSource): RenderedToolCall {
     rendered.toolOutput = boundText(text, MAX_TOOL_OUTPUT_BYTES);
   }
 
+  const images = toolResultImages(source.result);
+  if (images.length > 0) rendered.images = images;
+
   const diff = readDiff(toolName, input, details);
   if (diff) rendered.toolDiff = diff;
   return rendered;
+}
+
+/**
+ * Images carried by a tool result.
+ *
+ * Bounded in count and in bytes: a data URL is the image itself, and the
+ * transcript budget is shared with everything else in the session. An image
+ * over the cap is dropped rather than truncated — half a data URL renders as a
+ * broken image, which is worse than the `[image]` placeholder it replaced.
+ */
+function toolResultImages(result: unknown): Array<{ fileUrl: string; content: string }> {
+  if (!isObject(result) || !Array.isArray(result.content)) return [];
+  const images: Array<{ fileUrl: string; content: string }> = [];
+  for (const block of result.content) {
+    if (images.length >= MAX_TOOL_RESULT_IMAGES) break;
+    if (!isObject(block) || block.type !== "image") continue;
+    const data = readString(block.data);
+    const mimeType = readString(block.mimeType) ?? readString(block.mediaType) ?? "image/png";
+    if (!data) continue;
+    const fileUrl = data.startsWith("data:") ? data : `data:${mimeType};base64,${data}`;
+    if (fileUrl.length > MAX_TOOL_RESULT_IMAGE_BYTES) continue;
+    images.push({ fileUrl, content: readString(block.alt) ?? "Tool result image" });
+  }
+  return images;
 }
 
 /**
@@ -181,8 +218,11 @@ export function toolResultText(result: unknown): string {
       continue;
     }
     if (!isObject(block)) continue;
+    // An image block contributes nothing to the *text* projection: it is
+    // emitted as its own `image` part instead, where it can actually be seen.
+    // The literal "[image]" this replaces told the user an image existed and
+    // then withheld it.
     if (nonBlank(block.text)) chunks.push(block.text);
-    else if (block.type === "image") chunks.push("[image]");
   }
   return chunks.join("\n");
 }

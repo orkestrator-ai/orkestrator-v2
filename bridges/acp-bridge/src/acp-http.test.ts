@@ -13,6 +13,22 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  test("runtime health uses the shared envelope and answers unknown sessions in band", async () => {
+    const { base, headers } = await spawnBridge();
+    const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toEqual({ summary: {}, notices: [] });
+
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    });
+    const session = (await created.json()) as { id: string };
+    const health = await nativeFetch(`${base}/session/${session.id}/runtime-health`, { headers });
+    expect(health.status).toBe(200);
+    expect(await health.json()).toMatchObject({ summary: expect.any(Object), notices: [] });
+  });
+
   // The fake agent records its own argv, so these assert the exact command line
   // the bridge builds. They cannot prove the real CLIs accept those flags —
   // `docs/upgrade-agents.md` carries that as a manual step for version bumps.

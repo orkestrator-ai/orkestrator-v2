@@ -154,6 +154,25 @@ export const AGENT_INTERACTION_APPLY_RESULTS = [
 ] as const;
 export type AgentInteractionApplyResult = (typeof AGENT_INTERACTION_APPLY_RESULTS)[number];
 
+/**
+ * A broader authorization an option carries beyond this one request.
+ *
+ * Providers offer these as their own concept — Codex's execpolicy and network
+ * amendments, Claude's `canUseTool` suggestions — and each would otherwise need
+ * a provider-shaped button. Expressed as one more option instead, so the card
+ * stays generic and the user sees "approve" and "approve and remember" side by
+ * side rather than in two different places.
+ *
+ * `detail` is what the amendment actually grants, in the provider's own words,
+ * bounded like every other presented string. A card must not offer an
+ * amendment it cannot describe: an unexplained "and remember this" is exactly
+ * the click a user should not be asked to make.
+ */
+export interface AgentInteractionAmendment {
+  kind: "exec-policy" | "network-policy" | "permission-grant";
+  detail: string;
+}
+
 export interface AgentInteractionOption {
   /** Stable identity submitted by clients. */
   id: string;
@@ -161,6 +180,7 @@ export interface AgentInteractionOption {
   /** Exact value supplied to the provider by its adapter; never inferred from label. */
   providerValue: string;
   description?: string;
+  amendment?: AgentInteractionAmendment;
 }
 
 export interface AgentInteractionQuestion {
@@ -202,13 +222,21 @@ export interface AgentInteractionRequest {
   state: AgentInteractionState;
   revision: number;
   presentation: AgentInteractionPresentation;
-  /** False keeps the interaction actionable without blocking normal session work. */
-  blocking?: boolean;
   /** Authority-owned absolute epoch milliseconds. */
   createdAt: number;
   updatedAt: number;
   /** Absent only when the authority publishes no deadline. */
   expiresAt?: number;
+  /**
+   * Whether the turn is waiting on this request.
+   *
+   * Defaults to `true`, which is what every request predating this field was.
+   * A non-blocking request is still shown and still answerable, but it must not
+   * hold the session's activity at `waiting` — a build pipeline that reads a
+   * non-blocking question as a stall parks a turn that is in fact still
+   * running.
+   */
+  blocking?: boolean;
 }
 
 export interface AgentInteractionSnapshot {
@@ -272,6 +300,16 @@ export interface AgentInteractionPolicy {
   input: AgentInteractionPolicyAction;
   authorization: AgentInteractionPolicyAction;
   unknown: "deny-and-fail";
+  /**
+   * Per-kind overrides, for kinds the input/authorization split answers badly.
+   *
+   * The two coarse buckets are still the default. This exists because some
+   * kinds are neither: an MCP elicitation is a *server* asking for input rather
+   * than the agent asking the user, and declining one lets the turn continue,
+   * while denying a command approval must fail the turn. Absent means "use the
+   * bucket", which is what every policy predating this field did.
+   */
+  kinds?: Partial<Record<AgentInteractionKind, AgentInteractionPolicyAction>>;
 }
 
 export const INTERACTIVE_AGENT_INTERACTION_POLICY: AgentInteractionPolicy = Object.freeze({
@@ -288,6 +326,35 @@ export const UNATTENDED_AGENT_INTERACTION_POLICY: AgentInteractionPolicy = Objec
   input: "decline-and-continue",
   authorization: "deny-and-fail",
   unknown: "deny-and-fail",
+  kinds: Object.freeze({
+    /**
+     * An MCP *server* asking for input, not the agent asking the user.
+     *
+     * These are already in the `input` bucket and so already decline; they are
+     * named explicitly because the reason is different and worth keeping: the
+     * MCP spec defines `decline` as an outcome the server is expected to
+     * handle, so refusing one fails the tool call on its own terms rather than
+     * failing the turn around it.
+     *
+     * `permission` is deliberately **not** listed. It looks like the natural
+     * candidate — "the agent asked to widen what it may do, so refuse and let
+     * it carry on" — but the kind is overloaded across providers. Codex uses it
+     * for a genuine capability escalation, while OpenCode maps a per-tool
+     * approval onto it: an unattended OpenCode session refused permission to
+     * edit files would continue as an agent that cannot write, burning the rest
+     * of the pipeline to produce nothing. Failing there is the better outcome,
+     * and the ambiguity is not something a per-kind default can resolve — plan
+     * 12's execution policy is where that distinction belongs.
+     */
+    "mcp-form": "decline-and-continue",
+    "mcp-url": "decline-and-continue",
+    elicitation: "decline-and-continue",
+    // Running a command or writing a file with nobody watching is the case the
+    // unattended policy exists to prevent. Unchanged, and stated here so it
+    // cannot be softened by a later change to the `authorization` bucket.
+    "command-approval": "deny-and-fail",
+    "file-approval": "deny-and-fail",
+  }) as Partial<Record<AgentInteractionKind, AgentInteractionPolicyAction>>,
 });
 
 export const AGENT_INTERACTION_JOURNAL_STATES = [
@@ -418,6 +485,7 @@ const REQUEST_KEYS = new Set([
   "createdAt",
   "updatedAt",
   "expiresAt",
+  "blocking",
 ]);
 const PRESENTATION_KEYS = new Set([
   "title",
@@ -440,7 +508,8 @@ const QUESTION_KEYS = new Set([
   "allowFreeText",
   "options",
 ]);
-const OPTION_KEYS = new Set(["id", "label", "providerValue", "description"]);
+const OPTION_KEYS = new Set(["id", "label", "providerValue", "description", "amendment"]);
+const AMENDMENT_KEYS = new Set(["kind", "detail"]);
 const ANSWER_KEYS = new Set(["version", "interactionId", "sessionId", "answers"]);
 const QUESTION_ANSWER_KEYS = new Set(["questionId", "optionIds", "freeText"]);
 const RESOLUTION_KEYS = new Set([
@@ -523,7 +592,8 @@ function presentationTextLength(presentation: AgentInteractionPresentation): num
         option.id.length +
         option.label.length +
         option.providerValue.length +
-        (option.description?.length ?? 0);
+        (option.description?.length ?? 0) +
+        (option.amendment?.detail.length ?? 0);
     }
   }
   return total;
@@ -559,7 +629,19 @@ function isOption(value: unknown): value is AgentInteractionOption {
     isId(value.id) &&
     isBoundedString(value.label) &&
     isBoundedString(value.providerValue, AGENT_INTERACTION_LIMITS.maxProviderValueLength) &&
-    isOptionalBoundedString(value.description)
+    isOptionalBoundedString(value.description) &&
+    (value.amendment === undefined || isAmendment(value.amendment))
+  );
+}
+
+function isAmendment(value: unknown): value is AgentInteractionAmendment {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, AMENDMENT_KEYS) &&
+    (value.kind === "exec-policy" ||
+      value.kind === "network-policy" ||
+      value.kind === "permission-grant") &&
+    isBoundedString(value.detail)
   );
 }
 
@@ -794,20 +876,40 @@ export function isAgentInteractionApplyOutcome(
 export function isAgentInteractionPolicy(value: unknown): value is AgentInteractionPolicy {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, new Set(["version", "mode", "input", "authorization", "unknown"])) ||
+    !hasOnlyKeys(
+      value,
+      new Set(["version", "mode", "input", "authorization", "unknown", "kinds"]),
+    ) ||
     value.version !== AGENT_INTERACTION_POLICY_VERSION ||
     (value.mode !== "interactive" && value.mode !== "unattended") ||
     typeof value.input !== "string" ||
     !POLICY_ACTIONS.has(value.input) ||
     typeof value.authorization !== "string" ||
     !POLICY_ACTIONS.has(value.authorization) ||
-    value.unknown !== "deny-and-fail"
+    value.unknown !== "deny-and-fail" ||
+    !isInteractionPolicyKindMap(value.kinds)
   ) {
     return false;
   }
   return value.mode === "interactive"
     ? value.input === "await-user" && value.authorization === "await-user"
     : value.input === "decline-and-continue" && value.authorization === "deny-and-fail";
+}
+
+/**
+ * The optional per-kind override map.
+ *
+ * Absent is valid — that is every policy predating the field. Present but
+ * naming an unknown kind or an unknown action is not: a policy is a
+ * fail-closed authority, so an override it cannot interpret must invalidate
+ * the whole policy rather than be quietly ignored.
+ */
+function isInteractionPolicyKindMap(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([kind, action]) => KINDS.has(kind) && typeof action === "string" && POLICY_ACTIONS.has(action),
+  );
 }
 
 export function agentInteractionPolicyAction(
@@ -817,6 +919,12 @@ export function agentInteractionPolicyAction(
   if (!isAgentInteractionPolicy(policy) || typeof kind !== "string" || !KINDS.has(kind)) {
     return "deny-and-fail";
   }
+  // A per-kind override wins over the coarse bucket. The two buckets answer
+  // most kinds correctly, but not all: an MCP elicitation is a *server* asking
+  // for input rather than the agent asking the user, and declining one lets
+  // the turn continue while denying a command approval must fail it.
+  const override = policy.kinds?.[kind as AgentInteractionKind];
+  if (override && POLICY_ACTIONS.has(override)) return override;
   if (INPUT_KINDS.has(kind as AgentInteractionKind)) return policy.input;
   if (AUTHORIZATION_KINDS.has(kind as AgentInteractionKind)) {
     return policy.authorization;

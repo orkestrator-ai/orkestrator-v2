@@ -10,7 +10,7 @@ import type {
   NativeAgentContextUsage,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
-import { PROVIDER } from "./config.js";
+import { approvalsEnabled, PROVIDER } from "./config.js";
 import {
   piRunId,
   sessionIsBlocked,
@@ -55,6 +55,7 @@ export function publicStatus(state: SessionState): JsonObject {
     composer: state.composer,
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
+    capabilities: { interactions: { kinds: publicInteractionKinds() } },
   };
 }
 
@@ -161,9 +162,15 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   if (used === 0) return undefined;
   const model = state.composer.models.find((entry) => entry.id === usage.modelId);
   const maximum = usage.contextWindow ?? model?.contextWindow;
+  // Anything not backed by Pi's own occupancy number is the per-turn sum
+  // standing in for it, which is a different scope. Say so rather than
+  // presenting it as an exact whole-session total.
+  const estimated = usage.estimated === true || usage.contextTokens === undefined;
   return {
     usedTokens: used,
     ...(maximum ? { maximumTokens: maximum } : {}),
+    ...(usage.contextPercent !== undefined ? { percentage: usage.contextPercent } : {}),
+    ...(estimated ? { estimated: true } : {}),
     ...(usage.modelId ? { modelId: usage.modelId } : {}),
     ...(turn.inputTokens !== undefined ? { inputTokens: turn.inputTokens } : {}),
     ...(turn.outputTokens !== undefined ? { outputTokens: turn.outputTokens } : {}),
@@ -178,10 +185,27 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   };
 }
 
+/**
+ * The interaction kinds this session can actually raise.
+ *
+ * Read from the live gate rather than from the platform table: Pi's approval
+ * surface is off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, so a session with the
+ * gate off never asks. Reporting the empty set is what lets the tab say so
+ * instead of showing a pending list that looks like it is still loading.
+ */
+export function publicInteractionKinds(): string[] {
+  return approvalsEnabled() ? ["command-approval", "file-approval"] : [];
+}
+
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
+  const drift = state.health.drift();
+  const notices = state.health.listNotices();
   return {
     ...(state.todos.length > 0 ? { todos: state.todos.length } : {}),
+    ...(state.slashCommands.length > 0 ? { commands: state.slashCommands.length } : {}),
     state: state.session ? "attached" : "detached",
+    ...(drift ? { drift } : {}),
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 

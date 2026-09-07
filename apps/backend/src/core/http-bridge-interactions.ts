@@ -31,6 +31,7 @@ import {
 import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
+const CODEX_APPROVAL_AMENDMENT_QUESTION_ID = "codex-approval-amendment";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
@@ -287,6 +288,47 @@ export class HttpBridgeInteractionAdapter {
           ? rawChanges.length > 0
           : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
+    const amendmentOptions = Array.isArray(request.amendments)
+      ? request.amendments
+          .slice(0, AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion)
+          .flatMap((rawAmendment, amendmentIndex) => {
+            const amendment = asRecord(rawAmendment);
+            const detail = nonEmptyString(amendment?.detail);
+            const amendmentKind = amendment?.kind;
+            const decision = amendment?.decision;
+            const sourceIndex = amendment?.amendmentIndex;
+            if (
+              !amendment ||
+              !detail ||
+              (amendmentKind !== "exec-policy" && amendmentKind !== "network-policy") ||
+              (decision !== "approve-with-execpolicy-amendment" &&
+                decision !== "approve-with-network-amendment") ||
+              (decision === "approve-with-network-amendment" &&
+                (!Number.isSafeInteger(sourceIndex) || (sourceIndex as number) < 0))
+            ) {
+              return [];
+            }
+            const providerValue =
+              decision === "approve-with-network-amendment"
+                ? `${decision}:${sourceIndex as number}`
+                : decision;
+            return [
+              {
+                id: `amendment-${amendmentIndex}`,
+                label:
+                  amendmentKind === "exec-policy"
+                    ? "Approve with command policy"
+                    : "Approve with network policy",
+                providerValue,
+                description: boundedText(detail, "Provider-proposed policy amendment"),
+                amendment: {
+                  kind: amendmentKind,
+                  detail: boundedText(detail, "Provider-proposed policy amendment"),
+                },
+              } satisfies AgentInteractionQuestion["options"][number],
+            ];
+          })
+      : [];
     const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),
       ...(command ? [`Command: ${boundedText(command, "Command")}`] : []),
@@ -310,7 +352,22 @@ export class HttpBridgeInteractionAdapter {
               ? "Approve file changes"
               : "Approve permissions",
         body: body === undefined ? undefined : boundedText(body, "Approval requested"),
-        questions: [],
+        questions:
+          amendmentOptions.length > 0
+            ? [
+                {
+                  id: CODEX_APPROVAL_AMENDMENT_QUESTION_ID,
+                  prompt: "Broader approval (optional)",
+                  description:
+                    "Choose only if you want Codex to apply the provider-proposed policy amendment.",
+                  required: false,
+                  multiple: false,
+                  secret: false,
+                  allowFreeText: false,
+                  options: amendmentOptions,
+                },
+              ]
+            : [],
         confirmLabel: "Approve",
         declineLabel: "Deny",
         confirmDisabled: !actionable,
@@ -799,18 +856,35 @@ export class HttpBridgeInteractionAdapter {
       request.kind === "file-approval" ||
       request.kind === "permission"
     ) {
+      const amendmentAnswer = resolution.answer?.answers.find(
+        (answer) => answer.questionId === CODEX_APPROVAL_AMENDMENT_QUESTION_ID,
+      );
+      const amendmentOptionId = amendmentAnswer?.optionIds?.[0];
+      const amendmentProviderValue = amendmentOptionId
+        ? request.presentation.questions
+            .find((question) => question.id === CODEX_APPROVAL_AMENDMENT_QUESTION_ID)
+            ?.options.find((option) => option.id === amendmentOptionId)?.providerValue
+        : undefined;
+      const networkMatch = amendmentProviderValue?.match(/^approve-with-network-amendment:(\d+)$/);
+      const selectedDecision =
+        amendmentProviderValue === "approve-with-execpolicy-amendment"
+          ? amendmentProviderValue
+          : networkMatch
+            ? "approve-with-network-amendment"
+            : undefined;
       return {
         path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
         method: "POST",
         body: JSON.stringify({
           decision:
             resolution.action === "answer"
-              ? "approve"
+              ? (selectedDecision ?? "approve")
               : resolution.action === "approve-for-session"
                 ? "approve-for-session"
                 : resolution.action === "cancel"
                   ? "cancel"
                   : "deny",
+          ...(networkMatch ? { amendmentIndex: Number(networkMatch[1]) } : {}),
         }),
       };
     }

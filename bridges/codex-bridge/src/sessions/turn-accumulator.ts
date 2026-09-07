@@ -32,6 +32,13 @@ export type TurnPhase =
   | "interrupted"
   | "failed";
 
+/**
+ * A progress line is one row in a collapsed transcript, so it is capped well
+ * below a message. An MCP server that streams a whole log through `message`
+ * would otherwise put it in the transcript one report at a time.
+ */
+const MAX_ITEM_PROGRESS_CHARS = 200;
+
 export interface ItemAccumulator {
   id: string;
   /** Last authoritative item, when one has arrived. */
@@ -45,6 +52,14 @@ export interface ItemAccumulator {
   /** Command stdout/stderr, capped for the UI. */
   outputDelta: string;
   outputTruncated: boolean;
+  /**
+   * The newest progress report for this item, while it is still running.
+   *
+   * Only the newest: progress is a hint over the item's own state, so a
+   * backlog of superseded lines is noise. Cleared when the item completes,
+   * because a settled row reporting live progress is worse than no line at all.
+   */
+  progress?: string;
   completed: boolean;
   /** Raw apply_patch recovery candidate, hidden while a structured item may arrive. */
   rawFallback: boolean;
@@ -234,6 +249,8 @@ export class TurnAccumulator {
     accumulator.item = item;
     accumulator.completed = true;
     accumulator.rawFallback = false;
+    // The item settled, so any progress line describes work that has stopped.
+    accumulator.progress = undefined;
     accumulator.completedAt ??= completedAtMs;
   }
 
@@ -282,6 +299,19 @@ export class TurnAccumulator {
     target.set(index, (target.get(index) ?? "") + delta);
   }
 
+  /**
+   * Record a live progress report for one item.
+   *
+   * Ignored once the item has completed: a late report describes work that has
+   * already stopped, and the row would claim to be busy forever.
+   */
+  onItemProgress(itemId: string, message: string): void {
+    const accumulator = this.ensureItem(itemId);
+    if (accumulator.completed) return;
+    accumulator.progress = message.slice(0, MAX_ITEM_PROGRESS_CHARS);
+    accumulator.version += 1;
+  }
+
   onCommandOutputDelta(itemId: string, delta: string): void {
     const accumulator = this.ensureItem(itemId);
     if (accumulator.completed) return;
@@ -328,6 +358,7 @@ export class TurnAccumulator {
       status: state === "failure" ? "failed" : "completed",
     };
     accumulator.completed = true;
+    accumulator.progress = undefined;
     accumulator.completedAt ??= completedAtMs;
     return state === "failure";
   }

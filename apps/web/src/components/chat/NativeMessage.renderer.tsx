@@ -19,6 +19,7 @@ import {
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
 import { FilePart, TextPart } from "./NativeMessage.file-parts";
+import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import {
   AgentGroupPart,
   SubagentPart,
@@ -233,6 +234,7 @@ export function MessagePart({
           toolOutput={part.toolOutput}
           toolError={part.toolError}
           backgroundTask={part.backgroundTask}
+          progress={part.progress}
           deferredDetails={deferredDetails}
         />
       );
@@ -249,6 +251,14 @@ export function MessagePart({
           eagerPreview={eagerImagePreview}
         />
       );
+    case "compaction":
+      return <CompactionPart part={part} expansionKey={`${partKey}/compaction`} />;
+    case "retry":
+      return <RetryPart part={part} />;
+    case "status":
+      return <StatusPart part={part} />;
+    case "image":
+      return <ImagePart part={part} containerId={containerId} />;
     case "subagent":
       return (
         <SubagentPart part={part} containerId={containerId} partKey={partKey} embedded={embedded} />

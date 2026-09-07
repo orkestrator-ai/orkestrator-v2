@@ -23,11 +23,13 @@ import {
   SettingsManager,
   type AgentSession,
   type ExtensionAPI,
+  type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import type {
   NativeAgentResumeEntry,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   agentDirectory,
   CATALOG_TIMEOUT_MS,
@@ -223,6 +225,7 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     slashCommands: [],
     compacting: false,
     lastAccessed: Date.now(),
+    health: new RuntimeHealthRecorder(),
   };
 }
 
@@ -291,6 +294,10 @@ async function attach(state: SessionState): Promise<AgentSession> {
     ? await agentSessionTestHooks.createAgentSession(state)
     : await createPiAgentSession(state);
 
+  // Before `publishAttachedSession`, which is where the command list is read:
+  // binding is what runs `resources_discover`, so an extension-contributed
+  // prompt template only exists on the session afterwards.
+  await bindSessionExtensions(state, session);
   return publishAttachedSession(state, session);
 }
 
@@ -337,7 +344,88 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
   });
 
+  // Pi restored a session against a model the saved one is not. The turn will
+  // still run, on a different model than the transcript above it was produced
+  // by, so the user has to be told rather than left to infer it.
+  if (nonBlank(created.modelFallbackMessage)) {
+    state.health.recordNotice({
+      message: created.modelFallbackMessage,
+      method: "session/modelFallback",
+      severity: "warning",
+      source: "provider",
+    });
+  }
+  recordExtensionLoadDiagnostics(state, created.extensionsResult);
+
   return created.session;
+}
+
+/**
+ * Start the extension runtime.
+ *
+ * Nothing in Pi's extension surface runs until this is called: `session_start`
+ * never fires, so `resources_discover` never runs and extension-contributed
+ * skills and prompt templates are absent from the command list, and extension
+ * errors have no listener and are swallowed. Discarding the create result left
+ * every one of those silently off.
+ *
+ * No UI context is bound. Every field of `ExtensionBindings` is optional, and
+ * an `ExtensionUIContext` is a terminal surface — overlays, footers, widgets,
+ * raw key handlers — with no counterpart in a session served over HTTP.
+ * Binding a stub that resolves every dialog to "no answer" would be
+ * indistinguishable to an extension from a user dismissing it, which is the
+ * honest answer here: this host cannot show one. Routing extension dialogs
+ * through the interaction contract is plan 04's work, not a stub's.
+ */
+export async function bindSessionExtensions(
+  state: SessionState,
+  session: AgentSession,
+): Promise<void> {
+  try {
+    await session.bindExtensions({
+      // Not a terminal. `rpc` is the mode Pi's own programmatic host uses.
+      mode: "rpc",
+      onError: (error) => {
+        // Extension paths are absolute and can name a user's home directory,
+        // so only the basename is kept; the message is bounded by the recorder.
+        const extension = error.extensionPath.split(/[\\/]/).pop() ?? "extension";
+        state.health.recordNotice({
+          message: `Pi extension ${extension} failed handling ${error.event}`,
+          method: `extension/${error.event}`,
+          severity: "error",
+          source: "provider",
+          detail: error.error,
+        });
+      },
+    });
+  } catch (error) {
+    // A failed bind costs extension commands and resources, not the session.
+    // The turn the user is about to send still runs.
+    state.health.recordNotice({
+      message: "Pi extensions failed to start; extension commands and skills are unavailable",
+      method: "session/bindExtensions",
+      severity: "error",
+      source: "bridge",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Extensions Pi could not load at all, as one notice each. */
+export function recordExtensionLoadDiagnostics(
+  state: SessionState,
+  result: LoadExtensionsResult | undefined,
+): void {
+  for (const failure of result?.errors ?? []) {
+    const extension = failure.path.split(/[\\/]/).pop() ?? "extension";
+    state.health.recordNotice({
+      message: `Pi extension ${extension} failed to load`,
+      method: "extension/load",
+      severity: "error",
+      source: "provider",
+      ...(failure.error ? { detail: failure.error } : {}),
+    });
+  }
 }
 
 function publishAttachedSession(state: SessionState, session: AgentSession): AgentSession {
@@ -757,15 +845,85 @@ function hydrateHistory(state: SessionState): void {
 }
 
 /**
+ * Append a replayed boundary or status row as its own message.
+ *
+ * Its own message rather than a part on the previous one: these sit *between*
+ * turns, and folding one into the assistant message above it would claim the
+ * agent said it.
+ */
+function appendHistoricNotice(
+  state: SessionState,
+  part:
+    | { type: "compaction"; content: string; compactedTokensBefore?: number }
+    | {
+        type: "status";
+        content: string;
+        severity: "info" | "warning" | "error";
+      },
+): void {
+  const messageId = randomBytes(12).toString("hex");
+  pushMessage(state, "assistant", part.content, [
+    { ...part, sourcePartId: `${messageId}:0`, sourceMessageId: messageId } as BridgeMessagePart,
+  ]);
+}
+
+/**
  * Render one persisted session entry.
  *
- * Only the message entries carry conversation. The rest — model changes,
- * thinking-level changes, compaction bookkeeping — are session mechanics that
- * the live path also does not render, so replaying them would make a resumed
- * transcript strictly noisier than the one it is reproducing.
+ * The message entries carry the conversation, and the rest carry what happened
+ * *to* it: a compaction boundary the model no longer remembers past, a branch
+ * summary, a model or thinking-level change mid-session. Those are exactly the
+ * things a resumed transcript was missing — a user who returns to a compacted
+ * session and sees an unbroken history has been shown something false, and the
+ * live path now records all of them, so replaying only messages made a resumed
+ * transcript disagree with the one it was reproducing.
+ *
+ * `label` and `session_info` entries stay out: they are naming, not history.
  */
 function appendHistoricEntry(state: SessionState, entry: unknown): void {
-  if (!isObject(entry) || entry.type !== "message") return;
+  if (!isObject(entry)) return;
+  if (entry.type === "compaction") {
+    appendHistoricNotice(state, {
+      type: "compaction",
+      content: nonBlank(entry.summary) ? entry.summary : "",
+      ...(typeof entry.tokensBefore === "number"
+        ? { compactedTokensBefore: entry.tokensBefore }
+        : {}),
+    });
+    return;
+  }
+  if (entry.type === "branch_summary") {
+    if (nonBlank(entry.summary)) {
+      appendHistoricNotice(state, {
+        type: "status",
+        content: `Branch summary: ${entry.summary}`,
+        severity: "info",
+      });
+    }
+    return;
+  }
+  if (entry.type === "model_change") {
+    const model = [entry.provider, entry.modelId].filter(nonBlank).join("/");
+    if (model) {
+      appendHistoricNotice(state, {
+        type: "status",
+        content: `Model changed to ${model}`,
+        severity: "info",
+      });
+    }
+    return;
+  }
+  if (entry.type === "thinking_level_change") {
+    if (nonBlank(entry.thinkingLevel)) {
+      appendHistoricNotice(state, {
+        type: "status",
+        content: `Thinking level changed to ${entry.thinkingLevel}`,
+        severity: "info",
+      });
+    }
+    return;
+  }
+  if (entry.type !== "message") return;
   const message = entry.message;
   if (!isObject(message) || !nonBlank(message.role)) return;
 

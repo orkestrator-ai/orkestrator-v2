@@ -185,14 +185,18 @@ describe("requests needing UI we do not have", () => {
     expect(h.violations).toHaveLength(0);
   });
 
-  test("permission escalation is cancelled instead of fabricating a grant", async () => {
+  test("permission escalation with no one to grant it is declined, not failed", async () => {
     const h = harness();
     h.router.handle(request("item/permissions/requestApproval"), 1);
     await settle();
 
-    // There is no valid "decline" shape here, so an error is the honest answer.
-    expect(h.answers[0]!.error?.code).toBe(-32601);
-    expect(h.answers[0]!.result).toBeUndefined();
+    // An *empty grant profile*, not a `-32601`. To app-server the two mean
+    // different things: an error says this client cannot answer permission
+    // requests at all, which fails the turn, while an empty profile says "no,
+    // carry on with what you have" and lets it continue sandboxed.
+    expect(h.answers[0]!.error).toBeUndefined();
+    // Turn-scoped: refusing once is not refusing for the rest of the session.
+    expect(h.answers[0]!.result).toEqual({ permissions: {}, scope: "turn" });
   });
 
   test("a dynamic tool call is reported failed, not silently succeeded", async () => {
@@ -365,6 +369,64 @@ describe("interactive approvals", () => {
     expect(h.router.getHistory().at(-1)?.resolution).toBe("user-approved");
     // An approval needs no transcript note.
     expect(h.transcript).toHaveLength(0);
+  });
+
+  test("an amendment approval is counted as approved and returns the selected proposal", async () => {
+    const h = approvalHarness();
+    h.router.handle(
+      {
+        ...request("item/commandExecution/requestApproval"),
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          command: "curl https://two.example",
+          proposedNetworkPolicyAmendments: [
+            { host: "one.example", action: "allow" },
+            { host: "two.example", action: "allow" },
+          ],
+        },
+      },
+      1,
+    );
+    await settle();
+
+    expect(
+      h.router.resolveApproval(h.presented[0]!.approvalId, "approve-with-network-amendment", 1),
+    ).toBe(true);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({
+      decision: {
+        applyNetworkPolicyAmendment: {
+          network_policy_amendment: { host: "two.example", action: "allow" },
+        },
+      },
+    });
+    expect(h.router.getMetrics().approvalsApproved).toBe(1);
+    expect(h.router.getMetrics().approvalsDenied).toBe(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("user-approved");
+    expect(h.transcript).toEqual([]);
+  });
+
+  test("withdraws an approval answered by another client without recording a decline", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(h.router.withdrawResolved("srv-1")).toBe(true);
+    await settle();
+
+    expect(h.answers).toEqual([]);
+    expect(h.router.getParkedApprovals()).toEqual([]);
+    expect(h.router.getMetrics().approvalsApproved).toBe(0);
+    expect(h.router.getMetrics().approvalsDenied).toBe(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("externally-answered");
+    expect(h.resolved).toEqual([
+      expect.objectContaining({ decision: "withdrawn", resolution: "withdrawn" }),
+    ]);
+    expect(h.transcript).toEqual([]);
+    expect(h.router.withdrawResolved("missing")).toBe(false);
   });
 
   test("a denial is sent as decline and explained in the transcript", async () => {
@@ -845,6 +907,21 @@ describe("interactive questions and MCP elicitation", () => {
   test("resolving an unknown interaction id reports false", () => {
     const h = interactionHarness();
     expect(h.router.resolveInteraction("ask-does-not-exist", { action: "cancel" })).toBe(false);
+  });
+
+  test("withdraws an interaction answered by another client without responding", async () => {
+    const h = interactionHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(questionRequest(), 1);
+    await settle();
+
+    expect(h.router.withdrawResolved("srv-1")).toBe(true);
+    await settle();
+
+    expect(h.answers).toEqual([]);
+    expect(h.router.getParkedInteractions()).toEqual([]);
+    expect(h.router.getMetrics().interactionsAnswered).toBe(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("externally-answered");
+    expect(h.resolved[0]).toMatchObject({ action: "cancel", resolution: "withdrawn" });
   });
 
   test.each(["decline", "cancel"] as const)(

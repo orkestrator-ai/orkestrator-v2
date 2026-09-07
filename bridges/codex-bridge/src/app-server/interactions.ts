@@ -4,6 +4,7 @@ export type InteractionMethod = "item/tool/requestUserInput" | "mcpServer/elicit
 
 export type InteractionResolution =
   | "answered"
+  | "withdrawn"
   | "declined"
   | "cancelled"
   | "timed-out"
@@ -33,7 +34,14 @@ export interface InteractionRequest {
   itemId: string | null;
   generation: EngineGeneration;
   requestedAt: number;
-  /** True means Codex expects an explicit answer with no client deadline. */
+  /**
+   * Whether the turn is waiting on this request.
+   *
+   * app-server publishes it as `isBlocking`; the older `autoResolutionMs` is
+   * deprecated in favour of it and is read only when `isBlocking` is absent.
+   * A non-blocking question is still shown, but it must not hold the turn's
+   * activity at `waiting`.
+   */
   isBlocking: boolean;
   expiresAt?: number;
   autoResolutionMs?: number;
@@ -131,15 +139,16 @@ export function describeInteraction(options: {
 
   if (options.method === "item/tool/requestUserInput") {
     // Current app-server versions always send this boolean. Legacy recordings
-    // omitted it: keep those questions turn-blocking as they were before this
-    // field existed, while retaining the old bounded deadline.
+    // omitted it: preserve their auto-resolution behavior when present, while
+    // treating a request with neither field as blocking.
     if (params.isBlocking !== undefined && typeof params.isBlocking !== "boolean") return null;
-    const isBlocking = params.isBlocking !== false;
-    const waitsIndefinitely = params.isBlocking === true;
     const autoResolutionMs =
       typeof params.autoResolutionMs === "number" && params.autoResolutionMs > 0
         ? params.autoResolutionMs
         : undefined;
+    const isBlocking =
+      typeof params.isBlocking === "boolean" ? params.isBlocking : autoResolutionMs === undefined;
+    const waitsIndefinitely = params.isBlocking === true;
     const questions = Array.isArray(params.questions)
       ? params.questions.flatMap((raw) => {
           const question = record(raw);
@@ -194,8 +203,14 @@ export function describeInteraction(options: {
     };
   }
 
+  // `openaiForm` is the same payload as `openai/form` under a second spelling
+  // the generated protocol also defines. The handshake advertises
+  // `mcpServerOpenaiFormElicitation`, so app-server can send either; omitting
+  // one auto-cancelled a form the user was meant to fill in.
   const mode = params.mode;
-  if (mode !== "form" && mode !== "openai/form" && mode !== "url") return null;
+  if (mode !== "form" && mode !== "openai/form" && mode !== "openaiForm" && mode !== "url") {
+    return null;
+  }
   return {
     interactionId: options.interactionId,
     kind: mode === "url" ? "mcp-url" : "mcp-form",
@@ -205,7 +220,7 @@ export function describeInteraction(options: {
     itemId: null,
     generation: options.generation,
     requestedAt: options.requestedAt,
-    isBlocking: false,
+    isBlocking: true,
     expiresAt: options.defaultExpiresAt,
     serverName: text(params.serverName),
     message: text(params.message),

@@ -7,7 +7,7 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import {
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
@@ -236,23 +236,45 @@ function recordUsage(state: SessionState): void {
   state.turnStartedAt = undefined;
 }
 
-function readContextUsage(
-  state: SessionState,
-): { contextTokens?: number; contextWindow?: number } | undefined {
+/**
+ * Read Pi's own context accounting.
+ *
+ * `ContextUsage` is a typed SDK export — `{ tokens, contextWindow, percent }` —
+ * so the fields are read directly rather than probed. `tokens` is documented as
+ * `null` right after a compaction, before the next model response re-establishes
+ * a real count. That is not "unknown source", it is "known to be stale", so it
+ * is reported as `estimated` and the caller falls back to the per-turn sum. The
+ * previous probe silently switched to a differently-scoped number and presented
+ * it as an exact whole-session total.
+ */
+function readContextUsage(state: SessionState): {
+  contextTokens?: number;
+  contextWindow?: number;
+  contextPercent?: number;
+  estimated?: boolean;
+} {
   try {
-    const usage = state.session?.getContextUsage();
-    if (!usage) return undefined;
-    const record = usage as unknown as Record<string, unknown>;
-    const tokens = record.totalTokens ?? record.tokens ?? record.used;
-    const window = record.contextWindow ?? record.maxTokens;
+    const usage: ContextUsage | undefined = state.session?.getContextUsage();
+    if (!usage) return {};
+    const { tokens, contextWindow, percent } = usage;
+    const window =
+      typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
+        ? { contextWindow }
+        : {};
+    if (typeof tokens !== "number" || !Number.isFinite(tokens)) {
+      return { ...window, estimated: true };
+    }
     return {
-      ...(typeof tokens === "number" && Number.isFinite(tokens) ? { contextTokens: tokens } : {}),
-      ...(typeof window === "number" && Number.isFinite(window) ? { contextWindow: window } : {}),
+      contextTokens: tokens,
+      ...window,
+      ...(typeof percent === "number" && Number.isFinite(percent)
+        ? { contextPercent: percent }
+        : {}),
     };
   } catch {
     // Context accounting is a display nicety. A session that cannot report it
     // must not fail the turn that just succeeded.
-    return undefined;
+    return {};
   }
 }
 

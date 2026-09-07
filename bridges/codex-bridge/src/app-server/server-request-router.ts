@@ -22,8 +22,10 @@ import {
   buildApprovalResponse,
   describeApproval,
   describeApprovalOutcome,
+  isGrantingApprovalDecision,
   isInteractiveApprovalMethod,
   type ApprovalDecision,
+  type ApprovalResolvedDecision,
   type ApprovalRequest,
   type ApprovalResolution,
   type InteractiveApprovalMethod,
@@ -74,7 +76,8 @@ export type ServerRequestResolution =
   /** Answered by a human through the approval UI. */
   | "user-approved"
   | "user-declined"
-  | "user-answered";
+  | "user-answered"
+  | "externally-answered";
 
 export interface ServerRequestRecord {
   id: string | number;
@@ -126,7 +129,7 @@ export interface ServerRequestRouterOptions {
   /** Notifies the UI that a parked approval is no longer actionable. */
   onApprovalResolved?: (
     request: ApprovalRequest,
-    decision: ApprovalDecision,
+    decision: ApprovalResolvedDecision,
     resolution: ApprovalResolution,
   ) => void;
   presentInteraction?: (request: InteractionRequest) => boolean;
@@ -237,10 +240,14 @@ export class ServerRequestRouter {
    * a restart. The caller should treat that as "the card is stale", not an error:
    * with a 5-minute window and a restartable child it is a normal race.
    */
-  resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
+  resolveApproval(
+    approvalId: string,
+    decision: ApprovalDecision,
+    amendmentIndex?: number,
+  ): boolean {
     const parked = this.parkedApprovals.get(approvalId);
     if (!parked) return false;
-    void this.settleApproval(parked, decision, "answered");
+    void this.settleApproval(parked, decision, "answered", { amendmentIndex });
     return true;
   }
 
@@ -261,6 +268,32 @@ export class ServerRequestRouter {
         skipSend: true,
       });
     }
+  }
+
+  /**
+   * Withdraw a request another client already answered.
+   *
+   * app-server has the answer and will not wait for a second one, so the card
+   * on screen is asking about something already decided. Withdrawn rather than
+   * answered: sending a response for a settled request would be answering a
+   * question app-server has stopped asking, and `skipSend` is what keeps this
+   * from doing that.
+   *
+   * Returns whether anything was actually withdrawn, so the caller can tell a
+   * request this bridge parked from one it never saw.
+   */
+  withdrawResolved(requestId: string | number): boolean {
+    for (const parked of Array.from(this.parkedApprovals.values())) {
+      if (parked.requestId !== requestId) continue;
+      this.withdrawApproval(parked);
+      return true;
+    }
+    for (const parked of Array.from(this.parkedInteractions.values())) {
+      if (parked.requestId !== requestId) continue;
+      void this.settleInteraction(parked, { action: "cancel" }, "withdrawn", { skipSend: true });
+      return true;
+    }
+    return false;
   }
 
   /** Drops approvals for a thread whose session is going away. */
@@ -412,22 +445,27 @@ export class ServerRequestRouter {
         );
 
       /**
-       * Permissions escalation. There is no correct "decline" shape here — the
-       * response requires a permission profile — so cancel with a protocol error
-       * instead of inventing a grant.
+       * Permissions escalation with nobody to grant it.
+       *
+       * Answered with an *empty grant profile* rather than a `-32601` protocol
+       * error. The two are not the same thing to app-server: an error says
+       * "this client cannot answer permission requests at all", which fails the
+       * turn, while an empty profile says "no, carry on with what you have" and
+       * lets the turn continue sandboxed. `buildApprovalResponse` already knows
+       * how to build the empty profile, and it is the honest answer — the agent
+       * asked to widen what it may do and the answer is no, which is not the
+       * same as the request being unsupported.
        */
       case "item/permissions/requestApproval":
-        this.violation(method, "permission escalation requested");
         this.explain(
           record,
-          "Codex requested additional permissions. Orkestrator cannot grant them, so the request was cancelled.",
+          "Codex requested additional permissions with no one to grant them. Orkestrator declined, so the turn continues with the permissions it already had.",
         );
-        return this.finish(key, record, "cancelled", () =>
-          this.options.respondWithError(
+        return this.finish(key, record, "declined", () =>
+          this.options.respond(
             generation,
             request.id,
-            JSON_RPC_METHOD_NOT_FOUND,
-            "Orkestrator does not support permission escalation requests",
+            (buildApprovalResponse(method, "deny", request.params) as { result: unknown }).result,
           ),
         );
 
@@ -597,14 +635,14 @@ export class ServerRequestRouter {
     parked: PendingApproval,
     decision: ApprovalDecision,
     resolution: ApprovalResolution,
-    options: { skipSend?: boolean } = {},
+    options: { skipSend?: boolean; amendmentIndex?: number } = {},
   ): Promise<void> {
     // First writer wins, so a user click racing the expiry timer cannot answer twice.
     if (!this.parkedApprovals.delete(parked.request.approvalId)) return;
     clearTimeout(parked.timer);
     this.parkedKeys.delete(parked.key);
 
-    const approved = decision === "approve" || decision === "approve-for-session";
+    const approved = isGrantingApprovalDecision(decision);
     if (approved) this.counts.approvalsApproved += 1;
     else this.counts.approvalsDenied += 1;
 
@@ -628,10 +666,32 @@ export class ServerRequestRouter {
       return;
     }
 
-    const payload = buildApprovalResponse(parked.method, decision, parked.rawParams);
+    const payload = buildApprovalResponse(
+      parked.method,
+      decision,
+      parked.rawParams,
+      options.amendmentIndex,
+    );
     await this.finish(parked.key, parked.record, approved ? "user-approved" : "user-declined", () =>
       this.options.respond(parked.generation, parked.requestId, payload.result),
     );
+  }
+
+  /** Retire a card answered by another client without inventing a user choice. */
+  private withdrawApproval(parked: PendingApproval): void {
+    if (!this.parkedApprovals.delete(parked.request.approvalId)) return;
+    clearTimeout(parked.timer);
+    this.parkedKeys.delete(parked.key);
+    try {
+      this.options.onApprovalResolved?.(parked.request, "withdrawn", "withdrawn");
+    } catch (error) {
+      console.error("[codex-bridge] onApprovalResolved threw:", error);
+    }
+    this.pending.delete(parked.key);
+    this.sendStarted.delete(parked.key);
+    parked.record.resolution = "externally-answered";
+    parked.record.resolvedAt = this.now();
+    this.pushHistory(parked.record);
   }
 
   private tryParkInteraction(
@@ -720,7 +780,12 @@ export class ServerRequestRouter {
     if (options.skipSend) {
       this.pending.delete(parked.key);
       this.sendStarted.delete(parked.key);
-      parked.record.resolution = resolution === "answered" ? "user-answered" : "cancelled";
+      parked.record.resolution =
+        resolution === "answered"
+          ? "user-answered"
+          : resolution === "withdrawn"
+            ? "externally-answered"
+            : "cancelled";
       parked.record.resolvedAt = this.now();
       this.pushHistory(parked.record);
       return;

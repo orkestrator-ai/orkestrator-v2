@@ -29,6 +29,7 @@ import {
 import { ServerRequestRouter } from "../app-server/server-request-router.js";
 import type {
   ApprovalDecision,
+  ApprovalResolvedDecision,
   ApprovalRequest,
   ApprovalResolution,
 } from "../app-server/approvals.js";
@@ -357,6 +358,10 @@ function runtimeNoticeDetail(method: string, params: Record<string, unknown>): s
 }
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
+/** Distinct unrecognised notification method names retained. */
+const MAX_UNKNOWN_METHODS = 16;
+/** Longest retained method name. Protocol methods are far shorter than this. */
+const MAX_UNKNOWN_METHOD_LENGTH = 128;
 
 export class AppServerEngine implements CodexEngine {
   readonly kind = "app-server" as const;
@@ -370,12 +375,21 @@ export class AppServerEngine implements CodexEngine {
   private readonly terminalWaiters = new Map<string, TerminalWaiter[]>();
   private readonly interruptTimeoutMs: number;
   private unknownNotificationCount = 0;
+  /**
+   * The most recent method names the reducer did not recognise.
+   *
+   * Names only, and bounded: a count alone tells an operator that the pinned
+   * protocol moved but not *what* moved, which is the first thing they need
+   * after a Codex bump. Insertion-ordered so eviction is oldest-first, and
+   * re-inserted on a repeat so the retained window follows recency.
+   */
+  private readonly unknownNotificationMethods = new Set<string>();
   private unsupportedItemCount = 0;
   private readonly runtimeNotices: RuntimeNotice[] = [];
   private approvalHandler?: (request: ApprovalRequest) => boolean;
   private approvalResolvedHandler?: (
     request: ApprovalRequest,
-    decision: ApprovalDecision,
+    decision: ApprovalResolvedDecision,
     resolution: ApprovalResolution,
   ) => void;
   private interactionHandler?: (request: InteractionRequest) => boolean;
@@ -465,7 +479,7 @@ export class AppServerEngine implements CodexEngine {
     present: (request: ApprovalRequest) => boolean;
     resolved: (
       request: ApprovalRequest,
-      decision: ApprovalDecision,
+      decision: ApprovalResolvedDecision,
       resolution: ApprovalResolution,
     ) => void;
   }): void {
@@ -486,12 +500,26 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /** Applies a user's answer. False when the approval is already gone. */
-  resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
-    return this.router.resolveApproval(approvalId, decision);
+  resolveApproval(
+    approvalId: string,
+    decision: ApprovalDecision,
+    amendmentIndex?: number,
+  ): boolean {
+    return this.router.resolveApproval(approvalId, decision, amendmentIndex);
   }
 
   getParkedApprovals(): readonly ApprovalRequest[] {
     return this.router.getParkedApprovals();
+  }
+
+  /**
+   * Withdraw a parked card whose request another client already answered.
+   *
+   * Never answers: app-server has the answer, and a second response would be
+   * replying to a question it has stopped asking.
+   */
+  withdrawResolvedServerRequest(requestId: string | number): boolean {
+    return this.router.withdrawResolved(requestId);
   }
 
   resolveInteraction(interactionId: string, answer: InteractionAnswer): boolean {
@@ -532,12 +560,14 @@ export class AppServerEngine implements CodexEngine {
 
   getHealth(): AppServerHealth & {
     unknownNotifications: number;
+    unknownMethods: string[];
     unsupportedItems: number;
     serverRequests: ReturnType<ServerRequestRouter["getMetrics"]>;
   } {
     return {
       ...this.supervisor.getHealth(),
       unknownNotifications: this.unknownNotificationCount,
+      unknownMethods: [...this.unknownNotificationMethods],
       unsupportedItems: this.unsupportedItemCount,
       serverRequests: this.router.getMetrics(),
     };
@@ -606,6 +636,14 @@ export class AppServerEngine implements CodexEngine {
     const result = reduceNotification(notification, generation);
     if (result.unknownMethod) {
       this.unknownNotificationCount += 1;
+      const method = result.unknownMethod.slice(0, MAX_UNKNOWN_METHOD_LENGTH);
+      this.unknownNotificationMethods.delete(method);
+      this.unknownNotificationMethods.add(method);
+      while (this.unknownNotificationMethods.size > MAX_UNKNOWN_METHODS) {
+        const oldest = this.unknownNotificationMethods.values().next().value;
+        if (oldest === undefined) break;
+        this.unknownNotificationMethods.delete(oldest);
+      }
       this.supervisor.recordUnknownNotification();
     }
     if (result.unsupportedItemType) this.unsupportedItemCount += 1;
@@ -860,6 +898,7 @@ export class AppServerEngine implements CodexEngine {
      */
     protocol: {
       unknownNotifications: number;
+      unknownMethods: string[];
       unsupportedItems: number;
       serverRequests: ReturnType<ServerRequestRouter["getMetrics"]>;
     };
@@ -896,6 +935,7 @@ export class AppServerEngine implements CodexEngine {
       },
       protocol: {
         unknownNotifications: engine.unknownNotifications,
+        unknownMethods: engine.unknownMethods,
         unsupportedItems: engine.unsupportedItems,
         serverRequests: engine.serverRequests,
       },

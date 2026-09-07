@@ -19,6 +19,13 @@
  *    permissions method answers with a grant profile instead of a decision.
  */
 import type { EngineGeneration } from "../engine/types.js";
+import type {
+  ExecPolicyAmendment,
+  NetworkPolicyAmendment,
+} from "./generated/typescript/v2/index.js";
+
+const MAX_APPROVAL_AMENDMENTS = 16;
+const MAX_APPROVAL_AMENDMENT_DETAIL_LENGTH = 4_000;
 
 /** Methods a human can meaningfully answer. */
 export const INTERACTIVE_APPROVAL_METHODS = [
@@ -45,11 +52,32 @@ export type ApprovalKind = "command" | "file-change" | "permissions";
  * variant; elsewhere it degrades to `approve` rather than being rejected, since
  * the user's intent ("yes, and stop asking") is still satisfiable as "yes".
  */
-export type ApprovalDecision = "approve" | "approve-for-session" | "deny" | "cancel";
+export type ApprovalDecision =
+  | "approve"
+  | "approve-for-session"
+  | "deny"
+  | "cancel"
+  /**
+   * Approve, and widen the exec policy so this command shape stops asking.
+   *
+   * A separate decision rather than a flag on `approve`, because it grants
+   * something beyond the one request in front of the user. The amendment sent
+   * is the one app-server itself proposed on the request — never one this
+   * bridge composed, which would be Orkestrator granting a permission on the
+   * user's behalf.
+   */
+  | "approve-with-execpolicy-amendment"
+  /** Approve, and allow this host for the rest of the session. */
+  | "approve-with-network-amendment";
+
+/** Includes the neutral local outcome for a request another client answered. */
+export type ApprovalResolvedDecision = ApprovalDecision | "withdrawn";
 
 export const APPROVAL_DECISIONS: readonly ApprovalDecision[] = [
   "approve",
   "approve-for-session",
+  "approve-with-execpolicy-amendment",
+  "approve-with-network-amendment",
   "deny",
   "cancel",
 ];
@@ -58,9 +86,21 @@ export function isApprovalDecision(value: unknown): value is ApprovalDecision {
   return typeof value === "string" && (APPROVAL_DECISIONS as readonly string[]).includes(value);
 }
 
+export function isGrantingApprovalDecision(
+  decision: ApprovalDecision,
+): decision is Exclude<ApprovalDecision, "deny" | "cancel"> {
+  return (
+    decision === "approve" ||
+    decision === "approve-for-session" ||
+    decision === "approve-with-execpolicy-amendment" ||
+    decision === "approve-with-network-amendment"
+  );
+}
+
 /** Why a pending approval stopped being pending, for the UI and the audit trail. */
 export type ApprovalResolution =
   | "answered"
+  | "withdrawn"
   | "timed-out"
   | "engine-restarted"
   | "session-closed"
@@ -111,6 +151,23 @@ export interface ApprovalRequest {
   networkHost?: string;
   /** True when the protocol has a real "and stop asking" variant for this method. */
   supportsApproveForSession: boolean;
+  /**
+   * Broader authorizations this request offers beyond itself.
+   *
+   * Present only when app-server proposed one. `detail` is what the amendment
+   * grants, in app-server's own words: a card must not offer an amendment it
+   * cannot describe, because an unexplained "and remember this" is exactly the
+   * click a user should not be asked to make.
+   */
+  amendments?: Array<{
+    kind: "exec-policy" | "network-policy";
+    detail: string;
+    decision: Extract<
+      ApprovalDecision,
+      "approve-with-execpolicy-amendment" | "approve-with-network-amendment"
+    >;
+    amendmentIndex?: number;
+  }>;
   /**
    * False when the bridge could not recover enough action detail for an informed
    * approval. The renderer may still offer deny/cancel, but must not approve it.
@@ -209,6 +266,23 @@ export function describeApproval(options: {
         ? Boolean(changes?.length)
         : permissions !== undefined && (permissions.network || permissions.fileSystem);
 
+  const execPolicy = execPolicyAmendment(params);
+  const amendments: NonNullable<ApprovalRequest["amendments"]> = [];
+  if (execPolicy) {
+    amendments.push({
+      kind: "exec-policy",
+      detail: execPolicy.join(", "),
+      decision: "approve-with-execpolicy-amendment",
+    });
+  }
+  for (const proposal of networkPolicyAmendments(params)) {
+    amendments.push({
+      kind: "network-policy",
+      detail: `${proposal.amendment.action} ${proposal.amendment.host}`,
+      decision: "approve-with-network-amendment",
+      amendmentIndex: proposal.index,
+    });
+  }
   return {
     approvalId: options.approvalId,
     kind,
@@ -235,6 +309,10 @@ export function describeApproval(options: {
      * the UI so a future method without it can say so.
      */
     supportsApproveForSession: true,
+    // Only when app-server proposed one. An amendment the request did not offer
+    // must not be offered to the user: there is nothing to send, and the card
+    // would grant a session-wide approval under an "and remember this" label.
+    ...(amendments.length > 0 ? { amendments } : {}),
     actionable,
   };
 }
@@ -251,14 +329,93 @@ export interface ApprovalResponsePayload {
  * The legacy methods have no cancel variant, so it degrades to a denial with a
  * rejection string — honest about what actually happens.
  */
+/**
+ * The exec-policy amendment app-server proposed on this request.
+ *
+ * Read from the request, never composed here: an amendment is a durable
+ * widening of what the agent may run, and the only one safe to send is the one
+ * the user was shown.
+ */
+function execPolicyAmendment(rawParams: unknown): ExecPolicyAmendment | undefined {
+  const params = isRecord(rawParams) ? rawParams : {};
+  const amendment = params.proposedExecpolicyAmendment;
+  if (!Array.isArray(amendment)) return undefined;
+  if (
+    amendment.length === 0 ||
+    amendment.length > MAX_APPROVAL_AMENDMENTS ||
+    !amendment.every((rule): rule is string => typeof rule === "string" && rule.length > 0)
+  ) {
+    return undefined;
+  }
+  const detail = amendment.join(", ");
+  return detail.length <= MAX_APPROVAL_AMENDMENT_DETAIL_LENGTH ? amendment : undefined;
+}
+
+/** The bounded network amendments app-server proposed, with stable source indexes. */
+function networkPolicyAmendments(
+  rawParams: unknown,
+): Array<{ index: number; amendment: NetworkPolicyAmendment }> {
+  const params = isRecord(rawParams) ? rawParams : {};
+  if (!Array.isArray(params.proposedNetworkPolicyAmendments)) return [];
+  return params.proposedNetworkPolicyAmendments
+    .slice(0, MAX_APPROVAL_AMENDMENTS)
+    .flatMap((candidate, index) => {
+      if (!isRecord(candidate)) return [];
+      const host = str(candidate.host);
+      const action = candidate.action;
+      if (
+        !host ||
+        (action !== "allow" && action !== "deny") ||
+        `${action} ${host}`.length > MAX_APPROVAL_AMENDMENT_DETAIL_LENGTH
+      ) {
+        return [];
+      }
+      return [{ index, amendment: { host, action } }];
+    });
+}
+
+function networkPolicyAmendment(
+  rawParams: unknown,
+  amendmentIndex: number | undefined,
+): NetworkPolicyAmendment | undefined {
+  if (!Number.isSafeInteger(amendmentIndex) || amendmentIndex! < 0) return undefined;
+  return networkPolicyAmendments(rawParams).find((entry) => entry.index === amendmentIndex)
+    ?.amendment;
+}
+
 export function buildApprovalResponse(
   method: InteractiveApprovalMethod,
   decision: ApprovalDecision,
   rawParams: unknown,
+  amendmentIndex?: number,
 ): ApprovalResponsePayload {
   switch (method) {
     case "item/commandExecution/requestApproval":
     case "item/fileChange/requestApproval": {
+      // The amendment arms carry app-server's own proposal back verbatim. If
+      // the request did not offer one, the decision degrades to a plain
+      // `accept`: the user said yes, and granting a *composed* amendment would
+      // be this bridge widening a policy nobody asked it to widen.
+      if (decision === "approve-with-execpolicy-amendment") {
+        const amendment = execPolicyAmendment(rawParams);
+        return amendment
+          ? {
+              result: {
+                decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: amendment } },
+              },
+            }
+          : { result: { decision: "accept" } };
+      }
+      if (decision === "approve-with-network-amendment") {
+        const amendment = networkPolicyAmendment(rawParams, amendmentIndex);
+        return amendment
+          ? {
+              result: {
+                decision: { applyNetworkPolicyAmendment: { network_policy_amendment: amendment } },
+              },
+            }
+          : { result: { decision: "accept" } };
+      }
       const wire =
         decision === "approve"
           ? "accept"
@@ -272,6 +429,15 @@ export function buildApprovalResponse(
 
     case "execCommandApproval":
     case "applyPatchApproval": {
+      // The legacy methods have no amendment variant. "Yes, and remember" is
+      // still satisfiable as "yes, for this session", which is the closest
+      // thing the wire offers and never grants more than the user asked for.
+      if (
+        decision === "approve-with-execpolicy-amendment" ||
+        decision === "approve-with-network-amendment"
+      ) {
+        return { result: { decision: "approved_for_session" } };
+      }
       // Legacy `ReviewDecision`: snake_case unit variants plus an externally
       // tagged `denied`. It has a real `abort`, so cancel maps cleanly.
       if (decision === "approve") return { result: { decision: "approved" } };
@@ -292,7 +458,10 @@ export function buildApprovalResponse(
     case "item/permissions/requestApproval": {
       const params = isRecord(rawParams) ? rawParams : {};
       const requested = isRecord(params.permissions) ? params.permissions : {};
-      const granting = decision === "approve" || decision === "approve-for-session";
+      // A permission grant has no separate amendment arm: the grant *is* the
+      // amendment, and its breadth is the `scope` below. Both amendment
+      // decisions therefore mean "grant for the session".
+      const granting = isGrantingApprovalDecision(decision);
       return {
         result: {
           permissions: granting
@@ -301,7 +470,16 @@ export function buildApprovalResponse(
                 ...(requested.fileSystem != null ? { fileSystem: requested.fileSystem } : {}),
               }
             : {},
-          scope: decision === "approve-for-session" ? "session" : "turn",
+          // `session` only when the user actually asked to stop being asked.
+          // A denial stays turn-scoped: refusing once is not the same as
+          // refusing for the rest of the session, and the agent may have a
+          // better reason next time.
+          scope:
+            decision === "approve-for-session" ||
+            decision === "approve-with-execpolicy-amendment" ||
+            decision === "approve-with-network-amendment"
+              ? "session"
+              : "turn",
         },
       };
     }
@@ -311,10 +489,11 @@ export function buildApprovalResponse(
 /** Human-readable line for the transcript when an approval was not granted. */
 export function describeApprovalOutcome(
   request: ApprovalRequest,
-  decision: ApprovalDecision,
+  decision: ApprovalResolvedDecision,
   resolution: ApprovalResolution,
 ): string | null {
-  if (decision === "approve" || decision === "approve-for-session") return null;
+  if (decision === "withdrawn" || resolution === "withdrawn") return null;
+  if (isGrantingApprovalDecision(decision)) return null;
 
   // Phrased as an object of "asked for", so one template reads correctly for a
   // command, a patch and a permission grant alike.

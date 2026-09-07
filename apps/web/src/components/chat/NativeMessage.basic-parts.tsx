@@ -139,6 +139,15 @@ function backgroundTaskState(
 }
 
 /** Render a tool invocation part - expandable to show input/output */
+/** Human-readable elapsed time for a running tool's progress sub-line. */
+function formatElapsed(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return "";
+  const seconds = Math.round(elapsedMs / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 export function ToolPart({
   expansionKey,
   toolName,
@@ -148,6 +157,7 @@ export function ToolPart({
   toolOutput,
   toolError,
   backgroundTask,
+  progress,
   deferredDetails = false,
 }: {
   expansionKey: string;
@@ -158,6 +168,14 @@ export function ToolPart({
   toolOutput?: string;
   toolError?: string;
   backgroundTask?: NativeBackgroundTask;
+  /**
+   * The newest progress report for this call, attached at projection time.
+   *
+   * A hint over `toolState`, never a substitute: it is shown only while the
+   * call is still pending, so a missed final progress event cannot leave a
+   * settled row claiming to be busy.
+   */
+  progress?: { content: string; elapsedMs?: number };
   /** Output exists but is fetched on expand, so the row must stay expandable. */
   deferredDetails?: boolean;
 }) {
@@ -374,6 +392,9 @@ export function ToolPart({
   };
 
   const formattedInput = formatInput();
+  // Only while the call is actually running. A settled row showing a progress
+  // line would report work that has already stopped.
+  const livingProgress = toolState === "pending" ? progress : undefined;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -423,6 +444,15 @@ export function ToolPart({
           </span>
         )}
       </CollapsibleTrigger>
+
+      {livingProgress ? (
+        <div className="flex min-w-0 items-center gap-2 pl-9 pr-2 pb-1 text-[10px] text-muted-foreground/70">
+          <span className="truncate">{livingProgress.content}</span>
+          {livingProgress.elapsedMs !== undefined ? (
+            <span className="shrink-0 tabular-nums">{formatElapsed(livingProgress.elapsedMs)}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {hasExpandableContent && (
         <CollapsibleContent className="mt-1">

@@ -332,7 +332,7 @@ describe("session events", () => {
     expect(state.queue).toEqual({ steering: ["stop and check"], followUp: ["then summarize"] });
   });
 
-  test("reports compaction as work in flight and settles it with a card", () => {
+  test("reports compaction as work in flight and settles it as a boundary", () => {
     const state = running();
     applySessionEvent(state, { type: "compaction_start", reason: "threshold" });
     expect(state.compacting).toBe(true);
@@ -344,10 +344,10 @@ describe("session events", () => {
       result: { summary: "kept the plan" },
     });
     expect(state.compacting).toBe(false);
+    // A boundary in the conversation, not a tool the agent chose to run.
     expect(parts(state)[0]).toMatchObject({
-      toolName: "compact_context",
-      toolState: "success",
-      toolOutput: "kept the plan",
+      type: "compaction",
+      content: "kept the plan",
     });
   });
 
@@ -360,7 +360,7 @@ describe("session events", () => {
     expect(state.messages).toHaveLength(0);
   });
 
-  test("renders a retry as a visible notice", () => {
+  test("renders a retry as a visible row that is still in flight", () => {
     const state = running();
     applySessionEvent(state, {
       type: "auto_retry_start",
@@ -371,8 +371,10 @@ describe("session events", () => {
     });
 
     expect(parts(state)[0]).toMatchObject({
-      toolName: "notice",
-      toolTitle: "Retrying (2/5): overloaded",
+      type: "retry",
+      toolState: "pending",
+      retryAttempt: 2,
+      content: "overloaded",
     });
   });
 
@@ -417,5 +419,277 @@ describe("session events", () => {
 
     expect(state.messages).toHaveLength(0);
     expect(state.revision).toBe(before);
+  });
+});
+
+/**
+ * What this bridge does with a Pi event it has no branch for.
+ *
+ * Pi adds vocabulary between releases. Before drift recording, a new event was
+ * indistinguishable from an event that never arrived.
+ */
+describe("event drift", () => {
+  test("an unrecognised event type is counted and named, never thrown", () => {
+    const state = newSessionState();
+
+    expect(() => applySessionEvent(state, { type: "conversation_forked" })).not.toThrow();
+
+    expect(state.health.drift()).toEqual({
+      unknownEvents: 1,
+      unknownKinds: ["conversation_forked"],
+    });
+  });
+
+  test("a known-but-unrendered event is counted distinguishably from an SDK addition", () => {
+    const state = newSessionState();
+    applySessionEvent(state, { type: "turn_start" });
+    applySessionEvent(state, { type: "invented_by_pi" });
+
+    expect(state.health.drift()?.unknownKinds).toEqual(["unrendered:turn_start", "invented_by_pi"]);
+  });
+
+  test("the payload is never recorded, only the type name", () => {
+    const state = newSessionState();
+    applySessionEvent(state, {
+      type: "secret_event",
+      message: { text: "the user's private prompt" },
+      apiKey: "sk-not-a-real-key",
+    });
+
+    const serialized = JSON.stringify(state.health.snapshot());
+    expect(serialized).toContain("secret_event");
+    expect(serialized).not.toContain("private prompt");
+    expect(serialized).not.toContain("sk-not-a-real-key");
+  });
+
+  test("events the switch handles do not count as drift", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "hi" },
+    });
+    applySessionEvent(state, { type: "message_end" });
+    applySessionEvent(state, { type: "compaction_start" });
+
+    expect(state.health.drift()).toBeUndefined();
+  });
+});
+
+describe("compaction boundaries", () => {
+  test("becomes a boundary row carrying Pi's own token count", () => {
+    // The synthetic tool card this replaces read as something the agent chose
+    // to run, and dropped both token counts on the floor.
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, { type: "compaction_start", reason: "threshold" });
+    expect(state.compacting).toBe(true);
+
+    applySessionEvent(state, {
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
+      result: {
+        summary: "Earlier work on the parser.",
+        firstKeptEntryId: "e-9",
+        tokensBefore: 142_000,
+        estimatedTokensAfter: 18_000,
+      },
+    });
+
+    expect(state.compacting).toBe(false);
+    const part = state.messages.at(-1)!.parts.at(-1)!;
+    expect(part).toMatchObject({
+      type: "compaction",
+      content: "Earlier work on the parser.",
+      compactedTokensBefore: 142_000,
+      tokenCountText: "~18,000 tokens after",
+    });
+  });
+
+  test("a compaction with no summary is still a boundary", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "compaction_end",
+      aborted: false,
+      result: { summary: "", tokensBefore: 90_000 },
+    });
+
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      content: "",
+      compactedTokensBefore: 90_000,
+    });
+  });
+
+  test("a failed compaction stays a failure card, not a boundary", () => {
+    // Nothing was compacted, so claiming a boundary would tell the user the
+    // model forgot something it still remembers.
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "compaction_end",
+      aborted: false,
+      errorMessage: "summarization model unavailable",
+    });
+
+    const part = state.messages.at(-1)!.parts.at(-1)!;
+    expect(part.type).toBe("tool-invocation");
+    expect(part).toMatchObject({
+      toolState: "failure",
+      toolError: "summarization model unavailable",
+    });
+  });
+
+  test("an aborted compaction leaves no row at all", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, { type: "compaction_end", aborted: true });
+    expect(state.messages).toEqual([]);
+  });
+});
+
+describe("retries that settle", () => {
+  test("opens pending and settles on success", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "auto_retry_start",
+      attempt: 2,
+      maxAttempts: 5,
+      delayMs: 1_000,
+      errorMessage: "overloaded",
+    });
+
+    const part = state.messages.at(-1)!.parts.at(-1)!;
+    expect(part).toMatchObject({
+      type: "retry",
+      toolState: "pending",
+      retryAttempt: 2,
+      content: "overloaded",
+    });
+
+    applySessionEvent(state, { type: "auto_retry_end", success: true, attempt: 2 });
+    expect(part.toolState).toBe("success");
+  });
+
+  test("settles as failed and adopts the final error", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      errorMessage: "overloaded",
+    });
+    applySessionEvent(state, {
+      type: "auto_retry_end",
+      success: false,
+      attempt: 3,
+      finalError: "gave up after three attempts",
+    });
+
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "retry",
+      toolState: "failure",
+      content: "gave up after three attempts",
+    });
+  });
+
+  test("settles the newest open retry and leaves settled ones alone", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, { type: "auto_retry_start", attempt: 1, errorMessage: "first" });
+    applySessionEvent(state, { type: "auto_retry_end", success: true, attempt: 1 });
+    applySessionEvent(state, { type: "auto_retry_start", attempt: 2, errorMessage: "second" });
+    applySessionEvent(state, { type: "auto_retry_end", success: false, attempt: 2 });
+
+    const retries = state.messages.flatMap((message) =>
+      message.parts.filter((part) => part.type === "retry"),
+    );
+    expect(retries.map((part) => part.toolState)).toEqual(["success", "failure"]);
+  });
+
+  test("an end with no open retry is a no-op, not a throw", () => {
+    const state = newSessionState();
+    state.status = "running";
+    expect(() =>
+      applySessionEvent(state, { type: "auto_retry_end", success: true, attempt: 1 }),
+    ).not.toThrow();
+  });
+});
+
+describe("tool result images", () => {
+  const image = {
+    type: "image",
+    data: "iVBORw0KGgo=",
+    mimeType: "image/png",
+  };
+
+  test("becomes its own image row instead of the word [image]", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      result: { content: [{ type: "text", text: "Captured" }, image] },
+    });
+
+    const parts = state.messages.at(-1)!.parts;
+    const imagePart = parts.find((part) => part.type === "image")!;
+    expect(imagePart).toMatchObject({
+      type: "image",
+      imageSource: "viewed",
+      fileUrl: "data:image/png;base64,iVBORw0KGgo=",
+    });
+    // The text projection no longer claims an image the user cannot see.
+    const tool = parts.find((part) => part.type === "tool-invocation")!;
+    expect(tool.toolOutput).toBe("Captured");
+    expect(tool.toolOutput).not.toContain("[image]");
+  });
+
+  test("a re-emitted end frame does not duplicate the image", () => {
+    const state = newSessionState();
+    state.status = "running";
+    const event = {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      result: { content: [image] },
+    };
+    applySessionEvent(state, event);
+    applySessionEvent(state, event);
+
+    expect(state.messages.at(-1)!.parts.filter((part) => part.type === "image")).toHaveLength(1);
+  });
+
+  test("a streaming partial result does not emit an image yet", () => {
+    // A partial can carry the same image repeatedly as it streams.
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "tool_execution_update",
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      partialResult: { content: [image] },
+    });
+
+    expect(state.messages.at(-1)!.parts.some((part) => part.type === "image")).toBe(false);
+  });
+
+  test("an oversized image is dropped rather than shown broken", () => {
+    const state = newSessionState();
+    state.status = "running";
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      result: { content: [{ type: "image", data: "x".repeat(5 * 1024 * 1024) }] },
+    });
+
+    expect(state.messages.at(-1)!.parts.some((part) => part.type === "image")).toBe(false);
   });
 });

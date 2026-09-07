@@ -19,6 +19,7 @@ import type {
   NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
+  NativeAgentRuntimeNotice,
   NativeAgentRuntimeSummary,
   NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
@@ -224,6 +225,14 @@ export interface ProviderInteractiveSnapshot {
   contextUsage?: NativeAgentContextUsage;
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
+  /**
+   * The interaction kinds this *session* can raise, when the provider reports.
+   *
+   * Overrides the platform table: a Pi session with its approval gate off
+   * raises nothing, and the table says only what the platform may raise.
+   * Absent leaves the table standing; present-and-empty is a real "never asks".
+   */
+  interactionKinds?: string[];
   notices?: NativeAgentNotice[];
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;
@@ -349,6 +358,21 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome>;
+  /**
+   * Bounded inventory, drift and provider diagnostics for one session.
+   *
+   * Every bridge answers this, including for a session it does not have: an
+   * unknown session is `{ summary: {}, notices: [] }` in band, never a 404,
+   * because the backend reads a 404 on a shared route as "this bridge predates
+   * the route" and fails the environment. A provider with nothing to say
+   * returns an empty summary rather than omitting the method.
+   */
+  runtimeHealth?(sessionId: string): Promise<ProviderRuntimeHealth>;
+}
+
+export interface ProviderRuntimeHealth {
+  summary: NativeAgentRuntimeSummary;
+  notices: NativeAgentRuntimeNotice[];
 }
 
 export interface BridgeConnection {

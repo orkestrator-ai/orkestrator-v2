@@ -142,6 +142,48 @@ describe("NativeAgentService projection lifecycle", () => {
     );
   });
 
+  test.each([
+    { name: "only non-blocking requests", blocking: [false], phase: "running" },
+    { name: "mixed blocking requests", blocking: [false, true], phase: "blocked" },
+  ] as const)("derives session activity from $name", async ({ blocking, phase }) => {
+    const snapshot = pendingInteractionSnapshot(
+      10_000,
+      blocking.map(() => "question" as const),
+    );
+    snapshot.requests.forEach((request, index) => {
+      request.blocking = blocking[index];
+    });
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "running", messages: [] }),
+      interactions: {
+        listPendingInteractions: async () => snapshot,
+        resolveInteraction: async () => ({
+          result: "applied",
+          interactionId: "unused",
+          sessionId: "provider-session",
+          revision: 2,
+        }),
+      },
+    });
+    await withService(
+      {
+        prefix: `orkestrator-native-projection-${phase}-`,
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: `tab-${phase}`,
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.turn.phase).toBe(phase);
+        expect(projection?.interactions).toHaveLength(blocking.length);
+      },
+    );
+  });
+
   test("invalidates a missing session through the status fallback", async () => {
     const { provider, status } = createProviderStub("codex", {
       status: async () => "missing",

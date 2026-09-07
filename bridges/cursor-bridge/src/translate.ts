@@ -15,9 +15,11 @@
 import { randomBytes } from "node:crypto";
 import {
   MAX_ACTIVE_SUBAGENTS_PER_SESSION,
+  MAX_MESSAGE_TEXT_BYTES,
   MAX_TOOL_OUTPUT_BYTES,
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
+import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import { appendBounded, boundText, chargeTranscript } from "./transcript.js";
 import {
@@ -25,6 +27,9 @@ import {
   nonBlank,
   toolSourceStates,
   type BridgeMessage,
+  type BridgeCompactionPart,
+  type BridgeImagePart,
+  type BridgeProgressPart,
   type BridgeTextPart,
   type BridgeToolPart,
   type JsonObject,
@@ -38,11 +43,55 @@ interface UpdateContext {
 }
 
 /**
+ * Which update types this translator accounts for.
+ *
+ * A `Record` over the SDK's own unions rather than a list, so a `@cursor/sdk`
+ * release that adds an update type **fails this typecheck** instead of the
+ * update arriving as an unexplained gap. `true` means the switch below does
+ * something with it; `false` means known and deliberately not rendered, each
+ * one documented — "we chose not to show this" and "we never heard of this"
+ * must not look the same in the drift counter.
+ *
+ * `NestedTaskUpdate` is a strict subset of `InteractionUpdate` except for
+ * `step-started`/`step-completed`, which are in both, so one table covers the
+ * recursive call as well.
+ */
+const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate["type"], boolean> =
+  {
+    "text-delta": true,
+    "thinking-delta": true,
+    "thinking-completed": true,
+    "token-delta": true,
+    "partial-tool-call": true,
+    "tool-call-started": true,
+    "tool-call-completed": true,
+    "tool-call-delta": true,
+    "shell-output-delta": true,
+    summary: true,
+    "turn-ended": true,
+    // A message the SDK appended to the conversation itself — which is where a
+    // steered prompt lands. Without this row a steer vanished from the
+    // transcript entirely.
+    "user-message-appended": true,
+    // The pending and settled halves of the compaction that `summary`
+    // delivers whole, so the boundary appears while it is being produced
+    // rather than only once it is done.
+    "summary-started": true,
+    "summary-completed": true,
+    // Internal turn segmentation. No transcript value: a step boundary is not
+    // something a reader can act on, and the work inside it is already
+    // rendered by the deltas and tool calls it contains.
+    "step-started": false,
+    "step-completed": false,
+  };
+
+/**
  * Apply one interaction update to the session transcript.
  *
- * Unknown update types are ignored rather than rejected. The SDK adds
+ * Unknown update types are recorded as drift rather than rejected. The SDK adds
  * vocabulary faster than this bridge can track it, and an unrecognized frame
- * mid-turn must degrade to "not rendered", never to a failed turn.
+ * mid-turn must degrade to "not rendered", never to a failed turn — but it must
+ * not degrade to *invisible* either, which is what a bare `default: break` did.
  */
 export function applyInteractionUpdate(
   state: SessionState,
@@ -88,6 +137,20 @@ export function applyInteractionUpdate(
     case "summary":
       applySummary(state, readText(update.summary), context);
       break;
+    case "summary-started":
+      // Open the boundary now: compaction can take a while, and a session that
+      // appears to stall with nothing to explain it is the case this fixes.
+      applySummaryStarted(state, context);
+      break;
+    case "summary-completed":
+      applySummaryCompleted(state, readText(update.summary), context);
+      break;
+    case "user-message-appended":
+      applyAppendedUserMessage(
+        state,
+        update as unknown as Extract<InteractionUpdate, { type: "user-message-appended" }>,
+      );
+      break;
     case "turn-ended":
       // Nested task usage belongs to the child model context. Folding it into
       // the parent would make the parent's live context gauge jump to an
@@ -96,6 +159,12 @@ export function applyInteractionUpdate(
       if (!context.parentTaskUseId) applyTurnUsage(state, update.usage);
       break;
     default:
+      // A type the table names as `false` is a documented gap; one it does not
+      // name is an SDK addition. Both are counted, and distinguishably so.
+      // Names only: an update payload carries prompts and file contents.
+      state.health.recordUnknown(
+        update.type in HANDLED_UPDATE_TYPES ? `unrendered:${update.type}` : update.type,
+      );
       break;
   }
 }
@@ -147,10 +216,13 @@ function applyToolCall(
 ): void {
   const callId = nonBlank(update.callId) ? update.callId : undefined;
   if (!callId) return;
-  const rendered = renderToolCall(update.toolCall);
+  const rendered = renderToolCall(update.toolCall, state.health);
   const message = currentAssistantMessage(state);
   closeTextParts(state, context.parentTaskUseId);
   const part = upsertToolPart(state, message, callId, context.parentTaskUseId);
+  if (phase === "settled" && rendered.generatedImage) {
+    appendGeneratedImage(state, message, callId, rendered.generatedImage);
+  }
 
   part.toolName = rendered.toolName;
   part.content = rendered.toolTitle
@@ -177,7 +249,14 @@ function applyToolCall(
 
   // A settled shell call supersedes whatever was streamed into it, so drop the
   // streaming buffer rather than letting it grow for the rest of the session.
-  if (phase === "settled") toolSourceStates.delete(part);
+  // The progress line goes with it: the call is over, so a line saying it is
+  // still working would be a lie the transcript keeps telling.
+  if (phase === "settled") {
+    toolSourceStates.delete(part);
+    message.parts = message.parts.filter(
+      (candidate) => candidate.type !== "progress" || candidate.toolUseId !== callId,
+    );
+  }
   chargeToolPart(state, part);
   state.revision += 1;
 }
@@ -295,8 +374,80 @@ function applyShellOutputDelta(
   );
   toolSourceStates.set(part, source);
   part.toolOutput = source.streamedOutput;
+  // A live sub-line beside the accumulating output: the output is what the
+  // command produced, the progress line is "it is still producing it". The
+  // backend projection folds it onto this row by call id.
+  if (part.toolUseId) upsertProgressPart(state, message, part.toolUseId, text);
   chargeToolPart(state, part);
   state.revision += 1;
+}
+
+/**
+ * Keep exactly one live progress line per call.
+ *
+ * Only the newest survives, and it is dropped when the call settles: progress
+ * is a hint over the authoritative tool state, and a settled row still showing
+ * a progress line reports work that has already stopped.
+ */
+function upsertProgressPart(
+  state: SessionState,
+  message: BridgeMessage,
+  toolUseId: string,
+  text: string,
+): void {
+  const content = boundText(lastLine(text), MAX_TOOL_TITLE_BYTES);
+  if (!content) return;
+  const existing = message.parts.find(
+    (candidate) => candidate.type === "progress" && candidate.toolUseId === toolUseId,
+  ) as BridgeProgressPart | undefined;
+  if (existing) {
+    existing.content = content;
+    return;
+  }
+  const sourcePartId = `progress:${toolUseId}`;
+  message.parts.push({
+    type: "progress",
+    content,
+    sourcePartId,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+    toolUseId,
+  });
+  chargeTranscript(state, content.length + sourcePartId.length);
+}
+
+/** The newest non-empty line of streamed output, which is what is happening now. */
+function lastLine(text: string): string {
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  return lines.at(-1)?.trim() ?? "";
+}
+
+/**
+ * Show an image the agent generated.
+ *
+ * Keyed on the call id so a re-rendered settled call cannot append a second
+ * copy. The bytes stay on disk: only the path travels.
+ */
+function appendGeneratedImage(
+  state: SessionState,
+  message: BridgeMessage,
+  callId: string,
+  image: { filePath: string; caption: string },
+): void {
+  const sourcePartId = `image:${callId}`;
+  if (message.parts.some((candidate) => candidate.sourcePartId === sourcePartId)) return;
+  const part: BridgeImagePart = {
+    type: "image",
+    content: image.caption,
+    sourcePartId,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+    fileUrl: `file://${image.filePath}`,
+    filename: image.filePath,
+    imageSource: "generated",
+  };
+  message.parts.push(part);
+  chargeTranscript(state, part.content.length + sourcePartId.length);
 }
 
 /**
@@ -316,24 +467,110 @@ function readShellOutputText(event: unknown): string {
   return "";
 }
 
+/**
+ * A compaction boundary, as its own transcript row.
+ *
+ * The synthetic tool card this replaces read as something the agent chose to
+ * run. A compaction is a boundary in the conversation — the model no longer
+ * remembers what is above it — which is what the boundary row says.
+ */
 function applySummary(state: SessionState, summary: string, context: UpdateContext): void {
   if (!summary) return;
+  const open = openCompactionPart(state);
+  if (open) {
+    open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+    open.toolState = "success";
+    state.revision += 1;
+    return;
+  }
+  appendCompactionPart(state, summary, "success", context);
+}
+
+/** Open a boundary while the summary is still being produced. */
+function applySummaryStarted(state: SessionState, context: UpdateContext): void {
+  if (openCompactionPart(state)) return;
+  appendCompactionPart(state, "", "pending", context);
+}
+
+function applySummaryCompleted(state: SessionState, summary: string, context: UpdateContext): void {
+  const open = openCompactionPart(state);
+  if (!open) {
+    appendCompactionPart(state, summary, "success", context);
+    return;
+  }
+  if (summary) open.content = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
+  open.toolState = "success";
+  state.revision += 1;
+}
+
+/**
+ * The newest boundary still waiting for its summary.
+ *
+ * Scanned from the end so a session with several compactions settles the one
+ * that is actually open, and bounded to the trailing message because a
+ * transcript trim can evict an older one — settling nothing is better than
+ * settling the wrong boundary.
+ */
+function openCompactionPart(state: SessionState): BridgeCompactionPart | undefined {
+  const parts = state.messages.at(-1)?.parts ?? [];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part?.type === "compaction" && part.toolState === "pending") return part;
+  }
+  return undefined;
+}
+
+function appendCompactionPart(
+  state: SessionState,
+  summary: string,
+  toolState: "pending" | "success",
+  context: UpdateContext,
+): void {
   const message = currentAssistantMessage(state);
-  // Context compaction is a real event in the turn and the user should be able
-  // to see what survived it. Rendering it as a card keeps it visible without
-  // letting it read as assistant prose.
-  const part = upsertToolPart(
-    state,
-    message,
-    `summary:${message.parts.length}`,
-    context.parentTaskUseId,
-  );
-  part.toolName = "compact_context";
-  part.content = "Compacted context";
-  part.toolTitle = part.content;
-  part.toolState = "success";
-  part.toolOutput = boundText(summary, MAX_TOOL_OUTPUT_BYTES);
-  chargeToolPart(state, part);
+  closeTextParts(state, context.parentTaskUseId);
+  const sourcePartId = `summary:${message.parts.length}`;
+  const part: BridgeCompactionPart = {
+    type: "compaction",
+    content: boundText(summary, MAX_TOOL_OUTPUT_BYTES),
+    sourcePartId,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+    toolState,
+  };
+  message.parts.push(part);
+  chargeTranscript(state, part.content.length + sourcePartId.length);
+  state.revision += 1;
+}
+
+/**
+ * A message the SDK appended to the conversation itself.
+ *
+ * This is where a steered prompt lands, so without a row for it a steer
+ * disappeared from the transcript entirely and the user was left with an
+ * answer to a question they could not see.
+ */
+function applyAppendedUserMessage(
+  state: SessionState,
+  update: Extract<InteractionUpdate, { type: "user-message-appended" }>,
+): void {
+  const text = update.userMessage.text;
+  if (!text) return;
+  const messageId = `appended-${state.messages.length}`;
+  const part: BridgeTextPart = {
+    type: "text",
+    content: boundText(text, MAX_MESSAGE_TEXT_BYTES),
+    sourcePartId: `${messageId}:0`,
+    sourceMessageId: messageId,
+    createdAt: new Date().toISOString(),
+  };
+  state.messages.push({
+    id: messageId,
+    role: "user",
+    content: part.content,
+    parts: [part],
+    createdAt: part.createdAt!,
+  });
+  chargeTranscript(state, part.content.length);
   state.revision += 1;
 }
 

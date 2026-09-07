@@ -1866,49 +1866,70 @@ describe("AgentInfoButton Codex runtime panel", () => {
     } satisfies NativeAgentSessionProjection);
   }
 
-  test("shows a loading line until the health request resolves", async () => {
+  test("says so plainly while the projection carries no runtime yet", async () => {
+    // Codex reads the same panel as every other platform now, so a session with
+    // no projected runtime gets the same "nothing to report" line rather than a
+    // Codex-shaped loading state fed by a second, renderer-owned health fetch.
     seedCodex();
-    let release: (value: unknown) => void = () => {};
-    mockGetCodexRuntimeHealth.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
-    );
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
-    expect(screen.getByText("Loading Codex runtime…")).toBeTruthy();
-    await act(async () => {
-      release({ engine: { state: "ready", codexVersion: "0.144.1" } });
-    });
-    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
-    expect(screen.getByText("Codex 0.144.1")).toBeTruthy();
+    expect(screen.getByText("Codex Native does not report runtime details.")).toBeTruthy();
   });
 
-  test("counts MCP servers, skills and hooks from the shapes the bridge reports", async () => {
+  test("renders the state and version the projection carries", async () => {
     seedCodex();
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: {},
-      mcp: [{ name: "a" }, { name: "b" }],
-      skills: { data: [{ skills: [1, 2, 3] }] },
-      // `error` is a diagnostic key, not an inventory entry.
-      hooks: { alpha: {}, error: "unavailable" },
-    }));
+    seedCodexProjection({ state: "ready", version: "0.144.1" });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
+    expect(screen.getByText("Codex Native 0.144.1")).toBeTruthy();
+  });
+
+  test("renders the inventory counts the projection carries", async () => {
+    // Counting the bridge's inventory shapes is the backend's job — see
+    // `bridgeRuntimeSummary`. The panel renders the numbers it is given.
+    seedCodex();
+    seedCodexProjection({ mcpServers: 2, skills: 3, hooks: 1 });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(metricValue("MCP")).toBe("2"));
     expect(metricValue("Skills")).toBe("3");
     expect(metricValue("Hooks")).toBe("1");
-    expect(screen.getByText("state unavailable")).toBeTruthy();
-    expect(screen.getByText("version unavailable")).toBeTruthy();
   });
 
-  test("renders at most the five most recent notices and ignores malformed ones", async () => {
+  test("shows drift as a count and the names of the kinds behind it", async () => {
     seedCodex();
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: { state: "ready" },
+    seedCodexProjection({
+      state: "ready",
+      drift: { unknownEvents: 7, unknownKinds: ["codex/brand/new", "codex/other"] },
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(screen.getByText("7 events this bridge did not recognise")).toBeTruthy(),
+    );
+    expect(screen.getByText("codex/brand/new, codex/other")).toBeTruthy();
+  });
+
+  test("counts a single unrecognised event in the singular", async () => {
+    seedCodex();
+    seedCodexProjection({ drift: { unknownEvents: 1, unknownKinds: [] } });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event this bridge did not recognise")).toBeTruthy(),
+    );
+  });
+
+  test("renders at most the five most recent notices the projection carries", async () => {
+    seedCodex();
+    seedCodexProjection({
+      state: "ready",
       notices: [
         { method: "m1", message: "notice one" },
         { method: "m2", message: "notice two" },
@@ -1916,9 +1937,8 @@ describe("AgentInfoButton Codex runtime panel", () => {
         { method: "m4", message: "notice four" },
         { method: "m5", message: "notice five" },
         { method: "m6", message: "notice six" },
-        { method: "m7" },
       ],
-    }));
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -1927,20 +1947,25 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText("notice two")).toBeTruthy();
   });
 
-  test("groups repeated notices and shows their total count", async () => {
+  test("shows a repeated notice's total count and its retained occurrences", async () => {
+    // Grouping happens in the bridge recorder and again in the backend; the
+    // panel renders the group it is handed.
     seedCodex();
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: { state: "ready" },
+    seedCodexProjection({
+      state: "ready",
       notices: [
-        ...Array.from({ length: 8 }, (_, index) => ({
+        {
           method: "mcpServer/startupStatus/updated",
           message: "Codex reported mcpServer startupStatus updated",
-          detail: `context7: ${index === 7 ? "failed\nConnection timed out" : "starting"}`,
-          receivedAt: `2026-08-26T20:0${index}:00.000Z`,
-        })),
+          count: 8,
+          occurrences: Array.from({ length: 5 }, (_, index) => ({
+            detail: `context7: ${index === 4 ? "failed\nConnection timed out" : "starting"}`,
+            receivedAt: `2026-08-26T20:0${index}:00.000Z`,
+          })),
+        },
         { method: "warning", message: "Codex reported warning" },
       ],
-    }));
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
@@ -2032,43 +2057,32 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(isPopoverOpen()).toBe(true);
   });
 
-  test("uses the latest occurrence when limiting distinct notices", async () => {
+  test("shows a repeat count beside a grouped notice", async () => {
     seedCodex();
-    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
-      engine: { state: "ready" },
-      notices: [
-        { method: "m1", message: "notice one" },
-        { method: "m2", message: "notice two" },
-        { method: "m3", message: "notice three" },
-        { method: "m4", message: "notice four" },
-        { method: "m5", message: "notice five" },
-        { method: "m6", message: "notice six" },
-        { method: "m1", message: "notice one" },
-      ],
-    }));
+    seedCodexProjection({
+      state: "ready",
+      notices: [{ method: "m1", message: "notice one", count: 2 }],
+    });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     await waitFor(() => expect(screen.getByText("notice one (2)")).toBeTruthy());
-    expect(screen.queryByText("notice two") === null).toBe(true);
-    expect(screen.getByText("notice three")).toBeTruthy();
-    expect(screen.getByText("notice six")).toBeTruthy();
   });
 
-  test("falls back to an error snapshot when the health request rejects", async () => {
+  test("a failed health read does not disturb the projected runtime", async () => {
+    // The health read exists for rate limits and credits now. Its failure must
+    // not blank a panel that is being fed by the projection.
     seedCodex();
+    seedCodexProjection({ state: "ready", version: "0.144.1" });
     mockGetCodexRuntimeHealth.mockImplementation(async () => {
       throw new Error("bridge down");
     });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
-    // The panel must leave the loading state even on failure.
-    await waitFor(() => expect(screen.queryByText("Loading Codex runtime…") === null).toBe(true), {
-      timeout: 10_000,
-    });
-    expect(screen.getByText("state unavailable")).toBeTruthy();
-  }, 20_000);
+    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
+    expect(screen.getByText("Codex Native 0.144.1")).toBeTruthy();
+  });
 
   test("does not request health while closed and drops a response that lands after close", async () => {
     seedCodex();
@@ -2141,7 +2155,14 @@ describe("AgentInfoButton Codex runtime panel", () => {
 
     expect(isPopoverOpen()).toBe(false);
     open();
-    await waitFor(() => expect(screen.getByText("replacement-ready")).toBeTruthy());
+    // The replacement's limits landing is what proves the new read won; the
+    // panel itself is fed by the projection and says nothing about which
+    // health response arrived.
+    await waitFor(() =>
+      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
+        { label: "Primary", usedPercent: 20 },
+      ]),
+    );
     expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(CODEX_CLIENT, "codex-session-2");
     await act(async () => {
       releaseOld({
@@ -2150,7 +2171,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
       });
     });
 
-    expect(screen.queryByText("stale-session") === null).toBe(true);
     expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
       { label: "Primary", usedPercent: 20 },
     ]);
@@ -2207,7 +2227,11 @@ describe("AgentInfoButton Codex runtime panel", () => {
     rerender(<AgentInfoButton activeTab={codexTab({ id: nextTabId })} />);
     expect(isPopoverOpen()).toBe(false);
     open();
-    await waitFor(() => expect(screen.getByText("second-tab-ready")).toBeTruthy());
+    await waitFor(() =>
+      expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
+        { label: "Primary", usedPercent: 30 },
+      ]),
+    );
     expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(2);
     await act(async () => {
       releaseOld({
@@ -2216,7 +2240,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
       });
     });
 
-    expect(screen.queryByText("stale-first-tab") === null).toBe(true);
     expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
       { label: "Primary", usedPercent: 30 },
     ]);
@@ -2305,7 +2328,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
         { label: "Primary", usedPercent: 100 },
       ]),
     );
-    expect(screen.getByText("ready")).toBeTruthy();
     expect(screen.queryByText(/Runtime health unavailable/) === null).toBe(true);
   });
 
@@ -4807,6 +4829,32 @@ describe("AgentInfoButton ACP agents", () => {
       ...overrides,
     } as NativeAgentSessionProjection;
   }
+
+  test("renders drift and notices for a non-Codex platform through the same panel", async () => {
+    // The point of the generalization: nothing in `AgentRuntimePanel` is
+    // Codex-shaped, so a Cursor session gets the same drift block and the same
+    // notice cards from the same projection fields.
+    useNativeAgentProjectionStore.getState().setProjection(
+      createSessionKey(ENVIRONMENT_ID, TAB_ID),
+      acpProjection("cursor", {
+        runtime: {
+          state: "attached",
+          drift: { unknownEvents: 3, unknownKinds: ["tool:webSearch"] },
+          notices: [
+            { message: "Cursor substituted a model", severity: "warning", source: "provider" },
+          ],
+        },
+      }),
+    );
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    await waitFor(() =>
+      expect(screen.getByText("3 events this bridge did not recognise")).toBeTruthy(),
+    );
+    expect(screen.getByText("tool:webSearch")).toBeTruthy();
+    expect(screen.getByText("Cursor substituted a model")).toBeTruthy();
+  });
 
   test("names a Grok session and renders the usage its bridge reported", () => {
     useNativeAgentProjectionStore.getState().setProjection(

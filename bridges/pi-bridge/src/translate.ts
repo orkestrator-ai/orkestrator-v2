@@ -13,8 +13,9 @@
  *    turn is bounded by `boundTranscript` rather than by hope.
  */
 import { randomBytes } from "node:crypto";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
-import { renderToolCall } from "./tool-rendering.js";
+import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
   appendBounded,
   boundText,
@@ -27,6 +28,9 @@ import {
   setSteerJournal,
   toolSourceStates,
   type BridgeMessage,
+  type BridgeCompactionPart,
+  type BridgeImagePart,
+  type BridgeRetryPart,
   type BridgeTextPart,
   type BridgeToolPart,
   type JsonObject,
@@ -59,6 +63,50 @@ function turnFramesWelcome(state: SessionState): boolean {
  * faster than this bridge can track it, and an unrecognized frame mid-turn
  * must degrade to "not rendered", never to a failed turn.
  */
+/**
+ * Which Pi session events this translator accounts for.
+ *
+ * A `Record` over the SDK's own `AgentSessionEvent` union rather than a list,
+ * so a Pi release that adds an event **fails this typecheck** instead of the
+ * event arriving as an unexplained gap. `true` means the switch below does
+ * something with it; `false` means known and deliberately not rendered, each
+ * documented — "we chose not to show this" and "we never heard of this" must
+ * not look the same in the drift counter.
+ */
+const HANDLED_SESSION_EVENTS: Record<AgentSessionEvent["type"], boolean> = {
+  message_start: true,
+  message_update: true,
+  message_end: true,
+  tool_execution_start: true,
+  tool_execution_update: true,
+  tool_execution_end: true,
+  turn_end: true,
+  queue_update: true,
+  compaction_start: true,
+  compaction_end: true,
+  thinking_level_changed: true,
+  session_info_changed: true,
+  auto_retry_start: true,
+  auto_retry_end: true,
+  bash_execution_update: true,
+  // Turn and agent lifecycle. The bridge derives running/idle from its own
+  // dispatch rather than from these, so rendering them would add rows for
+  // boundaries the transcript already shows through the messages inside them.
+  turn_start: false,
+  agent_start: false,
+  agent_end: false,
+  agent_settled: false,
+  // Pi retrying its own summarization. Becomes a `retry` part in plan 03;
+  // until then the compaction card is what the user sees.
+  summarization_retry_scheduled: false,
+  summarization_retry_attempt_start: false,
+  summarization_retry_finished: false,
+  // Pi appending to its own JSONL session file. The bridge builds its
+  // transcript from the message and tool events instead, so consuming this too
+  // would double every row. Plan 03 uses it for historic replay, not live.
+  entry_appended: false,
+};
+
 export function applySessionEvent(state: SessionState, event: unknown): void {
   if (!isObject(event) || !nonBlank(event.type)) return;
 
@@ -113,13 +161,25 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       break;
     case "auto_retry_start":
       if (!turnFramesWelcome(state)) break;
-      applyNotice(state, retryNotice(event));
+      applyRetryStart(state, event);
+      break;
+    case "auto_retry_end":
+      // Settles the row `auto_retry_start` opened. Without this the card stayed
+      // pending forever, so a retry that ultimately failed read as one that
+      // worked — and one that worked read as one still in flight.
+      applyRetryEnd(state, event);
       break;
     case "bash_execution_update":
       // A user-initiated `!command`, which this bridge never issues. Ignored
       // rather than rendered: it belongs to whoever ran it.
       break;
     default:
+      // A type the table names as `false` is a documented gap; one it does not
+      // name is an SDK addition. Both are counted, distinguishably. Names only:
+      // an event payload carries prompts, file contents and tool output.
+      state.health.recordUnknown(
+        event.type in HANDLED_SESSION_EVENTS ? `unrendered:${event.type}` : event.type,
+      );
       break;
   }
   // Synchronous by design: this function runs on Pi's SDK listener and must
@@ -331,7 +391,44 @@ function applyToolExecution(
   }
 
   chargeToolPart(state, part);
+  // Only once the call settles: a partial result can carry the same image
+  // repeatedly as it streams, and a duplicated screenshot in the transcript is
+  // worse than one that appears a moment late.
+  if (phase === "settled") appendToolResultImages(state, message, toolCallId, rendered.images);
   state.revision += 1;
+}
+
+/**
+ * Show images a tool returned, rather than the word "[image]".
+ *
+ * Keyed on the call id so a re-render of the same settled call cannot append a
+ * second copy — Pi can re-emit an end frame, and the transcript is not a place
+ * that tolerates duplicates.
+ */
+function appendToolResultImages(
+  state: SessionState,
+  message: BridgeMessage,
+  toolCallId: string,
+  images: RenderedToolCall["images"],
+): void {
+  if (!images || images.length === 0) return;
+  for (const [index, image] of images.entries()) {
+    const sourcePartId = `image:${toolCallId}:${index}`;
+    if (message.parts.some((candidate) => candidate.sourcePartId === sourcePartId)) continue;
+    const part: BridgeImagePart = {
+      type: "image",
+      content: image.content,
+      sourcePartId,
+      sourceMessageId: message.id,
+      createdAt: new Date().toISOString(),
+      fileUrl: image.fileUrl,
+      // The agent looked at it; it did not produce it and the user did not
+      // attach it.
+      imageSource: "viewed",
+    };
+    message.parts.push(part);
+    chargeTranscript(state, part.content.length + part.fileUrl!.length);
+  }
 }
 
 /**
@@ -375,25 +472,105 @@ function applyQueueUpdate(state: SessionState, event: JsonObject): void {
  * Rendering it as a card keeps it visible without letting it read as assistant
  * prose.
  */
+/**
+ * A compaction boundary, as its own transcript row.
+ *
+ * The synthetic tool card this replaces read as something the agent chose to
+ * run and dropped both token counts on the floor. A compaction is a boundary in
+ * the conversation — the model no longer remembers what is above it — so it
+ * gets a boundary row carrying Pi's own `tokensBefore`.
+ *
+ * A failed compaction keeps its old shape: it is a failure the user can act on
+ * (the context did not shrink), not a boundary that happened.
+ */
 function applyCompaction(state: SessionState, event: JsonObject): void {
   if (event.aborted === true) {
     state.revision += 1;
     return;
   }
-  const summary =
-    isObject(event.result) && nonBlank(event.result.summary) ? event.result.summary : "";
   const message = currentAssistantMessage(state);
   closeTextParts(state);
-  const part = upsertToolPart(state, message, `compaction:${message.parts.length}`);
-  part.toolName = "compact_context";
-  part.content = "Compacted context";
-  part.toolTitle = part.content;
-  const failed = nonBlank(event.errorMessage);
-  part.toolState = failed ? "failure" : "success";
-  if (failed) part.toolError = boundText(event.errorMessage as string, MAX_TOOL_TITLE_BYTES);
-  else if (summary) part.toolOutput = boundText(summary, MAX_TOOL_TITLE_BYTES * 32);
-  chargeToolPart(state, part);
+
+  if (nonBlank(event.errorMessage)) {
+    const part = upsertToolPart(state, message, `compaction:${message.parts.length}`);
+    part.toolName = "compact_context";
+    part.content = "Compacting context failed";
+    part.toolTitle = part.content;
+    part.toolState = "failure";
+    part.toolError = boundText(event.errorMessage, MAX_TOOL_TITLE_BYTES);
+    chargeToolPart(state, part);
+    state.revision += 1;
+    return;
+  }
+
+  const result = isObject(event.result) ? event.result : {};
+  const summary = nonBlank(result.summary) ? result.summary : "";
+  const tokensBefore = typeof result.tokensBefore === "number" ? result.tokensBefore : undefined;
+  const estimatedAfter =
+    typeof result.estimatedTokensAfter === "number" ? result.estimatedTokensAfter : undefined;
+  const sourcePartId = `compaction:${message.parts.length}`;
+  const part: BridgeCompactionPart = {
+    type: "compaction",
+    content: boundText(summary, MAX_TOOL_TITLE_BYTES * 32),
+    sourcePartId,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+    ...(tokensBefore !== undefined ? { compactedTokensBefore: tokensBefore } : {}),
+    // `estimatedTokensAfter` is Pi's word, and the estimate is the honest
+    // framing: the real post-compaction count is not known until the next
+    // model response.
+    ...(estimatedAfter !== undefined
+      ? { tokenCountText: `~${estimatedAfter.toLocaleString()} tokens after` }
+      : {}),
+  };
+  message.parts.push(part);
+  chargeTranscript(state, part.content.length + sourcePartId.length);
   state.revision += 1;
+}
+
+/** Open a retry row for the request that just failed. */
+function applyRetryStart(state: SessionState, event: JsonObject): void {
+  const message = currentAssistantMessage(state);
+  closeTextParts(state);
+  const sourcePartId = `retry:${message.parts.length}`;
+  const part: BridgeRetryPart = {
+    type: "retry",
+    content: boundText(
+      nonBlank(event.errorMessage) ? event.errorMessage.trim() : "the request failed",
+      MAX_TOOL_TITLE_BYTES,
+    ),
+    sourcePartId,
+    sourceMessageId: message.id,
+    createdAt: new Date().toISOString(),
+    toolState: "pending",
+    ...(typeof event.attempt === "number" ? { retryAttempt: event.attempt } : {}),
+  };
+  message.parts.push(part);
+  chargeTranscript(state, part.content.length + sourcePartId.length);
+  state.revision += 1;
+}
+
+/**
+ * Settle the newest unsettled retry row.
+ *
+ * By recency rather than by attempt number: Pi's `auto_retry_end` names an
+ * attempt, but a transcript trim can evict the row that attempt opened, and
+ * settling nothing is better than settling the wrong row.
+ */
+function applyRetryEnd(state: SessionState, event: JsonObject): void {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const parts = state.messages[index]?.parts ?? [];
+    for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = parts[partIndex];
+      if (part?.type !== "retry" || part.toolState !== "pending") continue;
+      part.toolState = event.success === true ? "success" : "failure";
+      if (event.success !== true && nonBlank(event.finalError)) {
+        part.content = boundText(event.finalError.trim(), MAX_TOOL_TITLE_BYTES);
+      }
+      state.revision += 1;
+      return;
+    }
+  }
 }
 
 /**

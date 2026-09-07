@@ -789,6 +789,7 @@ describe("HTTP bridge provider", () => {
 
     expect(requests.map((request) => request.url).sort()).toEqual([
       "http://cursor.test/session/cursor-1/messages",
+      "http://cursor.test/session/cursor-1/runtime-health",
       "http://cursor.test/session/cursor-1/status",
     ]);
     expect(snapshot.messages).toEqual([

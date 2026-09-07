@@ -9,6 +9,7 @@
  */
 import type { SDKAgent } from "@cursor/sdk";
 import type { NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -89,7 +90,57 @@ export interface BridgeToolPart {
   parentTaskUseId?: string;
 }
 
-export type BridgeMessagePart = BridgeTextPart | BridgeFilePart | BridgeToolPart;
+/** A context compaction boundary. */
+export interface BridgeCompactionPart {
+  type: "compaction";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  /** Pending while the summary is still being produced. */
+  toolState?: "success" | "failure" | "pending";
+}
+
+/** A short provider status line in the transcript flow. */
+export interface BridgeStatusPart {
+  type: "status";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  severity?: "info" | "warning" | "error";
+}
+
+/** An image the agent generated. Bytes stay behind `fileUrl`. */
+export interface BridgeImagePart {
+  type: "image";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  fileUrl?: string;
+  filename?: string;
+  imageSource?: "attachment" | "generated" | "viewed";
+}
+
+/** A live progress line for a running tool call. */
+export interface BridgeProgressPart {
+  type: "progress";
+  content: string;
+  sourcePartId: string;
+  sourceMessageId: string;
+  createdAt?: string;
+  toolUseId: string;
+}
+
+export type BridgeMessagePart =
+  | BridgeTextPart
+  | BridgeFilePart
+  | BridgeToolPart
+  | BridgeCompactionPart
+  | BridgeStatusPart
+  | BridgeImagePart
+  | BridgeProgressPart;
 
 export interface PromptJournalEntry {
   requestId: string;
@@ -246,6 +297,21 @@ export interface SessionState {
   turnStartedAt?: number;
   /** Wall clock the session was last touched by a tab-facing route. */
   lastAccessed: number;
+  /**
+   * The model the SDK reported it is actually running, from the run's own
+   * `system` message. Not the composer selection: Cursor substitutes.
+   */
+  runModelId?: string;
+  /** Tool *names* the run was given. Never their descriptions or schemas. */
+  runTools?: string[];
+  /**
+   * What this bridge saw and did not understand, and what the SDK reported.
+   *
+   * `@cursor/sdk` is a fast-moving dependency whose update and tool-call unions
+   * grow between releases; without this, a new variant is indistinguishable
+   * from a turn that produced nothing. Runtime-only — a restart re-observes.
+   */
+  health: RuntimeHealthRecorder;
 }
 
 export interface PersistedSession {

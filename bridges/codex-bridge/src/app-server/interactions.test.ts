@@ -291,6 +291,51 @@ describe("describeInteraction: the autoResolutionMs clamp", () => {
   );
 });
 
+describe("describeInteraction: the blocking flag", () => {
+  test("isBlocking is authoritative over the deprecated autoResolutionMs", () => {
+    const described = describeWith(QUESTION, {
+      threadId: "thread-1",
+      questions: [question()],
+      isBlocking: false,
+      autoResolutionMs: null,
+    });
+    expect(described?.isBlocking).toBe(false);
+  });
+
+  test("isBlocking true wins even when an auto-resolution deadline is present", () => {
+    const described = describeWith(QUESTION, {
+      threadId: "thread-1",
+      questions: [question()],
+      isBlocking: true,
+      autoResolutionMs: 60_000,
+    });
+    expect(described?.isBlocking).toBe(true);
+    expect(described?.expiresAt).toBeUndefined();
+  });
+
+  test("an app-server that omits isBlocking falls back to the deprecated field", () => {
+    expect(
+      describeWith(QUESTION, {
+        threadId: "thread-1",
+        questions: [question()],
+        autoResolutionMs: 60_000,
+      })?.isBlocking,
+    ).toBe(false);
+    expect(
+      describeWith(QUESTION, { threadId: "thread-1", questions: [question()] })?.isBlocking,
+    ).toBe(true);
+  });
+
+  test("a non-boolean isBlocking is not trusted", () => {
+    const described = describeWith(QUESTION, {
+      threadId: "thread-1",
+      questions: [question()],
+      isBlocking: "false",
+    });
+    expect(described).toBeNull();
+  });
+});
+
 describe("describeInteraction: MCP elicitation", () => {
   test("form mode carries the requested schema", () => {
     const schema = { type: "object", properties: { region: { type: "string" } } };
@@ -327,6 +372,22 @@ describe("describeInteraction: MCP elicitation", () => {
     });
     expect(described?.kind).toBe("mcp-form");
     expect(described?.schema).toEqual({ type: "object" });
+  });
+
+  test("openaiForm is the same alias for form under the protocol's second spelling", () => {
+    // The handshake advertises `mcpServerOpenaiFormElicitation`, so app-server
+    // can send this spelling; before it was accepted the request auto-cancelled.
+    const described = describeWith(ELICITATION, {
+      threadId: "thread-1",
+      serverName: "deploy",
+      mode: "openaiForm",
+      message: "Pick one",
+      requestedSchema: { type: "object" },
+    });
+    expect(described?.kind).toBe("mcp-form");
+    expect(described?.schema).toEqual({ type: "object" });
+    expect(described?.serverName).toBe("deploy");
+    expect(described?.isBlocking).toBe(true);
   });
 
   test("url mode becomes an mcp-url card carrying the link and elicitation id", () => {

@@ -1,9 +1,11 @@
 // Session management routes
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
   createOrRecoverSession,
   getSession,
+  peekSession,
   listSessions,
   getSessionMessages,
   sendPrompt,
@@ -799,6 +801,28 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
 session.get("/:id/activity", async (c) => {
   const activity = await getSessionActivity(c.req.param("id"));
   return c.json({ activity });
+});
+
+/**
+ * Bounded inventory, drift and provider diagnostics for one session.
+ *
+ * Read-only in exactly the sense `/activity` is: it must not resolve the
+ * session, touch its idle clock, or hydrate its transcript, because the backend
+ * sweeps every persisted session every couple of seconds and doing any of those
+ * here would pin every transcript in memory forever.
+ *
+ * Always 200, never 404, for the same reason as `/activity`: a 404 on a shared
+ * route reads as "this bridge predates the route" and fails the environment.
+ * A session this bridge has never heard of has no drift to report, which is
+ * exactly what an empty answer says.
+ *
+ * Registered as a two-segment path so the `/:id` route above cannot shadow it.
+ */
+session.get("/:id/runtime-health", (c) => {
+  const sessionData = peekSession(c.req.param("id"));
+  if (!sessionData?.health) return c.json(emptyRuntimeHealth());
+  const { drift, notices } = sessionData.health.snapshot();
+  return c.json({ summary: drift ? { drift } : {}, notices });
 });
 
 /**

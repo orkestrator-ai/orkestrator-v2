@@ -1272,11 +1272,19 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
   if (!isApprovalDecision(body.decision)) {
     return c.json({ error: `decision must be one of: ${APPROVAL_DECISIONS.join(", ")}` }, 400);
   }
+  const amendmentIndex = body.amendmentIndex;
+  if (
+    amendmentIndex !== undefined &&
+    (!Number.isSafeInteger(amendmentIndex) || amendmentIndex < 0)
+  ) {
+    return c.json({ error: "amendmentIndex must be a non-negative integer" }, 400);
+  }
 
   const outcome = appServerRuntime.respondToApproval(
     c.req.param("id"),
     c.req.param("approvalId"),
     body.decision,
+    amendmentIndex,
   );
   if (outcome === "wrong-session") {
     return c.json({ error: "Approval does not belong to this session" }, 403);

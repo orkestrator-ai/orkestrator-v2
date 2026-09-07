@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { gunzipSync } from "node:zlib";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
@@ -49,6 +50,16 @@ const mockGetSession = mock((id: string) =>
         taskRegistry: id === "s-tasks" ? sessionTaskRegistry : undefined,
       }
     : undefined,
+);
+const runtimeHealth = new RuntimeHealthRecorder();
+runtimeHealth.recordUnknown("future-event");
+runtimeHealth.recordNotice({
+  message: "Provider deprecated an option",
+  severity: "warning",
+  source: "provider",
+});
+const mockPeekSession = mock((id: string) =>
+  id === "s-health" ? ({ id, lastAccessedAt: 123, health: runtimeHealth } as never) : undefined,
 );
 
 const mockListSessions = mock(() => [
@@ -143,6 +154,7 @@ mock.module("../services/session-manager.js", () => ({
   createSession: mockCreateSession,
   createOrRecoverSession: mockCreateOrRecoverSession,
   getSession: mockGetSession,
+  peekSession: mockPeekSession,
   listSessions: mockListSessions,
   getSessionMessages: mockGetSessionMessages,
   sendPrompt: mockSendPrompt,
@@ -241,6 +253,8 @@ afterAll(() => {
 
 describe("session routes", () => {
   beforeEach(() => {
+    mockGetSession.mockClear();
+    mockPeekSession.mockClear();
     mockCreateSession.mockClear();
     mockCreateOrRecoverSession.mockReset();
     mockCreateOrRecoverSession.mockImplementation(async (title?: string) => ({
@@ -285,6 +299,29 @@ describe("session routes", () => {
     mockGetPromptDispatchState.mockReset();
     mockGetPromptDispatchState.mockImplementation(() => "new");
     resetPersistenceMocks();
+  });
+
+  test("runtime health reads without touching or resolving the session", async () => {
+    const response = await app.request("/session/s-health/runtime-health");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      summary: { drift: { unknownEvents: 1, unknownKinds: ["future-event"] } },
+      notices: [
+        expect.objectContaining({
+          message: "Provider deprecated an option",
+          severity: "warning",
+          source: "provider",
+        }),
+      ],
+    });
+    expect(mockPeekSession).toHaveBeenCalledWith("s-health");
+    expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  test("runtime health answers empty in band for an unknown session", async () => {
+    const response = await app.request("/session/missing/runtime-health");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ summary: {}, notices: [] });
   });
 
   // --- POST /session/create ---

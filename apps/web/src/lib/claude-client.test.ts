@@ -1659,7 +1659,6 @@ describe("claude-client", () => {
         "plan.approval-requested",
         "plan.approval-responded",
         "system.compact",
-        "system.message",
       ]) {
         expect(subscribed).toContain(type);
       }

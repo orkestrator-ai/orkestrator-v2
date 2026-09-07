@@ -916,3 +916,130 @@ describe("plan approval flow", () => {
     stop();
   });
 });
+
+/**
+ * The two callbacks that used to be unset.
+ *
+ * Unset, an MCP elicitation or a host dialog sat unanswered until the CLI's own
+ * park deadline expired — which the user saw as the tab freezing for minutes
+ * with nothing to explain it.
+ */
+describe("MCP elicitations and host dialogs", () => {
+  test("declines a form elicitation and says which server asked", async () => {
+    const session = createSession("elicitation-form");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    expect(
+      await call.options.onElicitation!(
+        {
+          serverName: "linear",
+          message: "Which team?",
+          mode: "form",
+          requestedSchema: { type: "object" },
+        },
+        { signal: new AbortController().signal, requestId: "r1" },
+      ),
+    ).toEqual({ action: "decline" });
+
+    // MCP defines `decline` as an outcome the server handles, so the tool call
+    // fails on its own terms rather than the turn hanging.
+    const notice = getSession(session.id)!.messages.at(-1)!.parts[0]!;
+    expect(notice).toMatchObject({ type: "status", severity: "warning" });
+    expect(notice.content).toContain("linear");
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("a url elicitation says it needs a terminal rather than failing silently", async () => {
+    const session = createSession("elicitation-url");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    await call.options.onElicitation!(
+      {
+        serverName: "linear",
+        message: "Authorize",
+        mode: "url",
+        url: "https://linear.app/oauth",
+      },
+      { signal: new AbortController().signal, requestId: "r2" },
+    );
+
+    expect(getSession(session.id)!.messages.at(-1)!.parts[0]!.content).toContain("terminal");
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("cancels a host dialog rather than leaving it to the CLI deadline", async () => {
+    const session = createSession("user-dialog");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    // `cancelled` makes the CLI apply the dialog's own default. This host
+    // declares no `supportedDialogKinds`, so it can render none of them.
+    expect(
+      await call.options.onUserDialog!(
+        { dialogKind: "something", payload: {} },
+        { signal: new AbortController().signal, requestId: "r3" },
+      ),
+    ).toEqual({ behavior: "cancelled" });
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+});
+
+describe("permission suggestions", () => {
+  test("does not persist SDK suggestions for an allow-once decision", async () => {
+    const session = createSession("permission-suggestions");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    const suggestions = [{ type: "addRules", rules: [{ toolName: "Bash" }] }];
+    expect(
+      await call.options.canUseTool!("Bash", { command: "ls" }, {
+        signal: new AbortController().signal,
+        suggestions,
+      } as never),
+    ).toEqual({
+      behavior: "allow",
+      updatedInput: { command: "ls" },
+    });
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("allows without a permission update when the SDK offered none", async () => {
+    const session = createSession("permission-no-suggestions");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "go");
+    const call = await nextQueryCall();
+
+    expect(
+      await call.options.canUseTool!("Bash", { command: "ls" }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).toEqual({ behavior: "allow", updatedInput: { command: "ls" } });
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+  });
+});

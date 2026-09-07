@@ -1344,6 +1344,11 @@ export function getSession(sessionId: string): SessionState | undefined {
   return session;
 }
 
+/** Read session state without changing liveness or hydrating its transcript. */
+export function peekSession(sessionId: string): SessionState | undefined {
+  return sessions.get(sessionId);
+}
+
 /**
  * What a session is doing, as far as anything outside this bridge needs to know.
  *

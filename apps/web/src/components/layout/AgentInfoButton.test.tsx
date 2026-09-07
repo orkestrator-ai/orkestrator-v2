@@ -11,6 +11,7 @@ import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   nativeAgentCapabilities,
+  type NativeAgentAccountUsageWindow,
   type NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -290,6 +291,24 @@ function seedPaneLayout() {
 
 function open() {
   fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
+}
+
+/** Publish one account window list as the active Claude tab's usage snapshot. */
+function seedDailyUsage(account: NativeAgentAccountUsageWindow[]) {
+  useClaudeStore.setState({
+    contextUsage: new Map([[CLAUDE_KEY, usage({ account })]]),
+  } as never);
+}
+
+/** `count` consecutive UTC days from 2026-08-01, newest last, as the provider reports them. */
+function dailyBuckets(
+  count: number,
+  tokensFor: (index: number) => number,
+): NativeAgentAccountUsageWindow[] {
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 7, 1 + index)).toISOString().slice(0, 10);
+    return { window: `daily:${date}`, label: date, tokens: tokensFor(index) };
+  });
 }
 
 /** Open the panel from either state — several actions deliberately leave it open. */
@@ -1465,7 +1484,9 @@ describe("AgentInfoButton usage panel", () => {
     expect(chart).toBeTruthy();
     expect(within(chart).getAllByRole("img").length).toBe(3);
     expect(within(chart).getByLabelText("Aug 25: 417M tokens")).toBeTruthy();
-    expect(within(chart).getByText("Peak 417M")).toBeTruthy();
+    // The peak is scoped to the plotted range so it cannot be read as the
+    // account-lifetime "Peak day" window rendered as a card beside it.
+    expect(within(chart).getByText("Peak 3d 417M")).toBeTruthy();
     // The newest day is the standing readout before anything is hovered.
     expect(within(chart).getByText("375M")).toBeTruthy();
     // Non-daily windows keep their cards; the days no longer get one each.
@@ -1473,6 +1494,96 @@ describe("AgentInfoButton usage panel", () => {
       within(screen.getByRole("region", { name: "Account usage" })).getByText("Lifetime"),
     ).toBeTruthy();
     expect(screen.queryByText("2026-08-24")).toBe(null);
+  });
+
+  test("hovering a column reads that day out and releasing restores the newest", () => {
+    seedDailyUsage([
+      { window: "daily:2026-08-24", label: "2026-08-24", tokens: 60_000_000 },
+      { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000 },
+      { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+    ]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    const bars = within(chart).getAllByRole("img");
+    expect(within(chart).getByText("375M")).toBeTruthy();
+
+    fireEvent.mouseEnter(bars[0]!);
+    expect(within(chart).getByText("60M")).toBeTruthy();
+    expect(within(chart).queryByText("375M")).toBe(null);
+
+    fireEvent.mouseEnter(bars[1]!);
+    expect(within(chart).getByText("417M")).toBeTruthy();
+
+    fireEvent.mouseLeave(bars[1]!.parentElement!);
+    expect(within(chart).getByText("375M")).toBeTruthy();
+    expect(within(chart).queryByText("417M")).toBe(null);
+  });
+
+  test("plots only the trailing thirty days and scopes the peak to them", () => {
+    // Day zero is both the largest bucket and the one truncation must drop, so
+    // a slice that kept the wrong end would show up in the bars and the peak.
+    seedDailyUsage(
+      dailyBuckets(35, (index) => (index === 0 ? 999_000_000 : (index + 1) * 1_000_000)),
+    );
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(within(chart).getAllByRole("img").length).toBe(30);
+    expect(within(chart).queryByLabelText("Aug 1: 999M tokens")).toBe(null);
+    expect(within(chart).getByLabelText("Aug 6: 6.0M tokens")).toBeTruthy();
+    // The footer brackets the plotted range, not the full reported history.
+    const footer = within(chart).getByText("Peak 30d 35M").parentElement!;
+    expect(within(footer).getByText("Aug 6")).toBeTruthy();
+    expect(within(footer).getByText("Sep 4")).toBeTruthy();
+  });
+
+  test("keeps a daily bucket as a card when the chart cannot show all of it", () => {
+    seedDailyUsage([
+      // No token count: nothing to plot.
+      { window: "daily:2026-08-24", label: "2026-08-24", resetsAt: "2026-08-25T00:00:00.000Z" },
+      // A token count the chart could plot, but spend the chart would swallow.
+      { window: "daily:2026-08-25", label: "2026-08-25", tokens: 417_000_000, spendUsd: 12.5 },
+      { window: "daily:2026-08-26", label: "2026-08-26", tokens: 375_000_000 },
+    ]);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const cards = screen.getByRole("region", { name: "Account usage" });
+    expect(within(cards).getByText("2026-08-24")).toBeTruthy();
+    expect(within(cards).getByText("2026-08-25")).toBeTruthy();
+    expect(within(cards).getByText("$12.50")).toBeTruthy();
+    // Only the bucket the chart can represent in full becomes a bar.
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    expect(within(chart).getAllByRole("img").length).toBe(1);
+    expect(within(chart).getByLabelText("Aug 26: 375M tokens")).toBeTruthy();
+  });
+
+  test("drops the account card list when every window is a plottable day", () => {
+    seedDailyUsage(dailyBuckets(3, (index) => (index + 1) * 1_000_000));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
+    expect(
+      within(screen.getByRole("region", { name: "Daily tokens" })).getAllByRole("img").length,
+    ).toBe(3);
+  });
+
+  test("renders flat bars rather than NaN heights when every day is zero", () => {
+    seedDailyUsage(dailyBuckets(3, () => 0));
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const chart = screen.getByRole("region", { name: "Daily tokens" });
+    const bars = within(chart).getAllByRole("img");
+    expect(bars.length).toBe(3);
+    for (const bar of bars) {
+      expect((bar.firstElementChild as HTMLElement).style.height).toBe("2%");
+    }
+    expect(within(chart).getByText("Peak 3d 0")).toBeTruthy();
   });
 
   test("retains provider-neutral account and turn rows beside legacy live counters", () => {

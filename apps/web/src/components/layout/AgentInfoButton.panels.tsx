@@ -561,15 +561,37 @@ interface DailyTokenPoint {
 }
 
 /**
+ * A day the chart can draw in full: a token count and nothing else.
+ *
+ * The chart plots one number per day, so any other populated field would be
+ * dropped on the floor. Keep this in step with the payload fields of
+ * `NativeAgentAccountUsageWindow`; a field missing here is a field the chart
+ * would silently swallow.
+ */
+function isPlainTokenBucket(
+  entry: NativeAgentAccountUsageWindow,
+): entry is NativeAgentAccountUsageWindow & { tokens: number } {
+  return (
+    entry.tokens !== undefined &&
+    entry.usedPercent === undefined &&
+    entry.resetsAt === undefined &&
+    entry.spendUsd === undefined &&
+    entry.creditsRemaining === undefined &&
+    entry.limitUsd === undefined
+  );
+}
+
+/**
  * Separate the per-day token buckets from the account's quota windows.
  *
  * A provider can report months of daily buckets. Rendering one card per day
  * pushed the quota and credit windows the panel exists for far below the fold,
  * so the days become a single chart and only the remaining windows stay as
- * cards. A daily bucket with no token count has nothing to plot, so it falls
- * back to a card where its other fields can still be read.
+ * cards. A daily bucket the chart cannot represent in full — no token count to
+ * plot, or a quota, reset or spend alongside it — falls back to a card where
+ * every one of its fields can still be read.
  */
-export function splitAccountUsage(account: NativeAgentAccountUsageWindow[]): {
+function splitAccountUsage(account: NativeAgentAccountUsageWindow[]): {
   windows: NativeAgentAccountUsageWindow[];
   daily: DailyTokenPoint[];
 } {
@@ -579,7 +601,7 @@ export function splitAccountUsage(account: NativeAgentAccountUsageWindow[]): {
     const date = entry.window.startsWith(DAILY_WINDOW_PREFIX)
       ? entry.window.slice(DAILY_WINDOW_PREFIX.length)
       : null;
-    if (date === null || entry.tokens === undefined) {
+    if (date === null || !isPlainTokenBucket(entry)) {
       windows.push(entry);
       continue;
     }
@@ -651,7 +673,9 @@ function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
       </div>
       <div className="flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground">
         <span className="truncate">{formatDayLabel(oldest.date)}</span>
-        <span className="shrink-0 font-mono tabular-nums">Peak {formatTokenCount(peak)}</span>
+        <span className="shrink-0 font-mono tabular-nums">
+          Peak {plotted.length}d {formatTokenCount(peak)}
+        </span>
         <span className="truncate">{formatDayLabel(latest.date)}</span>
       </div>
     </section>

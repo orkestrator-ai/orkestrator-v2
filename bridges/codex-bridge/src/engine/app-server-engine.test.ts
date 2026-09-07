@@ -1646,7 +1646,7 @@ describe("runtime notices", () => {
       ["deprecationNotice", { message: "a deprecation" }],
       ["configWarning", { message: "a config warning" }],
       ["model/rerouted", { message: "rerouted" }],
-      ["mcpServer/startupStatus/updated", { status: "starting deploy" }],
+      ["mcpServer/startupStatus/updated", { status: "starting" }],
       // Not advisory: it has a rendering of its own and must not be duplicated
       // into the notice ring.
       ["thread/name/updated", { threadId: "t1", threadName: "not a notice" }],
@@ -1670,15 +1670,28 @@ describe("runtime notices", () => {
     ]);
   });
 
-  test("classifies only a failed MCP startup update as an error", async () => {
+  test("keeps known lifecycle updates quiet and failure-shaped or unknown updates visible", async () => {
     const captured = await noticesFor([
       ["mcpServer/startupStatus/updated", { name: "docs", status: "starting" }],
       ["mcpServer/startupStatus/updated", { name: "docs", status: "ready" }],
       ["mcpServer/startupStatus/updated", { name: "docs", status: "cancelled" }],
       ["mcpServer/startupStatus/updated", { name: "docs", status: "failed" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", error: "Connection refused" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", failureReason: "Timed out" }],
+      ["mcpServer/startupStatus/updated", { name: "docs", status: "retrying" }],
+      ["mcpServer/startupStatus/updated", { name: "docs" }],
     ]);
 
-    expect(captured.map((notice) => notice.severity)).toEqual(["info", "info", "info", "error"]);
+    expect(captured.map((notice) => notice.severity)).toEqual([
+      "info",
+      "info",
+      "info",
+      "error",
+      "error",
+      "error",
+      "warning",
+      "warning",
+    ]);
   });
 
   test("exposes only the selected provider detail fields", async () => {

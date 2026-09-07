@@ -363,9 +363,21 @@ function runtimeNoticeSeverity(
   params: Record<string, unknown>,
 ): RuntimeNotice["severity"] {
   if (method === "mcpServer/startupStatus/updated") {
-    // Starting, ready, and cancelled are ordinary lifecycle inventory. Only a
-    // failed server needs to interrupt the user with a chat advisory.
-    return params.status === "failed" ? "error" : "info";
+    const hasFailureDetail = [params.error, params.failureReason].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    );
+    if (params.status === "failed" || hasFailureDetail) return "error";
+    // Only known non-failure lifecycle states are inventory. An unfamiliar or
+    // malformed shape stays visible so a protocol change cannot hide a real
+    // startup failure.
+    if (
+      params.status === "starting" ||
+      params.status === "ready" ||
+      params.status === "cancelled"
+    ) {
+      return "info";
+    }
+    return "warning";
   }
   return "warning";
 }

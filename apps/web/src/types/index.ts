@@ -481,6 +481,8 @@ export interface GlobalConfig {
   enabledAgentPlatforms?: AgentPlatform[];
   /** Weakest read-only guarantee a coordinator conversation may run under. */
   coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
+  /** Internal marker for the one-time coordinator safety-default migration. */
+  coordinatorProviderTierDefaultVersion?: number;
   favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
   containerResources: ContainerResources;
   envFilePatterns: string[];

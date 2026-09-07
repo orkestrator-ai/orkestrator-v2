@@ -130,13 +130,13 @@ const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 const COORDINATOR_TIER_CHOICES = [
   {
     id: "enforced" as const,
-    label: "Enforced only (recommended)",
+    label: "Enforced only",
     description:
       "Offer a platform only where the provider or the operating system blocks file writes, mutating commands and network access regardless of what the agent attempts.",
   },
   {
     id: "provider-configured" as const,
-    label: "Also allow provider-configured",
+    label: "Also allow provider-configured (recommended)",
     description:
       "Additionally offer platforms that are told to deny those actions but expose no way for Orkestrator to verify it.",
   },

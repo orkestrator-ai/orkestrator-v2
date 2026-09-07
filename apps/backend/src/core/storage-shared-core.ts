@@ -62,6 +62,10 @@ import {
 } from "@orkestrator/protocol/debug-logging";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
 import {
+  COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+  normalizeCoordinatorProviderTierDefaultVersion,
+} from "@orkestrator/protocol/coordinator";
+import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
   migrateGlobalAgentSettings,
@@ -1705,8 +1709,27 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     openCodeModelProviders,
   );
 
+  // The previous release persisted its `enforced` default even when the user
+  // only saved an unrelated global setting. With no explicit-choice marker in
+  // that format, an unmarked `enforced` value is the legacy implicit default.
+  // Remove it once so absence follows the new product default; the version
+  // marker prevents a later explicit `enforced` choice from being migrated.
+  const storedCoordinatorProviderTierDefaultVersion = global.coordinatorProviderTierDefaultVersion;
+  const coordinatorProviderTiers =
+    storedCoordinatorProviderTierDefaultVersion === undefined &&
+    global.coordinatorProviderTiers === "enforced"
+      ? undefined
+      : global.coordinatorProviderTiers;
+  const coordinatorProviderTierDefaultVersion = normalizeCoordinatorProviderTierDefaultVersion(
+    storedCoordinatorProviderTierDefaultVersion,
+  );
   const nextGlobal = stripLegacyKeys(
-    { ...global, agentSettings },
+    {
+      ...global,
+      agentSettings,
+      coordinatorProviderTiers,
+      coordinatorProviderTierDefaultVersion,
+    },
     LEGACY_GLOBAL_AGENT_KEYS,
   ) as unknown as AppConfig["global"];
 
@@ -1725,6 +1748,8 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
     JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
     JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
+    global.coordinatorProviderTiers === coordinatorProviderTiers &&
+    global.coordinatorProviderTierDefaultVersion === coordinatorProviderTierDefaultVersion &&
     config.schemaVersion === 2
   ) {
     return reviewInstructionSanitized;
@@ -1838,6 +1863,7 @@ export function defaultConfig(): AppConfig {
       useHostClaudeCredentials: true,
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
+      coordinatorProviderTierDefaultVersion: COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
       favoriteModels: [],
       agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS },
       agentSettings: {

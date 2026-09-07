@@ -1386,6 +1386,96 @@ describe("GlobalSettings", () => {
     );
   });
 
+  test("enables Save when only the coordinator safety level changes and persists it", async () => {
+    render(<GlobalSettings activeSection="platforms" />);
+
+    const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
+    const providerConfigured = within(tiers).getByRole("radio", {
+      name: /Also allow provider-configured/,
+    }) as HTMLInputElement;
+    const enforced = within(tiers).getByRole("radio", {
+      name: /Enforced only/,
+    }) as HTMLInputElement;
+    const save = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+
+    expect(providerConfigured.checked).toBe(true);
+    await waitFor(() => expect(save.disabled).toBe(true));
+    fireEvent.click(enforced);
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ coordinatorProviderTiers: "enforced" }),
+      ),
+    );
+  });
+
+  test("resets an unsaved coordinator safety level to its persisted value", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+
+    const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
+    const enforced = within(tiers).getByRole("radio", {
+      name: /Enforced only/,
+    }) as HTMLInputElement;
+    const advisory = within(tiers).getByRole("radio", {
+      name: /Also allow advisory/,
+    }) as HTMLInputElement;
+    const save = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+
+    expect(enforced.checked).toBe(true);
+    fireEvent.click(advisory);
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(enforced.checked).toBe(true);
+    await waitFor(() => expect(save.disabled).toBe(true));
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test("rehydrates coordinator safety changes without losing an edit to favourites", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, coordinatorProviderTiers: "enforced" },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+
+    const tiers = screen.getByRole("radiogroup", { name: "Coordinator safety level" });
+    const providerConfigured = within(tiers).getByRole("radio", {
+      name: /Also allow provider-configured/,
+    }) as HTMLInputElement;
+    const advisory = within(tiers).getByRole("radio", {
+      name: /Also allow advisory/,
+    }) as HTMLInputElement;
+    const save = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+
+    act(() => {
+      useConfigStore.getState().updateGlobalConfig({
+        coordinatorProviderTiers: "provider-configured",
+      });
+    });
+    await waitFor(() => expect(providerConfigured.checked).toBe(true));
+
+    fireEvent.click(advisory);
+    await waitFor(() => expect(save.disabled).toBe(false));
+    act(() => {
+      useConfigStore.getState().updateGlobalConfig({
+        favoriteModels: [{ platform: "codex", modelId: "gpt-5.4" }],
+      });
+    });
+
+    expect(advisory.checked).toBe(true);
+    expect(save.disabled).toBe(false);
+  });
+
   test("draws each platform toggle in its shared accent colour, enabled or not", () => {
     useConfigStore.setState((state) => ({
       ...state,

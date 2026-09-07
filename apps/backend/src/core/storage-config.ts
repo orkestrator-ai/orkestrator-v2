@@ -2,7 +2,11 @@ import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
-import { coordinatorProviderTierSetting } from "./coordinator-providers.js";
+import {
+  COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+  coordinatorProviderTierSetting,
+  normalizeCoordinatorProviderTierDefaultVersion,
+} from "./coordinator-providers.js";
 import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
@@ -204,8 +208,9 @@ export abstract class StorageConfig extends StorageProjects {
       );
       if (!configExists) return;
       const current = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
-      if (current.schemaVersion === 2) return;
-      await this.saveJson(this.configFile(), normalizePersistedConfig(current));
+      const normalized = normalizePersistedConfig(current);
+      if (normalized === current) return;
+      await this.saveJson(this.configFile(), normalized);
     });
   }
 
@@ -496,11 +501,13 @@ export abstract class StorageConfig extends StorageProjects {
       terminalHistoryGlobalRetentionMb: terminalHistoryRetention.globalMb,
       terminalHistoryRetentionDays: terminalHistoryRetention.days,
       enabledAgentPlatforms,
-      // Normalized rather than trusted: an unrecognised value must fall back to
-      // the strictest level, never leave the coordinator admitting a platform
-      // whose boundary this host cannot hold.
+      // Missing follows the product default. Malformed input fails closed to
+      // enforced rather than widening the read-only boundary.
       coordinatorProviderTiers: coordinatorProviderTierSetting(
         reviewValidated.coordinatorProviderTiers,
+      ),
+      coordinatorProviderTierDefaultVersion: normalizeCoordinatorProviderTierDefaultVersion(
+        reviewValidated.coordinatorProviderTierDefaultVersion,
       ),
       agentSettings: {
         ...agentSettings,
@@ -509,6 +516,13 @@ export abstract class StorageConfig extends StorageProjects {
     };
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
+      validated.coordinatorProviderTierDefaultVersion = Math.max(
+        validated.coordinatorProviderTierDefaultVersion ??
+          COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
+        normalizeCoordinatorProviderTierDefaultVersion(
+          config.global.coordinatorProviderTierDefaultVersion,
+        ),
+      );
       config.global = options.preserveCredentials
         ? {
             ...validated,

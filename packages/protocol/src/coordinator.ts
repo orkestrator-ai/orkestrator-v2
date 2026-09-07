@@ -27,6 +27,30 @@ export type CoordinatorProviderTier =
   | "advisory"
   | "unavailable";
 
+/**
+ * Weakest tier an installation offers before the user chooses one.
+ *
+ * `provider-configured` admits every platform that is at least told to deny
+ * mutations. Only `advisory`, where nothing but the agent's cooperation holds
+ * the boundary, stays opt-in. The web settings form and the backend table both
+ * read this so a fresh install and an unsaved form agree on what "default" is.
+ */
+export const DEFAULT_COORDINATOR_PROVIDER_TIER = "provider-configured" as const;
+
+/**
+ * Marks configs that have crossed the one-time default change from `enforced`
+ * to `provider-configured`.
+ */
+export const COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION = 1 as const;
+
+export function normalizeCoordinatorProviderTierDefaultVersion(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION
+    ? value
+    : COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION;
+}
+
 export interface CoordinatorProviderQualification {
   tier: CoordinatorProviderTier;
   /** Whether this host's tier setting admits the platform right now. */

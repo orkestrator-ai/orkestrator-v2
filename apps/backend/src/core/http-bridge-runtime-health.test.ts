@@ -64,7 +64,7 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]?.occurrences).toHaveLength(2);
   });
 
-  test("preserves Codex notice severity so routine lifecycle updates stay out of the tab", () => {
+  test("preserves Codex notice severity while keeping both out of the tab", () => {
     const summary = bridgeRuntimeSummary({
       engine: {},
       notices: [
@@ -81,9 +81,9 @@ describe("bridgeRuntimeSummary", () => {
       ],
     })!;
 
-    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toEqual([
-      { kind: "advisory", message: "Codex reported warning", severity: "warning" },
-    ]);
+    expect(summary.notices?.map((notice) => notice.severity)).toEqual(["info", "warning"]);
+    // Both are health-panel material: the tab only takes errors.
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toEqual([]);
   });
 
   test("keeps lifecycle and failure occurrences in separate Codex groups", () => {
@@ -137,7 +137,7 @@ describe("bridgeRuntimeSummary", () => {
 });
 
 describe("snapshotNotices", () => {
-  test("promotes provider advisories into the tab alongside the transport warning", () => {
+  test("promotes provider errors into the tab alongside the transport warning", () => {
     expect(
       snapshotNotices({
         transcriptTruncated: true,
@@ -145,6 +145,7 @@ describe("snapshotNotices", () => {
           notices: [
             { message: "inventory", severity: "info" },
             { message: "deprecated", severity: "warning" },
+            { message: "broken", severity: "error" },
           ],
         },
       }),
@@ -154,8 +155,17 @@ describe("snapshotNotices", () => {
         message:
           "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
       },
-      { kind: "advisory", message: "deprecated", severity: "warning" },
+      { kind: "advisory", message: "broken", severity: "error" },
     ]);
+  });
+
+  test("provider warnings stay in the health panel", () => {
+    expect(
+      snapshotNotices({
+        transcriptTruncated: false,
+        runtime: { notices: [{ message: "deprecated", severity: "warning" }] },
+      }),
+    ).toEqual([]);
   });
 
   test("a clean snapshot carries no notices at all", () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { mockToastError, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -82,6 +82,29 @@ afterEach(() => {
 });
 
 describe("ConnectionsSettings", () => {
+  test("updates an open settings view from another window's catalogue broadcast", async () => {
+    let desktopListener: ((payload: ConnectionList) => void) | undefined;
+    installConnections();
+    window.orkestrator!.listen = mock((event, callback) => {
+      if (event === "desktop-connections-changed") {
+        desktopListener = callback as (payload: ConnectionList) => void;
+      }
+      return () => undefined;
+    });
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    act(() => {
+      desktopListener?.({
+        ...initialList,
+        connections: [initialList.connections[0]!],
+      });
+    });
+
+    await waitFor(() => expect(screen.queryByText("desk.tailnet.ts.net") === null).toBe(true));
+    expect(screen.getByText("0 remote connections")).toBeTruthy();
+  });
+
   test("shows local and remote servers with secure token status", async () => {
     installConnections();
     render(<ConnectionsSettings />);

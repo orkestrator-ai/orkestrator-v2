@@ -201,6 +201,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     handleTerminalPasteMock.mockClear();
     handleTerminalPasteMock.mockResolvedValue(undefined);
     capturedImagePasteOptions = null;
+    delete window.orkestrator;
 
     globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
       callback(0);
@@ -247,6 +248,37 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("suppresses background geometry and republishes when the Electron window gains focus", async () => {
+    const originalHasFocus = document.hasFocus;
+    let documentFocused = false;
+    Object.defineProperty(document, "hasFocus", {
+      configurable: true,
+      value: () => documentFocused,
+    });
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+
+    try {
+      render(
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+      act(() => resizeCallback?.([], {} as ResizeObserver));
+      expect(resizeInteractiveTerminalMock).not.toHaveBeenCalled();
+
+      documentFocused = true;
+      act(() => window.dispatchEvent(new Event("focus")));
+      await waitFor(() =>
+        expect(resizeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", 120, 30),
+      );
+    } finally {
+      Object.defineProperty(document, "hasFocus", {
+        configurable: true,
+        value: originalHasFocus,
+      });
+      delete window.orkestrator;
+    }
   });
 
   test("sends Shift+Enter as LF to the tmux input bridge", async () => {

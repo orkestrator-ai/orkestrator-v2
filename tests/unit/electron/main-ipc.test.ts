@@ -44,7 +44,11 @@ function createHarness(
     toDataURL: mock(() => "data:image/png;base64,abc"),
   };
   const nativeImage = { createFromDataURL: mock((dataUrl: string) => ({ dataUrl })) };
-  const appApi = { exit: mock(() => undefined) };
+  const appApi = {
+    exit: mock(() => undefined),
+    quit: mock(() => undefined),
+    relaunch: mock(() => undefined),
+  };
   const clipboardApi = {
     readText: mock(() => "copied"),
     writeText: mock(() => undefined),
@@ -226,6 +230,9 @@ describe("main IPC registration", () => {
 
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
+    await harness.invoke("orkestrator:process:restart");
+    expect(harness.appApi.relaunch).toHaveBeenCalledTimes(1);
+    expect(harness.appApi.quit).toHaveBeenCalledTimes(1);
     await expect(harness.invoke("orkestrator:window:start-dragging")).resolves.toBeUndefined();
     await expect(harness.invoke("orkestrator:window:set-zoom-factor", 1.5)).resolves.toBe(true);
     expect(harness.setZoomFactor).toHaveBeenCalledWith(1.5);

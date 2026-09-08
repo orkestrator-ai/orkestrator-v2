@@ -205,6 +205,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:process:exit",
       args: [7],
     });
+    await expect(api.process.restart()).resolves.toEqual({
+      channel: "orkestrator:process:restart",
+      args: [],
+    });
     await expect(api.window.startDragging()).resolves.toEqual({
       channel: "orkestrator:window:start-dragging",
       args: [],

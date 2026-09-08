@@ -134,6 +134,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       exit(code?: number): Promise<void> {
         return ipcRenderer.invoke("orkestrator:process:exit", code);
       },
+      restart(): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:process:restart");
+      },
     },
 
     window: {

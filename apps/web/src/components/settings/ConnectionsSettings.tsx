@@ -37,7 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
-import { publishConnections } from "@/lib/connections";
+import { publishConnections, subscribeToConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -88,6 +88,8 @@ export function ConnectionsSettings() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => subscribeToConnections(setConnections), []);
 
   const remoteCount = useMemo(
     () => connections?.connections.filter((connection) => connection.kind === "remote").length ?? 0,

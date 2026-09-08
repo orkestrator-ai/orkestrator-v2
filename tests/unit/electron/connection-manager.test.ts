@@ -180,12 +180,13 @@ describe("Electron connection manager", () => {
       onEvent: mock(() => undefined),
     });
     await manager.initialize();
+    await manager.bind("remote-window", "local");
     manager.markLocalBackendUnavailable();
 
     await expect(manager.probe("local")).resolves.toBe(false);
-    await expect(
-      manager.connect({ address: "https://desk.example", token }, "remote-window"),
-    ).resolves.toMatchObject({ connections: expect.any(Array) });
+    const list = await manager.connect({ address: "https://desk.example", token }, "remote-window");
+    expect(list).toMatchObject({ localAvailable: false, connections: expect.any(Array) });
+    await expect(manager.invoke("get_projects", {}, "remote-window")).resolves.toBeUndefined();
     expect(local.backend.invoke).toHaveBeenCalledTimes(1);
   });
 
@@ -1027,6 +1028,7 @@ describe("Electron connection manager", () => {
     });
     await manager.initialize();
     await manager.bind("local-window", "local");
+    await manager.bind("remote-window-a", "local");
     const remoteList = await manager.connect(
       { address: "https://desk.example", token },
       "remote-window-a",
@@ -1046,6 +1048,7 @@ describe("Electron connection manager", () => {
     );
     expect(eventSignals).toHaveLength(1);
 
+    await manager.bind("remote-window-c", "local");
     await manager.connect(
       { address: "https://desk.example", token: "replacement-token-123456" },
       "remote-window-c",
@@ -1067,6 +1070,61 @@ describe("Electron connection manager", () => {
     expect(eventSignals[1]?.aborted).toBe(true);
   });
 
+  test("routes two remote window scopes to their own backends and credentials", async () => {
+    const local = localBackendHarness();
+    const eventSignals = new Map<string, AbortSignal>();
+    const requests: Array<{ hostname: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const url = new URL(String(input));
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (url.pathname === "/__orkestrator/events") {
+        eventSignals.set(url.hostname, init?.signal as AbortSignal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      if (url.pathname === "/__orkestrator/status") {
+        return new Response(JSON.stringify({ ok: true }));
+      }
+      requests.push({ hostname: url.hostname, authorization });
+      return new Response(JSON.stringify({ result: url.hostname }));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.bind("remote-a-window", "local");
+    await manager.bind("remote-b-window", "local");
+
+    const remoteA = await manager.connect(
+      { address: "https://a.example", token: "gateway-token-server-a" },
+      "remote-a-window",
+    );
+    const remoteB = await manager.connect(
+      { address: "https://b.example", token: "gateway-token-server-b" },
+      "remote-b-window",
+    );
+
+    await expect(manager.invoke("get_projects", {}, "remote-a-window")).resolves.toBe("a.example");
+    await expect(manager.invoke("get_projects", {}, "remote-b-window")).resolves.toBe("b.example");
+    expect(remoteA.activeConnectionId).not.toBe(remoteB.activeConnectionId);
+    expect(requests).toEqual([
+      { hostname: "a.example", authorization: "Bearer gateway-token-server-a" },
+      { hostname: "b.example", authorization: "Bearer gateway-token-server-b" },
+    ]);
+    expect(eventSignals.get("a.example")?.aborted).toBe(false);
+    expect(eventSignals.get("b.example")?.aborted).toBe(false);
+
+    manager.release("remote-a-window");
+    manager.release("remote-b-window");
+    expect(eventSignals.get("a.example")?.aborted).toBe(true);
+    expect(eventSignals.get("b.example")?.aborted).toBe(true);
+  });
+
   test("does not remove a saved connection while a window is using it", async () => {
     const local = localBackendHarness();
     installHealthyRemoteFetch();
@@ -1076,6 +1134,7 @@ describe("Electron connection manager", () => {
       onEvent: mock(() => undefined),
     });
     await manager.initialize();
+    await manager.bind("remote-window", "local");
     const list = await manager.connect({ address: "https://desk.example", token }, "remote-window");
 
     await manager.bind("other-remote-window", list.activeConnectionId);
@@ -1086,6 +1145,65 @@ describe("Electron connection manager", () => {
     await expect(manager.forget(list.activeConnectionId, "remote-window")).resolves.toMatchObject({
       activeConnectionId: "local",
     });
+  });
+
+  test("does not resurrect a released scope after its remote check completes", async () => {
+    const local = localBackendHarness();
+    let resolveStatus: ((response: Response) => void) | undefined;
+    const eventSignals: AbortSignal[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/__orkestrator/events") {
+        eventSignals.push(init?.signal as AbortSignal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      return new Promise<Response>((resolve) => {
+        resolveStatus = resolve;
+      });
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.bind("closing-window", "local");
+
+    const connection = manager.connect(
+      { address: "https://desk.example", token },
+      "closing-window",
+    );
+    while (!resolveStatus) await Promise.resolve();
+    manager.release("closing-window");
+    resolveStatus(new Response(JSON.stringify({ ok: true })));
+
+    await expect(connection).rejects.toThrow("window is no longer available");
+    expect(() => manager.getList("closing-window")).toThrow("window is no longer available");
+    expect(eventSignals).toHaveLength(0);
+    expect(local.getStored().connections).toEqual([]);
+  });
+
+  test("fails closed instead of rotating Local after a window scope is released", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    await manager.bind("remote-window", "local");
+    await manager.connect({ address: "https://desk.example", token }, "remote-window");
+    manager.release("remote-window");
+
+    await expect(
+      manager.setGatewayToken("replacement-token-123456", "remote-window"),
+    ).rejects.toThrow("window is no longer available");
+    expect(local.backend.setToken).not.toHaveBeenCalled();
   });
 
   test("reports address, authentication, network, malformed response, and timeout errors", async () => {

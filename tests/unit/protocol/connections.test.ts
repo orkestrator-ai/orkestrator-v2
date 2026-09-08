@@ -64,6 +64,13 @@ describe("connection protocol validation", () => {
         credentialStorage: "disk",
       }),
     ).toThrow("credentialStorage");
+    expect(() =>
+      parseConnectionList({
+        activeConnectionId: "local",
+        connections: [],
+        localAvailable: "yes",
+      }),
+    ).toThrow("localAvailable");
   });
 
   test("accepts local and remote connection summaries", () => {
@@ -71,6 +78,7 @@ describe("connection protocol validation", () => {
       parseConnectionList({
         activeConnectionId: "remote-1",
         credentialStorage: "secure",
+        localAvailable: false,
         connections: [
           {
             id: "local",
@@ -90,6 +98,10 @@ describe("connection protocol validation", () => {
           },
         ],
       }),
-    ).toMatchObject({ activeConnectionId: "remote-1", credentialStorage: "secure" });
+    ).toMatchObject({
+      activeConnectionId: "remote-1",
+      credentialStorage: "secure",
+      localAvailable: false,
+    });
   });
 });

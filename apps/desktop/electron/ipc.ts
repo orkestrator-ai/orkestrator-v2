@@ -52,6 +52,8 @@ type DialogLike = {
 
 type AppLike = {
   exit(code?: number): void;
+  quit(): void;
+  relaunch(): void;
 };
 
 type NativeImageLike = {
@@ -295,6 +297,10 @@ export function registerMainIpc({
 
   handle("orkestrator:process:exit", (_event, code?: unknown) => {
     appApi.exit(typeof code === "number" ? code : 0);
+  });
+  handle("orkestrator:process:restart", () => {
+    appApi.relaunch();
+    appApi.quit();
   });
 
   handle("orkestrator:window:start-dragging", () => undefined);

@@ -92,4 +92,15 @@ describe("native dialog/window/process wrappers", () => {
       Object.defineProperty(window, "close", { configurable: true, value: originalClose });
     }
   });
+
+  test("restarts through the preload bridge", async () => {
+    const { restart } = await loadNativeProcess();
+    const restartMock = mock(async () => undefined);
+    window.orkestrator = {
+      process: { exit: mock(async () => undefined), restart: restartMock },
+    } as never;
+
+    await restart();
+    expect(restartMock).toHaveBeenCalledTimes(1);
+  });
 });

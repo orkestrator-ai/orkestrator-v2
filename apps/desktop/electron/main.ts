@@ -15,6 +15,7 @@ import {
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { registerBackendShutdown } from "./backend-lifecycle.js";
 import {
@@ -55,6 +56,13 @@ import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
 } from "./application-logging.js";
+import {
+  browserPreviewPartitionForWindow,
+  cleanupFailedDesktopWindow,
+  DesktopWindowRequestGate,
+  DesktopWindowSlotAllocator,
+  rendererPartitionForWindow,
+} from "./desktop-window-lifecycle.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,10 +94,11 @@ type DesktopWindowContext = {
   browserPreviewManager: BrowserPreviewManager;
 };
 const windowContexts = new Map<number, DesktopWindowContext>();
-const usedWindowSlots = new Set<number>();
 const MAX_DESKTOP_WINDOWS = 32;
+const windowSlots = new DesktopWindowSlotAllocator(MAX_DESKTOP_WINDOWS);
+const windowRequestGate = new DesktopWindowRequestGate();
+let legacyRendererSessionClaimed = false;
 let lastFocusedWindowId: number | null = null;
-let pendingNewWindowRequests = 0;
 const backendProcess = new BackendProcess();
 // Closing a main window may quit; the windowless moments before the first one,
 // between programmatic first-run setup handoffs, must not.
@@ -146,13 +155,33 @@ function setConnectionTitle(window: BrowserWindow, scope: string): void {
   window.setTitle(`${productName} — ${active?.name ?? "Local"}`);
 }
 
-function allocateWindowSlot(): number {
-  for (let slot = 1; slot <= MAX_DESKTOP_WINDOWS; slot += 1) {
-    if (usedWindowSlots.has(slot)) continue;
-    usedWindowSlots.add(slot);
-    return slot;
-  }
-  throw new Error(`Orkestrator supports up to ${MAX_DESKTOP_WINDOWS} open windows.`);
+function createWindowBrowserPreviews(
+  createdWindow: BrowserWindow,
+  scope: string,
+  partition: string,
+) {
+  const emitToOwner = (event: string, payload: unknown) =>
+    emitToWindow(createdWindow, event, payload);
+  const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
+    emitToRenderers: emitToOwner,
+    openExternal: (url) => shell.openExternal(url),
+    writeClipboardText: (text) => clipboard.writeText(text),
+    logError: (message, error) => console.error(message, error),
+  });
+  return initializeBrowserPreviews({
+    fromPartition: (partitionName) => session.fromPartition(partitionName),
+    partition,
+    WebContentsViewCtor: WebContentsView,
+    menu: Menu,
+    getWindow: () => createdWindow,
+    ...browserPreviewMainAdapters,
+    focusAddressBar: createBrowserPreviewAddressFocusHandler({
+      getWindow: () => createdWindow,
+      emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
+    }),
+    getAuthorization: (url) =>
+      connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+  });
 }
 
 function createMenu(): void {
@@ -178,15 +207,18 @@ async function createWindow(connectionId?: string): Promise<void> {
       ? connectionManager.getConnectionId(currentContext.scope)
       : connectionManager.getList().activeConnectionId);
   const scope = randomUUID();
-  const slot = allocateWindowSlot();
+  const slot = windowSlots.allocate();
   let connectionList: ReturnType<ConnectionManager["getList"]>;
   try {
     connectionList = await connectionManager.bind(scope, inheritedConnectionId);
   } catch (error) {
-    usedWindowSlots.delete(slot);
+    windowSlots.release(slot);
     throw error;
   }
   const activeConnection = connectionList.connections.find((connection) => connection.active);
+  const activeConnectionId = activeConnection?.id ?? LOCAL_CONNECTION_ID;
+  const useLegacyDefaultSession = !legacyRendererSessionClaimed;
+  legacyRendererSessionClaimed = true;
   let registered = false;
   const allocation: { window: BrowserWindow | null } = { window: null };
   try {
@@ -200,7 +232,7 @@ async function createWindow(connectionId?: string): Promise<void> {
       rendererRoot: isDev ? undefined : path.join(process.resourcesPath, "web"),
       devServerUrl: process.env.VITE_DEV_SERVER_URL,
       title: `${productName} — ${activeConnection?.name ?? "Local"}`,
-      partition: `persist:orkestrator-renderer-${slot}`,
+      partition: rendererPartitionForWindow(slot, activeConnectionId, useLegacyDefaultSession),
       beforeLoad: (createdWindow) => {
         allocation.window = createdWindow;
         const emitToOwner = (event: string, payload: unknown) =>
@@ -209,26 +241,11 @@ async function createWindow(connectionId?: string): Promise<void> {
           createdWindow.webContents.session.webRequest,
           (url) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
         );
-        const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
-          emitToRenderers: emitToOwner,
-          openExternal: (url) => shell.openExternal(url),
-          writeClipboardText: (text) => clipboard.writeText(text),
-          logError: (message, error) => console.error(message, error),
-        });
-        const browserPreviewRuntime = initializeBrowserPreviews({
-          fromPartition: (partition) => session.fromPartition(partition),
-          partition: `persist:orkestrator-browser-previews-${slot}`,
-          WebContentsViewCtor: WebContentsView,
-          menu: Menu,
-          getWindow: () => createdWindow,
-          ...browserPreviewMainAdapters,
-          focusAddressBar: createBrowserPreviewAddressFocusHandler({
-            getWindow: () => createdWindow,
-            emitFocus: (tabId) => emitToOwner("browser-preview-focus-address", tabId),
-          }),
-          getAuthorization: (url) =>
-            connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
-        });
+        const browserPreviewRuntime = createWindowBrowserPreviews(
+          createdWindow,
+          scope,
+          browserPreviewPartitionForWindow(slot, activeConnectionId),
+        );
         const webContentsId = createdWindow.webContents.id;
         windowContexts.set(webContentsId, {
           window: createdWindow,
@@ -252,10 +269,10 @@ async function createWindow(connectionId?: string): Promise<void> {
           lastFocusedWindowId = webContentsId;
         });
         createdWindow.once("closed", () => {
-          browserPreviewRuntime.manager.destroyAll();
+          windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll();
           windowContexts.delete(webContentsId);
           connectionManager?.release(scope);
-          usedWindowSlots.delete(slot);
+          windowSlots.release(slot);
           if (lastFocusedWindowId === webContentsId) {
             lastFocusedWindowId = windowContexts.keys().next().value ?? null;
           }
@@ -264,12 +281,24 @@ async function createWindow(connectionId?: string): Promise<void> {
     });
     windowAllClosedQuit.markMainWindowCreated();
   } catch (error) {
-    if (registered) allocation.window?.destroy();
-    else {
-      connectionManager.release(scope);
-      usedWindowSlots.delete(slot);
-    }
+    cleanupFailedDesktopWindow({
+      window: allocation.window,
+      registered,
+      releaseScope: () => connectionManager?.release(scope),
+      releaseSlot: () => windowSlots.release(slot),
+    });
     throw error;
+  }
+}
+
+function publishConnectionLists(): void {
+  if (!connectionManager) return;
+  for (const context of windowContexts.values()) {
+    emitToWindow(
+      context.window,
+      "desktop-connections-changed",
+      connectionManager.getList(context.scope),
+    );
   }
 }
 
@@ -282,11 +311,6 @@ function registerIpc(): void {
   const updateWindowTitle = (event: { sender?: { id: number } } | undefined) => {
     const context = contextForEvent(event);
     setConnectionTitle(context.window, context.scope);
-  };
-  const publishConnectionLists = () => {
-    for (const context of windowContexts.values()) {
-      emitToWindow(context.window, "desktop-connections-changed", manager().getList(context.scope));
-    }
   };
   registerMainIpc({
     getBackend: (event) => {
@@ -315,7 +339,21 @@ function registerIpc(): void {
       return list;
     },
     useConnection: async (connectionId, event) => {
-      const list = await manager().use(connectionId, scopeForEvent(event));
+      const context = contextForEvent(event);
+      const nextPreviewRuntime = createWindowBrowserPreviews(
+        context.window,
+        context.scope,
+        browserPreviewPartitionForWindow(context.slot, connectionId),
+      );
+      let list: ReturnType<ConnectionManager["getList"]>;
+      try {
+        list = await manager().use(connectionId, context.scope);
+      } catch (error) {
+        nextPreviewRuntime.manager.destroyAll();
+        throw error;
+      }
+      context.browserPreviewManager.destroyAll();
+      context.browserPreviewManager = nextPreviewRuntime.manager;
       updateWindowTitle(event);
       publishConnectionLists();
       return list;
@@ -410,6 +448,7 @@ async function startApplication(): Promise<void> {
     onUnexpectedExit: (error) => {
       connectionManager?.markLocalBackendUnavailable();
       emitToConnection("local", "local-backend-unavailable", { message: error.message });
+      publishConnectionLists();
       dialog.showErrorBox(
         `${productName} backend stopped`,
         `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
@@ -427,10 +466,10 @@ async function startApplication(): Promise<void> {
 
   createMenu();
   registerIpc();
+  const queuedNewWindows = windowRequestGate.markReady();
   await createWindow();
   connectionManager.release(DEFAULT_CONNECTION_SCOPE);
-  while (pendingNewWindowRequests > 0) {
-    pendingNewWindowRequests -= 1;
+  for (let index = 0; index < queuedNewWindows; index += 1) {
     await createWindow();
   }
   await toolchainProgress.close();
@@ -463,10 +502,7 @@ if (isPrimaryInstance) {
     app,
     () => focusedContext()?.window ?? null,
     () => {
-      if (!connectionManager) {
-        pendingNewWindowRequests += 1;
-        return;
-      }
+      if (!windowRequestGate.request()) return;
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a window for a second launch:", error),
       );

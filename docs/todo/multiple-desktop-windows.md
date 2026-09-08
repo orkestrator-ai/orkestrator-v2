@@ -49,22 +49,29 @@ paths must use the same window binding.
 - Remote connections are pooled by connection ID. Windows sharing a server use
   one desktop event client; the last window release stops that client without
   stopping work on the server.
-- Renderer and browser-preview sessions use bounded per-window partitions.
-  Connection-sensitive renderer persistence is namespaced, and pane/tab focus
-  is restored as a window-local overlay over the backend-owned structure.
-- Only the focused terminal in the focused Electron window publishes geometry,
-  preventing background windows from oscillating one shared PTY size.
+- Renderer and browser-preview sessions use bounded, connection-keyed per-window
+  partitions. The first renderer retains the legacy default session long enough
+  to migrate existing presentation preferences; preview cookies are never reused
+  by a window opened on another connection.
+- Every visible active terminal pane in the focused Electron window publishes
+  geometry, including visibility-redraw and Claude interactive-tmux paths.
+  Background windows publish none and reclaim geometry when focused.
 - A failed local backend marks Local unavailable while remote windows stay
-  open. The in-memory connection catalogue remains usable for that Electron
-  process, and forgetting a connection is refused while another window uses it.
+  open. Local windows show a persistent restart action, the in-memory connection
+  catalogue remains usable for that Electron process, and forgetting a
+  connection is refused while another window uses it.
 - Connection names are enforced in native window titles. New windows inherit
   the focused window's connection, while `--new-window` is forwarded through
   the existing single-instance process.
 
+New-window requests received during startup remain queued until initialization
+and privileged IPC registration finish. Released window scopes are invalidated,
+so late connection work cannot recreate a closed scope or fall through to Local.
+
 The current release still starts the one owned local backend during desktop
 startup, even if the first view selects a remote. Durable catalogue ownership
 also remains in that backend; after it fails, catalogue changes are session-only
-until restart. Remote-only cold startup, automatic Local recovery, document
+until restart. Remote-only cold startup, in-process Local recovery, document
 generation envelopes, and restoring an arbitrary set of windows remain later
 lifecycle work. Shared tab membership remains intentional; only presentation
 selection is window-local.
@@ -215,13 +222,15 @@ have conflict-related modules; establish their behavior with two live clients
 before proposing new storage. Two answers to one approval must resolve once,
 with the other window reconciling the already-resolved interaction.
 
-Terminal geometry is a specific remaining design check: `terminal_resize`
-currently applies dimensions directly to the shared terminal. Prefer the focused
-view to control geometry; if renderer focus gating still permits races, add a
-backend-owned viewer lease rather than allowing background resize oscillation.
-Exercise both terminal implementations. `detach_terminal` explicitly closes a
-session, so it must never become a generic window-close cleanup operation.
-`useTerminal` already releases only renderer listeners on ordinary unmount.
+`terminal_resize` applies dimensions directly to the shared terminal. The
+implemented renderer owner rule allows every visible pane in the focused window
+to publish while suppressing background windows, and it covers regular PTY
+resizes, visibility redraws, and Claude interactive tmux. A focused window
+re-publishes its current geometry on focus. If runtime testing still exposes
+races between renderers, use a backend-owned viewer lease rather than weakening
+this rule. `detach_terminal` explicitly closes a session, so it must never become
+a generic window-close cleanup operation. `useTerminal` already releases only
+renderer listeners on ordinary unmount.
 
 ## Lifecycle and connection management behavior
 
@@ -238,8 +247,9 @@ session, so it must never become a generic window-close cleanup operation.
 - A remote disconnection leaves that window on its chosen server with reconnect
   controls. Do not silently switch it to Local. Other connections continue.
 - A local backend exit marks Local unavailable and leaves remote windows usable.
-  Offer explicit local recovery; restart only after the old owned child is
-  confirmed gone, and reconcile uncertain operations before any new dispatch.
+  Local windows retain a persistent unavailable state with an explicit full-app
+  restart action. Any future in-process recovery must confirm the old owned child
+  is gone and reconcile uncertain operations before dispatching new work.
 - Reject forgetting a connection while another window uses it, explaining which
   windows must close/switch first. Removing a saved token and rotating the remote
   gateway token are distinct actions. Rotation necessarily affects every client

@@ -69,6 +69,8 @@ interface Window {
     };
     process: {
       exit(code?: number): Promise<void>;
+      /** Electron only: relaunches the application to recover owned services. */
+      restart?(): Promise<void>;
     };
     window: {
       startDragging(): Promise<void>;

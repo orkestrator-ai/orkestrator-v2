@@ -122,7 +122,16 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("initializeBrowserPreviews");
     expect(desktopMain).toContain("browserPreviewManager: browserPreviewRuntime.manager");
     expect(desktopMain).toContain("getBrowserPreviews: (event)");
-    expect(desktopMain).toContain("browserPreviewRuntime.manager.destroyAll()");
+    expect(desktopMain).toContain(
+      "windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll()",
+    );
+    expect(desktopMain).toContain("browserPreviewPartitionForWindow(context.slot, connectionId)");
+    expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
+      desktopMain.indexOf("windowRequestGate.markReady()"),
+    );
+    expect(desktopMain.indexOf("windowRequestGate.markReady()")).toBeLessThan(
+      desktopMain.indexOf("await createWindow();"),
+    );
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
   });
 

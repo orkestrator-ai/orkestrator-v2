@@ -86,6 +86,9 @@ describe("monorepo orchestration scripts", () => {
     expect(
       source.indexOf("COPY --chown=node:node package.json bun.lock /opt/bridge-build/"),
     ).toBeLessThan(installIndex);
+    expect(source.indexOf("COPY --chown=node:node patches /opt/bridge-build/patches")).toBeLessThan(
+      installIndex,
+    );
     expect(
       source.indexOf(
         "COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol",

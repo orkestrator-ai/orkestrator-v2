@@ -246,6 +246,7 @@ RUN NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
 # shared @orkestrator/protocol workspace package, so copying either bridge as a
 # standalone package leaves its `workspace:*` dependency impossible to resolve.
 COPY --chown=node:node package.json bun.lock /opt/bridge-build/
+COPY --chown=node:node patches /opt/bridge-build/patches
 COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
 COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
 COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { TabShell } from "./TabShell";
 
 describe("TabShell", () => {
@@ -51,7 +52,10 @@ describe("TabShell", () => {
   test("omits inactive and unavailable controls", () => {
     const { container } = render(<TabShell isActive={false}>Tab title</TabShell>);
 
-    expect(container.querySelector("[aria-hidden='true'].bg-primary")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expectDomAbsent(
+      container.querySelector("[aria-hidden='true'].bg-primary"),
+      "inactive tab marker",
+    );
+    expectDomAbsent(screen.queryByRole("button"), "unavailable tab control");
   });
 });

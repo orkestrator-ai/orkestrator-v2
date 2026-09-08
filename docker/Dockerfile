@@ -1,7 +1,8 @@
-# Bun is the primary runtime: it builds and runs the bridge servers. The
+# Bun is the primary runtime: it builds and runs the bridge servers. This tag
+# mirrors the developer and CI version managed by the repository's mise.toml.
 # `-debian` variant is glibc-based (Debian), which keeps the musl-delete logic
 # for the Claude Agent SDK below valid. (An Alpine/musl base would invert it.)
-FROM oven/bun:1.4.0-debian
+FROM oven/bun:1.4.2-debian
 
 ARG TZ
 ENV TZ="$TZ"
@@ -268,7 +269,7 @@ WORKDIR /opt/bridge-build/bridges/claude-bridge
 # resolved at runtime — the old top-level rm never touched it) to make resolution
 # unambiguous and drop ~225MB of dead weight. If switching to an Alpine/musl
 # base, keep musl and strip gnu instead.
-# Verified in oven/bun:1.4.0-debian (linux/arm64): the bridge boots, /global/health
+# Verified with the pinned oven/bun Debian image (linux/arm64): the bridge boots, /global/health
 # returns 200, and the SDK resolves the gnu binary from dist/node_modules with no
 # musl variant and no top-level node_modules left behind.
 RUN bun run build \
@@ -317,8 +318,10 @@ RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
 
 # Install mise after the expensive CLI, browser and bridge-build layers so a
 # mise-only version bump does not invalidate them. Host installations cannot be
-# reused here: their binaries target macOS and the container runs Linux. Keep
-# both supported image architectures pinned to config/mise-version.json.
+# reused here: their binaries target macOS and the container runs Linux. The
+# shared Bun install remains visible if a devcontainer mounts over the node
+# user's home. Keep both supported image architectures pinned to
+# config/mise-version.json.
 ARG MISE_VERSION=2026.9.1
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
@@ -333,6 +336,12 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
+  mise install --system bun@1.4.2 && \
+  BUN_INSTALL_DIR="$(mise where bun@1.4.2)" && \
+  test -x "$BUN_INSTALL_DIR/bin/bun" && \
+  ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.2" && \
+  mise exec bun@1.4.2 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
   rm -f "/tmp/${MISE_TARBALL}" && \
@@ -345,7 +354,9 @@ ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
-RUN printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
+RUN test "$(/usr/local/bin/bun --version)" = "1.4.2" \
+ && test "$(/usr/local/bin/bunx --version)" = "1.4.2" \
+ && printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
  && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
  && rm mise.toml
 

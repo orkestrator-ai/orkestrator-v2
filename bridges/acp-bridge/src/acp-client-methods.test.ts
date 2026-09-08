@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,8 +16,11 @@ afterEach(async () => {
 
 async function workspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "acp-client-methods-"));
-  directories.push(directory);
-  return directory;
+  // Bun 1.4.2 exposes macOS's /var -> /private/var alias through tmpdir(); use
+  // the same canonical path the production workspace guard compares against.
+  const canonical = await realpath(directory);
+  directories.push(canonical);
+  return canonical;
 }
 
 describe("ACP filesystem client methods", () => {

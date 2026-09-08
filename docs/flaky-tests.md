@@ -130,10 +130,10 @@ New open observations from the later aggregate runs:
 - One run also observed isolated `useVirtuosoScrollState` and Codex lifecycle
   assertion failures. Neither has an established cause, so both remain open.
 
-## `create_project_from_scratch > rolls back when GitHub CLI is definitely missing` (`apps/backend/src/core/commands-project-creation.test.ts:288`)
+## `create_project_from_scratch > rolls back when GitHub CLI is definitely missing` (`apps/backend/src/core/commands-project-creation.test.ts:292`)
 
-- **Status:** resolved — see the 2026-09-06 resolution sweep above
-- **Date observed:** 2026-09-03
+- **Status:** open — recurred after the 2026-09-06 resolution sweep
+- **Date observed:** 2026-09-03; recurred 2026-09-08
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
   the workspace group ran six Turbo packages, and the backend package used two
@@ -147,6 +147,13 @@ New open observations from the later aggregate runs:
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts
   src/core/commands-project-creation.test.ts --only-failures` from
   `apps/backend` -> 39 passed, 0 failed, and 107 assertions in 1.44 s.
+- **2026-09-08 recurrence:** `mise exec -- bun run test` under Bun 1.4.2
+  produced the same resolved-`fs.access` assertion in the four-group
+  concurrent suite (27.76 ms). The backend package reported 2,797 passed and
+  one failed across 120 files in 99.33 s. Rerunning the owning file alone with
+  `mise exec -- bun test --preload ../../tests/setup-node.ts
+  ./src/core/commands-project-creation.test.ts` from `apps/backend` passed all
+  39 tests and 107 assertions in 1.30 s without a source change.
 - **Hypothesis:** `createProjectFromScratch` awaits its best-effort rollback
   before rejecting, but the rollback deliberately swallows failures and first
   abandons deletion if the directory identity changed. The aggregate output

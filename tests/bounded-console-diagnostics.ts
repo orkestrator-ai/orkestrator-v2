@@ -100,7 +100,10 @@ export function summarizeValue(
     }
 
     const name = value.constructor?.name || "Object";
-    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
+      PropertyKey,
+      PropertyDescriptor
+    >;
     const keys = Reflect.ownKeys(descriptors);
     const entries: string[] = [];
     for (const key of keys.slice(0, MAX_OBJECT_KEYS)) {

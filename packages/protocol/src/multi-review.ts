@@ -117,12 +117,34 @@ export type MultiReviewPhase =
   | "cancelled"
   | "failed";
 
+/** The three fix-session turns, named by the request that runs each of them. */
+export type MultiReviewStepKind = "prepare" | "consolidate" | "fix";
+
+/**
+ * One step's timing and consumption.
+ *
+ * The three steps share one provider session and every dispatch resets its
+ * clock, so a settled step's numbers only survive if they are recorded here.
+ */
+export interface MultiReviewStepRuntime {
+  startedAt: string;
+  completedAt?: string;
+  /** Tokens this step consumed: cumulative session usage minus its dispatch baseline. */
+  tokenCount?: number;
+  /** Cumulative session usage when the step was dispatched; bookkeeping for {@link tokenCount}. */
+  tokenBaseline?: number;
+}
+
+export type MultiReviewStepRuntimes = Partial<Record<MultiReviewStepKind, MultiReviewStepRuntime>>;
+
 export interface MultiReviewFixSession extends MultiReviewModelSelection {
   sessionKey: string;
   providerSessionId: string;
   requestIds: string[];
   status: "running" | "idle" | "failed" | "cancelled";
   startedAt: string;
+  /** Cumulative provider tokens for the whole session, across all three steps. */
+  tokenCount?: number;
   /** Last time the supervisor observed this session's transcript change. */
   progressAt?: string;
   /**
@@ -154,6 +176,8 @@ export interface MultiReviewWorkflow {
   /** Durable key reserved for the next or current consolidation/fix session. */
   fixSessionKey?: string;
   fixSession?: MultiReviewFixSession;
+  /** Per-step timing and token consumption, kept once the shared session moves on. */
+  stepRuntimes?: MultiReviewStepRuntimes;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
   /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
   reviewPackage?: ReviewPackageReference;
@@ -188,7 +212,7 @@ export interface MultiReviewWorkflow {
   /** Non-fatal failure to publish the current fix session into the pane layout. */
   presentationError?: string;
   activeRequest?: {
-    kind: "prepare" | "consolidate" | "fix";
+    kind: MultiReviewStepKind;
     requestId: string;
     state: "prepared" | "dispatching" | "sent";
     createdAt: string;
@@ -274,6 +298,8 @@ export function isStartMultiReviewCustomFixInput(
   );
 }
 
+export const MULTI_REVIEW_STEP_KINDS = ["prepare", "consolidate", "fix"] as const;
+
 const PHASES = new Set<MultiReviewPhase>([
   "preparing",
   "reviewing",
@@ -324,6 +350,7 @@ function isFixSession(value: unknown): boolean {
       "requestIds",
       "status",
       "startedAt",
+      "tokenCount",
       "progressAt",
       "progressDigest",
       "stalledSince",
@@ -339,11 +366,36 @@ function isFixSession(value: unknown): boolean {
     ["running", "idle", "failed", "cancelled"].includes(value.status as string) &&
     optionalDate(value.startedAt) &&
     typeof value.startedAt === "string" &&
+    optionalTokenCount(value.tokenCount) &&
     optionalDate(value.progressAt) &&
     optionalProgressDigest(value.progressDigest) &&
     optionalDate(value.stalledSince) &&
     optionalDate(value.completedAt) &&
     optionalString(value.error, 4_096)
+  );
+}
+
+function optionalTokenCount(value: unknown): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0);
+}
+
+function isStepRuntime(value: unknown): value is MultiReviewStepRuntime {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["startedAt", "completedAt", "tokenCount", "tokenBaseline"]) &&
+    typeof value.startedAt === "string" &&
+    optionalDate(value.startedAt) &&
+    optionalDate(value.completedAt) &&
+    optionalTokenCount(value.tokenCount) &&
+    optionalTokenCount(value.tokenBaseline)
+  );
+}
+
+function isStepRuntimes(value: unknown): value is MultiReviewStepRuntimes {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, MULTI_REVIEW_STEP_KINDS) &&
+    Object.values(value).every((runtime) => isStepRuntime(runtime))
   );
 }
 
@@ -361,7 +413,7 @@ function isActiveRequest(
       "schemaRepairPrompt",
       "idleResultPolls",
     ]) &&
-    (value.kind === "prepare" || value.kind === "consolidate" || value.kind === "fix") &&
+    MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind) &&
     nonBlank(value.requestId) &&
     (value.state === "prepared" || value.state === "dispatching" || value.state === "sent") &&
     typeof value.createdAt === "string" &&
@@ -424,6 +476,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "fixModel",
       "fixSessionKey",
       "fixSession",
+      "stepRuntimes",
       "phase",
       "reviewWorktreeSnapshot",
       "reviewPackage",
@@ -466,6 +519,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.backendRevision as number) < 0 ||
     (value.controllerFence !== undefined && !nonBlank(value.controllerFence)) ||
     (value.fixSession !== undefined && !isFixSession(value.fixSession)) ||
+    (value.stepRuntimes !== undefined && !isStepRuntimes(value.stepRuntimes)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
     (value.reviewPackage !== undefined &&

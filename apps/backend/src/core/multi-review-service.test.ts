@@ -4903,3 +4903,141 @@ test("cancelling package preparation stops its fix-model session before settling
     { packageFlow: true },
   );
 });
+
+test("preparation and consolidation each keep their own runtime and token count", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.usageTokens = 40_000;
+  await withService(
+    "env-step-runtimes",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+
+      const preparing = (await snapshot(started.id))!;
+      expect(preparing.phase).toBe("preparing");
+      // A fresh session starts from nothing, so preparation owns the whole total.
+      expect(preparing.stepRuntimes?.prepare).toMatchObject({ tokenCount: 40_000 });
+      expect(preparing.stepRuntimes?.prepare?.startedAt).toBeDefined();
+      expect(preparing.stepRuntimes?.prepare?.completedAt).toBeUndefined();
+      expect(preparing.fixSession?.tokenCount).toBe(40_000);
+
+      provider.statusValue = "idle";
+      await service.advanceNow(started.id);
+      const prepared = (await snapshot(started.id))!;
+      expect(prepared.phase).toBe("reviewing");
+      const prepare = prepared.stepRuntimes!.prepare!;
+      expect(prepare.completedAt).toBeDefined();
+
+      provider.usageTokens = 65_000;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const ready = (await snapshot(started.id))!;
+      // Preparation finished before consolidation was dispatched, so the shared
+      // session's later growth may not be added to it.
+      expect(ready.stepRuntimes?.prepare).toMatchObject({
+        startedAt: prepare.startedAt,
+        completedAt: prepare.completedAt,
+        tokenCount: 40_000,
+      });
+      expect(ready.stepRuntimes?.consolidate).toMatchObject({ tokenCount: 25_000 });
+      expect(ready.stepRuntimes?.consolidate?.completedAt).toBeDefined();
+      expect(ready.fixSession?.tokenCount).toBe(65_000);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("a failed consolidation keeps the step's clock and preparation's numbers", async () => {
+  const provider = new Provider();
+  provider.usageTokens = 10_000;
+  await withService(
+    "env-step-runtimes-failure",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "consolidating";
+      });
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      const consolidating = (await snapshot(started.id))!;
+      expect(consolidating.stepRuntimes?.consolidate?.startedAt).toBeDefined();
+      expect(consolidating.stepRuntimes?.consolidate?.completedAt).toBeUndefined();
+
+      provider.sessionFailures.set(consolidating.fixSession!.providerSessionId, "bridge crashed");
+      await service.advanceNow(started.id);
+
+      const failed = (await snapshot(started.id))!;
+      expect(failed.phase).toBe("failed");
+      expect(failed.stepRuntimes?.consolidate?.completedAt).toBeDefined();
+      expect(failed.stepRuntimes?.prepare?.tokenCount).toBe(10_000);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("retrying consolidation restarts its numbers and preserves preparation's", async () => {
+  const provider = new Provider();
+  provider.usageTokens = 12_000;
+  await withService(
+    "env-step-runtimes-retry",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "consolidating";
+      });
+      provider.statusValue = "running";
+      await service.advanceNow(started.id);
+      const consolidating = (await snapshot(started.id))!;
+      provider.sessionFailures.set(consolidating.fixSession!.providerSessionId, "bridge crashed");
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("failed");
+
+      provider.sessionFailures.clear();
+      const retried = await service.retry(started.id);
+      expect(retried.phase).toBe("consolidating");
+      // The retry runs on a new session, so consolidation is measured again.
+      expect(retried.stepRuntimes?.consolidate).toBeUndefined();
+      expect(retried.stepRuntimes?.prepare?.tokenCount).toBe(12_000);
+    },
+    { packageFlow: true },
+  );
+});
+
+test("fix-session usage falls back to the transcript and never fails the turn", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.usageMessageLimit = 32;
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Preparing" }];
+  provider.usageFromMessages = () => {
+    throw new Error("usage unavailable");
+  };
+  await withService(
+    "env-step-runtimes-transcript-usage",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await service.advanceNow(started.id);
+
+      const unmetered = (await snapshot(started.id))!;
+      expect(unmetered.phase).toBe("preparing");
+      expect(unmetered.stepRuntimes?.prepare?.startedAt).toBeDefined();
+      expect(unmetered.stepRuntimes?.prepare?.tokenCount).toBeUndefined();
+
+      provider.usageFromMessages = () => ({ usedTokens: 120, sessionTokens: 5_000 });
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.stepRuntimes?.prepare?.tokenCount).toBe(5_000);
+      // The progress probe reuses the transcript the usage read already fetched.
+      expect(provider.messageOptions.every((options) => options?.limit === 32)).toBe(true);
+    },
+    { packageFlow: true, serviceOptions: { progressProbeIntervalMs: 0 } },
+  );
+});

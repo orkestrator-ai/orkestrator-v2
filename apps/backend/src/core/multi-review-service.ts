@@ -10,6 +10,7 @@ import {
   type MultiReviewPhase,
   type MultiReviewModelSelection,
   type MultiReviewReviewerTranscript,
+  type MultiReviewStepKind,
   type MultiReviewWorkflow,
   type MultiReviewWorktreeSnapshot,
   type StartMultiReviewCustomFixInput,
@@ -112,6 +113,33 @@ function fixSessionKey(workflowId: string): string {
 
 function rotatedSessionKey(base: string): string {
   return `${base}:restart:${randomUUID()}`;
+}
+
+/**
+ * Opens a step's durable timing record.
+ *
+ * The three steps share one provider session, and every dispatch resets that
+ * session's clock and adds to its cumulative token counter. Recording the start
+ * and the counter's value here is what lets a settled step keep reporting its
+ * own runtime and its own consumption after the next step takes the session.
+ */
+function beginStepRuntime(
+  workflow: MultiReviewWorkflow,
+  kind: MultiReviewStepKind,
+  session: MultiReviewFixSession,
+): void {
+  const runtimes = (workflow.stepRuntimes ??= {});
+  runtimes[kind] = {
+    startedAt: session.startedAt,
+    ...(session.tokenCount === undefined ? {} : { tokenBaseline: session.tokenCount }),
+  };
+}
+
+/** Stops a step's clock, keeping the first settlement when one is already recorded. */
+function settleStepRuntime(workflow: MultiReviewWorkflow, kind: MultiReviewStepKind): void {
+  const runtime = workflow.stepRuntimes?.[kind];
+  if (!runtime || runtime.completedAt !== undefined) return;
+  runtime.completedAt = nowIso();
 }
 
 function clearPendingAddressIdentity(workflow: MultiReviewWorkflow): void {
@@ -552,6 +580,7 @@ export class MultiReviewService {
         if (replacement) workflow.reviewWorktreeSnapshot = replacement;
         workflow.phase = "preparing";
         delete workflow.reviewPackage;
+        delete workflow.stepRuntimes;
         workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
         delete workflow.reviewSnapshotStale;
         delete workflow.fixSession;
@@ -574,6 +603,7 @@ export class MultiReviewService {
         );
         workflow.phase = "preparing";
         workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        delete workflow.stepRuntimes;
         delete workflow.fixSession;
         delete workflow.activeRequest;
       } else {
@@ -634,6 +664,10 @@ export class MultiReviewService {
           );
           workflow.phase = "consolidating";
           workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+          // The retry runs on a fresh session, so consolidation's numbers start
+          // again. Preparation already finished and keeps its own.
+          delete workflow.stepRuntimes?.consolidate;
+          delete workflow.stepRuntimes?.fix;
           delete workflow.fixSession;
           delete workflow.activeRequest;
         }
@@ -1338,6 +1372,7 @@ export class MultiReviewService {
       }
     }
     if (workflow.fixSession?.status === "running") workflow.fixSession.status = "cancelled";
+    if (workflow.activeRequest) settleStepRuntime(workflow, workflow.activeRequest.kind);
     workflow.phase = "cancelled";
     if (timedOut && waiting.length > 0) {
       workflow.error =
@@ -1500,14 +1535,17 @@ export class MultiReviewService {
     token: string,
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+    usage: { messages?: Promise<unknown[]>; usageChanged: boolean } = { usageChanged: false },
   ): Promise<void> {
     const previousDigest = session.progressDigest;
     const observation = await this.progress.observe(
       session.providerSessionId,
-      () =>
-        provider.messages(session.providerSessionId, {
-          limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-        }),
+      async () =>
+        usage.messages
+          ? (await usage.messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES)
+          : provider.messages(session.providerSessionId, {
+              limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+            }),
       session.progressDigest,
     );
     await this.assertFence(workflow.id, token);
@@ -1516,9 +1554,10 @@ export class MultiReviewService {
       await this.save(workflow, token);
       return;
     }
+    const changed = usage.usageChanged || session.progressDigest !== previousDigest;
     const elapsedMs = noProgressElapsedMs(session.progressAt, session.startedAt);
     if (elapsedMs === null) {
-      if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+      if (changed) await this.save(workflow, token);
       return;
     }
     if (elapsedMs >= this.stallAbandonMs()) {
@@ -1533,7 +1572,78 @@ export class MultiReviewService {
       await this.save(workflow, token);
       return;
     }
-    if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+    if (changed) await this.save(workflow, token);
+  }
+
+  /**
+   * Reads the transcript tail once for the providers that meter usage from it.
+   *
+   * The rejection is absorbed here rather than by each caller: usage is
+   * presentation metadata, and an unreadable transcript must never fail an
+   * otherwise healthy turn — nor leave an unhandled rejection behind when the
+   * probe that would have awaited it is skipped.
+   */
+  private readFixSessionMessages(
+    provider: BuildPipelineProvider,
+    session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+  ): Promise<unknown[]> | undefined {
+    if (!provider.usageFromMessages) return undefined;
+    const limit = provider.usageMessageLimit;
+    return provider
+      .messages(session.providerSessionId, limit === undefined ? {} : { limit })
+      .catch((error: unknown) => {
+        console.warn("[multi-review] Reading fix session transcript failed:", errorMessage(error));
+        return [] as unknown[];
+      });
+  }
+
+  /**
+   * Copies the session's cumulative token counter into the workflow and
+   * attributes the growth since dispatch to the step that is running.
+   *
+   * One session serves all three steps, so its counter alone cannot say what
+   * preparation cost as distinct from consolidation. The dispatch baseline is
+   * the difference, and the step keeps the delta after the session moves on.
+   */
+  private async refreshFixSessionUsage(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    provider: BuildPipelineProvider,
+    session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+    observedUsage: { sessionTokens?: number } | undefined,
+    messages: Promise<unknown[]> | undefined,
+  ): Promise<boolean> {
+    try {
+      const usage =
+        observedUsage ??
+        (provider.usageFromMessages && messages
+          ? provider.usageFromMessages(await messages)
+          : undefined);
+      const reported = usage?.sessionTokens;
+      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0) {
+        return false;
+      }
+      await this.assertFence(workflow.id, token);
+      const tokenCount = Math.max(session.tokenCount ?? 0, reported);
+      const kind = workflow.activeRequest?.kind;
+      const runtime = kind ? workflow.stepRuntimes?.[kind] : undefined;
+      const stepTokens = runtime
+        ? Math.max(0, tokenCount - (runtime.tokenBaseline ?? 0))
+        : undefined;
+      if (
+        session.tokenCount === tokenCount &&
+        (runtime === undefined || runtime.tokenCount === stepTokens)
+      ) {
+        return false;
+      }
+      session.tokenCount = tokenCount;
+      if (runtime) runtime.tokenCount = stepTokens;
+      return true;
+    } catch (error) {
+      if (error instanceof ControllerFenceError) throw error;
+      console.warn("[multi-review] Reading fix session token usage failed:", errorMessage(error));
+      return false;
+    }
   }
 
   private stallWarningMs(): number {
@@ -1592,8 +1702,9 @@ export class MultiReviewService {
     });
     if (!workflow.activeRequest) {
       const requestId = randomUUID();
+      const kind = preparing ? "prepare" : "consolidate";
       workflow.activeRequest = {
-        kind: preparing ? "prepare" : "consolidate",
+        kind,
         requestId,
         state: "prepared",
         createdAt: nowIso(),
@@ -1605,6 +1716,7 @@ export class MultiReviewService {
       delete session.progressAt;
       delete session.progressDigest;
       delete session.stalledSince;
+      beginStepRuntime(workflow, kind, session);
       await this.save(workflow, token);
     }
     const request = workflow.activeRequest;
@@ -1670,19 +1782,32 @@ export class MultiReviewService {
     await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      session.providerSessionId,
-    );
+    const observation = await readProviderStatus(provider, session.providerSessionId);
+    const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
+    // Shared with the progress probe below: a provider whose usage only comes
+    // from its transcript must not be read twice per tick.
+    const messages = this.readFixSessionMessages(provider, session);
+    const usageChanged = await this.refreshFixSessionUsage(
+      workflow,
+      token,
+      provider,
+      session,
+      observation.contextUsage,
+      messages,
+    );
     if (status === "running") {
       if (request.idleResultPolls !== undefined) {
         delete request.idleResultPolls;
         await this.save(workflow, token);
       }
-      await this.observeFixSessionProgress(workflow, token, provider, session);
+      await this.observeFixSessionProgress(workflow, token, provider, session, {
+        messages,
+        usageChanged,
+      });
       return;
     }
+    if (usageChanged) await this.save(workflow, token);
     if (status === "blocked") {
       // Unattended interactions were already resolved above; a provider still
       // reporting blocked cannot be waited on indefinitely.
@@ -1752,6 +1877,7 @@ export class MultiReviewService {
       workflow.phase = "reviewing";
       session.status = "idle";
       session.completedAt = nowIso();
+      settleStepRuntime(workflow, "prepare");
       delete workflow.activeRequest;
       delete workflow.reviewSnapshotStale;
       await this.save(workflow, token);
@@ -1778,6 +1904,7 @@ export class MultiReviewService {
       workflow.phase = "ready";
       session.status = "idle";
       session.completedAt = nowIso();
+      settleStepRuntime(workflow, "consolidate");
       delete workflow.activeRequest;
       await this.save(workflow, token);
       await this.release(workflow, token);
@@ -1808,6 +1935,7 @@ export class MultiReviewService {
     }
     workflow.fixResult = fixed;
     session.completedAt = nowIso();
+    settleStepRuntime(workflow, "fix");
     delete workflow.activeRequest;
     if (!fixed.complete) {
       session.status = "failed";
@@ -1914,6 +2042,9 @@ export class MultiReviewService {
       workflow.fixSession.status = "failed";
       workflow.fixSession.error = workflow.error;
     }
+    // The turn that was in flight is over, whatever it was: stop its clock so
+    // the failed card still reports how long it ran.
+    if (workflow.activeRequest) settleStepRuntime(workflow, workflow.activeRequest.kind);
     await this.save(workflow, token).catch(() => undefined);
     await this.release(workflow, token);
   }

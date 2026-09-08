@@ -100,6 +100,64 @@ describe("multi review protocol", () => {
     ).toBe(false);
   });
 
+  test("validates per-step runtimes and cumulative fix-session usage", () => {
+    const timestamp = new Date(0).toISOString();
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-runtimes",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      fixSession: {
+        agent: "codex",
+        model: "gpt-5.6",
+        sessionKey: "fix-session",
+        providerSessionId: "provider-fix",
+        requestIds: ["request-1"],
+        status: "running",
+        startedAt: timestamp,
+        tokenCount: 65_000,
+      },
+      stepRuntimes: {
+        prepare: {
+          startedAt: timestamp,
+          completedAt: timestamp,
+          tokenCount: 40_000,
+          tokenBaseline: 0,
+        },
+        consolidate: { startedAt: timestamp, tokenBaseline: 40_000 },
+      },
+      phase: "consolidating",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision: 1,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, stepRuntimes: {} })).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...workflow.fixSession, tokenCount: -1 },
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, stepRuntimes: { review: { startedAt: timestamp } } }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, stepRuntimes: { prepare: { startedAt: "soon" } } }),
+    ).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, stepRuntimes: { prepare: {} } })).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        stepRuntimes: { fix: { startedAt: timestamp, tokenCount: 1.5 } },
+      }),
+    ).toBe(false);
+  });
+
   test("carries progress and stall timestamps on both supervised session kinds", () => {
     const timestamp = new Date(0).toISOString();
     const workflow = {

@@ -788,4 +788,155 @@ describe("AgentMailService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+  test("delivers everything one mailbox is waiting for as a single turn", async () => {
+    const { storage, dataDir } = await fixture();
+    const prompts: string[] = [];
+    try {
+      const messages = [];
+      for (const [index, body] of ["First finding.", "Second finding.", "Done."].entries()) {
+        messages.push(
+          await storage.sendAgentMail(
+            { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+            {
+              requestId: `report-${index}`,
+              toEnvironmentId: "recipient",
+              toTabId: "agent",
+              body,
+            },
+          ),
+        );
+      }
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(3);
+
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      // One dispatch, not three: three dispatches would be three turns, because
+      // the first one marks the session busy and parks the rest.
+      expect(prompts).toHaveLength(1);
+      for (const body of ["First finding.", "Second finding.", "Done."]) {
+        expect(prompts[0]).toContain(body);
+      }
+      // In the order the sender sent them.
+      expect(prompts[0]!.indexOf("First finding.")).toBeLessThan(
+        prompts[0]!.indexOf("Second finding."),
+      );
+      for (const message of messages) {
+        expect(
+          (await storage.getAgentMailMessage("recipient", "agent", message.id)).placement,
+        ).toBe("injected");
+      }
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not batch a sibling that is no longer individually injectable", async () => {
+    const { storage, dataDir } = await fixture();
+    const prompts: string[] = [];
+    try {
+      const workflow = await storage.sendAgentMail(
+        { kind: "system", projectId: "project", source: "workflow", resourceId: "build-1" },
+        {
+          requestId: "workflow-message",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Coordinator exchange remains eligible.",
+        },
+      );
+      const plain = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "plain-message",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Plain message must remain queued.",
+        },
+      );
+      const config = await storage.loadConfig();
+      config.global.agentMessaging = {
+        ...config.global.agentMessaging!,
+        defaultInjectPolicy: "off",
+      };
+      await storage.saveConfig(config);
+      await storage.synchronizeAgentMailboxes();
+
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Coordinator exchange remains eligible.");
+      expect(prompts[0]).not.toContain("Plain message must remain queued.");
+      expect(await storage.getAgentMailMessage("recipient", "agent", workflow.id)).toMatchObject({
+        placement: "injected",
+      });
+      expect(await storage.getAgentMailMessage("recipient", "agent", plain.id)).toMatchObject({
+        placement: "pending-inject",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a batch that cannot be delivered leaves every message retryable", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const first = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "one", toEnvironmentId: "recipient", toTabId: "agent", body: "One." },
+      );
+      const second = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "two", toEnvironmentId: "recipient", toTabId: "agent", body: "Two." },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async () => ({ outcome: "held", reason: "queue" }),
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      // A sibling swept into a batch that was then held must not be stranded in
+      // `submitting`: it was never delivered, so it is still owed.
+      for (const message of [first, second]) {
+        const stored = await storage.getAgentMailMessage("recipient", "agent", message.id);
+        expect(stored.placement).toBe("pending-inject");
+        expect(stored.placementReason).toBe("queue");
+      }
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });

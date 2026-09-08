@@ -5,7 +5,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { Project } from "./models.js";
+import type { Environment, Project } from "./models.js";
 import type { StorageService } from "./storage.js";
 import { coordinatorProviderAllowed } from "./coordinator-providers.js";
 
@@ -107,4 +107,38 @@ export function coordinatorRuntimeUnavailableMessage(
     case "workspace":
       return "Native agent coordinator is unavailable";
   }
+}
+
+/**
+ * The synthetic environment a coordinator runtime presents to code that is
+ * written against `Environment`.
+ *
+ * A coordinator deliberately has no environment row — it is the project's real
+ * checkout, not a disposable workspace — but the native-agent service resolves
+ * readiness, worktree paths and activity through one. This builds that view
+ * from the durable workspace so the liveness assertion and the activity sweep
+ * cannot disagree about what a coordinator looks like.
+ */
+export function coordinatorRuntimeEnvironment(
+  runtimeId: string,
+  source: { workspace: CoordinatorWorkspace; project: Pick<Project, "localPath"> },
+): Environment {
+  return {
+    id: runtimeId,
+    projectId: source.workspace.projectId,
+    name: "Coordinator",
+    branch: source.workspace.repositoryStatus?.branch ?? "",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: source.workspace.createdAt,
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: source.project.localPath,
+    setupPhase: "ready",
+    setupScriptsComplete: true,
+  } as Environment;
 }

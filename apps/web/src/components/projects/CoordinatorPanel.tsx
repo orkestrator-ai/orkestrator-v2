@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   GitBranch,
+  Hourglass,
   Loader2,
   LockKeyhole,
   Pause,
@@ -11,6 +12,7 @@ import {
   MessagesSquare,
   RefreshCw,
   RotateCcw,
+  X,
 } from "lucide-react";
 import {
   coordinatorRuntimeId,
@@ -36,6 +38,8 @@ import {
 import * as backend from "@/lib/backend";
 import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 
 interface CoordinatorPanelProps {
@@ -202,6 +206,37 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selected = conversations.find(
     (item) => item.id === snapshot?.workspace.selectedConversationId,
   );
+  const environments = useEnvironmentStore((state) => state.environments);
+  /*
+   * Workers this coordinator is still owed an answer by.
+   *
+   * Derived from the snapshot's durable associations rather than anything this
+   * component observed, so it is correct on a fresh mount, after a reload, and
+   * after the page was closed for an hour — the coordinator keeps waiting while
+   * nobody is looking at it.
+   *
+   * Associations are project-wide, so the selected conversation identity is a
+   * load-bearing filter rather than presentation state.
+   */
+  const awaitingWorkers = useMemo(() => {
+    if (!snapshot || !selected) return [];
+    return snapshot.workflows.flatMap((association) => {
+      if (
+        association.coordinatorId !== snapshot.workspace.id ||
+        association.conversationId !== selected.id ||
+        association.delegation?.state !== "running"
+      )
+        return [];
+      const environment = environments.find((item) => item.id === association.resourceId);
+      return [
+        {
+          id: association.id,
+          environmentId: association.resourceId,
+          label: environment?.name ?? association.resourceId,
+        },
+      ];
+    });
+  }, [snapshot, selected, environments]);
   // Scoped to the conversation that produced it, so switching tabs during
   // assignment cannot replay one conversation's first prompt into another.
   const launchForSelected =
@@ -243,9 +278,24 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const blocked = git?.repositoryOperationBlockedReason ?? null;
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
   const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
+  const contextNoticeSessionIdentity = snapshot
+    ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
+    : undefined;
+  const contextNoticeOccurrenceId = newestContextEvent
+    ? `repository-context\u0000${newestContextEvent.revision}`
+    : undefined;
+  const contextNoticeDismissed = useNativeNoticeDismissalStore((state) =>
+    contextNoticeSessionIdentity && contextNoticeOccurrenceId
+      ? (state.sessions
+          .find((session) => session.sessionIdentity === contextNoticeSessionIdentity)
+          ?.occurrenceIds.includes(contextNoticeOccurrenceId) ?? false)
+      : false,
+  );
+  const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const latestContextEvent =
     newestContextEvent &&
-    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision
+    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision &&
+    !contextNoticeDismissed
       ? newestContextEvent
       : undefined;
 
@@ -353,6 +403,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           >
             Context r{snapshot.workspace.repositoryContextRevision}
           </span>
+          {awaitingWorkers.length > 0 ? (
+            <span
+              className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
+              title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
+                .map((worker) => worker.label)
+                .join("\n")}`}
+            >
+              <Hourglass className="size-3" />
+              Waiting on {awaitingWorkers.length}{" "}
+              {awaitingWorkers.length === 1 ? "worker" : "workers"}
+            </span>
+          ) : null}
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}
@@ -541,11 +603,29 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       </div>
 
       {latestContextEvent ? (
-        <div className="shrink-0 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200">
-          Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
-          <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code> (context
-          r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn receives the
-          new context.
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-3 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200"
+        >
+          <span className="min-w-0 flex-1">
+            Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
+            <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code>{" "}
+            (context r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn
+            receives the new context.
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss repository context notice"
+            title="Dismiss notice"
+            className="shrink-0 cursor-pointer rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+            onClick={() => {
+              if (contextNoticeSessionIdentity && contextNoticeOccurrenceId) {
+                dismissNotice(contextNoticeSessionIdentity, contextNoticeOccurrenceId);
+              }
+            }}
+          >
+            <X aria-hidden="true" className="size-3.5" />
+          </button>
         </div>
       ) : null}
 

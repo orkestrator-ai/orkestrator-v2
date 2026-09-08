@@ -14,6 +14,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { StorageService } from "./storage.js";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import {
   coordinatorProviderQualification,
@@ -22,6 +23,7 @@ import {
 } from "./coordinator-providers.js";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
+const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
 
 export function sanitizeCoordinatorError(value: unknown): string {
   const text = (value instanceof Error ? value.message : String(value))
@@ -62,6 +64,7 @@ function retainCoordinatorConversations(
 /** Backend authority for one durable, non-disposable project coordinator. */
 export class CoordinatorService {
   private readonly projectOperations = new Map<string, Promise<unknown>>();
+  private delegationWakeDelivery: Promise<void> | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -71,6 +74,10 @@ export class CoordinatorService {
       error: string | null;
     },
     private readonly host?: CoordinatorHostCapabilities,
+    private readonly workerActivity?: (
+      environmentId: string,
+      tabId: string,
+    ) => Promise<AgentActivityState | "unknown">,
   ) {}
 
   /**
@@ -464,6 +471,202 @@ export class CoordinatorService {
         );
         await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
       }
+    }
+  }
+
+  /**
+   * Close the delegations a finished worker turn settles, and wake their
+   * coordinators exactly once.
+   *
+   * Called from the turn-end edge and again from the periodic reconcile, which
+   * is what makes a crash between closing a delegation and delivering its wake
+   * recoverable: the close is durable, `wokenAt` is the receipt, and an
+   * unstamped closed delegation is retried until one is delivered.
+   *
+   * `waiting` is deliberately not a completion. A worker blocked on an approval
+   * needs a human, and waking the coordinator to say "it is still going" is the
+   * unsolicited update this whole design removes.
+   */
+  async settleWorkerDelegations(worker: {
+    environmentId: string;
+    tabId?: string;
+    state: "completed" | "failed" | "stopped";
+  }): Promise<void> {
+    const open = await this.storage.listOpenCoordinatorDelegations();
+    for (const association of open) {
+      if (association.resourceId !== worker.environmentId) continue;
+      const delegation = association.delegation;
+      if (!delegation) continue;
+      if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
+      /*
+       * The turn that just ended cannot be the answer to a request the worker
+       * has not received yet. That happens when the coordinator messages a
+       * worker already mid-turn: the delegation opens, the in-flight turn ends
+       * moments later, and closing here would report "finished" for work that
+       * has not started. The request stays open; the turn that actually reads
+       * it is the one that settles it.
+       *
+       * Only for `completed` — a stopped or failed worker is never going to
+       * read it, and leaving the coordinator waiting on that would be worse.
+       */
+      if (
+        worker.state === "completed" &&
+        (await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          delegation.workerTabId,
+        ))
+      ) {
+        continue;
+      }
+      // A close that returns null lost the race to another observer of the same
+      // edge. Either way the delegation is now closed, and the wake below is
+      // idempotent, so there is nothing to do differently.
+      await this.storage.closeCoordinatorDelegation(association.id, worker.state);
+    }
+    await this.deliverDelegationWakes();
+  }
+
+  /**
+   * Close delegations whose worker can no longer finish.
+   *
+   * A deleted, stopped or errored environment produces no turn-end edge, so
+   * without this the coordinator waits on a worker that will never report and
+   * its held mail is never released. Checked on the sweep rather than hooked
+   * into every teardown path, because the states that matter are all readable
+   * from the environment record and a missed hook is a silent hang.
+   */
+  async reconcileWorkerDelegations(): Promise<void> {
+    for (const association of await this.storage.listOpenCoordinatorDelegations()) {
+      const environment = await this.storage.getEnvironment(association.resourceId);
+      let state: "completed" | "failed" | "stopped" | null =
+        !environment || environment.deletionRequestedAt
+          ? ("stopped" as const)
+          : environment.status === "error"
+            ? ("failed" as const)
+            : environment.status === "stopped"
+              ? ("stopped" as const)
+              : null;
+      if (
+        !state &&
+        this.workerActivity &&
+        Date.now() - Date.parse(association.delegation!.requestedAt) >=
+          DELEGATION_IDLE_RECONCILE_GRACE_MS
+      ) {
+        const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          association.delegation!.workerTabId,
+        );
+        if (
+          !undelivered &&
+          (await this.workerActivity(
+            association.resourceId,
+            association.delegation!.workerTabId,
+          )) === "idle"
+        ) {
+          state = "completed";
+        }
+      }
+      if (!state) continue;
+      await this.storage.closeCoordinatorDelegation(association.id, state);
+    }
+    await this.deliverDelegationWakes();
+  }
+
+  /**
+   * Deliver the outstanding wake for every closed-but-unwoken delegation.
+   *
+   * The worker's own report is the wake when it sent one: releasing it is what
+   * makes it injectable, and it carries the substance. Only a worker that
+   * reported nothing gets a synthesized notice, so a coordinator is never woken
+   * twice for one delegation and never told "finished" by a second message that
+   * says less than the first.
+   */
+  deliverDelegationWakes(): Promise<void> {
+    if (this.delegationWakeDelivery) return this.delegationWakeDelivery;
+    const delivery = this.deliverDelegationWakesOnce().finally(() => {
+      if (this.delegationWakeDelivery === delivery) this.delegationWakeDelivery = null;
+    });
+    this.delegationWakeDelivery = delivery;
+    return delivery;
+  }
+
+  private async deliverDelegationWakesOnce(): Promise<void> {
+    const unwoken = await this.storage.listUnwokenCoordinatorDelegations();
+    for (const association of unwoken) {
+      const delegation = association.delegation;
+      if (!delegation || !association.conversationId) continue;
+      const workspace = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
+      const conversation = workspace?.conversations.find(
+        (item) => item.id === association.conversationId && !item.closedAt,
+      );
+      if (!workspace || !conversation) {
+        // The conversation that delegated is gone. Retiring the delegation is
+        // the only honest outcome: there is nobody left to wake, and leaving it
+        // unstamped would retry this lookup on every sweep forever.
+        await this.storage.markCoordinatorDelegationWoken(association.id);
+        continue;
+      }
+      const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
+      let wakeKind = delegation.wakeKind;
+      if (!wakeKind) {
+        const hasReport = await this.storage.hasDelegationHeldAgentMail(
+          association.id,
+          runtimeId,
+          conversation.tabId,
+          association.resourceId,
+          delegation.workerTabId,
+        );
+        const prepared = await this.storage.prepareCoordinatorDelegationWake(
+          association.id,
+          hasReport ? "report" : "notice",
+        );
+        wakeKind = prepared?.delegation?.wakeKind;
+      }
+      if (!wakeKind) continue;
+      if (wakeKind === "report") {
+        // A zero count is safe on retry: wakeKind was committed while the
+        // report was still held, so zero now means an earlier pass released it.
+        await this.storage.releaseDelegationHeldAgentMail(
+          association.id,
+          runtimeId,
+          conversation.tabId,
+          association.resourceId,
+          delegation.workerTabId,
+        );
+      } else {
+        const environment = await this.storage.getEnvironment(association.resourceId);
+        const label = environment?.name ?? association.resourceId;
+        const outcome =
+          delegation.state === "completed"
+            ? "finished"
+            : delegation.state === "failed"
+              ? "failed"
+              : "stopped";
+        await this.storage.sendAgentMail(
+          {
+            kind: "system",
+            projectId: association.projectId,
+            source: "workflow",
+            resourceId: association.resourceId,
+          },
+          {
+            requestId: `delegation-${association.id}-${delegation.completedAt ?? outcome}`,
+            toEnvironmentId: runtimeId,
+            toTabId: conversation.tabId,
+            subject: `Worker ${label} ${outcome}`,
+            body:
+              `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ${outcome} ` +
+              `without sending a report.` +
+              (association.baseBranch
+                ? ` It was started from ${association.baseBranch}${
+                    association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
+                  }.`
+                : "") +
+              ` Inspect the environment through Orkestrator controls before deciding what to do next.`,
+          },
+        );
+      }
+      await this.storage.markCoordinatorDelegationWoken(association.id);
     }
   }
 

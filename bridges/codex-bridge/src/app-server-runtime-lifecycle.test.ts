@@ -4126,6 +4126,47 @@ describe("health", () => {
 });
 
 describe("runtime health", () => {
+  test("uses global MCP inventory for a lazily restored thread without re-attaching it", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-restored",
+        threadId: "thread-restored",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Restored",
+        titleSource: "explicit",
+      }),
+    );
+    const h = await harness({
+      "mcpServerStatus/list": (params) => {
+        if (params.threadId) {
+          const error = new Error(`thread not found: ${String(params.threadId)}`) as Error & {
+            rpcCode: number;
+          };
+          error.rpcCode = -32600;
+          throw error;
+        }
+        return { data: [] };
+      },
+      "skills/list": () => ({ data: [] }),
+      "hooks/list": () => ({ data: [] }),
+      "account/rateLimits/read": () => ({ rateLimits: {} }),
+    });
+
+    expect(await h.runtime.listMcpServers("session-restored")).toEqual({ data: [] });
+    expect(await h.runtime.getRuntimeHealth("session-restored")).toMatchObject({
+      mcp: { data: [] },
+    });
+
+    const inventoryRequests = h
+      .child()
+      .requests.filter((request) => request.method === "mcpServerStatus/list");
+    expect(inventoryRequests).toHaveLength(2);
+    expect(inventoryRequests.every((request) => request.params.threadId === undefined)).toBe(true);
+    expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(false);
+  });
+
   test("scopes the snapshot to the session's thread when there is one", async () => {
     const h = await harness({
       "mcpServerStatus/list": () => ({ data: [] }),

@@ -31,6 +31,7 @@ const {
   collectPaneDependencyIds,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
+  requestPaneTabActivation,
 } = await import("./pane-layout-authoritative");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
@@ -318,6 +319,42 @@ describe("reconcileAuthoritativePaneLayout", () => {
       );
 
       expect(restored?.root).toMatchObject({ activeTabId: "tab-2" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("activates a backend-created tab requested by this Electron window", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const currentRoot = leaf("default", [{ id: "tab-1", type: "plain" }]);
+      requestPaneTabActivation("env-1", "agent-job-pr");
+
+      const backendRoot = leaf("default", [
+        { id: "tab-1", type: "plain" },
+        {
+          id: "agent-job-pr",
+          type: "agent-native",
+          displayTitle: "PR",
+          nativeAgentData: { environmentId: "env-1", platform: "codex" },
+        },
+      ]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "agent-job-pr";
+
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+
+      expect(restored?.activePaneId).toBe("default");
+      expect(restored?.root).toMatchObject({ activeTabId: "agent-job-pr" });
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

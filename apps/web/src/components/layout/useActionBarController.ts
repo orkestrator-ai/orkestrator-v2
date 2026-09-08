@@ -45,6 +45,7 @@ import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
@@ -1350,6 +1351,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
+        requestPaneTabActivation(operationEnvironmentId, result.tabId);
         if (result.status === "rejected") {
           releaseCreatePrLaunch(operationEnvironmentId);
           toast.error("Could not start pull request creation", {

@@ -161,8 +161,10 @@ import {
 export {
   describeRewindTarget,
   formatResetDateTime,
+  labelWindowMinutes,
+  limitWindowPosition,
   summarizeRewindPreview,
-  weeklyWindowPosition,
+  windowDurationMinutes,
 } from "./AgentInfoButton.panels";
 
 export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
@@ -1088,10 +1090,16 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 <UsagePanel
                   usage={usage}
                   modelId={modelId}
+                  /*
+                   * Claude answers limit reads directly and its store holds the
+                   * authoritative snapshot, including an empty one. Every other
+                   * provider reports through the usage snapshot, falling back to
+                   * the neutral projection when the snapshot has no limits yet.
+                   */
                   rateLimits={
                     activeSession.provider === "claude"
                       ? (claudeRateLimits ?? neutralRateLimits)
-                      : undefined
+                      : (usage?.rateLimits ?? neutralRateLimits)
                   }
                 />
               </div>

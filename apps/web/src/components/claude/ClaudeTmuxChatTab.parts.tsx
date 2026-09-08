@@ -992,7 +992,11 @@ export function TmuxComposeBar({
   const selectSlashCommand = (command: SlashCommand) => {
     // Drop the user back in the input after the command + a space so they
     // can type any arguments (e.g. `/model opus`) before pressing Enter.
-    setValue(sessionKey, command.name + " ");
+    // Without the pending position React restores the caret to the offset it
+    // had in the typed prefix, leaving it inside the completed name.
+    const nextValue = command.name + " ";
+    pendingCursorPositionRef.current = nextValue.length;
+    setValue(sessionKey, nextValue);
     setSlashMenuOpen(false);
     textareaRef.current?.focus();
   };

@@ -461,6 +461,75 @@ describe("MentionableInput", () => {
     expect(input!.getAttribute("aria-disabled")).toBe("true");
   });
 
+  test("focusAtEnd parks the cursor after a wholesale value replacement", () => {
+    const inputRef = createRef<MentionableInputRef>();
+
+    function Harness() {
+      const [draftText, setDraftText] = useState("/st");
+
+      return (
+        <>
+          <button type="button" data-testid="replace-draft" onClick={() => setDraftText("/steer ")}>
+            Replace
+          </button>
+          <MentionableInput
+            ref={inputRef}
+            value={draftText}
+            mentions={[]}
+            onChange={(newText) => setDraftText(newText)}
+          />
+        </>
+      );
+    }
+
+    const { container, getByTestId } = render(<Harness />);
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+
+    // The caret sits where the user stopped typing the prefix — restoring that
+    // offset into "/steer " would land it mid-word.
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, "/st".length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    act(() => {
+      getByTestId("replace-draft").click();
+      inputRef.current!.focusAtEnd();
+    });
+
+    expect(input.textContent).toBe("/steer ");
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe("/steer ".length);
+  });
+
+  test("focusAtEnd parks the cursor when the value replacement already rendered", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const onChange = mock(() => {});
+    const { container, rerender } = render(
+      <MentionableInput ref={inputRef} value="/st" mentions={[]} onChange={onChange} />,
+    );
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, "/st".length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // Zustand-backed composer updates can render before selectCommand calls
+    // focusAtEnd, so there may be no later render to apply a queued cursor.
+    rerender(<MentionableInput ref={inputRef} value="/steer " mentions={[]} onChange={onChange} />);
+    expect(inputRef.current!.getCursorPosition()).toBe("/st".length);
+
+    act(() => inputRef.current!.focusAtEnd());
+
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe("/steer ".length);
+  });
+
   test("inserts a mention at the last known cursor position when focus moved outside", () => {
     const onChange = mock(() => {});
     const inputRef = createRef<MentionableInputRef>();

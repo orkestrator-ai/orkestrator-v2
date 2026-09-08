@@ -9,8 +9,12 @@ interface UseSlashCommandMenuOptions<TCommand extends SlashCommandOption> {
   text: string;
   /** Replace the composer text with the chosen command, ready for arguments. */
   setText: (text: string) => void;
-  /** Return focus to the input after a selection. */
-  focusInput?: () => void;
+  /**
+   * Return focus to the input after a selection, caret after the trailing
+   * space. Composers restore the caret offset the user had while typing the
+   * prefix, which lands mid-word once the name is completed.
+   */
+  focusInputAtEnd?: () => void;
 }
 
 interface UseSlashCommandMenuResult<TCommand extends SlashCommandOption> {
@@ -40,7 +44,7 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
   commands,
   text,
   setText,
-  focusInput,
+  focusInputAtEnd,
 }: UseSlashCommandMenuOptions<TCommand>): UseSlashCommandMenuResult<TCommand> {
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -77,9 +81,9 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
     (command: TCommand) => {
       setText(`${command.name} `);
       setIsOpen(false);
-      focusInput?.();
+      focusInputAtEnd?.();
     },
-    [setText, focusInput],
+    [setText, focusInputAtEnd],
   );
 
   const handleKeyDown = useCallback(

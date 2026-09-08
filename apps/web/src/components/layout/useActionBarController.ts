@@ -961,7 +961,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     const environmentId = selectedEnvironmentId;
     if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
     try {
-      await backend.launchTerminalJob({
+      const result = await backend.launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
         environmentId,
         tabType: "plain",
@@ -969,6 +969,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         title: "Run Commands",
         activateTab: true,
       });
+      requestPaneTabActivation(environmentId, result.tabId);
     } catch (error) {
       toast.error("Could not run commands", {
         description: error instanceof Error ? error.message : String(error),
@@ -1018,6 +1019,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         })
         .then((result) => {
+          requestPaneTabActivation(environmentId, result.tabId);
           if (result.status !== "rejected") return true;
           toast.error("Could not start script creation", {
             description: result.error || "The agent rejected the request.",
@@ -1517,6 +1519,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             ? { reasoningId: defaultForAgent.reasoningEffort }
             : {}),
         });
+        requestPaneTabActivation(environmentId, result.tabId);
         if (result.status === "rejected") {
           throw new Error(result.error || "The agent rejected the request.");
         }
@@ -1596,6 +1599,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
         });
+        requestPaneTabActivation(operationEnvironmentId, result.tabId);
         if (result.status === "rejected") {
           return fail(result.error || "The conflict-resolution agent rejected the prompt.");
         }

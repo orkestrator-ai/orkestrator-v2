@@ -23,6 +23,7 @@ import * as realKanbanStore from "@/stores/kanbanStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
+import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
@@ -49,6 +50,7 @@ const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
 const realMultiReviewPersistenceSnapshot = { ...realMultiReviewPersistence };
 const realUseFileSearchSnapshot = { ...realUseFileSearch };
+const realPaneLayoutAuthoritativeSnapshot = { ...realPaneLayoutAuthoritative };
 
 type MergeOutcome = {
   outcome: "merged" | "pending" | "unknown";
@@ -125,6 +127,7 @@ const launchTerminalJobMock = mock(
     status: "started",
   }),
 );
+const requestPaneTabActivationMock = mock((_environmentId: string, _tabId: string) => {});
 // The controller reaches the pane layout store imperatively, so the real store
 // action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
 // stays real for every other suite.
@@ -740,6 +743,11 @@ mock.module("@/lib/backend", () => ({
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
 }));
 
+mock.module("@/lib/pane-layout-authoritative", () => ({
+  ...realPaneLayoutAuthoritativeSnapshot,
+  requestPaneTabActivation: requestPaneTabActivationMock,
+}));
+
 // The hydrator has its own test file. Snapshot and restore per the Bun mock
 // rules in AGENTS.md so a non-isolated run does not leave it faked.
 mock.module("@/lib/multi-review-persistence", () => ({
@@ -778,6 +786,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
+  mock.module("@/lib/pane-layout-authoritative", () => realPaneLayoutAuthoritativeSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
   mock.module("@/lib/multi-review-persistence", () => realMultiReviewPersistenceSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
@@ -821,6 +830,7 @@ beforeEach(() => {
     sessionId: "terminal-session",
     status: "started" as const,
   }));
+  requestPaneTabActivationMock.mockReset();
   enqueuePromptQueueMessageMock.mockReset();
   enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
   clearTabInitialPromptMock.mockReset();
@@ -1561,6 +1571,7 @@ describe("ActionBar editor and run commands", () => {
         }),
       ),
     );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "terminal-job-run");
   });
 
   test("loads run commands from a local worktree", async () => {
@@ -1651,6 +1662,7 @@ describe("ActionBar editor and run commands", () => {
         }),
       ),
     );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve");
   });
 
   test("opens script configuration with an explanation when launch eligibility is blocked", () => {
@@ -2662,6 +2674,12 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ agent: "codex", title: "Git Push" }),
       ),
     );
+    await waitFor(() => expect(requestPaneTabActivationMock).toHaveBeenCalledTimes(3));
+    expect(requestPaneTabActivationMock.mock.calls).toEqual([
+      ["env-1", "agent-job-resolve"],
+      ["env-1", "agent-job-resolve"],
+      ["env-1", "agent-job-resolve"],
+    ]);
   });
 
   test("starts one backend-owned Resolve job and suppresses duplicate launches", async () => {

@@ -58,7 +58,7 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
         <button
           type="button"
           aria-label={closeLabel}
-          className="ml-1 flex h-7 w-7 items-center justify-center opacity-100 transition-opacity hover:text-red-400 md:h-auto md:w-auto md:opacity-0 md:group-hover:opacity-100"
+          className="ml-1 flex h-7 w-7 items-center justify-center opacity-100 transition-opacity hover:text-red-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 md:h-auto md:w-auto md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           onClick={(event) => {
             event.stopPropagation();
             onClose();

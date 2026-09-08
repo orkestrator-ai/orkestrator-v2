@@ -441,6 +441,17 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             key={item.id}
             isActive={selected?.id === item.id}
             className="cursor-pointer"
+            onClick={() => {
+              setError(null);
+              void backend
+                .selectCoordinatorConversation(projectId, item.id)
+                .then(setSnapshot)
+                .catch((cause) =>
+                  setError(
+                    cause instanceof Error ? cause.message : "Could not select conversation",
+                  ),
+                );
+            }}
             closeLabel={`Close ${item.title}`}
             onClose={() => {
               setOperation("conversation");
@@ -463,17 +474,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
                   : `${item.title}, no agent chosen yet`
               }
-              onClick={() => {
-                setError(null);
-                void backend
-                  .selectCoordinatorConversation(projectId, item.id)
-                  .then(setSnapshot)
-                  .catch((cause) =>
-                    setError(
-                      cause instanceof Error ? cause.message : "Could not select conversation",
-                    ),
-                  );
-              }}
             >
               {/* Which agent a conversation belongs to is fixed at its first
                   prompt and cannot be changed afterwards, so the tab strip is

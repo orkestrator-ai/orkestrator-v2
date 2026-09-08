@@ -20,6 +20,7 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import {
   compactClaudeSession,
   forkClaudeSession,
@@ -63,6 +64,7 @@ import {
   deleteAgentHandoff,
   beginNativeAgentSignIn,
   forkNativeAgentSession,
+  getBuildPipelineSessionProjection,
   getNativeAgentProjection,
   getSystemUsage,
   performNativeAgentSessionAction,
@@ -120,26 +122,48 @@ interface ActiveNativeSession {
   environmentId: string;
   sessionKey: string;
   providerSessionId?: string;
+  buildPipelineId?: string;
 }
 
-function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | null {
+function nativeProviderLabel(provider: AgentPlatform): string {
+  return provider === "opencode"
+    ? "OpenCode"
+    : provider === "claude" || provider === "codex"
+      ? `${AGENT_PROVIDER_LABELS[provider]} Native`
+      : AGENT_PLATFORM_LABELS[provider];
+}
+
+function resolveActiveNativeSession(
+  tab: TabInfo | null,
+  buildPipeline: BuildPipeline | undefined,
+  viewedBuildSessionId: string | undefined,
+): ActiveNativeSession | null {
   if (!tab) return null;
   const data = getNativeAgentData(tab);
-  if (!data?.platform || !AGENT_PLATFORMS.includes(data.platform)) return null;
+  if (data?.platform && AGENT_PLATFORMS.includes(data.platform)) {
+    return {
+      provider: data.platform,
+      providerLabel: nativeProviderLabel(data.platform),
+      environmentId: data.environmentId,
+      sessionKey: createSessionKey(data.environmentId, tab.id),
+      providerSessionId: data.sessionId,
+    };
+  }
+  if (tab.type !== "claude-build" || !tab.buildTabData || !buildPipeline) return null;
+  const session =
+    buildPipeline.sessions.find((candidate) => candidate.sdkSessionId === viewedBuildSessionId) ??
+    buildPipeline.sessions[buildPipeline.currentSessionIndex] ??
+    buildPipeline.sessions.at(-1);
+  if (!session) return null;
+  const provider = session.agent ?? buildPipeline.agentType;
+  if (!AGENT_PLATFORMS.includes(provider)) return null;
   return {
-    provider: data.platform,
-    // Claude, Codex and OpenCode keep the headings they have always had. An
-    // agent added since takes its name from the shared platform table rather
-    // than growing a second one here.
-    providerLabel:
-      data.platform === "opencode"
-        ? "OpenCode"
-        : data.platform === "claude" || data.platform === "codex"
-          ? `${AGENT_PROVIDER_LABELS[data.platform]} Native`
-          : AGENT_PLATFORM_LABELS[data.platform],
-    environmentId: data.environmentId,
-    sessionKey: createSessionKey(data.environmentId, tab.id),
-    providerSessionId: data.sessionId,
+    provider,
+    providerLabel: nativeProviderLabel(provider),
+    environmentId: tab.buildTabData.environmentId,
+    sessionKey: session.sessionKey,
+    providerSessionId: session.sdkSessionId,
+    buildPipelineId: buildPipeline.id,
   };
 }
 
@@ -187,7 +211,18 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
   const shareVersionRef = useRef(0);
-  const activeSession = useMemo(() => resolveActiveNativeSession(activeTab), [activeTab]);
+  const buildPipelineId =
+    activeTab?.type === "claude-build" ? activeTab.buildTabData?.pipelineId : undefined;
+  const buildPipeline = useBuildPipelineStore((state) =>
+    buildPipelineId ? state.pipelines.get(buildPipelineId) : undefined,
+  );
+  const viewedBuildSessionId = useBuildPipelineStore((state) =>
+    buildPipelineId ? state.viewedSessionIds.get(buildPipelineId) : undefined,
+  );
+  const activeSession = useMemo(
+    () => resolveActiveNativeSession(activeTab, buildPipeline, viewedBuildSessionId),
+    [activeTab, buildPipeline, viewedBuildSessionId],
+  );
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
@@ -199,12 +234,13 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
    * make one impossible is having nowhere to send it: an agent the user has
    * disabled is not a destination, and neither is the source itself.
    */
-  const handoffDestinations = activeSession
-    ? (Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[]).filter(
-        (provider) =>
-          provider !== activeSession.provider && enabledAgentPlatforms.includes(provider),
-      )
-    : [];
+  const handoffDestinations =
+    activeSession && !activeSession.buildPipelineId
+      ? (Object.keys(AGENT_PROVIDER_LABELS) as AgentProvider[]).filter(
+          (provider) =>
+            provider !== activeSession.provider && enabledAgentPlatforms.includes(provider),
+        )
+      : [];
   const canHandoff = handoffDestinations.length > 0;
   const neutralProjection = useNativeAgentProjectionStore((state) =>
     activeSession ? state.projections.get(activeSession.sessionKey) : undefined,
@@ -271,14 +307,16 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   );
   const canFork =
     neutralProjection?.capabilities.fork ??
-    (activeSession?.provider === "claude" ||
-      activeSession?.provider === "codex" ||
-      activeSession?.provider === "opencode");
+    (!activeSession?.buildPipelineId &&
+      (activeSession?.provider === "claude" ||
+        activeSession?.provider === "codex" ||
+        activeSession?.provider === "opencode"));
   const canCompact =
     neutralProjection?.capabilities.actions?.compact ??
-    (activeSession?.provider === "claude" ||
-      activeSession?.provider === "codex" ||
-      activeSession?.provider === "opencode");
+    (!activeSession?.buildPipelineId &&
+      (activeSession?.provider === "claude" ||
+        activeSession?.provider === "codex" ||
+        activeSession?.provider === "opencode"));
 
   const claudeUsage = useClaudeStore((state) =>
     activeSession?.provider === "claude"
@@ -514,12 +552,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     if (!open || !activeSession || !currentSessionId) return;
     let cancelled = false;
     const requestedSessionId = currentSessionId;
-    void getNativeAgentProjection({
-      environmentId: activeSession.environmentId,
-      agent: activeSession.provider,
-      logicalSessionKey: activeSession.sessionKey,
-      refreshUsage: true,
-    })
+    const projection = activeSession.buildPipelineId
+      ? getBuildPipelineSessionProjection({
+          pipelineId: activeSession.buildPipelineId,
+          sessionKey: activeSession.sessionKey,
+          refreshUsage: true,
+        })
+      : getNativeAgentProjection({
+          environmentId: activeSession.environmentId,
+          agent: activeSession.provider,
+          logicalSessionKey: activeSession.sessionKey,
+          refreshUsage: true,
+        });
+    void projection
       .then((projection) => {
         if (cancelled || !projection || projection.sessionId !== requestedSessionId) return;
         useNativeAgentProjectionStore
@@ -1059,6 +1104,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
           {activeSession ? (
             <div className="space-y-5">
               {activeTab &&
+              !activeSession.buildPipelineId &&
               messagingEnabled &&
               agentMailCapabilities("agent-native", activeSession.provider).canPull ? (
                 <div className="flex gap-2 border-b border-border/60 pb-4">

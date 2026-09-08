@@ -193,6 +193,7 @@ describe("BuildChatTab backend projection", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
+      viewedSessionIds: new Map(),
     });
   });
 
@@ -212,6 +213,9 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     fireEvent.click(screen.getByText("Build Session"));
     expect(screen.getByText("Implementation complete")).toBeTruthy();
+    expect(useBuildPipelineStore.getState().viewedSessionIds.get(pipeline.id)).toBe(
+      "build-session",
+    );
   });
 
   test("renders loading and empty-stage states from incomplete snapshots", () => {

@@ -6,6 +6,8 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -256,6 +258,20 @@ function cursorTab(overrides: Partial<TabInfo> = {}): TabInfo {
   } as TabInfo;
 }
 
+function buildTab(overrides: Partial<TabInfo> = {}): TabInfo {
+  return {
+    id: "build-tab",
+    type: "claude-build",
+    buildTabData: {
+      environmentId: ENVIRONMENT_ID,
+      pipelineId: "pipeline-1",
+      taskId: "task-1",
+      isLocal: true,
+    },
+    ...overrides,
+  } as TabInfo;
+}
+
 function usage(overrides: Partial<ContextUsageSnapshot> = {}): ContextUsageSnapshot {
   return {
     usedTokens: 25_000,
@@ -362,6 +378,11 @@ const originalConfirm = window.confirm;
 
 beforeEach(() => {
   useNativeAgentProjectionStore.getState().reset();
+  useBuildPipelineStore.setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+    viewedSessionIds: new Map(),
+  });
   confirmResult = true;
   confirmMessages = [];
   clipboardWrites = [];
@@ -514,6 +535,11 @@ afterEach(() => {
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
+  useBuildPipelineStore.setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+    viewedSessionIds: new Map(),
+  });
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
@@ -752,6 +778,63 @@ describe("AgentInfoButton provider resolution", () => {
 
     expect(screen.getByText("Codex Native")).toBeTruthy();
     expect(screen.getByText("gpt-5.3-codex")).toBeTruthy();
+  });
+
+  test("uses the build tab's selected stage as the active native session", async () => {
+    const sessions = [
+      {
+        phase: "build" as const,
+        agent: "codex" as const,
+        iteration: 0,
+        sessionKey: "pipeline-build-key",
+        sdkSessionId: "pipeline-build-session",
+        status: "idle" as const,
+        startedAt: "2026-09-08T10:00:00.000Z",
+        label: "Build Session",
+      },
+      {
+        phase: "verify" as const,
+        agent: "opencode" as const,
+        iteration: 0,
+        sessionKey: "pipeline-verify-key",
+        sdkSessionId: "pipeline-verify-session",
+        status: "running" as const,
+        startedAt: "2026-09-08T10:01:00.000Z",
+        label: "Verification Session",
+      },
+    ];
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          "pipeline-1",
+          buildPipelineFixture({
+            environmentId: ENVIRONMENT_ID,
+            sessions,
+            currentSessionIndex: 1,
+          }),
+        ],
+      ]),
+      buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
+      viewedSessionIds: new Map([["pipeline-1", "pipeline-build-session"]]),
+    });
+    useCodexStore.setState({
+      contextUsage: new Map([["pipeline-build-key", usage({ source: "codex" })]]),
+      selectedModel: new Map([["pipeline-build-key", "gpt-5.3-codex"]]),
+    } as never);
+
+    render(<AgentInfoButton activeTab={buildTab()} />);
+    open();
+
+    expect(screen.getByText("Codex Native")).toBeTruthy();
+    expect(screen.getByText("gpt-5.3-codex")).toBeTruthy();
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_build_pipeline_session_projection", {
+        pipelineId: "pipeline-1",
+        sessionKey: "pipeline-build-key",
+        refreshUsage: true,
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
   });
 });
 

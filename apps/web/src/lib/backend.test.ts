@@ -693,11 +693,20 @@ describe("backend setup wrappers", () => {
 
   test("exposes build-pipeline reads and backend-owned deletion", async () => {
     await backendWrappers.getBuildPipeline("pipeline-1");
+    await backendWrappers.getBuildPipelineSessionProjection({
+      pipelineId: "pipeline-1",
+      sessionKey: "session-key",
+      refreshUsage: true,
+    });
     await backendWrappers.listBuildPipelines("project-1");
     await backendWrappers.deleteBuildPipeline("pipeline-1");
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_build_pipeline", { pipelineId: "pipeline-1" }],
+      [
+        "get_build_pipeline_session_projection",
+        { pipelineId: "pipeline-1", sessionKey: "session-key", refreshUsage: true },
+      ],
       ["list_build_pipelines", { projectId: "project-1" }],
       ["delete_build_pipeline", { pipelineId: "pipeline-1" }],
     ]);

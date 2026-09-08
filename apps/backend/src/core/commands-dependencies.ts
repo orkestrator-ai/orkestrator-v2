@@ -13,6 +13,7 @@ export {
 export {
   AGENT_INTERACTION_ORIGINS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
   isAgentInteractionPolicy,
   type AgentInteractionOrigin,
   type AgentInteractionPolicy,
@@ -180,6 +181,7 @@ export {
 } from "./github.js";
 export {
   BUILD_PIPELINE_AGENTS,
+  isBuildPipeline,
   isStartBuildPipelineInput,
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";

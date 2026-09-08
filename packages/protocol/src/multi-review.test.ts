@@ -1,4 +1,5 @@
 import { reviewPackageArtifactPath } from "./review-artifacts";
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "./review-fanout";
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -96,6 +97,64 @@ describe("multi review protocol", () => {
         ...workflow,
         phase: "interactive",
         consolidatedReport: undefined,
+      }),
+    ).toBe(false);
+  });
+
+  test("validates per-step runtimes and cumulative fix-session usage", () => {
+    const timestamp = new Date(0).toISOString();
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-runtimes",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      fixSession: {
+        agent: "codex",
+        model: "gpt-5.6",
+        sessionKey: "fix-session",
+        providerSessionId: "provider-fix",
+        requestIds: ["request-1"],
+        status: "running",
+        startedAt: timestamp,
+        tokenCount: 65_000,
+      },
+      stepRuntimes: {
+        prepare: {
+          startedAt: timestamp,
+          completedAt: timestamp,
+          tokenCount: 40_000,
+          tokenBaseline: 0,
+        },
+        consolidate: { startedAt: timestamp, tokenBaseline: 40_000 },
+      },
+      phase: "consolidating",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision: 1,
+    };
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, stepRuntimes: {} })).toBe(true);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        fixSession: { ...workflow.fixSession, tokenCount: -1 },
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, stepRuntimes: { review: { startedAt: timestamp } } }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, stepRuntimes: { prepare: { startedAt: "soon" } } }),
+    ).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, stepRuntimes: { prepare: {} } })).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        stepRuntimes: { fix: { startedAt: timestamp, tokenCount: 1.5 } },
       }),
     ).toBe(false);
   });
@@ -438,12 +497,22 @@ test("preparation and immutable package references survive strict workflow valid
       requestId: "prepare-1",
       state: "dispatching",
       createdAt: timestamp,
+      usageFinalizationPolls: REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
     },
     createdAt: timestamp,
     updatedAt: timestamp,
     backendRevision: 1,
   };
   expect(isMultiReviewWorkflow(workflow)).toBe(true);
+  expect(
+    isMultiReviewWorkflow({
+      ...workflow,
+      activeRequest: {
+        ...workflow.activeRequest,
+        usageFinalizationPolls: REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS + 1,
+      },
+    }),
+  ).toBe(false);
   expect(isMultiReviewTerminalPhase("preparing")).toBe(false);
   const id = "review-package-multi-test";
   const sha256 = "a".repeat(64);

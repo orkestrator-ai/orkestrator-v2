@@ -36,7 +36,25 @@ export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
 export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION =
   "You are already in build mode. Remain in build mode and implement the fixes now. Do not enter, propose, or switch to plan mode. Do not invoke EnterPlanMode or any equivalent plan-mode tool, and do not ask the user to switch modes. Do not stop after describing a plan: make the necessary edits and run relevant validation.";
-export const MULTI_REVIEW_ADDRESS_PROMPT = `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
+/**
+ * Ends the automated preparation/consolidation contract when their session
+ * becomes an ordinary, user-facing Fix conversation.
+ *
+ * Multi Review deliberately reuses that session so the model retains the
+ * review context. Provider settings are per turn, but earlier prompt
+ * instructions remain in conversation history and can keep constraining the
+ * model unless the interactive handoff supersedes them.
+ */
+export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
+  "This is now a manual interactive Fix conversation, not an automated pipeline stage. " +
+  "Any JSON-only or structured-output contract from earlier turns has ended and does not apply to this turn or later replies. " +
+  "Earlier review-stage instructions not to edit files, run commands, or fix findings have also ended and no longer apply. " +
+  "Implement the requested fixes, run relevant validation, and commit every relevant change. " +
+  "When you finish, respond in ordinary Markdown prose with a concise summary and validation results. Do not return JSON unless the user explicitly asks for JSON.\n\n" +
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION;
+export const MULTI_REVIEW_ADDRESS_PROMPT =
+  "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.\n\n" +
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION;
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
@@ -73,7 +91,7 @@ ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 ${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
 ${instruction}
 
-${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
+${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
 }
 
 /**

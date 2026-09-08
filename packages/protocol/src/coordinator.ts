@@ -101,6 +101,8 @@ export interface CoordinatorDelegation {
   workerTabId: string;
   state: "running" | "completed" | "failed" | "stopped";
   completedAt?: string;
+  /** Durable wake decision, recorded before mail is released or synthesized. */
+  wakeKind?: "report" | "notice";
   /**
    * When the coordinator was actually woken for this delegation.
    *

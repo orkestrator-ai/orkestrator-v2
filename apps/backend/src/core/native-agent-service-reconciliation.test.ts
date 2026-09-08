@@ -3565,6 +3565,35 @@ describe("NativeAgentService", () => {
             { owner: "coordinator", previousState: undefined, state: "working" },
             { owner: "coordinator", previousState: "working", state: "idle" },
           ]);
+          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            lifecycleState: "paused",
+          }));
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("unknown");
+
+          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            lifecycleState: "ready",
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              closedAt: new Date().toISOString(),
+            })),
+          }));
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("unknown");
           // No environment row was fabricated for it along the way.
           expect((await storage.loadEnvironments()).map(({ id }) => id)).not.toContain(runtimeId);
         } finally {

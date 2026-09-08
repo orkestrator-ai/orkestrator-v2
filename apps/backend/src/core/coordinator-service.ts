@@ -14,6 +14,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { StorageService } from "./storage.js";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import {
   coordinatorProviderQualification,
@@ -22,6 +23,7 @@ import {
 } from "./coordinator-providers.js";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
+const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
 
 export function sanitizeCoordinatorError(value: unknown): string {
   const text = (value instanceof Error ? value.message : String(value))
@@ -62,6 +64,7 @@ function retainCoordinatorConversations(
 /** Backend authority for one durable, non-disposable project coordinator. */
 export class CoordinatorService {
   private readonly projectOperations = new Map<string, Promise<unknown>>();
+  private delegationWakeDelivery: Promise<void> | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -71,6 +74,10 @@ export class CoordinatorService {
       error: string | null;
     },
     private readonly host?: CoordinatorHostCapabilities,
+    private readonly workerActivity?: (
+      environmentId: string,
+      tabId: string,
+    ) => Promise<AgentActivityState | "unknown">,
   ) {}
 
   /**
@@ -504,9 +511,10 @@ export class CoordinatorService {
        */
       if (
         worker.state === "completed" &&
-        (await this.storage
-          .hasUndeliveredCoordinatorRequest(association.resourceId, delegation.workerTabId)
-          .catch(() => false))
+        (await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          delegation.workerTabId,
+        ))
       ) {
         continue;
       }
@@ -530,7 +538,7 @@ export class CoordinatorService {
   async reconcileWorkerDelegations(): Promise<void> {
     for (const association of await this.storage.listOpenCoordinatorDelegations()) {
       const environment = await this.storage.getEnvironment(association.resourceId);
-      const state =
+      let state: "completed" | "failed" | "stopped" | null =
         !environment || environment.deletionRequestedAt
           ? ("stopped" as const)
           : environment.status === "error"
@@ -538,6 +546,26 @@ export class CoordinatorService {
             : environment.status === "stopped"
               ? ("stopped" as const)
               : null;
+      if (
+        !state &&
+        this.workerActivity &&
+        Date.now() - Date.parse(association.delegation!.requestedAt) >=
+          DELEGATION_IDLE_RECONCILE_GRACE_MS
+      ) {
+        const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          association.delegation!.workerTabId,
+        );
+        if (
+          !undelivered &&
+          (await this.workerActivity(
+            association.resourceId,
+            association.delegation!.workerTabId,
+          )) === "idle"
+        ) {
+          state = "completed";
+        }
+      }
       if (!state) continue;
       await this.storage.closeCoordinatorDelegation(association.id, state);
     }
@@ -553,7 +581,16 @@ export class CoordinatorService {
    * twice for one delegation and never told "finished" by a second message that
    * says less than the first.
    */
-  async deliverDelegationWakes(): Promise<void> {
+  deliverDelegationWakes(): Promise<void> {
+    if (this.delegationWakeDelivery) return this.delegationWakeDelivery;
+    const delivery = this.deliverDelegationWakesOnce().finally(() => {
+      if (this.delegationWakeDelivery === delivery) this.delegationWakeDelivery = null;
+    });
+    this.delegationWakeDelivery = delivery;
+    return delivery;
+  }
+
+  private async deliverDelegationWakesOnce(): Promise<void> {
     const unwoken = await this.storage.listUnwokenCoordinatorDelegations();
     for (const association of unwoken) {
       const delegation = association.delegation;
@@ -570,15 +607,33 @@ export class CoordinatorService {
         continue;
       }
       const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-      const released = await this.storage
-        .releaseDelegationHeldAgentMail(
+      let wakeKind = delegation.wakeKind;
+      if (!wakeKind) {
+        const hasReport = await this.storage.hasDelegationHeldAgentMail(
+          association.id,
           runtimeId,
           conversation.tabId,
           association.resourceId,
           delegation.workerTabId,
-        )
-        .catch(() => 0);
-      if (released === 0) {
+        );
+        const prepared = await this.storage.prepareCoordinatorDelegationWake(
+          association.id,
+          hasReport ? "report" : "notice",
+        );
+        wakeKind = prepared?.delegation?.wakeKind;
+      }
+      if (!wakeKind) continue;
+      if (wakeKind === "report") {
+        // A zero count is safe on retry: wakeKind was committed while the
+        // report was still held, so zero now means an earlier pass released it.
+        await this.storage.releaseDelegationHeldAgentMail(
+          association.id,
+          runtimeId,
+          conversation.tabId,
+          association.resourceId,
+          delegation.workerTabId,
+        );
+      } else {
         const environment = await this.storage.getEnvironment(association.resourceId);
         const label = environment?.name ?? association.resourceId;
         const outcome =

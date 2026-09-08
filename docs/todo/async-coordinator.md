@@ -209,9 +209,11 @@ worker started with an `initialPrompt`: it has no mail to `reply_message` to.
 and `get_message_status`:
 
 - If the mailbox revision (already on the mailbox record) is unchanged since
-  the last read and `unchangedReads >= 3` within 120 s, return
-  `toolResult({ status: "no-new-mail", instruction: COORDINATOR_ASYNC_CONTRACT })`
-  instead of the page, and do not reset the counter.
+  the last read and `unchangedReads >= 3` within 120 s, return the authorized
+  page with `repeatedRead: true` and `instruction: COORDINATOR_ASYNC_CONTRACT`;
+  guidance never withholds data.
+- The counter key includes the mailbox, filters, and pagination arguments, so
+  distinct reads do not consume one another's budgets.
 - Any new revision resets the counter.
 - The guard is a read-side contract, not a security boundary; it is bounded
   and cannot lock the model out of reading mail that actually arrived.
@@ -266,14 +268,15 @@ Persist it on the existing association rather than inventing a new store:
 
 - `packages/protocol/src/coordinator.ts`: `CoordinatorWorkflowAssociation`
   gains `delegation?: CoordinatorDelegation`, holding `requestedAt`,
-  `workerTabId`, `state`, `completedAt` and `wokenAt`. *As built:* no
+  `workerTabId`, `state`, `completedAt`, `wakeKind` and `wokenAt`. *As built:* no
   `workerSessionKey` — the tab id plus the association's `resourceId` is the
   whole address, and the logical session key is derivable from them.
-- `launch_environment` and `launch_job` already reserve an `environment`
-  association (`commands-registry-coordinator.ts:362-374`); set
-  `delegation.state = "running"` there. A coordinator `send_message` to a
-  worker tab (`commands-registry-coordinator.ts:255-285`) upserts the
-  association for that environment and re-opens it as `running`.
+- `launch_environment` uses its reserved `environment` association. Every job,
+  prompt, and coordinator message gets a separate association keyed by its
+  idempotent request id; an environment-wide upsert would overwrite another
+  tab's outstanding wake. A second live request to the same worker tab is
+  rejected before dispatch because one turn-end cannot identify which queued
+  request it completed.
 
 ### The completion edge
 
@@ -308,7 +311,10 @@ Closing a delegation does two things, in order:
    anything over budget is returned to the pending index for the next pass
    rather than dropped. This also fixes the drip for ordinary tab-to-tab mail,
    not just delegations.
-2. **Send a completion notice only if nothing was released.** If the worker
+2. **Send a completion notice only if no report was held.** Before either mail
+   action, persist `wakeKind: "report" | "notice"` on the delegation. This keeps
+   a retry after report release from misreading a zero release count as silence.
+   If the worker
    sent no mail at all, a `system` mail is sent with requestId
    `delegation-<associationId>-<completedAt>`, subject
    `Worker <name> finished` / `failed` / `stopped`, and a body naming the
@@ -317,15 +323,16 @@ Closing a delegation does two things, in order:
    This is the fallback wake; it is never sent in addition to the worker's
    own report.
 
-`wokenAt` is stamped after step 1 or 2, so a restart between the edge and the
-send retries the notice idempotently and never sends two.
+`wokenAt` is stamped after step 1 or 2. A failed release leaves it unstamped for
+retry, and concurrent delivery passes coalesce; the durable `wakeKind` makes a
+restart after release idempotent as well.
 
 ### Holding progress mail
 
 `storage-agent-mail.ts`, in `sendAgentMail` where `shouldScheduleInject` is
 computed (`:1090-1123`): when the sender is a worker tab, the recipient is a
 coordinator mailbox, and an open delegation exists for that sender tab, the
-message is stored with `placement: "pending-inject"` and
+message is stored with `placement: "inject-held"` and
 `placementReason: "delegation-running"`, and is **excluded** from
 `listPendingAgentMailInjects` until the delegation closes. It is readable
 through `read_messages` at any time; the coordinator is simply not woken for

@@ -1094,6 +1094,7 @@ describe("Orkestrator control MCP server", () => {
     }));
     overrides.set("launch_coordinator_environment", () => ({
       environment: { id: "env-worker", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: true,
     }));
     const opened: Array<Record<string, unknown>> = [];
     overrides.set("open_coordinator_delegation", (args) => {
@@ -1132,10 +1133,6 @@ describe("Orkestrator control MCP server", () => {
       delivery: "async",
       nextStep: "Finish your turn now. Do not poll.",
     });
-    // And the wake it promises is actually arranged before it says so.
-    expect(opened).toHaveLength(1);
-    expect(opened[0]).toMatchObject({ environmentId: "env-worker", tabId: "startup-agent" });
-
     const read = async () =>
       rpc(credential.url, credential.token, "tools/call", {
         name: "read_messages",
@@ -1149,9 +1146,24 @@ describe("Orkestrator control MCP server", () => {
       const page = await read();
       expect(page.body.result?.structuredContent).toMatchObject({ total: 1 });
     }
-    // Fourth identical answer: it is waiting, not working.
+    // Fourth identical answer still carries the authorized page while warning
+    // the coordinator that it is polling.
     const refused = await read();
-    expect(refused.body.result?.structuredContent).toMatchObject({ status: "no-new-mail" });
+    expect(refused.body.result?.structuredContent).toMatchObject({
+      total: 1,
+      messages: [{ id: "message-1" }],
+      repeatedRead: true,
+    });
+
+    const differentlyFiltered = await rpc(credential.url, credential.token, "tools/call", {
+      name: "read_messages",
+      arguments: {
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        tabId: "coordinator-tab",
+        unreadOnly: true,
+      },
+    });
+    expect(differentlyFiltered.body.result?.structuredContent).not.toHaveProperty("repeatedRead");
 
     // Real new mail clears the guard immediately; the budget never hides it.
     mailbox = {
@@ -1163,5 +1175,127 @@ describe("Orkestrator control MCP server", () => {
     };
     const afterNewMail = await read();
     expect(afterNewMail.body.result?.structuredContent).toMatchObject({ total: 2 });
+
+    overrides.set("send_coordinator_agent_mail", () => ({
+      id: "stored-message",
+      requestId: "stored-message",
+      placement: "stored",
+      coordinatorDelegationOpened: false,
+    }));
+    const stored = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "stored-message",
+        toEnvironmentId: "env-1",
+        toTabId: "plain-tab",
+        body: "This cannot enter a worker turn.",
+      },
+    });
+    expect(stored.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("send_coordinator_agent_mail", () => ({
+      id: "bounced-message",
+      requestId: "bounced-message",
+      placement: "bounced",
+      coordinatorDelegationOpened: false,
+    }));
+    const bounced = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "bounced-message",
+        toEnvironmentId: "env-1",
+        toTabId: "muted-tab",
+        body: "This recipient is muted.",
+      },
+    });
+    expect(bounced.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("open_coordinator_delegation", (args) => {
+      opened.push(args);
+      throw new Error("storage unavailable");
+    });
+    const jobWithoutWake = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "job-without-wake",
+        environmentId: "env-1",
+        agent: "codex",
+        prompt: "Do the work.",
+      },
+    });
+    expect(jobWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
+    expect(opened.at(-1)).toMatchObject({
+      environmentId: "env-1",
+      tabId: "agent-job-job-1",
+      requestId: "job-without-wake",
+    });
+
+    overrides.set("launch_control_job", () => ({
+      jobId: "job-without-tab",
+      environmentId: "env-1",
+      status: "accepted",
+    }));
+    const jobWithoutTab = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "job-without-tab",
+        environmentId: "env-1",
+        agent: "codex",
+        prompt: "Do the work.",
+      },
+    });
+    expect(jobWithoutTab.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("assert_coordinator_delegation_available", () => {
+      throw new Error("That worker tab already has an outstanding coordinator delegation");
+    });
+    overrides.set("get_pane_layout", () => ({
+      activePaneId: "pane",
+      root: {
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "native-1",
+        tabs: [
+          {
+            id: "native-1",
+            type: "agent-native",
+            nativeAgentData: { platform: "codex" },
+          },
+        ],
+      },
+    }));
+    const dispatchesBeforeConflict = invocations.filter(
+      ({ command }) => command === "dispatch_native_agent_intent",
+    ).length;
+    const conflictingPrompt = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_prompt_to_tab",
+      arguments: {
+        requestId: "conflicting-prompt",
+        environmentId: "env-1",
+        tabId: "native-1",
+        prompt: "Do not dispatch this.",
+      },
+    });
+    expect(conflictingPrompt.body.result?.isError).toBe(true);
+    expect(
+      invocations.filter(({ command }) => command === "dispatch_native_agent_intent"),
+    ).toHaveLength(dispatchesBeforeConflict);
+
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-no-wake", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: false,
+    }));
+    const launchWithoutWake = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-without-wake",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Do the work.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    expect(launchWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
   });
 });

@@ -171,7 +171,25 @@ export class OrkestratorBackend {
       await handler({ environmentId }, context);
     };
     this.context = context;
-    this.coordinators = new CoordinatorService(storage, () => this.controlMcp.getSettings());
+    this.coordinators = new CoordinatorService(
+      storage,
+      () => this.controlMcp.getSettings(),
+      undefined,
+      async (environmentId, tabId) => {
+        const logicalSessionKey = `env-${environmentId}:${tabId}`;
+        const session = (await storage.listNativeAgentSessions()).find(
+          (candidate) =>
+            candidate.environmentId === environmentId &&
+            candidate.logicalSessionKey === logicalSessionKey,
+        );
+        if (!session) return "unknown";
+        return this.nativeAgents.sessionActivitySnapshot(
+          environmentId,
+          session.agent,
+          logicalSessionKey,
+        );
+      },
+    );
     context.coordinators = this.coordinators;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"

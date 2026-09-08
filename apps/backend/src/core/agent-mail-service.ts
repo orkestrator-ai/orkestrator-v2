@@ -6,7 +6,11 @@ import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { StorageService } from "./storage.js";
 import type { PromptQueueDrainer } from "./prompt-queue-drainer.js";
-import type { MailboxDescriptor, MailboxPresence } from "@orkestrator/protocol/agent-mail";
+import type {
+  AgentMailMessageSummary,
+  MailboxDescriptor,
+  MailboxPresence,
+} from "@orkestrator/protocol/agent-mail";
 
 const OBSERVED_PRESENCE_TTL_MS = 4_000;
 
@@ -21,6 +25,21 @@ const OBSERVED_PRESENCE_TTL_MS = 4_000;
  */
 const MAX_MAIL_INJECT_BATCH = 10;
 const MAX_MAIL_INJECT_BATCH_BYTES = 128 * 1024;
+
+function mayInjectMessage(mailbox: MailboxDescriptor, message: AgentMailMessageSummary): boolean {
+  const coordinatorExchange =
+    message.trust === "same-project" &&
+    mailbox.injectOverride === "inherit" &&
+    (message.from.kind === "coordinator" ||
+      message.from.kind === "system" ||
+      mailbox.ownerKind === "coordinator");
+  return (
+    (mailbox.injectPolicy === "idle" || coordinatorExchange) &&
+    !mailbox.mutedInbound &&
+    !mailbox.tombstonedAt &&
+    mailbox.capabilities.canInject
+  );
+}
 
 export class AgentMailService {
   private drainTask: Promise<void> | null = null;
@@ -240,19 +259,7 @@ export class AgentMailService {
       includeDeferred: true,
     });
     for (const { mailbox, message, deferredUntil } of pending) {
-      const coordinatorExchange =
-        message.trust === "same-project" &&
-        mailbox.injectOverride === "inherit" &&
-        (message.from.kind === "coordinator" ||
-          message.from.kind === "system" ||
-          mailbox.ownerKind === "coordinator");
-      if (
-        (mailbox.injectPolicy !== "idle" && !coordinatorExchange) ||
-        mailbox.mutedInbound ||
-        mailbox.tombstonedAt
-      )
-        continue;
-      if (!mailbox.capabilities.canInject) continue;
+      if (!mayInjectMessage(mailbox, message)) continue;
       const coordinatorId = coordinatorIdFromRuntimeId(mailbox.environmentId);
       if (coordinatorId) {
         const workspace = await this.storage.getCoordinatorWorkspaceById(coordinatorId);
@@ -338,6 +345,10 @@ export class AgentMailService {
         if (batched.length >= MAX_MAIL_INJECT_BATCH) break;
         if (sibling.mailbox.mailboxId !== mailbox.mailboxId) continue;
         if (sibling.message.id === message.id || sibling.deferredUntil) continue;
+        // Eligibility is per message, not merely per mailbox. A coordinator
+        // exchange may bypass an inherited-off policy while a plain sibling in
+        // the same pending snapshot must remain queued.
+        if (!mayInjectMessage(sibling.mailbox, sibling.message)) continue;
         const siblingClaim = await this.storage.beginAgentMailInject(
           mailbox.mailboxId,
           sibling.message.id,

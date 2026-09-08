@@ -844,6 +844,66 @@ describe("AgentMailService", () => {
     }
   });
 
+  test("does not batch a sibling that is no longer individually injectable", async () => {
+    const { storage, dataDir } = await fixture();
+    const prompts: string[] = [];
+    try {
+      const workflow = await storage.sendAgentMail(
+        { kind: "system", projectId: "project", source: "workflow", resourceId: "build-1" },
+        {
+          requestId: "workflow-message",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Coordinator exchange remains eligible.",
+        },
+      );
+      const plain = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        {
+          requestId: "plain-message",
+          toEnvironmentId: "recipient",
+          toTabId: "agent",
+          body: "Plain message must remain queued.",
+        },
+      );
+      const config = await storage.loadConfig();
+      config.global.agentMessaging = {
+        ...config.global.agentMessaging!,
+        defaultInjectPolicy: "off",
+      };
+      await storage.saveConfig(config);
+      await storage.synchronizeAgentMailboxes();
+
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Coordinator exchange remains eligible.");
+      expect(prompts[0]).not.toContain("Plain message must remain queued.");
+      expect(await storage.getAgentMailMessage("recipient", "agent", workflow.id)).toMatchObject({
+        placement: "injected",
+      });
+      expect(await storage.getAgentMailMessage("recipient", "agent", plain.id)).toMatchObject({
+        placement: "pending-inject",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("a batch that cannot be delivered leaves every message retryable", async () => {
     const { storage, dataDir } = await fixture();
     try {

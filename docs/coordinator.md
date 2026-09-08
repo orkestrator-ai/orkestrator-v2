@@ -130,11 +130,13 @@ stored and readable, but held, and released together with the final report so
 one delegation produces one turn rather than one per message. A worker that
 finishes without reporting still wakes its coordinator, with a notice saying so.
 A worker blocked on an approval or a question has not finished — that needs a
-person, and the toolbar says which workers are waiting on one.
+person. The toolbar keeps showing that the selected conversation is waiting on
+the worker without inferring tab-level attention from an environment-wide
+status.
 
 Because a coordinator is woken rather than waiting, it has no reason to poll.
-Repeatedly reading an unchanged mailbox returns "no new mail" and the delegation
-contract instead of the page, and the platforms hold the same line at the tool
+Repeatedly reading an unchanged mailbox returns the page with the delegation
+contract attached, and the platforms hold the same line at the tool
 level: Claude's read-only shell has no `sleep`, `watch` or `timeout`, and its
 scheduling and monitoring tools are refused with an explanation rather than a
 bare denial.

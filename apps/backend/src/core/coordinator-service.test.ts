@@ -1008,7 +1008,12 @@ describe("project coordinator", () => {
   });
   describe("worker delegations", () => {
     /** A coordinator with one assigned conversation and one running worker. */
-    async function delegationFixture(): Promise<{
+    async function delegationFixture(
+      options: {
+        requestedAt?: string;
+        workerActivity?: () => Promise<"idle" | "working" | "waiting" | "unknown">;
+      } = {},
+    ): Promise<{
       coordinator: CoordinatorService;
       projectId: string;
       coordinatorId: string;
@@ -1020,11 +1025,16 @@ describe("project coordinator", () => {
       const project = await storage.addProject(
         createProject("https://example.invalid/repo.git", checkout),
       );
-      const coordinator = new CoordinatorService(storage, () => ({
-        enabled: true,
-        running: true,
-        error: null,
-      }));
+      const coordinator = new CoordinatorService(
+        storage,
+        () => ({
+          enabled: true,
+          running: true,
+          error: null,
+        }),
+        undefined,
+        options.workerActivity ? async () => options.workerActivity!() : undefined,
+      );
       const initial = await coordinator.ensure(project.id);
       const conversation = initial.workspace.conversations[0]!;
       await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
@@ -1067,7 +1077,7 @@ describe("project coordinator", () => {
         requestId: "delegation-request",
         createdAt: new Date().toISOString(),
       });
-      await storage.openCoordinatorDelegation(association.id, "startup-agent");
+      await storage.openCoordinatorDelegation(association.id, "startup-agent", options.requestedAt);
       return {
         coordinator,
         projectId: project.id,
@@ -1077,6 +1087,25 @@ describe("project coordinator", () => {
         associationId: association.id,
         runtimeId: coordinatorRuntimeId(initial.workspace.id, conversation.id),
       };
+    }
+
+    async function openAdditionalDelegation(
+      fixture: Awaited<ReturnType<typeof delegationFixture>>,
+      requestId: string,
+      workerTabId = "startup-agent",
+    ): Promise<string> {
+      const association = await storage.saveCoordinatorWorkflowAssociation({
+        id: `association-${requestId}`,
+        coordinatorId: fixture.coordinatorId,
+        projectId: fixture.projectId,
+        conversationId: fixture.conversation.id,
+        kind: "environment",
+        resourceId: fixture.workerId,
+        requestId,
+        createdAt: new Date().toISOString(),
+      });
+      await storage.openCoordinatorDelegation(association.id, workerTabId);
+      return association.id;
     }
 
     async function workerSays(
@@ -1194,7 +1223,7 @@ describe("project coordinator", () => {
       });
       expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
 
-      await storage.openCoordinatorDelegation(fixture.associationId, "startup-agent");
+      await openAdditionalDelegation(fixture, "second-delegation");
       const report = await workerSays(fixture, "second-report", "Second round done.");
       expect(report.placement).toBe("inject-held");
 
@@ -1264,7 +1293,7 @@ describe("project coordinator", () => {
         },
       );
       expect(request.placement).toBe("pending-inject");
-      await storage.openCoordinatorDelegation(fixture.associationId, "startup-agent");
+      const followUpAssociationId = await openAdditionalDelegation(fixture, "follow-up-delegation");
 
       // That earlier turn now ends. It never saw the request, so calling it
       // finished would be a "done" for work that has not started.
@@ -1274,7 +1303,7 @@ describe("project coordinator", () => {
         state: "completed",
       });
       expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
-        fixture.associationId,
+        followUpAssociationId,
       ]);
       expect(
         (await storage.listPendingAgentMailInjects()).some(
@@ -1290,6 +1319,115 @@ describe("project coordinator", () => {
 
       const message = await workerSays(fixture, "unsolicited", "One more thing.");
       expect(message.placement).toBe("pending-inject");
+    });
+
+    test("keeps different worker tabs independent and rejects overlap on one tab", async () => {
+      const fixture = await delegationFixture();
+      const second = await openAdditionalDelegation(fixture, "second-tab", "agent-two");
+      expect(
+        (await storage.listOpenCoordinatorDelegations()).map((item) => item.id).toSorted(),
+      ).toEqual([fixture.associationId, second].toSorted());
+
+      const conflicting = await storage.saveCoordinatorWorkflowAssociation({
+        id: "same-tab-conflict",
+        coordinatorId: fixture.coordinatorId,
+        projectId: fixture.projectId,
+        conversationId: fixture.conversation.id,
+        kind: "environment",
+        resourceId: fixture.workerId,
+        requestId: "same-tab-conflict",
+        createdAt: new Date().toISOString(),
+      });
+      await expect(
+        storage.openCoordinatorDelegation(conflicting.id, "startup-agent"),
+      ).rejects.toThrow("already has an outstanding");
+      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).not.toContain(
+        conflicting.id,
+      );
+    });
+
+    test("settles an old delivered delegation first observed idle after restart", async () => {
+      const fixture = await delegationFixture({
+        requestedAt: new Date(0).toISOString(),
+        workerActivity: async () => "idle",
+      });
+      const report = await workerSays(fixture, "restart-report", "Finished during downtime.");
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+      expect(
+        (await storage.listPendingAgentMailInjects()).some(
+          ({ message }) => message.id === report.id,
+        ),
+      ).toBe(true);
+    });
+
+    test("coalesces concurrent wake delivery without inventing a silent-worker notice", async () => {
+      const fixture = await delegationFixture();
+      const report = await workerSays(fixture, "concurrent-report", "Real report.");
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+
+      await Promise.all([
+        fixture.coordinator.deliverDelegationWakes(),
+        fixture.coordinator.deliverDelegationWakes(),
+      ]);
+
+      const pending = await storage.listPendingAgentMailInjects();
+      expect(pending.filter(({ message }) => message.id === report.id)).toHaveLength(1);
+      expect(pending.some(({ message }) => message.from.kind === "system")).toBe(false);
+    });
+
+    test("retries a failed report release without stamping or synthesizing a wake", async () => {
+      const fixture = await delegationFixture();
+      const report = await workerSays(fixture, "retry-report", "Do not orphan me.");
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      const release = storage.releaseDelegationHeldAgentMail.bind(storage);
+      let failRelease = true;
+      storage.releaseDelegationHeldAgentMail = async (...args) => {
+        if (failRelease) throw new Error("disk unavailable");
+        return release(...args);
+      };
+
+      await expect(fixture.coordinator.deliverDelegationWakes()).rejects.toThrow(
+        "disk unavailable",
+      );
+      let association = (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
+        (item) => item.id === fixture.associationId,
+      );
+      expect(association?.delegation?.wokenAt).toBeUndefined();
+      expect(association?.delegation?.wakeKind).toBe("report");
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+
+      failRelease = false;
+      await fixture.coordinator.deliverDelegationWakes();
+      association = (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
+        (item) => item.id === fixture.associationId,
+      );
+      expect(association?.delegation?.wokenAt).toBeDefined();
+      expect(
+        (await storage.listPendingAgentMailInjects()).filter(
+          ({ message }) => message.id === report.id,
+        ),
+      ).toHaveLength(1);
+    });
+
+    test("keeps a delegation running when request-delivery state cannot be read", async () => {
+      const fixture = await delegationFixture();
+      storage.hasUndeliveredCoordinatorRequest = async () => {
+        throw new Error("mail store unavailable");
+      };
+
+      await expect(
+        fixture.coordinator.settleWorkerDelegations({
+          environmentId: fixture.workerId,
+          tabId: "startup-agent",
+          state: "completed",
+        }),
+      ).rejects.toThrow("mail store unavailable");
+      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
+        fixture.associationId,
+      ]);
     });
   });
 });

@@ -1161,22 +1161,22 @@ export class StorageAgentMail extends StorageDrafts {
        * coordinator. The message is never lost: it is readable immediately
        * through the mail tools and delivered in full on completion.
        */
-      const heldForDelegation =
-        sender.kind === "tab" &&
-        recipient.ownerKind === "coordinator" &&
-        trust === "same-project" &&
-        (await this.listOpenCoordinatorDelegations()).some(
-          (association) =>
-            association.resourceId === sender.environmentId &&
-            association.delegation?.workerTabId === sender.tabId &&
-            // The delegation has to belong to *this* conversation. A second
-            // conversation that never asked this worker for anything is not
-            // waiting on it, so holding its mail would silence a message
-            // nothing will ever release.
-            association.conversationId !== undefined &&
-            coordinatorRuntimeId(association.coordinatorId, association.conversationId) ===
-              recipient.environmentId,
-        );
+      const holdingDelegation =
+        sender.kind === "tab" && recipient.ownerKind === "coordinator" && trust === "same-project"
+          ? (await this.listOpenCoordinatorDelegations()).find(
+              (association) =>
+                association.resourceId === sender.environmentId &&
+                association.delegation?.workerTabId === sender.tabId &&
+                // The delegation has to belong to *this* conversation. A second
+                // conversation that never asked this worker for anything is not
+                // waiting on it, so holding its mail would silence a message
+                // nothing will ever release.
+                association.conversationId !== undefined &&
+                coordinatorRuntimeId(association.coordinatorId, association.conversationId) ===
+                  recipient.environmentId,
+            )
+          : undefined;
+      const heldForDelegation = Boolean(holdingDelegation);
       const shouldScheduleInject =
         (effectivePolicy === "idle" || coordinatorExchange) &&
         !recipient.mutedInbound &&
@@ -1226,6 +1226,7 @@ export class StorageAgentMail extends StorageDrafts {
                 // identity invented at that point would differ across a retry.
                 injectRequestId: `mail-inject-${id}`,
                 placementReason: COORDINATOR_DELEGATION_HOLD_REASON,
+                coordinatorDelegationId: holdingDelegation!.id,
               }
             : heldForLoopBudget
               ? { placementReason: "loop-budget-exhausted" }
@@ -1387,16 +1388,43 @@ export class StorageAgentMail extends StorageDrafts {
     });
   }
 
+  /** Whether this exact delegation has a worker report waiting to be released. */
+  async hasDelegationHeldAgentMail(
+    associationId: string,
+    coordinatorEnvironmentId: string,
+    coordinatorTabId: string,
+    workerEnvironmentId: string,
+    workerTabId: string,
+  ): Promise<boolean> {
+    const store = await this.loadAgentMailStore();
+    const mailbox = store.mailboxes[agentMailboxId(coordinatorEnvironmentId, coordinatorTabId)];
+    return Boolean(
+      mailbox?.messages.some(
+        (message) =>
+          message.placement === "inject-held" &&
+          message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
+          (message.coordinatorDelegationId === associationId ||
+            message.coordinatorDelegationId === undefined) &&
+          message.from.kind === "tab" &&
+          message.from.environmentId === workerEnvironmentId &&
+          message.from.tabId === workerTabId &&
+          !message.ackedAt &&
+          !message.discardedAt,
+      ),
+    );
+  }
+
   /**
    * Release the mail a finished worker sent while its coordinator was waiting.
    *
    * Every held message becomes deliverable at once, oldest first, so the
    * coordinator's next turn sees the whole exchange in order rather than one
-   * message now and the rest on later sweeps. Returns how many were released,
-   * because zero is what tells the caller the worker never reported and a
-   * completion notice has to be synthesized instead.
+   * message now and the rest on later sweeps. The durable delegation wake kind,
+   * recorded before this mutation, distinguishes a silent worker from a retry
+   * after an earlier pass already released the report.
    */
   async releaseDelegationHeldAgentMail(
+    associationId: string,
     coordinatorEnvironmentId: string,
     coordinatorTabId: string,
     workerEnvironmentId: string,
@@ -1413,6 +1441,8 @@ export class StorageAgentMail extends StorageDrafts {
           (message) =>
             message.placement === "inject-held" &&
             message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
+            (message.coordinatorDelegationId === associationId ||
+              message.coordinatorDelegationId === undefined) &&
             message.from.kind === "tab" &&
             message.from.environmentId === workerEnvironmentId &&
             message.from.tabId === workerTabId &&

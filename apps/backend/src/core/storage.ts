@@ -300,13 +300,7 @@ export class StorageService extends StorageKanban {
     });
   }
 
-  /**
-   * Open or re-open the delegation on an association.
-   *
-   * Re-opening is the normal case for a follow-up: the coordinator reads a
-   * worker's report and sends it more work, which is a new outstanding request
-   * against the same environment and therefore earns exactly one more wake.
-   */
+  /** Open one idempotent delegation without replacing another request. */
   async openCoordinatorDelegation(
     associationId: string,
     workerTabId: string,
@@ -317,6 +311,27 @@ export class StorageService extends StorageKanban {
       const store = await this.loadCoordinatorStore();
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association) return null;
+      if (association.delegation) {
+        if (association.delegation.workerTabId !== workerTabId) {
+          throw new Error("Coordinator request id was reused for a different worker tab");
+        }
+        // A retry of the same request must neither reset a running delegation
+        // nor reopen one that already produced its wake.
+        return association;
+      }
+      const overlapping = store.workflows.find(
+        (item) =>
+          item.id !== associationId &&
+          item.coordinatorId === association.coordinatorId &&
+          item.conversationId === association.conversationId &&
+          item.kind === "environment" &&
+          item.resourceId === association.resourceId &&
+          item.delegation?.workerTabId === workerTabId &&
+          item.delegation.state === "running",
+      );
+      if (overlapping) {
+        throw new Error("That worker tab already has an outstanding coordinator delegation");
+      }
       association.delegation = { requestedAt: at, workerTabId, state: "running" };
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
@@ -364,6 +379,28 @@ export class StorageService extends StorageKanban {
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association?.delegation || association.delegation.state !== "running") return null;
       association.delegation = { ...association.delegation, state, completedAt: at };
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      this.announce("coordinator", association.projectId, association.projectId);
+      return association;
+    });
+  }
+
+  /**
+   * Persist what kind of wake this delegation owns before performing the
+   * separate mail-store write. A retry can then distinguish an already-released
+   * report from a genuinely silent worker.
+   */
+  async prepareCoordinatorDelegationWake(
+    associationId: string,
+    wakeKind: "report" | "notice",
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.state === "running") return null;
+      if (association.delegation.wakeKind) return association;
+      association.delegation = { ...association.delegation, wakeKind };
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
       this.announce("coordinator", association.projectId, association.projectId);

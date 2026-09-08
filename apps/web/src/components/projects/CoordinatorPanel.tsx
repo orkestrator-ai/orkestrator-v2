@@ -211,25 +211,28 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * after the page was closed for an hour — the coordinator keeps waiting while
    * nobody is looking at it.
    *
-   * A worker in `waiting` is called out separately because it is the one state
-   * that will not resolve itself: it is blocked on an approval or a question,
-   * which needs a person, and it will never wake the coordinator on its own.
+   * Associations are project-wide, so the selected conversation identity is a
+   * load-bearing filter rather than presentation state.
    */
   const awaitingWorkers = useMemo(() => {
-    if (!snapshot) return [];
+    if (!snapshot || !selected) return [];
     return snapshot.workflows.flatMap((association) => {
-      if (association.delegation?.state !== "running") return [];
+      if (
+        association.coordinatorId !== snapshot.workspace.id ||
+        association.conversationId !== selected.id ||
+        association.delegation?.state !== "running"
+      )
+        return [];
       const environment = environments.find((item) => item.id === association.resourceId);
       return [
         {
           id: association.id,
           environmentId: association.resourceId,
           label: environment?.name ?? association.resourceId,
-          needsHuman: environment?.agentActivityState === "waiting",
         },
       ];
     });
-  }, [snapshot, environments]);
+  }, [snapshot, selected, environments]);
   // Scoped to the conversation that produced it, so switching tabs during
   // assignment cannot replay one conversation's first prompt into another.
   const launchForSelected =
@@ -385,15 +388,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             <span
               className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
               title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
-                .map((worker) => `${worker.label}${worker.needsHuman ? " — needs an answer" : ""}`)
+                .map((worker) => worker.label)
                 .join("\n")}`}
             >
               <Hourglass className="size-3" />
               Waiting on {awaitingWorkers.length}{" "}
               {awaitingWorkers.length === 1 ? "worker" : "workers"}
-              {awaitingWorkers.some((worker) => worker.needsHuman) ? (
-                <span className="text-amber-300">· needs an answer</span>
-              ) : null}
             </span>
           ) : null}
           <div className="min-w-3 flex-1" />

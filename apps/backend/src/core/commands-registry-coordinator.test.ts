@@ -9,6 +9,7 @@ import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -442,7 +443,12 @@ describe("coordinator command registry", () => {
         },
         context,
       ),
-    ).resolves.toMatchObject({ environment: { id: worker.id }, startError: "boot failed" });
+    ).resolves.toMatchObject({
+      environment: { id: worker.id },
+      startError: "boot failed",
+      coordinatorDelegationOpened: false,
+    });
+    expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
 
     const foreign = createEnvironment(otherProject.id, {
       name: "foreign",
@@ -461,6 +467,107 @@ describe("coordinator command registry", () => {
         context,
       ),
     ).rejects.toThrow("must stay within their project");
+  });
+
+  test("opens delegations only for scheduled mail and refuses same-tab overlap", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
+    const worker = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    worker.status = "running";
+    worker.setupPhase = "ready";
+    worker.setupScriptsComplete = true;
+    await storage.addEnvironment(worker);
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const send = commands.get("send_coordinator_agent_mail")!;
+
+    await storage.savePaneLayout(
+      worker.id,
+      {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "plain", type: "codex" }],
+          activeTabId: "plain",
+        },
+      },
+      0,
+    );
+    await storage.synchronizeAgentMailboxes();
+    const stored = await send(
+      {
+        ...scope,
+        requestId: "stored-request",
+        toEnvironmentId: worker.id,
+        toTabId: "plain",
+        body: "This tab cannot receive an agent turn.",
+      },
+      context,
+    );
+    expect(stored).toMatchObject({
+      placement: "stored",
+      coordinatorDelegationOpened: false,
+    });
+    expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+
+    await storage.savePaneLayout(
+      worker.id,
+      {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "agent",
+              type: "agent-native",
+              nativeAgentData: { environmentId: worker.id, platform: "codex" },
+            },
+          ],
+          activeTabId: "agent",
+        },
+      },
+      1,
+    );
+    await storage.synchronizeAgentMailboxes();
+    await expect(
+      send(
+        {
+          ...scope,
+          requestId: "first-request",
+          toEnvironmentId: worker.id,
+          toTabId: "agent",
+          body: "First request.",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      placement: "pending-inject",
+      coordinatorDelegationOpened: true,
+    });
+    await expect(
+      send(
+        {
+          ...scope,
+          requestId: "overlapping-request",
+          toEnvironmentId: worker.id,
+          toTabId: "agent",
+          body: "Second request.",
+        },
+        context,
+      ),
+    ).rejects.toThrow("already has an outstanding");
+    expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
   });
 
   test("retires session, credential, bridge, and mailbox before closing a conversation", async () => {

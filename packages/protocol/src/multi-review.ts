@@ -35,17 +35,19 @@ export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
 /**
- * Ends the schema contract from preparation/consolidation when their session
+ * Ends the automated preparation/consolidation contract when their session
  * becomes an ordinary, user-facing Fix conversation.
  *
  * Multi Review deliberately reuses that session so the model retains the
- * review context. The provider schema is per turn, but the earlier prompt is
- * still conversation history and models can keep obeying its JSON-only final
- * response instruction unless the interactive handoff supersedes it.
+ * review context. Provider settings are per turn, but earlier prompt
+ * instructions remain in conversation history and can keep constraining the
+ * model unless the interactive handoff supersedes them.
  */
 export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
   "This is now a manual interactive Fix conversation, not an automated pipeline stage. " +
   "Any JSON-only or structured-output contract from earlier turns has ended and does not apply to this turn or later replies. " +
+  "Earlier review-stage instructions not to edit files, run commands, or fix findings have also ended and no longer apply. " +
+  "Implement the requested fixes, run relevant validation, and commit every relevant change. " +
   "When you finish, respond in ordinary Markdown prose with a concise summary and validation results. Do not return JSON unless the user explicitly asks for JSON.";
 export const MULTI_REVIEW_ADDRESS_PROMPT =
   "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.\n\n" +

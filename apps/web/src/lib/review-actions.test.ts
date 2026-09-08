@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-actions";
 
@@ -10,12 +13,21 @@ const report = {
 } as StructuredReviewReport;
 
 describe("multiReviewCustomFixPrompt", () => {
-  test("makes Address all an ordinary interactive response after structured review turns", () => {
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toStartWith(
+  test("keeps generic Address all independent of the Multi Review handoff", () => {
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toBe(
       "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
     );
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("respond in ordinary Markdown prose");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(MULTI_REVIEW_ADDRESS_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+  });
+
+  test("retires both structured-output and read-only review-stage constraints", () => {
+    expect(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION).toContain(
+      "instructions not to edit files, run commands, or fix findings have also ended",
+    );
+    expect(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION).toContain(
+      "Implement the requested fixes, run relevant validation, and commit every relevant change.",
+    );
   });
 
   test("frames actionable report evidence and appends the custom instruction", () => {
@@ -27,6 +39,10 @@ describe("multiReviewCustomFixPrompt", () => {
     expect(prompt).toContain("Complete consolidated report");
     expect(prompt).toContain("User-provided fix instructions:\nPreserve the existing API");
     expect(prompt).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(prompt.split(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)).toHaveLength(2);
+    expect(prompt.indexOf(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)).toBeGreaterThan(
+      prompt.indexOf("</structured-review-findings-json>"),
+    );
   });
 
   test("escapes marker-shaped strings inside untrusted evidence", () => {

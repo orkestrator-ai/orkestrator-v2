@@ -396,6 +396,50 @@ describe("hideMachineOutputText", () => {
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([prose]);
   });
 
+  test("removes a trailing system dataset appended to commentary", () => {
+    const commentary = "The tree is clean. Validation will run as separate commands.";
+    const dataset = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "check", command: "bun run check" }],
+    });
+    const combined = `${commentary} ${dataset}`;
+    const messages = hideMachineOutputText(
+      [
+        {
+          id: "preparation",
+          role: "assistant",
+          content: combined,
+          parts: [{ type: "text", content: combined }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(commentary);
+    expect(messages[0]?.parts).toEqual([{ type: "text", content: commentary }]);
+  });
+
+  test("keeps inline JSON and JSON followed by commentary", () => {
+    const inline = 'The config {"strict":true} is correct.';
+    const messages = hideMachineOutputText(
+      [
+        {
+          id: "inline",
+          role: "assistant",
+          content: inline,
+          parts: [{ type: "text", content: inline }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(messages[0]?.content).toBe(inline);
+    expect(messages[0]?.parts[0]?.content).toBe(inline);
+  });
+
   test("never withholds the user's own text", () => {
     const prompt = '{"instruction":"review this"}';
     const messages = hideMachineOutputText([

@@ -631,6 +631,39 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
+  test("hides a backend structured dataset from a workflow transcript", async () => {
+    renderVirtualizedMessages = true;
+    const commentary = "The tree is clean. Validation will run as separate commands.";
+    const dataset = JSON.stringify({ headRef: "a".repeat(40), commands: [{ id: "check" }] });
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "preparation-result",
+          role: "assistant" as const,
+          content: `${commentary} ${dataset}`,
+          parts: [{ type: "text" as const, content: `${commentary} ${dataset}` }],
+          createdAt: "2026-09-08T20:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="multi-review-review:workflow-1"
+        data={identity("cursor")}
+        isActive
+        hideStructuredOutput
+      />,
+    );
+
+    expect(await screen.findByText(commentary)).toBeTruthy();
+    expect(screen.queryByText(dataset)).toBeNull();
+    expect(screen.getByTestId("native-agent-transcript-test-list").textContent).not.toContain(
+      '"headRef"',
+    );
+  });
+
   test("routes questions and plan reviews into the transcript while action approvals stay pinned", async () => {
     renderVirtualizedMessages = true;
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({

@@ -48,6 +48,8 @@ export interface CreateTabOptions {
   displayTitle?: string;
   /** True when the tab was launched from the review workflow. */
   isReviewTab?: boolean;
+  /** Hide schema-constrained machine datasets while retaining transcript commentary. */
+  hideStructuredOutput?: boolean;
   /** Optional one-shot agent launch mode that overrides repository/global defaults. */
   agentLaunchMode?: AgentLaunchModeOverride;
   /** Optional one-shot model selection for this agent tab. */

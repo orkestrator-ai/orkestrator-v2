@@ -127,21 +127,43 @@ function showOnlyFinalPayloadMessage(
  */
 export function hideMachineOutputText(
   messages: NativeMessage[],
-  options: { retainPayloadKind?: JsonPayload["kind"] } = {},
+  options: {
+    retainPayloadKind?: JsonPayload["kind"];
+    /** ACP-style providers can append the final dataset to a prose text part. */
+    stripTrailingPayload?: boolean;
+  } = {},
 ): NativeMessage[] {
-  const { retainPayloadKind } = options;
+  const { retainPayloadKind, stripTrailingPayload = false } = options;
   const isWithheld = (text: string): boolean => {
     if (!isWithheldMachineOutput(text)) return false;
     return retainPayloadKind === undefined || !isPayloadKind(text, retainPayloadKind);
   };
+  const visibleText = (text: string): string => {
+    if (isWithheld(text)) return "";
+    return stripTrailingPayload ? withoutTrailingJsonPayload(text) : text;
+  };
   return messages.flatMap((message) => {
     if (message.role !== "assistant") return [message];
-    const parts = message.parts.filter((part) => part.type !== "text" || !isWithheld(part.content));
+    let partsChanged = false;
+    const parts: NativeMessage["parts"] = [];
+    for (const part of message.parts) {
+      if (part.type !== "text") {
+        parts.push(part);
+        continue;
+      }
+      const content = visibleText(part.content);
+      if (content === part.content) {
+        parts.push(part);
+        continue;
+      }
+      partsChanged = true;
+      if (content) parts.push({ ...part, content });
+    }
     // `content` mirrors the provider's last text part, so it is withheld on the
     // same terms; a message rendered from `content` alone would otherwise put
     // the document straight back on screen.
-    let content = isWithheld(message.content) ? "" : message.content;
-    if (parts.length !== message.parts.length && content === message.content) {
+    let content = visibleText(message.content);
+    if (partsChanged && content === message.content) {
       // Persisted pipeline adapters can concatenate every text part into
       // `content`, so a prose update followed by machine output is neither a
       // standalone document nor safe to retain verbatim. Once a part was
@@ -151,12 +173,40 @@ export function hideMachineOutputText(
         .map((part) => part.content)
         .join("");
     }
-    if (parts.length === message.parts.length && content === message.content) {
+    if (!partsChanged && content === message.content) {
       return [message];
     }
     const filtered = { ...message, content, parts };
     return hasMessageContent(filtered) ? [filtered] : [];
   });
+}
+
+/**
+ * Remove a complete JSON value appended to prose in the same provider text
+ * part. Requiring the value to occupy the entire suffix keeps inline examples
+ * and JSON followed by commentary visible. Candidate starts must follow
+ * whitespace, which skips nested values and bounds parsing to outer documents.
+ */
+function withoutTrailingJsonPayload(text: string): string {
+  const trimmed = text.trimEnd();
+  const final = trimmed.at(-1);
+  if (final !== "}" && final !== "]") return text;
+  const firstCandidate = Math.max(0, trimmed.length - 1024 * 1024);
+  let candidates = 0;
+  for (let index = trimmed.length - 1; index >= firstCandidate; index -= 1) {
+    const character = trimmed[index];
+    if (character !== "{" && character !== "[") continue;
+    if (index > 0 && !/\s/.test(trimmed[index - 1]!)) continue;
+    candidates += 1;
+    if (candidates > 256) break;
+    try {
+      JSON.parse(trimmed.slice(index));
+      return trimmed.slice(0, index).trimEnd();
+    } catch {
+      // A nested or prose brace is not the root of the trailing dataset.
+    }
+  }
+  return text;
 }
 
 /**

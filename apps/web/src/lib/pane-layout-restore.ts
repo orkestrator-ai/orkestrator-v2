@@ -106,6 +106,9 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     id,
     displayTitle: optionalString(value.displayTitle),
     isReviewTab: optionalBoolean(value.isReviewTab),
+    ...(typeof value.hideStructuredOutput === "boolean"
+      ? { hideStructuredOutput: value.hideStructuredOutput }
+      : {}),
     initialAgentModel: optionalString(value.initialAgentModel),
     initialReasoningEffort: optionalString(value.initialReasoningEffort),
     initialConversationMode,

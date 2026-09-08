@@ -149,6 +149,8 @@ export interface TabInfo {
   displayTitle?: string;
   /** True when the tab was launched from the review workflow. */
   isReviewTab?: boolean;
+  /** Presentation-only: structured result datasets are not transcript commentary. */
+  hideStructuredOutput?: boolean;
   /** One-shot model selected when the agent tab was created. */
   initialAgentModel?: string;
   /** One-shot reasoning effort or provider variant selected at creation. */

@@ -12,6 +12,7 @@ export interface AgentNativeTabProps {
   ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  hideStructuredOutput?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";

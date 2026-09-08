@@ -386,13 +386,23 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const misePin = getMiseToolVersion("bun");
     const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
     const baseImageTag = getDockerfileBaseImageTag();
-    const dockerfile = read("docker/Dockerfile");
+    const dockerfile = dockerfileInstructions();
 
     expect(hostPin).toBe(misePin);
     expect(baseImageTag).toBe(`${misePin}-debian`);
     expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
     expect(dockerfile).toContain(`mise where bun@${misePin}`);
     expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);
+    expect(dockerfile).toContain('test -x "$BUN_INSTALL_DIR/bin/bun"');
+    expect(
+      dockerfile.match(
+        new RegExp(
+          `test "\\$\\(/usr/local/bin/bun --version\\)" = "${misePin.replaceAll(".", "\\.")}"`,
+          "g",
+        ),
+      ),
+    ).toHaveLength(2);
+    expect(dockerfile).toContain(`test "$(/usr/local/bin/bunx --version)" = "${misePin}"`);
   });
 
   test("Bun: host download script pins an exact version, not `latest`", () => {
@@ -410,6 +420,17 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(rootPackage.packageManager).toBe(`bun@${misePin}`);
     expect(cliPackage.engines?.bun).toBe(`>=${misePin}`);
+  });
+
+  test("Bun: onboarding works without preconfigured mise shell activation", () => {
+    const readme = read("README.md");
+
+    expect(readme).toContain("mise install");
+    expect(readme).toContain("mise exec -- bun install");
+    expect(readme).toContain("mise exec -- bun run dev");
+    expect(readme).toContain("mise exec -- bun run package:mac");
+    expect(readme).toContain("mise exec -- bun run package:release");
+    expect(readme).toContain("mise exec -- bun run package:linux");
   });
 
   test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
@@ -468,6 +489,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     for (const source of [workflow, lintWorkflow]) {
       expect(source).toContain("uses: jdx/mise-action@");
       expect(source).not.toContain("oven-sh/setup-bun@");
+      expect(source).toContain('run: test "$(bun --version)" = "$(mise current bun)"');
     }
     expect(workflow.match(/- "mise\.toml"/g)).toHaveLength(2);
     expect(workflow).toContain("run: ./scripts/download-bun.sh");

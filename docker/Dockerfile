@@ -337,7 +337,10 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
   mise install --system bun@1.4.2 && \
-  ln -sf "$(mise where bun@1.4.2)/bin/bun" /usr/local/bin/bun && \
+  BUN_INSTALL_DIR="$(mise where bun@1.4.2)" && \
+  test -x "$BUN_INSTALL_DIR/bin/bun" && \
+  ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.2" && \
   mise exec bun@1.4.2 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
@@ -351,7 +354,9 @@ ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
 USER node
 WORKDIR /workspace
-RUN printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
+RUN test "$(/usr/local/bin/bun --version)" = "1.4.2" \
+ && test "$(/usr/local/bin/bunx --version)" = "1.4.2" \
+ && printf '%s\n' '[env]' 'ORKESTRATOR_MISE_TRUST_SMOKE = "trusted"' > mise.toml \
  && zsh -ic 'command -v mise >/dev/null && typeset -f _mise_hook >/dev/null && test "$ORKESTRATOR_MISE_TRUST_SMOKE" = trusted && mise --version' \
  && rm mise.toml
 

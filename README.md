@@ -47,14 +47,14 @@ cd orkestrator-ai
 # Install the tool versions pinned in mise.toml
 mise install
 
-# Install dependencies
-bun install
+# Install dependencies with the repository-pinned Bun
+mise exec -- bun install
 
 # Build the Docker base image (required for container functionality)
 docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 
-# Run the application
-bun run dev
+# Run the application with the repository-pinned Bun
+mise exec -- bun run dev
 ```
 
 ### Packaging the desktop app
@@ -65,14 +65,14 @@ For a fast local build, package and install the unpacked app with local ad-hoc
 signing, without Apple Developer ID signing, notarization, or DMG creation:
 
 ```bash
-bun run package:mac
+mise exec -- bun run package:mac
 ```
 
 For a distributable DMG, opt into both Developer ID signing and Apple
 notarization:
 
 ```bash
-bun run package:release
+mise exec -- bun run package:release
 ```
 
 The release command relies on electron-builder's standard signing identity and
@@ -84,7 +84,7 @@ required certificate or notarization credentials are unavailable.
 Package and install the app for the current user:
 
 ```bash
-bun run package:linux
+mise exec -- bun run package:linux
 ```
 
 The Linux installer uses the freedesktop/XDG layout. It installs the unpacked

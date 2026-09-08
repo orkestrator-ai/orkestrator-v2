@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { summarizeValue, truncateUtf8 } from "../bounded-test-diagnostics";
+import { expectDomAbsent, summarizeValue, truncateUtf8 } from "../bounded-test-diagnostics";
 import {
   DOM_SCALAR_METHODS,
   DOM_SCALAR_PROPERTIES,
@@ -281,6 +281,23 @@ describe("bounded test diagnostics", () => {
     expect(output).toContain('<button aria-label="Context window">');
     expect(output).not.toContain("react-stack-top-frame");
   }, 10_000);
+
+  test("reports an unexpected DOM element without serializing its subtree", () => {
+    const element = buildFixtureElement(400);
+
+    expect(() => expectDomAbsent(element, "inactive tab marker")).toThrow(
+      'inactive tab marker: expected no matching element; received <div id="fixture">',
+    );
+    try {
+      expectDomAbsent(element, "inactive tab marker");
+      throw new Error("expected expectDomAbsent to fail");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(Buffer.byteLength(message, "utf8")).toBeLessThan(MAX_EXEMPT_PROJECTION_BYTES * 2);
+      expect(message).toContain('id="fixture"');
+      expect(message).not.toContain("row 399 content");
+    }
+  });
 
   test("keeps Node-only console diagnostics below the same byte budget", async () => {
     const child = Bun.spawn(

@@ -5,6 +5,7 @@ import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/consta
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
+import { COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION } from "@orkestrator/protocol/coordinator";
 import {
   DEFAULT_TERMINAL_HISTORY_ENABLED,
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
@@ -87,6 +88,7 @@ const DEFAULT_CONFIG: AppConfig = {
       "cdn.playwright.dev",
     ],
     enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
+    coordinatorProviderTierDefaultVersion: COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
     favoriteModels: [],
     // Mirrors `defaultConfig()` in the backend, which is the source of truth.
     agentSettings: {

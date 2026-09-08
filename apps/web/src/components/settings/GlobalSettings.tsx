@@ -6,6 +6,7 @@ import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
+import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
 import { useTimedCopyFeedback } from "@/hooks";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type {
@@ -102,6 +103,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.allowedDomains ?? [],
     global.preferredEditor ?? "vscode",
     global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
+    global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     global.terminalAppearance?.fontFamily ?? "",
@@ -163,7 +165,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [coordinatorProviderTiers, setCoordinatorProviderTiers] = useState<
     "enforced" | "provider-configured" | "advisory"
-  >(global.coordinatorProviderTiers ?? "enforced");
+  >(global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER);
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
@@ -280,6 +282,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
+    setCoordinatorProviderTiers(
+      global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    );
     setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setCodexMaxConcurrentThreads(
@@ -435,6 +440,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       preferredEditor !== (global.preferredEditor || "vscode") ||
       JSON.stringify(enabledAgentPlatforms) !==
         JSON.stringify(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) ||
+      coordinatorProviderTiers !==
+        (global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER) ||
       JSON.stringify(agentSettings) !==
         JSON.stringify(normalizeAgentSettings(global.agentSettings)) ||
       JSON.stringify(openCodeModelProviders) !==
@@ -810,6 +817,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
+    setCoordinatorProviderTiers(
+      global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    );
     setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setOpenCodeProviderDraft("");

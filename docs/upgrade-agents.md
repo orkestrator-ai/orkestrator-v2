@@ -440,9 +440,20 @@ hermetic `codex exec` exception.
      bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
    ```
 
-   The live contract tests do not call a model or spend credits. They verify
-   initialization order, method errors, model pagination/order, thread listing
-   and reads, thread naming, project-trust behavior, and clean process shutdown.
+   The default live contract tests do not call a model or spend credits. They
+   verify initialization order, method errors, model pagination/order, thread
+   listing and reads, thread naming, MCP configuration acceptance,
+   project-trust behavior, and clean process shutdown. Run the separately gated
+   approval canary when an upgrade could affect MCP tool approval semantics; it
+   copies the local auth file and spends one short model turn:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     RUN_LIVE_CODEX_MCP_APPROVAL_CANARY=1 \
+     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
+   ```
+
    Codex 0.153.3 defaults new durable threads to paginated history and eagerly
    writes their rollout header, but `thread/read(includeTurns=true)` returns
    `list_turns is not supported yet` until the first user message indexes the

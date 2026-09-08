@@ -83,7 +83,26 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.required": "false",
       "mcp_servers.orkestrator.startup_timeout_sec": "3",
     });
+    expect(overrides["mcp_servers.orkestrator.default_tools_approval_mode"]).toBeUndefined();
     expect(JSON.stringify(overrides)).not.toContain("project-secret");
+  });
+
+  // Codex refuses an MCP tool that is not annotated read-only when the thread
+  // runs `approvalPolicy: "never"` without full disk write, which is exactly a
+  // coordinator. Losing this key does not degrade delegation, it removes it:
+  // `launch_environment` fails before the backend ever sees the request.
+  test("keeps mutating control tools dispatchable under a read-only coordinator", () => {
+    const overrides = codexAppServerConfigOverrides({
+      ...COORDINATOR_ENV,
+      [ORKESTRATOR_AGENT_MCP_URL_ENV]: "http://127.0.0.1:4567/mcp",
+      [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
+    });
+
+    expect(overrides["mcp_servers.orkestrator.default_tools_approval_mode"]).toBe('"approve"');
+    // Approving the backend's control surface must not have relaxed the
+    // enforcement that makes the checkout itself read-only.
+    expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
+    expect(overrides["permissions.coordinator-conversation-1.filesystem"]).not.toContain('"write"');
   });
 
   test("keeps coordinator credentials out of model-created execution environments", () => {

@@ -14,6 +14,7 @@ import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 describe("project coordinator", () => {
   let root: string;
@@ -302,10 +303,13 @@ describe("project coordinator", () => {
 
   test("an unqualified repository default no longer errors the whole workspace", async () => {
     const config = await storage.loadConfig();
-    await storage.updateGlobalConfig({
+    const global = {
       ...config.global,
-      agentSettings: { ...config.global.agentSettings, defaultAgent: "grok" },
-    });
+      enabledAgentPlatforms: ["cursor", "grok", "opencode"] satisfies AgentPlatform[],
+      agentSettings: { ...config.global.agentSettings, defaultAgent: "grok" as const },
+    };
+    delete global.coordinatorProviderTiers;
+    await storage.saveConfig({ ...config, global });
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),
     );
@@ -319,13 +323,17 @@ describe("project coordinator", () => {
     expect(initial.workspace.lastStartupError).toBeUndefined();
     // Grok is not qualified at the default safety level, so the composer
     // preselects something that is rather than offering a dead end.
-    expect(await service.preferredAgent(project.id)).not.toBe("grok");
+    expect(await service.preferredAgent(project.id)).toBe("cursor");
     expect(initial.providerAvailability.grok).toMatchObject({
       tier: "advisory",
       available: false,
     });
-    expect(initial.providerAvailability.codex).toMatchObject({
-      tier: "enforced",
+    expect(initial.providerAvailability.cursor).toMatchObject({
+      tier: "provider-configured",
+      available: true,
+    });
+    expect(initial.providerAvailability.opencode).toMatchObject({
+      tier: "provider-configured",
       available: true,
     });
   });

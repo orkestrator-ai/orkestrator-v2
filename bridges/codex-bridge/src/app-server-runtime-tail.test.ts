@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MAX_PENDING_EVENTS_PER_TURN, MAX_PENDING_TURNS } from "./app-server-runtime.js";
+import { accountUsageFromLimits } from "./app-server-runtime-base.js";
 import type { EngineEvent } from "./engine/types.js";
 import { persistSessionTitle } from "./session-titles.js";
 
@@ -9,6 +10,27 @@ import {
   harness,
   threadPayload,
 } from "./app-server-runtime-test-harness.js";
+
+test("account limits use descriptive duration labels and preserve credit formatting", () => {
+  expect(
+    accountUsageFromLimits(
+      [
+        {
+          slot: "primary",
+          label: "Primary",
+          usedPercent: 10,
+          windowMinutes: 10_080,
+        },
+        { slot: "secondary", label: "Secondary", usedPercent: 20 },
+      ],
+      { balance: "12.50", hasCredits: true },
+    ),
+  ).toEqual([
+    { window: "primary", label: "Weekly limit", usedPercent: 10 },
+    { window: "secondary", label: "Secondary limit", usedPercent: 20 },
+    { window: "credits", label: "Credits", creditBalance: "12.50" },
+  ]);
+});
 
 describe("ordered event backpressure", () => {
   test("bounds a slow-render queue and emits explicit authoritative reconciliation", async () => {
@@ -618,8 +640,8 @@ describe("usage and account rate limits", () => {
           usedPercent: 60,
           resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
         },
-        { window: "secondary", label: "Secondary", usedPercent: 20 },
-        { window: "credits", label: "Credits", creditsRemaining: 12.5 },
+        { window: "secondary", label: "Secondary limit", usedPercent: 20 },
+        { window: "credits", label: "Credits", creditBalance: "12.50" },
       ],
     });
 

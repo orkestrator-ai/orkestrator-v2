@@ -118,7 +118,9 @@ export function createMultiReviewPreparationPrompt(input: {
 }): string {
   return (
     createReviewPreparationPrompt({ ...input, round: 1 }) +
-    "\n\nPrepare the existing change for Multi Review. Do not implement new features or fix review findings. Do not push, merge, rebase, reset, switch branches, or create another worktree. Narrate preparation progress in ordinary prose; return preparation metadata only in the final result."
+    // The interim-update contract lives in the shared preparation prompt, so
+    // this tail only adds what is specific to a hand-started Multi Review.
+    "\n\nPrepare the existing change for Multi Review. Do not implement new features or fix review findings. Do not push, merge, rebase, reset, switch branches, or create another worktree."
   );
 }
 

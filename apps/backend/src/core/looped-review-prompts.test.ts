@@ -126,6 +126,27 @@ describe("backend looped-review prompt contracts", () => {
     expect(prompt).toContain("Preserve state");
   });
 
+  test("keeps schema-constrained preparation progress in prose", () => {
+    // A preparation turn runs for minutes in a watchable tab. Codex answered
+    // one by re-drafting the enforced metadata after every command, and the
+    // viewer folded each draft into a collapsed JSON card, so the round looked
+    // silent while it was committing and validating.
+    const prompt = createReviewPreparationPrompt({
+      round: 1,
+      packageId: "package-1",
+      targetBranch: "main",
+    });
+
+    expect(prompt).toContain("## Output contract");
+    expect(prompt).toContain("The enforced schema applies to your final response only");
+    expect(prompt).toContain("Never send a JSON object or array as an interim update");
+    expect(prompt).toContain("do not wrap progress in schema field names");
+    expect(prompt).toContain(
+      "a message that begins with `{` or `[` is folded away as machine output",
+    );
+    expect(prompt).toContain("make the final assistant response the only JSON object");
+  });
+
   test("omits absent context and keeps package values subordinate in discovery", () => {
     const preparation = createReviewPreparationPrompt({
       round: 1,

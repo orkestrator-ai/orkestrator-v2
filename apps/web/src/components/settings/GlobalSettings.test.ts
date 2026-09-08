@@ -29,6 +29,17 @@ describe("global settings synchronization", () => {
     expect(globalFormSignature(configured)).not.toBe(globalFormSignature(current));
   });
 
+  test("tracks the coordinator safety level", () => {
+    const current = globalConfig();
+    expect(globalFormSignature({ ...current, coordinatorProviderTiers: "enforced" })).not.toBe(
+      globalFormSignature(current),
+    );
+    // Absent and the default spelled out are the same choice.
+    expect(
+      globalFormSignature({ ...current, coordinatorProviderTiers: "provider-configured" }),
+    ).toBe(globalFormSignature(current));
+  });
+
   test("tracks the durable terminal-history opt-out", () => {
     const current = globalConfig();
     expect(globalFormSignature({ ...current, terminalHistoryEnabled: false })).not.toBe(

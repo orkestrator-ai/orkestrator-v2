@@ -64,6 +64,50 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices?.[0]?.occurrences).toHaveLength(2);
   });
 
+  test("groups Codex notices by their structured condition identity", () => {
+    const summary = bridgeRuntimeSummary({
+      engine: {},
+      notices: [
+        {
+          id: "mcp:t1:github",
+          subject: "github",
+          method: "mcpServer/startupStatus/updated",
+          message: "github MCP failed to start",
+          severity: "error",
+          detail: "first",
+        },
+        {
+          id: "mcp:t1:github",
+          subject: "github",
+          method: "mcpServer/startupStatus/updated",
+          message: "github MCP failed to start",
+          severity: "error",
+          detail: "second",
+        },
+        {
+          id: "mcp:t1:docs",
+          subject: "docs",
+          method: "mcpServer/startupStatus/updated",
+          message: "docs MCP failed to start",
+          severity: "error",
+        },
+      ],
+    })!;
+
+    expect(summary.notices).toHaveLength(2);
+    expect(summary.notices?.[0]).toMatchObject({
+      id: "mcp:t1:github",
+      subject: "github",
+      count: 2,
+    });
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toContainEqual({
+      kind: "advisory",
+      message: "github MCP failed to start",
+      severity: "error",
+      occurrenceId: "mcp:t1:github",
+    });
+  });
+
   test("preserves Codex notice severity while keeping both out of the tab", () => {
     const summary = bridgeRuntimeSummary({
       engine: {},

@@ -2158,6 +2158,60 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText("notice two")).toBeTruthy();
   });
 
+  test("keeps routine information out of the notice stack and styles errors as errors", async () => {
+    seedCodex();
+    seedCodexProjection({
+      notices: [
+        { method: "inventory", message: "MCP inventory refreshed", severity: "info" },
+        {
+          id: "mcp:t1:github",
+          method: "mcpServer/startupStatus/updated",
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+      ],
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("github MCP failed to start")).toBeTruthy());
+    expect(screen.queryByText("MCP inventory refreshed") === null).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Show details for github MCP failed to start" }).className,
+    ).toContain("border-destructive");
+  });
+
+  test("opens the selected notice when legacy messages share a method", async () => {
+    seedCodex();
+    seedCodexProjection({
+      notices: [
+        {
+          method: "same/method",
+          message: "same message",
+          severity: "warning",
+          occurrences: [{ detail: "warning detail" }],
+        },
+        {
+          method: "same/method",
+          message: "same message",
+          severity: "error",
+          occurrences: [{ detail: "error detail" }],
+        },
+      ],
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    const triggers = await screen.findAllByRole("button", {
+      name: "Show details for same message",
+    });
+    expect(triggers).toHaveLength(2);
+    fireEvent.click(triggers[1]!);
+    expect(screen.getByRole("dialog", { name: "Codex Native runtime error" })).toBeTruthy();
+    expect(screen.getByText("error detail")).toBeTruthy();
+    expect(screen.queryByText("warning detail") === null).toBe(true);
+  });
+
   test("shows a repeated notice's total count and its retained occurrences", async () => {
     // Grouping happens in the bridge recorder and again in the backend; the
     // panel renders the group it is handed.

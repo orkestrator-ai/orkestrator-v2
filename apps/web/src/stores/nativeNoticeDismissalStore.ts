@@ -12,6 +12,7 @@ interface NativeNoticeDismissalSession {
 interface NativeNoticeDismissalState {
   sessions: NativeNoticeDismissalSession[];
   dismiss: (sessionIdentity: string, occurrenceId: string) => void;
+  reconcile: (sessionIdentity: string, activeOccurrenceIds: readonly string[]) => void;
   clear: () => void;
 }
 
@@ -44,6 +45,25 @@ export const useNativeNoticeDismissalStore = create<NativeNoticeDismissalState>(
               ...otherSessions.slice(-(MAX_DISMISSED_NOTICE_SESSIONS - 1)),
               { sessionIdentity, occurrenceIds },
             ],
+          };
+        }),
+      reconcile: (sessionIdentity, activeOccurrenceIds) =>
+        set((state) => {
+          const previous = state.sessions.find(
+            (session) => session.sessionIdentity === sessionIdentity,
+          );
+          if (!previous) return state;
+          const active = new Set(activeOccurrenceIds);
+          const occurrenceIds = previous.occurrenceIds.filter((id) => active.has(id));
+          if (occurrenceIds.length === previous.occurrenceIds.length) return state;
+          const otherSessions = state.sessions.filter(
+            (session) => session.sessionIdentity !== sessionIdentity,
+          );
+          return {
+            sessions:
+              occurrenceIds.length > 0
+                ? [...otherSessions, { sessionIdentity, occurrenceIds }]
+                : otherSessions,
           };
         }),
       clear: () => set({ sessions: [] }),

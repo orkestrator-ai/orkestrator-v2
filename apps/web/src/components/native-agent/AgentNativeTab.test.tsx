@@ -5394,6 +5394,50 @@ describe("AgentNativeTab", () => {
       ).toBeTruthy();
     });
 
+    test("keeps a repeated active condition dismissed until a clean snapshot retires it", async () => {
+      const tabId = "tab-stable-notice-lifecycle";
+      const notice = {
+        kind: "advisory" as const,
+        message: "github MCP failed to start",
+        severity: "error" as const,
+        occurrenceId: "mcp:thread-1:github",
+      };
+      seedProjection({ sessionId: "session-a", notices: [notice] });
+
+      const view = render(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
+      );
+
+      seedProjection({ sessionId: "session-a", notices: [notice] });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+      );
+      expect(screen.queryByText("github MCP failed to start") === null).toBe(true);
+
+      seedProjection({ sessionId: "session-a", notices: [] });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+      );
+      await waitFor(() =>
+        expect(
+          useNativeNoticeDismissalStore
+            .getState()
+            .sessions.some((session) => session.sessionIdentity.includes("session-a")),
+        ).toBe(false),
+      );
+
+      seedProjection({ sessionId: "session-a", notices: [notice] });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={3} />,
+      );
+      expect(
+        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
+      ).toBeTruthy();
+    });
+
     test("routes a running-turn /steer to the session action instead of the queue", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       render(<AgentNativeTab tabId="tab-steer" data={identity("codex")} isActive />);

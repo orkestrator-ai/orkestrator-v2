@@ -872,6 +872,10 @@ export type NativeAgentNoticeSource = (typeof NATIVE_AGENT_NOTICE_SOURCES)[numbe
 
 export interface NativeAgentRuntimeNotice {
   message: string;
+  /** Stable identity for one currently authoritative runtime condition. */
+  id?: string;
+  /** Short provider-owned object name, such as the MCP server that failed. */
+  subject?: string;
   method?: string;
   count?: number;
   /**

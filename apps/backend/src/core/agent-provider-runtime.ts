@@ -393,6 +393,9 @@ export function normalizeProviderRuntimeNotices(value: unknown): NativeAgentRunt
     const item = asRecord(candidate);
     const message = item?.message;
     if (!item || typeof message !== "string" || message.length === 0) continue;
+    const id = typeof item.id === "string" && item.id ? item.id.slice(0, 256) : undefined;
+    const subject =
+      typeof item.subject === "string" && item.subject ? item.subject.slice(0, 256) : undefined;
     const method = typeof item.method === "string" && item.method ? item.method : undefined;
     const count = item.count;
     const severity = NATIVE_AGENT_NOTICE_SEVERITIES.includes(
@@ -423,6 +426,8 @@ export function normalizeProviderRuntimeNotices(value: unknown): NativeAgentRunt
       : [];
     notices.push({
       message: message.slice(0, 1_000),
+      ...(id ? { id } : {}),
+      ...(subject ? { subject } : {}),
       ...(method ? { method: method.slice(0, 128) } : {}),
       ...(typeof count === "number" && Number.isSafeInteger(count) && count > 1
         ? { count: Math.min(count, 1_000_000) }
@@ -445,7 +450,7 @@ export function normalizeProviderRuntimeNotices(value: unknown): NativeAgentRunt
  * composer put a dismissable banner in front of the transcript for a condition
  * the user cannot act on mid-turn. An `error` still crosses because it says the
  * session in front of the user is broken. Bounded to five and deduplicated by
- * message, because these are appended to a projection a renderer holds for the
+ * stable condition identity, because these are appended to a projection a renderer holds for the
  * life of a session.
  */
 export function providerAdvisoryNotices(
@@ -456,14 +461,17 @@ export function providerAdvisoryNotices(
   for (const notice of notices) {
     if (notice.severity !== "error") continue;
     const latestOccurrence = notice.occurrences?.at(-1);
-    const occurrenceId = latestOccurrence?.receivedAt
-      ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000${latestOccurrence.receivedAt}\u0000${notice.count ?? 1}`
-      : notice.count !== undefined
-        ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000count:${notice.count}`
-        : undefined;
+    const occurrenceId =
+      notice.id ??
+      (latestOccurrence?.receivedAt
+        ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000${latestOccurrence.receivedAt}\u0000${notice.count ?? 1}`
+        : notice.count !== undefined
+          ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000count:${notice.count}`
+          : undefined);
+    const key = notice.id ?? notice.message;
     // Reinsert replacements so the bound follows the most recent occurrence.
-    advisories.delete(notice.message);
-    advisories.set(notice.message, {
+    advisories.delete(key);
+    advisories.set(key, {
       kind: "advisory" as const,
       message: notice.message,
       severity: "error",

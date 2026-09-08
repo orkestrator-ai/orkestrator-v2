@@ -108,6 +108,12 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
       const message = item?.message;
       if (typeof message !== "string" || message.length === 0) continue;
       const bounded = message.slice(0, 1_000);
+      const id =
+        typeof item?.id === "string" && item.id.length > 0 ? item.id.slice(0, 256) : undefined;
+      const subject =
+        typeof item?.subject === "string" && item.subject.length > 0
+          ? item.subject.slice(0, 256)
+          : undefined;
       const method =
         typeof item?.method === "string" && item.method.length > 0
           ? item.method.slice(0, 128)
@@ -121,7 +127,7 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
       // updates and actionable failures deliberately share Codex's generic
       // method-derived message. Combining them would either hide the failure or
       // make later inventory look like a new error occurrence.
-      const key = `${method ?? ""}\u0000${bounded}\u0000${severity}`;
+      const key = id ?? `${method ?? ""}\u0000${bounded}\u0000${severity}`;
       const existing = groupedNotices.get(key);
       const detail =
         typeof item?.detail === "string" && item.detail.length > 0
@@ -142,6 +148,8 @@ export function bridgeRuntimeSummary(payload: unknown): NativeAgentRuntimeSummar
       if (existing) groupedNotices.delete(key);
       groupedNotices.set(key, {
         message: bounded,
+        ...(id ? { id } : {}),
+        ...(subject ? { subject } : {}),
         ...(method ? { method } : {}),
         count: (existing?.count ?? 0) + 1,
         severity,

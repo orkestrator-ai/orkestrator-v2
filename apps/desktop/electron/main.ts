@@ -321,6 +321,7 @@ function registerIpc(): void {
     ipc: ipcMain,
     clipboardApi: clipboard,
     dialogApi: dialog,
+    shellApi: shell,
     appApi: app,
     nativeImageApi: nativeImage,
     listConnections: (event) => manager().getList(scopeForEvent(event)),

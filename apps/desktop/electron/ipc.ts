@@ -50,6 +50,10 @@ type DialogLike = {
   ): Promise<{ canceled: boolean; filePaths: string[] }>;
 };
 
+type ShellLike = {
+  openExternal(url: string): Promise<void>;
+};
+
 type AppLike = {
   exit(code?: number): void;
   quit(): void;
@@ -80,6 +84,7 @@ export type MainIpcDependencies = {
   ipc: IpcMainLike;
   clipboardApi: ClipboardLike;
   dialogApi: DialogLike;
+  shellApi: ShellLike;
   appApi: AppLike;
   nativeImageApi: NativeImageLike;
   getWebClientStatus: (event?: IpcEventLike) => WebClientStatus | Promise<WebClientStatus>;
@@ -119,6 +124,22 @@ function browserPreviewUrl(value: unknown): string {
   return value;
 }
 
+function externalBrowserUrl(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Expected an HTTP(S) browser URL");
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Expected an HTTP(S) browser URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Expected an HTTP(S) browser URL");
+  }
+  return url.href;
+}
+
 function browserPreviewBounds(value: unknown): BrowserPreviewBounds {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected browser preview bounds");
@@ -136,6 +157,7 @@ export function registerMainIpc({
   ipc,
   clipboardApi,
   dialogApi,
+  shellApi,
   appApi,
   nativeImageApi,
   getWebClientStatus,
@@ -218,6 +240,9 @@ export function registerMainIpc({
       nativeImageApi.createFromDataURL(typeof dataUrl === "string" ? dataUrl : ""),
     );
   });
+  handle("orkestrator:shell:open-external", (_event, url: unknown) =>
+    shellApi.openExternal(externalBrowserUrl(url)),
+  );
 
   handle("orkestrator:dialog:open", async (event, options?: unknown) => {
     const typedOptions =

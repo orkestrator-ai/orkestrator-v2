@@ -149,6 +149,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:dialog:open",
       args: [{ directory: true }],
     });
+    await expect(api.shell.openExternal("https://example.com/docs")).resolves.toEqual({
+      channel: "orkestrator:shell:open-external",
+      args: ["https://example.com/docs"],
+    });
     await expect(api.webClient.getStatus()).resolves.toEqual({
       channel: "orkestrator:web-client:get-status",
       args: [],

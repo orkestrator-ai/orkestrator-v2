@@ -401,9 +401,13 @@ export async function postGitHubCompletionComment(
 // --- GitHub Commands ---
 
 export async function openInBrowser(url: string): Promise<void> {
-  // Browser clients open links locally. Electron marks gateway metadata as a
-  // desktop connection so a remote-backend session still uses the native
-  // system-browser command instead of a renderer-created window.
+  // The Electron main process always runs on the client, even when this
+  // renderer's backend commands are routed to a remote Orkestrator server.
+  if (window.orkestrator?.shell?.openExternal) {
+    return window.orkestrator.shell.openExternal(url);
+  }
+  // Browser clients open links in their own browser rather than asking the
+  // backend host to launch one.
   if (window.orkestratorGateway?.enabled && !window.orkestratorGateway.desktop) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;

@@ -1871,7 +1871,12 @@ describe("backend command wrapper coverage", () => {
     window.orkestratorGateway = originalGateway;
   });
 
-  test("prefers the native browser opener when Electron also exposes gateway metadata", async () => {
+  test("opens remote-desktop links through the client Electron shell", async () => {
+    const openExternal = mock(async () => undefined);
+    window.orkestrator = {
+      ...window.orkestrator,
+      shell: { openExternal },
+    } as typeof window.orkestrator;
     window.orkestratorGateway = {
       enabled: true,
       desktop: true,
@@ -1880,9 +1885,8 @@ describe("backend command wrapper coverage", () => {
 
     await openInBrowser("https://example.com/docs");
 
-    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
-      url: "https://example.com/docs",
-    });
+    expect(openExternal).toHaveBeenCalledWith("https://example.com/docs");
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   test("submits backend-owned environment starts with the expected command payload", async () => {

@@ -32,12 +32,42 @@ import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-se
 const MAX_DEPENDENCY_SCAN_DEPTH = 10;
 const MAX_PENDING_TAB_ACTIVATIONS = 64;
 
+export interface PaneTabActivationRequest {
+  readonly environmentId: string;
+}
+
 // Backend-owned jobs publish their tabs through pane-layout reconciliation.
 // Electron windows intentionally preserve their own selection while adopting
 // that shared structure, so an action initiated in this renderer needs a
 // renderer-local handoff to focus its resulting tab. Keep only the latest
 // request per environment: a later foreground action supersedes an earlier one.
 const pendingTabActivations = new Map<string, string>();
+const latestTabActivationRequests = new Map<string, PaneTabActivationRequest>();
+
+function boundActivationMap<T>(map: Map<string, T>): void {
+  while (map.size > MAX_PENDING_TAB_ACTIVATIONS) {
+    const oldestEnvironmentId = map.keys().next().value;
+    if (typeof oldestEnvironmentId !== "string") break;
+    map.delete(oldestEnvironmentId);
+  }
+}
+
+/**
+ * Claim the next backend-created tab activation before its asynchronous launch.
+ *
+ * The object identity is the ordering token. Keeping it here, outside React,
+ * makes launch order authoritative across every mounted controller instance.
+ */
+export function beginPaneTabActivationRequest(environmentId: string): PaneTabActivationRequest {
+  const request = { environmentId };
+  latestTabActivationRequests.delete(environmentId);
+  latestTabActivationRequests.set(environmentId, request);
+  // A newer foreground action also supersedes an older tab which finished
+  // launching but has not appeared in the authoritative layout yet.
+  pendingTabActivations.delete(environmentId);
+  boundActivationMap(latestTabActivationRequests);
+  return request;
+}
 
 function activateTabInState(
   state: EnvironmentPaneState,
@@ -71,7 +101,25 @@ function activateTabInState(
  * the pending request when the exact tab arrives. Browser clients already use
  * the backend's shared selection and need no renderer-local override.
  */
-export function requestPaneTabActivation(environmentId: string, tabId: string): void {
+export function requestPaneTabActivation(
+  environmentId: string,
+  tabId: string,
+  request?: PaneTabActivationRequest,
+): void {
+  if (request) {
+    if (
+      request.environmentId !== environmentId ||
+      latestTabActivationRequests.get(environmentId) !== request
+    ) {
+      return;
+    }
+    latestTabActivationRequests.delete(environmentId);
+  } else {
+    // Preserve the original immediate API for non-launch callers. An explicit
+    // request is itself newer than any unresolved launch for this environment.
+    latestTabActivationRequests.delete(environmentId);
+    pendingTabActivations.delete(environmentId);
+  }
   if (!window.orkestrator?.isolatedViewState) return;
 
   const store = usePaneLayoutStore.getState();
@@ -84,11 +132,7 @@ export function requestPaneTabActivation(environmentId: string, tabId: string): 
 
   pendingTabActivations.delete(environmentId);
   pendingTabActivations.set(environmentId, tabId);
-  while (pendingTabActivations.size > MAX_PENDING_TAB_ACTIVATIONS) {
-    const oldestEnvironmentId = pendingTabActivations.keys().next().value;
-    if (typeof oldestEnvironmentId !== "string") break;
-    pendingTabActivations.delete(oldestEnvironmentId);
-  }
+  boundActivationMap(pendingTabActivations);
 }
 
 function applyPendingTabActivation(

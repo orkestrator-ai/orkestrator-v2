@@ -28,6 +28,7 @@ mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkf
 mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
+  beginPaneTabActivationRequest,
   collectPaneDependencyIds,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -355,6 +356,43 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       expect(restored?.activePaneId).toBe("default");
       expect(restored?.root).toMatchObject({ activeTabId: "agent-job-pr" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("keeps launch-order focus when backend launches complete out of order", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const olderRequest = beginPaneTabActivationRequest("env-1");
+      const newerRequest = beginPaneTabActivationRequest("env-1");
+
+      // The newer launch completes first. The older completion must not replace
+      // its pending activation merely because its backend promise settles last.
+      requestPaneTabActivation("env-1", "agent-job-push", newerRequest);
+      requestPaneTabActivation("env-1", "terminal-job-run", olderRequest);
+
+      const backendRoot = leaf("default", [
+        { id: "tab-1", type: "plain" },
+        { id: "terminal-job-run", type: "plain" },
+        {
+          id: "agent-job-push",
+          type: "agent-native",
+          nativeAgentData: { environmentId: "env-1", platform: "codex" },
+        },
+      ]);
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(leaf("default", [{ id: "tab-1", type: "plain" }])),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "agent-job-push" });
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

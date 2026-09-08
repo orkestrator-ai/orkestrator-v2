@@ -26,6 +26,18 @@ function turn() {
   });
 }
 
+function structuredTurn() {
+  return new TurnAccumulator({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    requestId: "request-1",
+    expectsStructuredOutput: true,
+    engineGeneration: 1,
+    assistantMessageId: "message-1",
+    startedAt: "2026-07-25T12:00:00.000Z",
+  });
+}
+
 describe("turn render state", () => {
   test("begins the first turn with empty render state", () => {
     const state = beginTurnRenderState(undefined);
@@ -1215,6 +1227,88 @@ describe("renderTurn", () => {
 
     expect(rendered.parts.map((part) => part.content)).toEqual(["first answer", "last answer"]);
     expect(rendered.content).toBe("last answer");
+  });
+
+  test("withholds interim structured-output drafts and reveals only the terminal result", async () => {
+    const accumulator = structuredTurn();
+    const state = createTurnRenderState();
+    accumulator.onItemCompleted({
+      id: "progress",
+      type: "agent_message",
+      text: "Checking the working tree.",
+    });
+    accumulator.onItemCompleted({
+      id: "draft-1",
+      type: "agent_message",
+      text: '{"validation":null,"filesLeftUncommitted":null,"limitations":["working"]}',
+    });
+    accumulator.onItemCompleted({
+      id: "command",
+      type: "command_execution",
+      command: "git status --short",
+      aggregated_output: "",
+      status: "completed",
+    });
+    accumulator.onItemCompleted({
+      id: "draft-2",
+      type: "agent_message",
+      text: '```json\n{"validation":null,"filesLeftUncommitted":null,"limitations":["validating"]}\n```',
+    });
+
+    const active = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+    expect(active.parts.map((part) => part.content)).toEqual([
+      "Checking the working tree.",
+      "git status --short",
+    ]);
+    expect(active.content).toBe("Checking the working tree.");
+
+    const finalPayload =
+      '{"validation":"bun run check","filesLeftUncommitted":[],"limitations":[]}';
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      text: finalPayload,
+    });
+    accumulator.complete("completed");
+
+    const completed = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+    expect(completed.parts.map((part) => part.content)).toEqual([
+      "Checking the working tree.",
+      "git status --short",
+      finalPayload,
+    ]);
+    expect(completed.content).toBe(finalPayload);
+  });
+
+  test("does not hide JSON messages from an ordinary unconstrained turn", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({
+      id: "json",
+      type: "agent_message",
+      text: '{"status":"still visible"}',
+    });
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts.map((part) => part.content)).toEqual(['{"status":"still visible"}']);
+    expect(rendered.content).toBe('{"status":"still visible"}');
   });
 
   test("falls back to the first text part when the final assistant message is empty", async () => {

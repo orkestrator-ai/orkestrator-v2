@@ -133,6 +133,64 @@ function joinReasoning(summary: string[], content: string[]): string {
   return source.filter(hasVisibleText).join("\n\n");
 }
 
+/** Kept aligned with the web payload renderer's bounded parse. */
+const MAX_JSON_DRAFT_PARSE_CHARS = 262_144;
+
+/**
+ * Whether an agent message is exactly a JSON container rather than prose that
+ * happens to mention JSON.
+ *
+ * A schema-constrained Codex turn can emit a fresh payload after each tool
+ * call even though only its last agent message is the authoritative result.
+ * Match the documents the web transcript would promote to payload cards while
+ * leaving ordinary progress such as `Found {x} in the config` alone.
+ */
+function isJsonContainerDocument(text: string): boolean {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json[5c]?)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i.exec(trimmed);
+  const candidate = (fenced?.[1] ?? trimmed).trim();
+  if (
+    candidate.length === 0 ||
+    candidate.length > MAX_JSON_DRAFT_PARSE_CHARS ||
+    !(
+      (candidate.startsWith("{") && candidate.endsWith("}")) ||
+      (candidate.startsWith("[") && candidate.endsWith("]"))
+    )
+  ) {
+    return false;
+  }
+  try {
+    const value: unknown = JSON.parse(candidate);
+    return value !== null && typeof value === "object";
+  } catch {
+    return false;
+  }
+}
+
+function terminalStructuredOutputItemId(turn: TurnAccumulator): string | undefined {
+  if (!turn.expectsStructuredOutput || !turn.isTerminal()) return undefined;
+  return turn
+    .ordered()
+    .filter((entry) => {
+      const item = effectiveItem(turn, entry);
+      return item?.type === "agent_message" && item.text.length > 0;
+    })
+    .at(-1)?.id;
+}
+
+function suppressStructuredOutputDraft(
+  turn: TurnAccumulator,
+  item: EngineItem,
+  finalItemId: string | undefined,
+): boolean {
+  return (
+    turn.expectsStructuredOutput &&
+    item.type === "agent_message" &&
+    item.id !== finalItemId &&
+    isJsonContainerDocument(item.text)
+  );
+}
+
 /**
  * The item to draw for one accumulator.
  *
@@ -468,6 +526,12 @@ export async function renderTurn(
     turn,
     options.segment,
   );
+  // app-server's output schema is turn-scoped, but it can still surface
+  // schema-shaped agent messages between tool calls. They are drafts, not
+  // separate results. Keep them out of the transcript until the turn settles,
+  // then reveal only the same last agent message that structured-output parsing
+  // reads as authoritative.
+  const structuredOutputItemId = terminalStructuredOutputItemId(turn);
 
   // Reconcile the authoritative item set without rebuilding its order around
   // the sub-agent entries. New parent items belong at the end of the timeline;
@@ -506,13 +570,14 @@ export async function renderTurn(
         const itemId = key.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
         const accumulator = accumulatorsByKey.get(itemId);
         const cached = options.state.completedItemParts.get(itemId);
+        const suppressDraft = suppressStructuredOutputDraft(turn, item, structuredOutputItemId);
         if (accumulator?.completed && cached?.source === accumulator.item) {
           // `itemToParts` touches a file's baseline while rendering its diff.
           // A completed-item cache hit skips that function, so without the
           // equivalent touch here an actively re-rendered file looks cold to
           // the LRU and can be evicted ahead of truly unused baselines.
           touchCachedPartBaselines(cached.parts, options.cwd, options.state.fileChange.baselines);
-          parts.push(...cached.parts);
+          if (!suppressDraft) parts.push(...cached.parts);
         } else {
           const itemParts = await itemToParts(item, options.cwd, options.state.fileChange);
           const createdAt =
@@ -530,7 +595,7 @@ export async function renderTurn(
           } else {
             options.state.completedItemParts.delete(itemId);
           }
-          parts.push(...stampedParts);
+          if (!suppressDraft) parts.push(...stampedParts);
           // A live progress line for a still-running item, in the same message
           // as the row it describes so the backend projection can fold it on.
           // Only for uncompleted items: the accumulator clears `progress` when
@@ -555,7 +620,9 @@ export async function renderTurn(
   const finalText = items
     .filter(
       (item): item is Extract<EngineItem, { type: "agent_message" }> =>
-        item.type === "agent_message" && item.text.length > 0,
+        item.type === "agent_message" &&
+        item.text.length > 0 &&
+        !suppressStructuredOutputDraft(turn, item, structuredOutputItemId),
     )
     .at(-1)?.text;
 

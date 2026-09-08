@@ -588,7 +588,10 @@ export abstract class NativeAgentServiceBase {
       const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
-        if ((!existing.owner || !existing.policy) && input.owner) {
+        if (
+          ((!existing.owner || !existing.policy) && input.owner) ||
+          (!existing.initialPromptPresentation && input.initialPromptPresentation)
+        ) {
           const enriched = await this.storage.adoptNativeAgentSession({
             key,
             environmentId: input.environmentId,
@@ -600,6 +603,7 @@ export abstract class NativeAgentServiceBase {
             owner: input.owner,
             executionPolicy: input.executionPolicy,
             policy: input.policy,
+            initialPromptPresentation: input.initialPromptPresentation,
           });
           void this.reconcileAgentInteractions().catch(() => undefined);
           return enriched;
@@ -636,6 +640,7 @@ export abstract class NativeAgentServiceBase {
         owner: input.owner,
         executionPolicy: input.executionPolicy,
         policy: input.policy,
+        initialPromptPresentation: input.initialPromptPresentation,
       },
       () => this.createProviderSession(provider, input),
     );
@@ -691,6 +696,7 @@ export abstract class NativeAgentServiceBase {
       owner: input.owner,
       executionPolicy: input.executionPolicy,
       policy: input.policy,
+      initialPromptPresentation: input.initialPromptPresentation,
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
     void this.reconcileAgentInteractions().catch(() => undefined);

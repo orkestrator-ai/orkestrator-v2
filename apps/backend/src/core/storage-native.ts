@@ -298,7 +298,13 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
+          | "origin"
+          | "interactionPolicy"
+          | "controls"
+          | "owner"
+          | "executionPolicy"
+          | "policy"
+          | "initialPromptPresentation"
         >
       >,
     createProviderSession: () => Promise<string>,
@@ -334,12 +340,26 @@ export abstract class StorageNative extends StorageReviews {
         ) {
           throw new Error("Native agent session key collision");
         }
-        if (!existing.owner && input.owner) {
+        if (
+          existing.initialPromptPresentation &&
+          input.initialPromptPresentation &&
+          JSON.stringify(existing.initialPromptPresentation) !==
+            JSON.stringify(input.initialPromptPresentation)
+        ) {
+          throw new Error("Native agent initial prompt presentation cannot change");
+        }
+        if (
+          (!existing.owner && input.owner) ||
+          (!existing.initialPromptPresentation && input.initialPromptPresentation)
+        ) {
           const migratedOwner = {
             ...existing,
-            owner: input.owner,
+            ...(input.owner ? { owner: input.owner } : {}),
             ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
             ...(input.policy ? { policy: input.policy } : {}),
+            ...(input.initialPromptPresentation
+              ? { initialPromptPresentation: input.initialPromptPresentation }
+              : {}),
             updatedAt: nowIso(),
           };
           sessions[input.key] = migratedOwner;
@@ -382,7 +402,13 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
+          | "origin"
+          | "interactionPolicy"
+          | "controls"
+          | "owner"
+          | "executionPolicy"
+          | "policy"
+          | "initialPromptPresentation"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -435,11 +461,22 @@ export abstract class StorageNative extends StorageReviews {
           const ownerChanged = !existing.owner && Boolean(input.owner);
           const policyChanged = !existing.executionPolicy && Boolean(input.executionPolicy);
           const normalizedPolicyChanged = !existing.policy && Boolean(input.policy);
+          const promptPresentationChanged =
+            !existing.initialPromptPresentation && Boolean(input.initialPromptPresentation);
+          if (
+            existing.initialPromptPresentation &&
+            input.initialPromptPresentation &&
+            JSON.stringify(existing.initialPromptPresentation) !==
+              JSON.stringify(input.initialPromptPresentation)
+          ) {
+            throw new Error("Native agent initial prompt presentation cannot change");
+          }
           if (
             (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) ||
             ownerChanged ||
             policyChanged ||
-            normalizedPolicyChanged
+            normalizedPolicyChanged ||
+            promptPresentationChanged
           ) {
             const updated: PersistedNativeAgentSession = {
               ...existing,
@@ -447,6 +484,9 @@ export abstract class StorageNative extends StorageReviews {
               ...(input.owner ? { owner: input.owner } : {}),
               ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
               ...(input.policy ? { policy: input.policy } : {}),
+              ...(input.initialPromptPresentation
+                ? { initialPromptPresentation: input.initialPromptPresentation }
+                : {}),
               updatedAt: nowIso(),
             };
             sessions[input.key] = updated;
@@ -486,6 +526,8 @@ export abstract class StorageNative extends StorageReviews {
                       : {}),
                   }
                 : existing.controls,
+              initialPromptPresentation:
+                input.initialPromptPresentation ?? existing.initialPromptPresentation,
             }
           : interactionMetadata),
         version: NATIVE_AGENT_SESSION_VERSION,

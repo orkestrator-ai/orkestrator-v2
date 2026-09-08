@@ -225,6 +225,7 @@ export const NativeMessage = memo(function NativeMessage({
                       content={message.content}
                       showCopy={false}
                       truncateUserPrompt={isUser}
+                      promptPresentation={message.promptPresentation}
                       renderJsonPayload={!isUser}
                       expansionKey={`${message.id}-content/json`}
                     />
@@ -243,12 +244,18 @@ function renderMessageParts(
   message: NativeMessageType,
   options: { showTextCopy?: boolean; containerId?: string } = {},
 ) {
+  const promptPresentationPartIndex = message.promptPresentation
+    ? message.parts.findIndex((part) => part.type === "text")
+    : -1;
   const renderPart = (part: NativeMessagePart, index: number) => (
     <MessagePart
       key={`${message.id}-part-${index}-${part.type}`}
       part={part}
       showTextCopy={options.showTextCopy ?? true}
       truncateUserPrompt={message.role === "user"}
+      promptPresentation={
+        index === promptPresentationPartIndex ? message.promptPresentation : undefined
+      }
       renderJsonPayload={message.role !== "user"}
       containerId={options.containerId}
       eagerImagePreview={message.role === "user"}

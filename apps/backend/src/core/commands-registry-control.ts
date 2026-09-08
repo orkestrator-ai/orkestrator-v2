@@ -5,6 +5,11 @@ import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { BUILD_PIPELINE_AGENTS, isAgentPlatform } from "./commands-dependencies.js";
 import { asNonBlankString, asOptionalString } from "./commands-helpers.js";
+import {
+  isTrustedUserPromptPresentation,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
+import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -30,6 +35,16 @@ async function launchNativeAgentJob(
   if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
   const prompt = asNonBlankString(args.prompt, "prompt");
   if (prompt.length > 100_000) throw new Error("prompt must be at most 100000 characters");
+  const initialPromptPresentation = coordinatorDelegationPresentationFrom(args);
+  if (initialPromptPresentation !== undefined) {
+    const parsed = parseCoordinatorDelegatedPrompt(prompt);
+    if (
+      !isTrustedUserPromptPresentation(initialPromptPresentation) ||
+      parsed?.frame !== initialPromptPresentation.frame
+    ) {
+      throw new Error("initialPromptPresentation does not match the prompt");
+    }
+  }
   const title = asOptionalString(args.title)?.trim();
   if (title && title.length > 200) throw new Error("title must be at most 200 characters");
   const agent = args.agent;
@@ -129,6 +144,7 @@ async function launchNativeAgentJob(
       model,
       reasoningEffort,
       sessionMode: conversationMode,
+      ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
       ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     });
     await context.storage.ensureNativeAgentJobTab({
@@ -150,6 +166,7 @@ async function launchNativeAgentJob(
       prompt,
       requestId,
       mode: conversationMode,
+      ...(initialPromptPresentation ? { initialPromptPresentation } : {}),
     });
     if (outcome.outcome === "rejected") await rollBackCompletionAction();
     return {

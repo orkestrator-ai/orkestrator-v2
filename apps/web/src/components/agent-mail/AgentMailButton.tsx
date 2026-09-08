@@ -68,17 +68,19 @@ function messageStatusLabel(
 
 type MessageRow = { mailbox: MailboxDescriptor; message: AgentMailMessageSummary; sent: boolean };
 
-interface AgentMailButtonProps {
-  environmentId?: string;
-  tabId?: string;
-  variant?: "global" | "tab";
+type MailboxAddress = { environmentId: string; tabId: string };
+
+function mailboxIdOf(address: MailboxAddress): string {
+  return `${address.environmentId}\0${address.tabId}`;
 }
 
-export function AgentMailButton({
-  environmentId,
-  tabId,
-  variant = "global",
-}: AgentMailButtonProps = {}) {
+/**
+ * The single agent-mail surface: the inbox button in the window's top-right
+ * corner. Per-tab entry points ("Message this tab…", "Inbox settings…", the
+ * delivery banner) route here through `openAgentMailForTab`, which opens this
+ * dropdown with the tab's mailbox preselected.
+ */
+export function AgentMailButton() {
   const summary = useAgentMailStore((state) => state.summary);
   const mailboxes = useAgentMailStore((state) => state.mailboxes);
   const failedSent = useAgentMailStore((state) => state.failedSent);
@@ -93,20 +95,13 @@ export function AgentMailButton({
   const allowCrossProject = useConfigStore(
     (state) => state.config.global.agentMessaging?.allowCrossProject === true,
   );
-  const tabMailboxId = environmentId && tabId ? `${environmentId}\0${tabId}` : null;
-  const hasTabMailbox =
-    variant !== "tab" ||
-    (tabMailboxId !== null && (summary.has(tabMailboxId) || mailboxes.has(tabMailboxId)));
   const unread = useMemo(
     () =>
-      Array.from(summary.values())
-        .filter(
-          (entry) =>
-            variant === "global" ||
-            (entry.environmentId === environmentId && entry.tabId === tabId),
-        )
-        .reduce((total, entry) => total + (entry.userUnseenCount ?? entry.unreadCount), 0),
-    [environmentId, summary, tabId, variant],
+      Array.from(summary.values()).reduce(
+        (total, entry) => total + (entry.userUnseenCount ?? entry.unreadCount),
+        0,
+      ),
+    [summary],
   );
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -124,64 +119,51 @@ export function AgentMailButton({
   const [actionError, setActionError] = useState<string>();
   const sendAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
 
-  const hydrate = async () => {
+  const hydrate = async (focus?: MailboxAddress) => {
     setLoading(true);
     try {
-      if (variant === "tab" && environmentId && tabId) {
-        const [, directoryResult, sentMessages] = await Promise.all([
-          refreshMailbox(environmentId, tabId),
-          backend.listAgentMailboxes({ limit: 200 }),
-          backend.listAgentMailSent({ environmentId, tabId }),
-        ]);
-        const mailbox = useAgentMailStore
-          .getState()
-          .mailboxes.get(`${environmentId}\0${tabId}`)?.descriptor;
-        const currentSnapshot = useAgentMailStore
-          .getState()
-          .mailboxes.get(`${environmentId}\0${tabId}`);
-        const participantAddresses = new Map<string, { environmentId: string; tabId: string }>();
-        for (const message of sentMessages) {
-          participantAddresses.set(`${message.toEnvironmentId}\0${message.toTabId}`, {
-            environmentId: message.toEnvironmentId,
-            tabId: message.toTabId,
-          });
-        }
-        for (const message of currentSnapshot?.messages ?? []) {
-          if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
-          participantAddresses.set(`${message.from.environmentId}\0${message.from.tabId}`, {
-            environmentId: message.from.environmentId,
-            tabId: message.from.tabId,
-          });
-        }
-        const participants =
-          participantAddresses.size > 0
-            ? await backend.getAgentMailMailboxes(Array.from(participantAddresses.values()))
-            : { mailboxes: [] };
-        const availableById = new Map(
-          directoryResult.mailboxes
-            .filter((candidate) => candidate.capabilities.canPull)
-            .map((candidate) => [candidate.mailboxId, candidate]),
-        );
-        for (const participant of participants.mailboxes) {
-          if (participant.descriptor.capabilities.canPull)
-            availableById.set(participant.descriptor.mailboxId, participant.descriptor);
-        }
-        const available = Array.from(availableById.values());
-        if (mailbox?.capabilities.canPull) {
-          const index = available.findIndex(
-            (candidate) => candidate.mailboxId === mailbox.mailboxId,
-          );
-          if (index >= 0) available[index] = mailbox;
-          else available.unshift(mailbox);
-        }
-        setDirectory(available);
-        setDestination(mailbox?.mailboxId ?? "");
-        setSent(sentMessages ?? []);
-      } else {
-        const snapshot = await refreshInbox();
-        setDirectory(snapshot.directory.filter((mailbox) => mailbox.capabilities.canPull));
-        setSent((await backend.listAgentMailSent()) ?? []);
+      const [snapshot, sentMessages] = await Promise.all([
+        refreshInbox(),
+        backend.listAgentMailSent(),
+      ]);
+      const availableById = new Map(
+        snapshot.directory
+          .filter((mailbox) => mailbox.capabilities.canPull)
+          .map((mailbox) => [mailbox.mailboxId, mailbox]),
+      );
+      // The directory only lists persisted mailboxes. A tab opened for the
+      // first time, or a Sent recipient that has since left the directory,
+      // still needs a descriptor so compose, settings, Reply, and the Sent
+      // view can name it — fetch those directly.
+      const missing = new Map<string, MailboxAddress>();
+      if (focus && !availableById.has(mailboxIdOf(focus))) missing.set(mailboxIdOf(focus), focus);
+      for (const message of sentMessages ?? []) {
+        const recipient = { environmentId: message.toEnvironmentId, tabId: message.toTabId };
+        if (!availableById.has(mailboxIdOf(recipient)))
+          missing.set(mailboxIdOf(recipient), recipient);
       }
+      for (const mailbox of useAgentMailStore.getState().mailboxes.values()) {
+        for (const message of mailbox.messages) {
+          if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
+          const sender = { environmentId: message.from.environmentId, tabId: message.from.tabId };
+          if (!availableById.has(mailboxIdOf(sender))) missing.set(mailboxIdOf(sender), sender);
+        }
+      }
+      if (missing.size > 0) {
+        const fetched = await backend.getAgentMailMailboxes(Array.from(missing.values()));
+        for (const mailbox of fetched.mailboxes) {
+          if (mailbox.descriptor.capabilities.canPull)
+            availableById.set(mailbox.descriptor.mailboxId, mailbox.descriptor);
+        }
+        if (focus) {
+          const focused = fetched.mailboxes.filter(
+            (mailbox) => mailbox.descriptor.mailboxId === mailboxIdOf(focus),
+          );
+          if (focused.length > 0) useAgentMailStore.getState().setMailboxes(focused);
+        }
+      }
+      setDirectory(Array.from(availableById.values()));
+      setSent(sentMessages ?? []);
     } catch (error) {
       toast.error("Could not load agent messages", {
         description: error instanceof Error ? error.message : String(error),
@@ -196,29 +178,28 @@ export function AgentMailButton({
       const detail = (raw as CustomEvent).detail as
         | { environmentId?: string; tabId?: string; mode?: string }
         | undefined;
-      if (
-        variant !== "tab" ||
-        !detail ||
-        detail.environmentId !== environmentId ||
-        detail.tabId !== tabId
-      )
-        return;
+      if (!detail?.environmentId || !detail.tabId) return;
+      const focus = { environmentId: detail.environmentId, tabId: detail.tabId };
       setOpen(true);
+      setDestination(mailboxIdOf(focus));
+      setReplyToMessageId(undefined);
+      setExpanded(null);
+      setBox("inbox");
       setCompose(detail.mode === "compose");
-      void hydrate();
+      void hydrate(focus);
     };
     window.addEventListener(OPEN_EVENT, listener);
     return () => window.removeEventListener(OPEN_EVENT, listener);
   });
 
   useEffect(() => {
-    if (failedSent.size === 0 || variant !== "global") return;
+    if (failedSent.size === 0) return;
     for (const message of failedSent.values())
       toast.error("Agent message delivery failed", {
         description: message.placementReason || "The recipient rejected delivery.",
       });
     clearFailedSent();
-  }, [clearFailedSent, failedSent, variant]);
+  }, [clearFailedSent, failedSent]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -230,15 +211,9 @@ export function AgentMailButton({
     if (!authoritative || authoritative.revision > expanded.revision) setExpanded(null);
   }, [expanded, mailboxes, sent]);
 
-  const inboxRows: MessageRow[] = Array.from(mailboxes.values())
-    .flatMap((mailbox) =>
-      mailbox.messages.map((message) => ({ mailbox: mailbox.descriptor, message, sent: false })),
-    )
-    .filter(
-      ({ mailbox }) =>
-        variant === "global" ||
-        (mailbox.environmentId === environmentId && mailbox.tabId === tabId),
-    );
+  const inboxRows: MessageRow[] = Array.from(mailboxes.values()).flatMap((mailbox) =>
+    mailbox.messages.map((message) => ({ mailbox: mailbox.descriptor, message, sent: false })),
+  );
   const sentRows: MessageRow[] = sent.flatMap((message) => {
     const mailbox = directory.find(
       (candidate) =>
@@ -273,10 +248,7 @@ export function AgentMailButton({
     new Map(directory.map((mailbox) => [mailbox.projectId, mailbox.projectName])).entries(),
   );
   const selectedMailbox = directory.find((candidate) => candidate.mailboxId === destination);
-  const tabMailbox = tabMailboxId
-    ? directory.find((candidate) => candidate.mailboxId === tabMailboxId)
-    : undefined;
-  const policyMailbox = variant === "tab" ? tabMailbox : selectedMailbox;
+  const policyMailbox = selectedMailbox;
 
   const read = async (mailbox: MailboxDescriptor, messageId: string, isSent: boolean) => {
     try {
@@ -385,7 +357,7 @@ export function AgentMailButton({
     }
   };
 
-  if (!messagingEnabled || !hasTabMailbox) return null;
+  if (!messagingEnabled) return null;
   return (
     <DropdownMenu
       open={open}
@@ -396,37 +368,19 @@ export function AgentMailButton({
       modal={false}
     >
       <DropdownMenuTrigger asChild>
-        {variant === "tab" ? (
-          <button
-            type="button"
-            aria-label={
-              unread ? `${unread} unseen agent messages; open inbox` : "Open tab agent inbox"
-            }
-            className={
-              unread
-                ? "min-w-4 rounded-full bg-cyan-400/90 px-1 text-center font-mono text-[9px] leading-4 text-zinc-950"
-                : "hidden rounded-sm p-0.5 text-muted-foreground hover:text-cyan-300 group-hover:inline-flex"
-            }
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {unread ? unread > 99 ? "99+" : unread : <Inbox className="h-3 w-3" />}
-          </button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="relative h-7 w-7"
-            aria-label={unread ? `Agent inbox, ${unread} unseen` : "Agent inbox"}
-          >
-            <Inbox className="h-4 w-4" />
-            {unread > 0 && (
-              <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-cyan-400 px-1 font-mono text-[9px] leading-4 text-zinc-950">
-                {unread > 99 ? "99+" : unread}
-              </span>
-            )}
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative h-7 w-7"
+          aria-label={unread ? `Agent inbox, ${unread} unseen` : "Agent inbox"}
+        >
+          <Inbox className="h-4 w-4" />
+          {unread > 0 && (
+            <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-cyan-400 px-1 font-mono text-[9px] leading-4 text-zinc-950">
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -499,14 +453,12 @@ export function AgentMailButton({
             <select
               aria-label="Message destination"
               value={destination}
-              disabled={variant === "tab"}
               onChange={(event) => setDestination(event.target.value)}
               className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-xs"
             >
               <option value="">Choose a destination…</option>
               {directory
                 .filter((mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull)
-                .filter((mailbox) => variant !== "tab" || mailbox.mailboxId === destination)
                 .map((mailbox) => (
                   <option key={mailbox.mailboxId} value={mailbox.mailboxId}>
                     {mailbox.displayName} · {mailbox.environmentName} · {policyLabel(mailbox)}
@@ -516,7 +468,6 @@ export function AgentMailButton({
             <div className="max-h-36 space-y-1 overflow-y-auto">
               {directory
                 .filter((mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull)
-                .filter((mailbox) => variant !== "tab" || mailbox.mailboxId === destination)
                 .map((mailbox) => (
                   <button
                     key={mailbox.mailboxId}
@@ -588,33 +539,29 @@ export function AgentMailButton({
           >
             Sent
           </Button>
-          {variant === "global" && (
-            <>
-              <select
-                aria-label="Filter by project"
-                value={projectFilter}
-                onChange={(event) => setProjectFilter(event.target.value)}
-                className="ml-auto h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
-              >
-                <option value="">All projects</option>
-                {projects.map(([id, name]) => (
-                  <option key={id} value={id}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="Filter by message status"
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
-                className="h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
-              >
-                <option value="all">All</option>
-                <option value="unread">Unseen</option>
-                <option value="retry">Failed</option>
-              </select>
-            </>
-          )}
+          <select
+            aria-label="Filter by project"
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
+            className="ml-auto h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
+          >
+            <option value="">All projects</option>
+            {projects.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by message status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+            className="h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
+          >
+            <option value="all">All</option>
+            <option value="unread">Unseen</option>
+            <option value="retry">Failed</option>
+          </select>
         </div>
         <ScrollArea className="h-[min(62vh,500px)]">
           {loading && threads.length === 0 ? (

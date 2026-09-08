@@ -289,11 +289,6 @@ describe("AgentMailButton", () => {
     expect(screen.queryByRole("button", { name: "Agent inbox" }) === null).toBe(true);
   });
 
-  test("renders no tab inbox when the authoritative summary has no mailbox", () => {
-    render(<AgentMailButton environmentId="env-1" tabId="missing" variant="tab" />);
-    expect(screen.queryByRole("button", { name: /tab agent inbox/i }) === null).toBe(true);
-  });
-
   test("reuses the compose idempotency key after an ambiguous failure", async () => {
     sendAgentMail
       .mockImplementationOnce(async () => {
@@ -367,20 +362,68 @@ describe("AgentMailButton", () => {
     expect(screen.getAllByText("Claude 1 · Agent").length).toBeGreaterThan(0);
   });
 
-  test("hydrates and opens a new tab mailbox from the window event", async () => {
-    useAgentMailStore.setState({
-      refreshMailbox: mock(async () => {
-        useAgentMailStore.getState().setMailbox(mailboxSnapshot());
-      }),
-    });
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    expect(screen.queryByRole("button", { name: /tab agent inbox/i }) === null).toBe(true);
+  test("opens the composer addressed to the tab from the window event", async () => {
+    render(<AgentMailButton />);
+    expect(screen.queryByPlaceholderText("Markdown message") === null).toBe(true);
 
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByPlaceholderText("Markdown message")).toBeTruthy();
+    expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
+      "env-1\0tab-1",
+    );
+    fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Send/ }));
+    await waitFor(() => expect(sendAgentMail).toHaveBeenCalledTimes(1));
+    expect(sendAgentMail.mock.calls[0]?.[0]).toMatchObject({
+      toEnvironmentId: "env-1",
+      toTabId: "tab-1",
+    });
   });
 
-  test("shows other-tab recipients in the tab Sent view", async () => {
+  test("opens the tab's inbox settings from the window event without a composer", async () => {
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-1", "tab-1", "settings"));
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    expect(screen.getAllByText("Claude 1 · Agent").length).toBeGreaterThan(0);
+    expect(screen.queryByPlaceholderText("Markdown message") === null).toBe(true);
+    fireEvent.change(screen.getByLabelText("Automatic delivery policy"), {
+      target: { value: "idle" },
+    });
+    await waitFor(() =>
+      expect(updateAgentMailboxPolicy).toHaveBeenCalledWith({
+        environmentId: "env-1",
+        tabId: "tab-1",
+        inject: "idle",
+      }),
+    );
+  });
+
+  test("fetches a tab mailbox the directory does not list yet", async () => {
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
+    });
+    getAgentMailMailboxes.mockImplementation(async () => ({
+      revision: 1,
+      mailboxes: [{ ...mailboxSnapshot(), descriptor: peerMailbox }],
+    }));
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-2", "tab-2", "compose"));
+    await waitFor(() =>
+      expect(getAgentMailMailboxes).toHaveBeenCalledWith([
+        { environmentId: "env-2", tabId: "tab-2" },
+      ]),
+    );
+    expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
+    expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
+      "env-2\0tab-2",
+    );
+  });
+
+  test("shows recipients missing from the directory in the Sent view", async () => {
     installTabMailbox();
     const sent = {
       ...message("stored"),
@@ -400,8 +443,8 @@ describe("AgentMailButton", () => {
     };
     const { body: _body, ...summary } = sent;
     listAgentMailSent.mockImplementation(async () => [summary]);
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Open tab agent inbox" }));
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sent" }));
     expect(await screen.findByText("To Claude 2 · Peer")).toBeTruthy();
   });
@@ -441,8 +484,8 @@ describe("AgentMailButton", () => {
     };
     const { body: _body, ...summary } = sent;
     listAgentMailSent.mockImplementation(async () => [summary]);
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Open tab agent inbox" }));
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sent" }));
     expect(await screen.findByText("Peer environment · recipient is composing")).toBeTruthy();
   });
@@ -464,8 +507,8 @@ describe("AgentMailButton", () => {
     const { body: _olderBody, ...olderSummary } = older;
     const { body: _newerBody, ...newerSummary } = newer;
     installTabMailbox([olderSummary, newerSummary]);
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: /unseen agent messages/ }));
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 2 unseen/ }));
 
     expect(await screen.findByText("Thread · 2 messages")).toBeTruthy();
     expect(screen.getByText("Newest subject")).toBeTruthy();
@@ -474,8 +517,8 @@ describe("AgentMailButton", () => {
 
   test("keeps mailbox policy controls available when the inbox is empty", async () => {
     installTabMailbox();
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Open tab agent inbox" }));
+    render(<AgentMailButton />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "settings"));
 
     expect(await screen.findByLabelText("Automatic delivery policy")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Mute inbound" })).toBeTruthy();
@@ -512,7 +555,7 @@ describe("AgentMailButton", () => {
     }
   });
 
-  test("replies from a tab inbox to the original sender", async () => {
+  test("replies from the inbox to the original sender", async () => {
     const incoming = {
       ...message("stored"),
       id: "incoming",
@@ -529,8 +572,8 @@ describe("AgentMailButton", () => {
     const { body: _body, ...incomingSummary } = incoming;
     installTabMailbox([incomingSummary]);
     getAgentMailMessage.mockImplementation(async () => incoming);
-    render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: /unseen agent messages/ }));
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 1 unseen/ }));
     fireEvent.click(await screen.findByText("From Claude 2 · Peer"));
     fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
     fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
@@ -587,8 +630,8 @@ describe("AgentMailButton", () => {
     discardAgentMailInject.mockImplementationOnce(async () => {
       throw new Error("submission won");
     });
-    const view = render(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
-    fireEvent.pointerDown(screen.getByRole("button", { name: /unseen agent messages/ }));
+    const view = render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 1 unseen/ }));
     fireEvent.click(await screen.findByText("From You"));
     fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
     expect((await screen.findByRole("alert")).textContent).toContain("submission won");
@@ -602,7 +645,7 @@ describe("AgentMailButton", () => {
     const { body: _submittingBody, ...submittingSummary } = submitting;
     act(() => installTabMailbox([submittingSummary]));
     getAgentMailMessage.mockImplementation(async () => submitting);
-    view.rerender(<AgentMailButton environmentId="env-1" tabId="tab-1" variant="tab" />);
+    view.rerender(<AgentMailButton />);
     fireEvent.click(await screen.findByText("From You"));
     expect(screen.queryByRole("button", { name: "Discard" }) === null).toBe(true);
   });

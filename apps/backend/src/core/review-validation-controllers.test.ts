@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+import {
+  reviewValidationDiscoveryPrompt,
+  REVIEW_VALIDATION_PLAN_SCHEMA,
+} from "./review-validation-prompts.js";
 import type { BuildPipelineProvider, ProviderSendOptions } from "./build-pipeline-provider.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
@@ -107,6 +110,12 @@ async function harness() {
     cleanup: () => rm(directory, { recursive: true, force: true }),
   };
 }
+
+test("discovery avoids a duplicate build when the full test stage already builds", () => {
+  const prompt = reviewValidationDiscoveryPrompt("main");
+  expect(prompt).toContain("if the full test stage already runs the production build");
+  expect(prompt).toContain("omit a separate build command instead of repeating it");
+});
 
 test("manual discovery hands off once; a replacement controller seals completed background evidence", async () => {
   const h = await harness();

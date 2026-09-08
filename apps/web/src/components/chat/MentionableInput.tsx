@@ -27,12 +27,12 @@ interface MentionableInputProps {
 export interface MentionableInputRef {
   focus: () => void;
   /**
-   * Focus and park the caret after the last character of the current or next
-   * rendered value. Callers that replace the whole draft (slash-command
-   * completion) need this: the caret is otherwise restored to the offset it
-   * held in the text the user typed, landing mid-word in the completed command.
+   * Focus and park the caret after the last character of the expected value.
+   * Callers that replace the whole draft (slash-command completion) need this:
+   * the caret is otherwise restored to the offset it held in the text the user
+   * typed, landing mid-word in the completed command.
    */
-  focusAtEnd: () => void;
+  focusAtEnd: (expectedValue: string) => void;
   blur: () => void;
   getCursorPosition: () => number;
   insertMention: (mention: FileMention) => void;
@@ -243,9 +243,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const lastValueRef = useRef(value);
     const lastMentionsRef = useRef(mentions);
     const isComposingRef = useRef(false);
-    // "end" defers to the value of the render that applies it, so a caller can
-    // ask for the caret at the end before knowing the replacement text.
-    const pendingCursorRef = useRef<number | "end" | null>(null);
+    const pendingCursorRef = useRef<number | null>(null);
     const pendingFocusRef = useRef(false);
     const initializedRef = useRef(false);
     const lastCursorPositionRef = useRef(value.length);
@@ -256,19 +254,20 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           focusEditableElement(inputRef.current);
         }
       },
-      focusAtEnd: () => {
+      focusAtEnd: (expectedValue) => {
         const input = inputRef.current;
         if (!input) return;
-        pendingCursorRef.current = "end";
-        pendingFocusRef.current = true;
+        const renderedValue = extractText(input);
+        const replacementIsPending = renderedValue !== expectedValue;
+        pendingCursorRef.current = replacementIsPending ? expectedValue.length : null;
+        pendingFocusRef.current = replacementIsPending;
         focusEditableElement(input);
 
         // Store-backed callers can commit the replacement synchronously before
         // invoking this method, leaving no subsequent render to consume the
-        // pending cursor. Move the live selection as well; if the replacement
-        // is still batched, the layout effect below repeats this against the
-        // next value.
-        const cursorPosition = extractText(input).length;
+        // pending cursor. Move the live selection as well, and only leave a
+        // request queued when the expected replacement has not rendered yet.
+        const cursorPosition = renderedValue.length;
         lastCursorPositionRef.current = cursorPosition;
         setCursorOffset(input, cursorPosition);
       },
@@ -360,9 +359,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       lastValueRef.current = value;
       lastMentionsRef.current = mentions;
 
-      const resolvedPendingCursor = pendingCursor === "end" ? value.length : pendingCursor;
-      const cursorPos =
-        resolvedPendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
+      const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
       lastCursorPositionRef.current = cursorPos;
 
       // Only rewrite the DOM when the content actually changed; rewriting on a

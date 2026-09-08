@@ -1215,12 +1215,17 @@ describe("rollout public helpers (continued)", () => {
   });
 
   test("rehydrates the same structured-output visibility as the live renderer", async () => {
-    const message = (role: "user" | "assistant", text: string) => ({
+    const message = (
+      role: "user" | "assistant",
+      text: string,
+      phase?: "commentary" | "final_answer",
+    ) => ({
       type: "response_item",
       payload: {
         type: "message",
         role,
         content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+        ...(phase ? { phase } : {}),
       },
     });
     const hydrated = await hydrateRollout(
@@ -1229,10 +1234,25 @@ describe("rollout public helpers (continued)", () => {
         sessionMeta("thread-structured-history"),
         { type: "turn_context", payload: { turn_id: "accepted", cwd: "/workspace" } },
         message("user", "accepted prompt"),
+        message(
+          "assistant",
+          '{"validation":[],"limitations":["Inspecting the accepted turn."]}',
+          "commentary",
+        ),
         message("assistant", '{"draft":true}'),
-        message("assistant", '{"final":true}'),
+        message("assistant", '{"final":true}', "final_answer"),
+        message(
+          "assistant",
+          '{"validation":[],"limitations":["Recording the accepted result."]}',
+          "commentary",
+        ),
         { type: "turn_context", payload: { turn_id: "failed", cwd: "/workspace" } },
         message("user", "failed prompt"),
+        message(
+          "assistant",
+          '{"validation":[],"limitations":["Inspecting the failed turn."]}',
+          "commentary",
+        ),
         message("assistant", '{"draft":"incomplete"'),
         { type: "turn_context", payload: { turn_id: "ordinary", cwd: "/workspace" } },
         message("user", "ordinary prompt"),
@@ -1250,7 +1270,12 @@ describe("rollout public helpers (continued)", () => {
         .filter((entry) => entry.role === "assistant")
         .map((entry) => [entry.turnId, entry.content, entry.parts.map((part) => part.content)]),
     ).toEqual([
-      ["accepted", '{"final":true}', ['{"final":true}']],
+      [
+        "accepted",
+        "Recording the accepted result.",
+        ["Inspecting the accepted turn.", '{"final":true}', "Recording the accepted result."],
+      ],
+      ["failed", "Inspecting the failed turn.", ["Inspecting the failed turn."]],
       ["ordinary", '{"ordinary":true}', ['{"ordinary":true}']],
     ]);
   });

@@ -4769,6 +4769,37 @@ describe("PersistentTerminal", () => {
     expect(terminalAddressPrompt).not.toMatch(/[\r\n]/);
   });
 
+  it("flattens multiline compose text before writing it to Claude Code", async () => {
+    useTerminalBootstrapped = true;
+    useTerminalSessionStore.setState({
+      sessions: new Map([["container-1:tab-1", { sessionId: "session-1" }]]),
+      composeDraftText: new Map(),
+      composeDraftImages: new Map(),
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(composeBarOptions).toBeDefined());
+    await act(async () => {
+      await composeBarOptions!.onSend([], "First line\n\nSecond line");
+    });
+
+    expect(writeMock.mock.calls.slice(-2)).toEqual([["First line Second line"], ["\r"]]);
+  });
+
   it("shows Address all in the same mount after backend bootstrap succeeds", async () => {
     let attempts = 0;
     invokeMock.mockImplementation(async (command: string) => {

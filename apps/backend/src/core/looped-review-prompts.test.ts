@@ -126,11 +126,10 @@ describe("backend looped-review prompt contracts", () => {
     expect(prompt).toContain("Preserve state");
   });
 
-  test("keeps schema-constrained preparation progress in prose", () => {
-    // A preparation turn runs for minutes in a watchable tab. Codex answered
-    // one by re-drafting the enforced metadata after every command, and the
-    // viewer folded each draft into a collapsed JSON card, so the round looked
-    // silent while it was committing and validating.
+  test("keeps schema-constrained preparation progress in commentary", () => {
+    // Codex applies the output schema to commentary samples too. The bridge
+    // unwraps a useful text field, so the prompt must tell it where progress
+    // belongs without treating that sample as final preparation metadata.
     const prompt = createReviewPreparationPrompt({
       round: 1,
       packageId: "package-1",
@@ -138,13 +137,16 @@ describe("backend looped-review prompt contracts", () => {
     });
 
     expect(prompt).toContain("## Output contract");
-    expect(prompt).toContain("The enforced schema applies to your final response only");
-    expect(prompt).toContain("Never send a JSON object or array as an interim update");
-    expect(prompt).toContain("do not wrap progress in schema field names");
-    expect(prompt).toContain(
-      "a message that begins with `{` or `[` is folded away as machine output",
-    );
-    expect(prompt).toContain("make the final assistant response the only JSON object");
+    expect(prompt).toContain("may apply the enforced schema to commentary");
+    expect(prompt).toContain("progress sentence in the `limitations` field");
+    expect(prompt).toContain("leave `validation` and `uncommittedFiles` as empty arrays");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).toContain("Do not use the final-response channel for progress");
+    expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).toHaveProperty("limitations");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("commentary");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("summary");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("notes");
   });
 
   test("omits absent context and keeps package values subordinate in discovery", () => {

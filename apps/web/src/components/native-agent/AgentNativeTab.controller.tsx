@@ -119,6 +119,7 @@ import {
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
+import { nativeMessageHasPlanTool } from "@/lib/plan-tool";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
@@ -416,7 +417,7 @@ export function SharedNativeAgentController({
     commands: projection?.slashCommands ?? [],
     text: draft.text,
     setText: (text) => updateDraft(sessionKey, { text }),
-    focusInputAtEnd: () => inputRef.current?.focusAtEnd(),
+    focusInputAtEnd: (expectedValue) => inputRef.current?.focusAtEnd(expectedValue),
   });
   const backendOwnsStartupPrompt =
     tabId === "startup-agent" &&
@@ -1341,11 +1342,17 @@ export function SharedNativeAgentController({
       void handleFork(messageId, kind);
     },
   });
+  const latestIsPlanReview =
+    latestAssistantMessage?.planReview === true ||
+    (platform === "cursor" &&
+      latestAssistantMessage !== undefined &&
+      nativeMessageHasPlanTool(latestAssistantMessage));
   const showPlanReview =
-    platform === "codex" &&
+    (platform === "codex" || platform === "cursor") &&
     composer?.selectedModeId === "plan" &&
     phase === "idle" &&
-    latestAssistantMessage?.planReview === true &&
+    latestIsPlanReview &&
+    latestAssistantMessage !== undefined &&
     latestAssistantMessage.id !== dismissedPlanReviewId;
   const switchPlanToBuild = useCallback(
     async (implement: boolean) => {

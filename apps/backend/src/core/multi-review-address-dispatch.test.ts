@@ -1,10 +1,14 @@
 import { expect, mock, test } from "bun:test";
 import {
+  MULTI_REVIEW_ADDRESS_PROMPT,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  multiReviewCustomFixPrompt,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { addressPrompt } from "./build-pipeline-prompts.js";
 import { NativeAgentProviderSessionMissingError } from "./native-agent-service.js";
 import {
   InvalidMultiReviewAddressStateError,
@@ -46,7 +50,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt: `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
+      prompt: MULTI_REVIEW_ADDRESS_PROMPT,
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -212,7 +216,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       requestId: "multi-review-address:multi-1:launch-1",
-      prompt: expect.stringContaining("Fix the reported regression"),
+      prompt: multiReviewCustomFixPrompt(custom.consolidatedReport!, custom.customFixInstruction!),
     }),
   );
   expect(dispatchIntent).toHaveBeenCalledWith(
@@ -369,7 +373,7 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
-      prompt: expect.stringContaining("Lost-session regression"),
+      prompt: `${addressPrompt(recoverable.consolidatedReport!)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
       mode: "build",
     }),
   );

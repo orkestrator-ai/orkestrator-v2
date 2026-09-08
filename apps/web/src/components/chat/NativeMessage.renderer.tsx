@@ -1,7 +1,9 @@
 import { useContext, useEffect, useState } from "react";
 import { isEditTool } from "@/lib/tool-names";
+import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
+import { PlanToolPart } from "./PlanToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
@@ -49,6 +51,7 @@ export function DeferredToolMessagePart({
   const expansionScope = useContext(MessageExpansionScopeContext);
   const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
   const [isOpen] = useMessagePartExpansion(expansionKey);
+  const eagerDetails = isPlanTool(part.toolName);
   const detailRef = part.detailRef!;
   const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
     cachedToolDetails(detailRef),
@@ -67,7 +70,7 @@ export function DeferredToolMessagePart({
   }, [detailRef]);
 
   useEffect(() => {
-    if (!isOpen || details || loadError || !loadToolDetails) return;
+    if ((!isOpen && !eagerDetails) || details || loadError || !loadToolDetails) return;
     let cancelled = false;
     void loadToolDetails(detailRef)
       .then((loaded) => {
@@ -82,7 +85,7 @@ export function DeferredToolMessagePart({
     return () => {
       cancelled = true;
     };
-  }, [detailRef, details, isOpen, loadError, loadToolDetails]);
+  }, [detailRef, details, eagerDetails, isOpen, loadError, loadToolDetails]);
 
   /*
    * The collapsed row shows the part's own metadata and nothing else. Earlier
@@ -209,6 +212,19 @@ export function MessagePart({
             toolOutput={part.toolOutput}
             toolError={part.toolError}
             toolDiff={part.toolDiff}
+            deferredDetails={deferredDetails}
+          />
+        );
+      }
+      if (isPlanTool(part.toolName)) {
+        return (
+          <PlanToolPart
+            toolName={part.toolName}
+            toolState={part.toolState}
+            toolTitle={part.toolTitle}
+            toolArgs={part.toolArgs}
+            toolOutput={part.toolOutput}
+            toolError={part.toolError}
             deferredDetails={deferredDetails}
           />
         );

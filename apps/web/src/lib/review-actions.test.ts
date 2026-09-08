@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-actions";
 
@@ -10,12 +14,23 @@ const report = {
 } as StructuredReviewReport;
 
 describe("multiReviewCustomFixPrompt", () => {
-  test("keeps the Address all prompt stable", () => {
+  test("keeps generic Address all independent of the Multi Review handoff", () => {
     expect(ADDRESS_ALL_REVIEW_PROMPT).toBe(
       `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
     );
+    expect(ADDRESS_ALL_REVIEW_PROMPT).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(MULTI_REVIEW_ADDRESS_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("Do not invoke EnterPlanMode");
     expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("make the necessary edits");
+  });
+
+  test("retires both structured-output and read-only review-stage constraints", () => {
+    expect(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION).toContain(
+      "instructions not to edit files, run commands, or fix findings have also ended",
+    );
+    expect(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION).toContain(
+      "Implement the requested fixes, run relevant validation, and commit every relevant change.",
+    );
   });
 
   test("frames actionable report evidence and appends the custom instruction", () => {
@@ -26,6 +41,11 @@ describe("multiReviewCustomFixPrompt", () => {
     expect(prompt).toContain("Failure feedback");
     expect(prompt).toContain("Complete consolidated report");
     expect(prompt).toContain("User-provided fix instructions:\nPreserve the existing API");
+    expect(prompt).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(prompt.split(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)).toHaveLength(2);
+    expect(prompt.indexOf(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)).toBeGreaterThan(
+      prompt.indexOf("</structured-review-findings-json>"),
+    );
     expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 

@@ -34,12 +34,12 @@ export function CodexPlanModeCard({
 
       <div className="space-y-3 px-4 py-4">
         <p className="text-sm leading-relaxed text-foreground">
-          Codex is in planning-only mode. It should analyze, propose a plan, and avoid making
-          changes until you approve the approach.
+          This session is in planning-only mode. The agent should analyze, propose a plan, and avoid
+          making changes until you approve the approach.
         </p>
         <p className="text-xs text-muted-foreground">
-          Approving switches the session back to build mode and sends a follow-up prompt telling
-          Codex to implement the approved plan.
+          Approving switches the session back to build mode and sends a follow-up prompt telling the
+          agent to implement the approved plan.
         </p>
       </div>
 

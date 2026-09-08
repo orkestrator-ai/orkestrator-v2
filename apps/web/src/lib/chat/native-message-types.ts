@@ -303,7 +303,7 @@ export interface NativeMessage {
   /** Provider/backend-observed model that produced this assistant message. */
   modelId?: string;
   turnId?: string;
-  /** Typed Codex plan-review marker used by the shared presentation slot. */
+  /** Typed plan-review marker used by the shared Codex/Cursor presentation slot. */
   planReview?: boolean;
   /** Backend-authenticated display treatment for this user message. */
   promptPresentation?: UserPromptPresentationKind;

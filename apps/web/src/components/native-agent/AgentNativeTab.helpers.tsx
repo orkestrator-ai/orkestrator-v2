@@ -229,6 +229,9 @@ function PlatformIcon({ platform }: { platform: AgentPlatform }) {
 }
 
 export function extractNativePlanContent(messages: readonly NativeMessage[]): string | undefined {
+  // createPlan bodies are deferred behind detailRef in projected messages and
+  // render through PlanToolPart. This synchronous fallback is only for plan
+  // files whose bounded content remains in toolArgs.
   const fromParts = (parts: readonly NativeMessagePart[]): string | undefined => {
     for (const part of [...parts].reverse()) {
       if (part.type === "tool-invocation" && part.toolName?.toLowerCase() === "write") {

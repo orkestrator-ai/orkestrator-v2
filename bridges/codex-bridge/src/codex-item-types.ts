@@ -78,6 +78,8 @@ export interface AgentMessageItem {
   type: "agent_message";
   /** Either natural-language text or JSON when structured output is requested. */
   text: string;
+  /** Provider channel; commentary remains user-visible even when schema-shaped. */
+  phase?: "commentary" | "final_answer";
   /** Non-blocking user input request embedded in the transcript by Codex. */
   delivery?: "async";
   questions?: AsyncUserInputQuestion[];

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { InteractionUpdateSchema } from "@cursor/sdk";
 import { newSessionState } from "./agent-session.js";
+import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { publicContextUsage } from "./public.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
 import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
@@ -165,6 +166,57 @@ describe("tool call lifecycle", () => {
       toolState: "success",
       toolOutput: "pass",
     });
+  });
+
+  test("plan mode stamps planReview on the assistant message", () => {
+    const state = running();
+    state.composer.selectedModeId = "plan";
+    applyInteractionUpdate(state, { type: "text-delta", text: "Here is the plan." });
+    expect(state.messages[0]).toMatchObject({
+      role: "assistant",
+      planReview: true,
+      content: "Here is the plan.",
+    });
+  });
+
+  test("build mode does not stamp planReview", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Implementing." });
+    expect(state.messages[0]!.planReview).toBeUndefined();
+  });
+
+  test("keeps live createPlan metadata inside the configured byte bounds", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "plan-1",
+      modelCallId: "model-1",
+      toolCall: {
+        type: "createPlan",
+        args: { name: "n".repeat(MAX_TOOL_TITLE_BYTES * 2), plan: "# Plan" },
+        result: { status: "success", value: {} },
+      },
+    });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "plan-2",
+      modelCallId: "model-1",
+      toolCall: {
+        type: "createPlan",
+        args: { plan: `# ${"h".repeat(MAX_TOOL_TITLE_BYTES * 2)}` },
+        result: { status: "success", value: {} },
+      },
+    });
+
+    const plans = toolParts(state);
+    expect(plans).toHaveLength(2);
+    expect(
+      plans.every((plan) => Buffer.byteLength(plan.toolTitle ?? "") <= MAX_TOOL_TITLE_BYTES),
+    ).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(plans[0]!.toolArgs))).toBeLessThanOrEqual(
+      MAX_TOOL_ARGUMENT_BYTES,
+    );
+    expect(plans[1]!.toolArgs).toBeUndefined();
   });
 
   test("a failed call settles as a failure", () => {

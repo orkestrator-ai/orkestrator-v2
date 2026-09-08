@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_MAX_CONTEXT_BYTES,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -116,9 +119,12 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("backend—not you—will deterministically generate it from Git");
     expect(prompt).toContain("commentary or update channel");
     expect(prompt).toContain("using ordinary prose sentences");
-    expect(prompt).toContain("Never send a JSON object or array as an interim update");
-    expect(prompt).toContain("do not use the final-response channel for progress");
-    expect(prompt).toContain("make the final assistant response the only JSON object");
+    expect(prompt).toContain("may apply the enforced schema to commentary");
+    expect(prompt).toContain("progress sentence in the `limitations` field");
+    expect(prompt).toContain("leave `validation` and `uncommittedFiles` as empty arrays");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).toContain("Do not use the final-response channel for progress");
+    expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
     expect(prompt).toContain("provider-enforced preparation metadata");
   });
 
@@ -178,11 +184,14 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("## Step 4: Test Coverage Review");
     expect(prompt).toContain("git diff origin/main...HEAD");
     expect(prompt).toContain("provider-enforced JSON Schema");
-    expect(prompt).toContain("The output schema applies to your final message only");
-    expect(prompt).toContain("Write interim progress updates as plain sentences");
+    expect(prompt).toContain("may also apply it to commentary samples");
+    expect(prompt).toContain("Send interim progress only through the provider's commentary");
+    expect(prompt).toContain("progress sentence in `reviewSummary`");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).toContain("Do not use the final-response channel for progress");
     expect(prompt).toContain("Never emit a partial or provisional structured report");
     expect(prompt).toContain(
-      "make the final assistant message the only provider-enforced structured report",
+      "make the final assistant message the one authoritative provider-enforced structured report",
     );
     expect(prompt).not.toContain("## Output Format");
     expect(prompt).not.toContain("## Summary of change");
@@ -352,6 +361,9 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Run the relevant validation.");
     expect(prompt).toContain("Stage only related safe files");
     expect(prompt).toContain("commit every relevant fix before finishing");
+    // Automated pipeline fix turns still receive their enforced result schema;
+    // only the manual Multi Review handoff supersedes prior JSON contracts.
+    expect(prompt).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 

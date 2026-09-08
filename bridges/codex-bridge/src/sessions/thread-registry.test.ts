@@ -9,6 +9,7 @@ import {
 import { TurnAccumulator } from "./turn-accumulator.js";
 import type { EngineTurnConfig } from "../engine/types.js";
 import type { NormalizedMessage } from "../messages/types.js";
+import { MAX_STRUCTURED_OUTPUT_TURNS } from "@orkestrator/protocol/structured-output";
 
 const CONFIG: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol" };
 
@@ -704,5 +705,27 @@ describe("generation recovery", () => {
     expect(reattached.engineGeneration).toBe(2);
     // Still one reference — re-attaching the same session must not double-count.
     expect(registry.referenceCount("thread-1")).toBe(1);
+  });
+});
+
+describe("structured-output turn history", () => {
+  test("fans out accepted state to every bound session and keeps a bounded ledger", () => {
+    const registry = makeRegistry();
+    const first = createSession(registry, "s1", "thread-1");
+    const second = createSession(registry, "s2", "thread-1");
+
+    for (let index = 0; index <= MAX_STRUCTURED_OUTPUT_TURNS; index += 1) {
+      registry.recordStructuredOutputTurn("thread-1", `turn-${index}`, false);
+    }
+    registry.recordStructuredOutputTurn("thread-1", `turn-${MAX_STRUCTURED_OUTPUT_TURNS}`, true);
+
+    for (const session of [first, second]) {
+      expect(session.structuredOutputTurns).toHaveLength(MAX_STRUCTURED_OUTPUT_TURNS);
+      expect(session.structuredOutputTurns?.[0]?.turnId).toBe("turn-1");
+      expect(session.structuredOutputTurns?.at(-1)).toEqual({
+        turnId: `turn-${MAX_STRUCTURED_OUTPUT_TURNS}`,
+        accepted: true,
+      });
+    }
   });
 });

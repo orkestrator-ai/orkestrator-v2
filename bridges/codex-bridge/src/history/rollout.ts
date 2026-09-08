@@ -32,6 +32,11 @@ import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import { extractAttachmentTags } from "../messages/attachment-tags.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import {
+  isWithheldMachineOutput,
+  MAX_STRUCTURED_OUTPUT_TURNS,
+  type StructuredOutputTurnRecord,
+} from "@orkestrator/protocol/structured-output";
+import {
   applyTranscriptToolOutput,
   deriveSubagentPartsFromTranscriptRecords,
   normalizeTranscriptToolArgs,
@@ -1047,7 +1052,10 @@ async function resolvePersistedSessionMetaForThread(
   return meta;
 }
 
-export async function hydrateMessagesFromPersistedSession(threadId: string): Promise<{
+export async function hydrateMessagesFromPersistedSession(
+  threadId: string,
+  options: { structuredOutputTurns?: readonly StructuredOutputTurnRecord[] } = {},
+): Promise<{
   messages: NormalizedMessage[];
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
@@ -1067,6 +1075,25 @@ export async function hydrateMessagesFromPersistedSession(threadId: string): Pro
   }
 
   const { records } = await readCachedTranscript(meta.transcriptPath);
+  const structuredTurns = new Map(
+    options.structuredOutputTurns
+      ?.slice(-MAX_STRUCTURED_OUTPUT_TURNS)
+      .map((entry) => [entry.turnId, entry.accepted]),
+  );
+  const finalAssistantRecordByTurn = new Map<string, number>();
+  let indexedTurnId: string | undefined;
+  for (const [recordIndex, record] of records.entries()) {
+    indexedTurnId = readTurnId(record.payload) ?? indexedTurnId;
+    if (
+      indexedTurnId &&
+      structuredTurns.has(indexedTurnId) &&
+      record.type === "response_item" &&
+      record.payload?.type === "message" &&
+      record.payload.role === "assistant"
+    ) {
+      finalAssistantRecordByTurn.set(indexedTurnId, recordIndex);
+    }
+  }
   const persistedSubagentParts = await hydratePersistedSubagentParts(threadId, records);
   const messages: NormalizedMessage[] = [];
   const toolPartsByCallId = new Map<
@@ -1092,7 +1119,7 @@ export async function hydrateMessagesFromPersistedSession(threadId: string): Pro
   let currentTurnModel: string | undefined;
   let currentAssistantMessage: NormalizedMessage | undefined;
 
-  for (const record of records) {
+  for (const [recordIndex, record] of records.entries()) {
     const recordTurnId = readTurnId(record.payload);
     if (recordTurnId && recordTurnId !== currentTurnId) {
       currentTurnId = recordTurnId;
@@ -1184,6 +1211,14 @@ export async function hydrateMessagesFromPersistedSession(threadId: string): Pro
     const { text, attachments } = persisted;
 
     if (role === "assistant") {
+      const acceptedStructuredTurn = currentTurnId ? structuredTurns.get(currentTurnId) : undefined;
+      if (
+        acceptedStructuredTurn !== undefined &&
+        isWithheldMachineOutput(text) &&
+        !(acceptedStructuredTurn && finalAssistantRecordByTurn.get(currentTurnId!) === recordIndex)
+      ) {
+        continue;
+      }
       const assistantMessage = ensureAssistantMessage();
       assistantMessage.content = text;
       assistantMessage.parts.push({ type: "text", content: text });

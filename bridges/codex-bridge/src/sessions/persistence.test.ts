@@ -4,6 +4,7 @@ import { chmod, mkdtemp, readdir, rm, stat, writeFile, mkdir } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { BRIDGE_SESSION_REGISTRY_VERSION, BridgeSessionStore, hashCwd } from "./persistence.js";
+import { MAX_STRUCTURED_OUTPUT_TURNS } from "@orkestrator/protocol/structured-output";
 
 const temporaryDirectories: string[] = [];
 
@@ -138,6 +139,7 @@ describe("BridgeSessionStore", () => {
       title: "A session",
       titleSource: "explicit",
       lastAcceptedRequestId: "request-1",
+      structuredOutputTurns: [{ turnId: "turn-structured", accepted: true }],
       confirmedModelsByTurn: { "turn-1": "gpt-rerouted" },
     });
 
@@ -174,6 +176,36 @@ describe("BridgeSessionStore", () => {
     );
 
     expect((await store.load()).map((record) => record.bridgeSessionId)).toEqual(["valid"]);
+  });
+
+  test("rejects malformed or unbounded structured-output turn ledgers", async () => {
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const { codexHome, store } = await makeStore({ now: () => now });
+    await writeRecordFile(codexHome, "valid-ledger", {
+      ...validRecordFields("valid-ledger", now),
+      structuredOutputTurns: [{ turnId: "turn-1", accepted: false }],
+    });
+    const malformed: unknown[] = [
+      null,
+      {},
+      [{ turnId: "", accepted: true }],
+      [{ turnId: "turn-1" }],
+      [{ turnId: "turn-1", accepted: "yes" }],
+      Array.from({ length: MAX_STRUCTURED_OUTPUT_TURNS + 1 }, (_, index) => ({
+        turnId: `turn-${index}`,
+        accepted: false,
+      })),
+    ];
+    await Promise.all(
+      malformed.map((structuredOutputTurns, index) =>
+        writeRecordFile(codexHome, `invalid-ledger-${index}`, {
+          ...validRecordFields(`invalid-ledger-${index}`, now),
+          structuredOutputTurns,
+        }),
+      ),
+    );
+
+    expect((await store.load()).map((record) => record.bridgeSessionId)).toEqual(["valid-ledger"]);
   });
 
   test("serializes concurrent upserts without losing either session", async () => {

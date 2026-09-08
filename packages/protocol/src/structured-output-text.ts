@@ -41,6 +41,23 @@ const WHOLE_JSON_FENCE = /^```(?:json[5c]?)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i;
 const THINKING_OPEN = new RegExp(`<(${THINKING_TAGS})(?:\\s[^>]*)?>`, "gi");
 const THINKING_CLOSE = new RegExp(`</(${THINKING_TAGS})[ \\t]*>`, "gi");
 
+/**
+ * `not-json`: does not open as a JSON document, so it is prose.
+ * `incomplete`: opens as one and its delimiters never close — still streaming.
+ * `complete`: one or more adjacent root documents all close, with no prose.
+ */
+export type JsonDocumentState = "not-json" | "incomplete" | "complete";
+
+interface JsonDocumentScan {
+  state: JsonDocumentState;
+  /** Last root document, only when the entire machine-output sequence closed. */
+  lastDocument?: string;
+}
+
+/** Opening fence of a JSON code block, which providers sometimes wrap around it. */
+const OPENING_JSON_FENCE = /^```(?:json[5c]?)?[ \t]*\r?\n/i;
+const CLOSING_JSON_FENCE = /\r?\n?```$/;
+
 interface IndexRange {
   start: number;
   end: number;
@@ -56,6 +73,84 @@ interface TagMatch {
 interface ScanResult {
   value: unknown;
   exhausted: boolean;
+}
+
+/**
+ * Classify text as prose, an unfinished JSON document, or a finished one.
+ *
+ * This is delimiter-accurate rather than grammar-accurate. A malformed closed
+ * document is still provider machine output, while prose around a JSON snippet
+ * remains visible. The scan allocates no growing substrings and never parses a
+ * streaming draft.
+ */
+function scanJsonDocuments(text: string): JsonDocumentScan {
+  let candidate = text.trim();
+  const fenced = OPENING_JSON_FENCE.test(candidate);
+  if (fenced) {
+    candidate = candidate.replace(OPENING_JSON_FENCE, "").replace(CLOSING_JSON_FENCE, "").trim();
+  }
+  const opening = candidate[0];
+  if (opening !== "{" && opening !== "[") return { state: "not-json" };
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let documentStart = 0;
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    const character = candidate[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{" || character === "[") {
+      depth += 1;
+      continue;
+    }
+    if (character !== "}" && character !== "]") continue;
+
+    depth -= 1;
+    if (depth < 0) return { state: "not-json" };
+    if (depth !== 0) continue;
+
+    const lastDocument = candidate.slice(documentStart, index + 1);
+    let next = index + 1;
+    while (candidate[next] !== undefined && /\s/.test(candidate[next]!)) next += 1;
+    if (next >= candidate.length) return { state: "complete", lastDocument };
+    if (candidate[next] !== "{" && candidate[next] !== "[") {
+      return { state: "not-json" };
+    }
+    const separator = candidate.slice(index + 1, next);
+    // Newline-separated roots are JSONL, and fenced roots were deliberately
+    // presented as source. Only Codex's same-line appended revisions collapse.
+    if (fenced || /[\r\n]/.test(separator)) return { state: "not-json" };
+    documentStart = next;
+    index = next - 1;
+  }
+
+  return { state: "incomplete" };
+}
+
+/** Classify provider text without paying for JSON.parse on streaming frames. */
+export function jsonDocumentState(text: string): JsonDocumentState {
+  return scanJsonDocuments(text).state;
+}
+
+/** Last closed root from a text block made entirely of machine JSON. */
+export function lastMachineJsonDocument(text: string): string | null {
+  const scan = scanJsonDocuments(text);
+  return scan.state === "complete" ? (scan.lastDocument ?? null) : null;
+}
+
+/** Whether text is provider machine output rather than prose. */
+export function isWithheldMachineOutput(text: string): boolean {
+  return jsonDocumentState(text) !== "not-json";
 }
 
 /**

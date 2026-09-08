@@ -189,6 +189,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         lastAcceptedRequestId: persisted.lastAcceptedRequestId,
         structuredOutputRequestId: persisted.structuredOutputRequestId,
         structuredOutput: persisted.structuredOutput,
+        structuredOutputTurns: persisted.structuredOutputTurns,
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
         asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
@@ -562,7 +563,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // It had a rollout to resume from, so it is materialized by definition.
       context.materialized = true;
       if (context.messages.length === 0) {
-        const hydrated = await hydrateMessagesFromPersistedSession(threadId);
+        const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
+          structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
+        });
         context.messages = hydrated.messages;
         this.registry.indexHydratedAsyncQuestions(context);
         this.applyPersistedModelOverrides(context);
@@ -1183,6 +1186,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
       const phaseBeforeRebind = context.phase;
       const errorBeforeRebind = context.error;
+      const turn = context.activeTurn;
 
       try {
         // An unmaterialized thread has no rollout and cannot be resumed on the new
@@ -1214,7 +1218,6 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         context.unsubscribed = false;
         context.engineGeneration = generation;
 
-        const turn = context.activeTurn;
         if (!turn) {
           this.registry.setPhase(
             context,
@@ -1296,15 +1299,19 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         // the session wedged in `recovering`.
         const message =
           error instanceof Error ? error.message : "Failed to recover the Codex thread";
-        context.activeTurn = null;
         // The old handle belongs to a dead generation. Keep the failed context for
         // honest status reporting, but force ensureAttached to resume it before a
         // later prompt may dispatch.
         context.unsubscribed = true;
-        this.registry.setPhase(context, "failed", message);
-        this.emitStatus(context);
-        for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit({ type: "session.error", sessionId, data: { error: message } });
+        if (turn) {
+          turn.complete("failed", { message, retryable: true });
+          await this.runFinalization(context, turn);
+        } else {
+          this.registry.setPhase(context, "failed", message);
+          this.emitStatus(context);
+          for (const sessionId of context.bridgeSessionIds) {
+            this.options.emit({ type: "session.error", sessionId, data: { error: message } });
+          }
         }
       }
     }
@@ -1330,6 +1337,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         retryable: structuredResult.error.retryable,
       });
     }
+    const structuredLedgerSessions = turn.expectsStructuredOutput
+      ? this.registry.recordStructuredOutputTurn(
+          context.threadId,
+          turn.turnId,
+          structuredResult?.ok === true && turn.phase === "completed",
+        )
+      : [];
 
     // Journal the terminal state *before* rendering. The durable "this request
     // finished" record must not wait on diff computation: a duplicate arriving in
@@ -1353,7 +1367,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       for (const session of structuredSessions) {
         session.structuredOutput = structuredResult;
       }
-      await Promise.all(structuredSessions.map((session) => this.persistSession(session)));
+      await Promise.all(
+        [...new Set([...structuredSessions, ...structuredLedgerSessions])].map((session) =>
+          this.persistSession(session),
+        ),
+      );
       for (const session of structuredSessions) {
         this.options.emit({
           type: "session.structured-output",

@@ -105,10 +105,12 @@ import {
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 import type { BridgeModel } from "./models-cache.js";
 import {
+  MAX_STRUCTURED_OUTPUT_TURNS,
   structuredOutputFailure,
   tryParseStructuredOutputText,
   type JsonSchema,
   type StructuredOutputResult,
+  type StructuredOutputTurnRecord,
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
@@ -924,6 +926,19 @@ export abstract class AppServerRuntimeBase {
 
   protected sessionIdsForThread(threadId: string): string[] {
     return this.registry.sessionsForThread(threadId).map((session) => session.id);
+  }
+
+  /** Union the durable structured-turn ledger across every tab bound to a thread. */
+  protected structuredOutputTurnsForThread(threadId: string): StructuredOutputTurnRecord[] {
+    const turns = new Map<string, boolean>();
+    for (const session of this.registry.boundSessionsForThread(threadId)) {
+      for (const entry of session.structuredOutputTurns ?? []) {
+        turns.set(entry.turnId, (turns.get(entry.turnId) ?? false) || entry.accepted);
+      }
+    }
+    return [...turns]
+      .slice(-MAX_STRUCTURED_OUTPUT_TURNS)
+      .map(([turnId, accepted]) => ({ turnId, accepted }));
   }
 
   listInteractions(sessionId: string): InteractionRequest[] {

@@ -26,11 +26,24 @@ function turn() {
   });
 }
 
+function structuredTurn() {
+  return new TurnAccumulator({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    requestId: "request-1",
+    expectsStructuredOutput: true,
+    engineGeneration: 1,
+    assistantMessageId: "message-1",
+    startedAt: "2026-07-25T12:00:00.000Z",
+  });
+}
+
 describe("turn render state", () => {
   test("begins the first turn with empty render state", () => {
     const state = beginTurnRenderState(undefined);
     expect(state.timelineOrder).toEqual([]);
     expect(state.completedItemParts.size).toBe(0);
+    expect(state.machineOutputByItem.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.subagentPathIds.size).toBe(0);
@@ -43,6 +56,11 @@ describe("turn render state", () => {
     const previous = createTurnRenderState();
     previous.timelineOrder.push("item:old");
     previous.completedItemParts.set("old", { source: null, parts: [] });
+    previous.machineOutputByItem.set("old", {
+      source: null,
+      version: 1,
+      withheld: true,
+    });
     previous.subagentParts.set("agent:old", { type: "subagent", content: "old" });
     previous.subagentFingerprints.set("agent:old", "old");
     previous.subagentPathIds.set("/root/old", "old");
@@ -53,6 +71,7 @@ describe("turn render state", () => {
     const next = beginTurnRenderState(previous);
     expect(next.timelineOrder).toEqual([]);
     expect(next.completedItemParts.size).toBe(0);
+    expect(next.machineOutputByItem.size).toBe(0);
     expect(next.subagentParts.size).toBe(0);
     expect(next.subagentFingerprints.size).toBe(0);
     expect(next.subagentPathIds.size).toBe(0);
@@ -65,6 +84,11 @@ describe("turn render state", () => {
     const state = createTurnRenderState();
     state.timelineOrder.push("x");
     state.completedItemParts.set("x", { source: null, parts: [] });
+    state.machineOutputByItem.set("x", {
+      source: null,
+      version: 1,
+      withheld: true,
+    });
     state.subagentParts.set("a", { type: "subagent", content: "x" });
     state.subagentFingerprints.set("a", "fingerprint");
     state.subagentPathIds.set("/root/a", "a");
@@ -74,6 +98,7 @@ describe("turn render state", () => {
     releaseTurnRenderState(state);
     expect(state.timelineOrder).toEqual([]);
     expect(state.completedItemParts.size).toBe(0);
+    expect(state.machineOutputByItem.size).toBe(0);
     expect(state.subagentParts.size).toBe(0);
     expect(state.subagentFingerprints.size).toBe(0);
     expect(state.subagentPathIds.size).toBe(0);
@@ -1215,6 +1240,232 @@ describe("renderTurn", () => {
 
     expect(rendered.parts.map((part) => part.content)).toEqual(["first answer", "last answer"]);
     expect(rendered.content).toBe("last answer");
+  });
+
+  test("withholds interim structured-output drafts and reveals only the terminal result", async () => {
+    const accumulator = structuredTurn();
+    const state = createTurnRenderState();
+    accumulator.onItemCompleted({
+      id: "progress",
+      type: "agent_message",
+      text: "Checking the working tree.",
+    });
+    accumulator.onItemCompleted({
+      id: "draft-1",
+      type: "agent_message",
+      text: '{"validation":null,"filesLeftUncommitted":null,"limitations":["working"]}',
+    });
+    accumulator.onItemCompleted({
+      id: "command",
+      type: "command_execution",
+      command: "git status --short",
+      aggregated_output: "",
+      status: "completed",
+    });
+    accumulator.onItemCompleted({
+      id: "draft-2",
+      type: "agent_message",
+      text: '```json\n{"validation":null,"filesLeftUncommitted":null,"limitations":["validating"]}\n```',
+    });
+
+    const active = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+    expect(active.parts.map((part) => part.content)).toEqual([
+      "Checking the working tree.",
+      "git status --short",
+    ]);
+    expect(active.content).toBe("Checking the working tree.");
+
+    const finalPayload =
+      '{"validation":"bun run check","filesLeftUncommitted":[],"limitations":[]}';
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      text: finalPayload,
+    });
+    accumulator.complete("completed");
+
+    const completed = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+    expect(completed.parts.map((part) => part.content)).toEqual([
+      "Checking the working tree.",
+      "git status --short",
+      finalPayload,
+    ]);
+    expect(completed.content).toBe(finalPayload);
+  });
+
+  test("withholds incomplete, fenced, malformed, and concatenated machine output", async () => {
+    for (const text of [
+      '{"validation":',
+      '```json\n{"validation":',
+      '{"validation": bad}',
+      '{"validation":null}{"validation":',
+      '{"validation":null}{"validation":true}',
+    ]) {
+      const accumulator = structuredTurn();
+      accumulator.onTextDelta("draft", text);
+      const rendered = await renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state: createTurnRenderState(),
+        loadSubagentParts: async () => [],
+      });
+      expect(rendered).toEqual({ parts: [], content: "" });
+    }
+  });
+
+  test("keeps one streaming draft hidden as it becomes complete", async () => {
+    const accumulator = structuredTurn();
+    const state = createTurnRenderState();
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => [],
+      });
+
+    accumulator.onTextDelta("draft", '{"validation":');
+    expect(await render()).toEqual({ parts: [], content: "" });
+    const incompleteClassification = state.machineOutputByItem.get("draft");
+
+    accumulator.onTextDelta("draft", "null}");
+    expect(await render()).toEqual({ parts: [], content: "" });
+    expect(state.machineOutputByItem.get("draft")).not.toBe(incompleteClassification);
+
+    accumulator.onItemCompleted({
+      id: "draft",
+      type: "agent_message",
+      text: '{"validation":null}',
+    });
+    expect(await render()).toEqual({ parts: [], content: "" });
+
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      text: '{"validation":"passed"}',
+    });
+    accumulator.complete("completed");
+    expect((await render()).parts.map((part) => part.content)).toEqual(['{"validation":"passed"}']);
+  });
+
+  test("classifies an unchanged completed draft only once per render state", async () => {
+    const accumulator = structuredTurn();
+    accumulator.onItemCompleted({ id: "draft", type: "agent_message", text: '{"draft":true}' });
+    const state = createTurnRenderState();
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => [],
+      });
+
+    await render();
+    const cached = state.machineOutputByItem.get("draft");
+    expect(cached).toMatchObject({ withheld: true });
+    await render();
+    expect(state.machineOutputByItem.get("draft")).toBe(cached);
+  });
+
+  test.each(["failed", "interrupted"] as const)(
+    "keeps a structured draft hidden when the turn is %s",
+    async (status) => {
+      const accumulator = structuredTurn();
+      accumulator.onItemCompleted({
+        id: "draft",
+        type: "agent_message",
+        text: '{"authoritative":false}',
+      });
+      accumulator.complete(status);
+
+      const rendered = await renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state: createTurnRenderState(),
+        loadSubagentParts: async () => [],
+      });
+      expect(rendered).toEqual({ parts: [], content: "" });
+    },
+  );
+
+  test("does not promote a draft when the final agent record is empty", async () => {
+    const accumulator = structuredTurn();
+    accumulator.onItemCompleted({
+      id: "draft",
+      type: "agent_message",
+      text: '{"authoritative":false}',
+    });
+    accumulator.onItemCompleted({ id: "empty-final", type: "agent_message", text: "" });
+    accumulator.complete("completed");
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+    expect(rendered.parts.map((part) => part.content)).toEqual([""]);
+    expect(rendered.content).toBe("");
+  });
+
+  test("keeps drafts hidden across assistant segments and reveals the final segment", async () => {
+    const accumulator = structuredTurn();
+    accumulator.onItemCompleted({
+      id: "draft",
+      type: "agent_message",
+      text: '{"authoritative":false}',
+    });
+    const boundary = accumulator.freezeAssistantSegment();
+    accumulator.startAssistantSegment("message-2", boundary, "2026-07-25T12:01:00.000Z");
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      text: '{"authoritative":true}',
+    });
+    accumulator.complete("completed");
+
+    const [first, second] = accumulator.assistantSegmentsInOrder();
+    const renderSegment = (segment: NonNullable<typeof first>) =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state: createTurnRenderState(),
+        segment,
+        loadSubagentParts: async () => [],
+      });
+    expect(await renderSegment(first!)).toEqual({ parts: [], content: "" });
+    expect((await renderSegment(second!)).content).toBe('{"authoritative":true}');
+  });
+
+  test("does not hide JSON messages from an ordinary unconstrained turn", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({
+      id: "json",
+      type: "agent_message",
+      text: '{"status":"still visible"}',
+    });
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts.map((part) => part.content)).toEqual(['{"status":"still visible"}']);
+    expect(rendered.content).toBe('{"status":"still visible"}');
   });
 
   test("falls back to the first text part when the final assistant message is empty", async () => {

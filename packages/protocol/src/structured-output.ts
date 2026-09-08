@@ -7,6 +7,15 @@
  */
 export type JsonSchema = Record<string, unknown>;
 
+/** Bounded durable history used to reproduce structured transcript filtering. */
+export const MAX_STRUCTURED_OUTPUT_TURNS = 128;
+
+export interface StructuredOutputTurnRecord {
+  turnId: string;
+  /** True only when the provider result parsed successfully. */
+  accepted: boolean;
+}
+
 export type StructuredOutputProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 
 export type StructuredOutputFailureCode =
@@ -123,11 +132,15 @@ export function isStructuredOutputResult(value: unknown): value is StructuredOut
 }
 
 export {
+  isWithheldMachineOutput,
+  jsonDocumentState,
+  lastMachineJsonDocument,
   STRUCTURED_OUTPUT_RECOVERY_CANDIDATES,
   STRUCTURED_OUTPUT_RECOVERY_CHARS,
   STRUCTURED_OUTPUT_RECOVERY_TAGS,
   tryParseStructuredOutputText,
 } from "./structured-output-text.js";
+export type { JsonDocumentState } from "./structured-output-text.js";
 
 export function structuredOutputFailure(
   provider: StructuredOutputProvider,

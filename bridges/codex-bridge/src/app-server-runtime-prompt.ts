@@ -628,7 +628,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // The user message is persisted now, so the thread has a rollout and can be
       // detached and resumed later.
       context.materialized = true;
-      await this.persistSession(session);
+      const ledgerSessions = input.outputSchema
+        ? this.registry.recordStructuredOutputTurn(context.threadId, turn.turnId, false)
+        : [];
+      await Promise.all(
+        [...new Set([session, ...ledgerSessions])].map((entry) => this.persistSession(entry)),
+      );
 
       const accumulator = new TurnAccumulator({
         threadId: context.threadId,

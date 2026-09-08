@@ -9,6 +9,7 @@ import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { createSessionKey } from "@/lib/utils";
 
 const backendSnapshot = { ...realBackend };
@@ -191,6 +192,7 @@ describe("CoordinatorPanel", () => {
     });
     useUIStore.setState({ projectBoardTab: "coordinator" });
     useNativeAgentProjectionStore.getState().reset();
+    useNativeNoticeDismissalStore.getState().clear();
   });
 
   test("forwards the project id to the coordinator native-agent tab", async () => {
@@ -539,7 +541,7 @@ describe("CoordinatorPanel", () => {
     await waitFor(() => expect(syncGit).toHaveBeenCalledWith("project-1"));
   });
 
-  test("disables Git mutations during an active turn and clears acknowledged context warnings", async () => {
+  test("disables Git mutations during an active turn and dismisses context warnings", async () => {
     ensuredGit = {
       ...gitStatus,
       upstream: "origin/main",
@@ -584,7 +586,14 @@ describe("CoordinatorPanel", () => {
     expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "Sync" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss repository context notice" }));
+    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
     active.unmount();
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+    cleanup();
 
     ensuredSnapshot = {
       ...ensuredSnapshot,

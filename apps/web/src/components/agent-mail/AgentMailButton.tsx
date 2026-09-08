@@ -673,6 +673,7 @@ export function AgentMailButton() {
               if (!latest) return null;
               const { mailbox, message, sent: isSent } = latest;
               const active = expanded?.id === message.id;
+              const routeLabel = `From ${senderLabel(message)} → To ${mailbox.displayName}`;
               return (
                 <div key={thread.threadId} className="border-b border-zinc-800/70 p-3">
                   <p className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -693,12 +694,17 @@ export function AgentMailButton() {
                           />
                         )}
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-medium">
-                            {message.subject ||
-                              (isSent
-                                ? `To ${mailbox.displayName}`
-                                : `From ${senderLabel(message)}`)}
+                          <p
+                            className="truncate text-xs font-medium"
+                            title={message.subject ? undefined : routeLabel}
+                          >
+                            {message.subject || routeLabel}
                           </p>
+                          {message.subject && (
+                            <p className="truncate text-[11px] text-zinc-300" title={routeLabel}>
+                              {routeLabel}
+                            </p>
+                          )}
                           <p className="truncate text-[11px] text-muted-foreground">
                             {mailbox.environmentName} ·{" "}
                             {messageStatusLabel(mailbox, message, isSent)}

@@ -73,6 +73,53 @@ async function requireCoordinatorConversation(
   }
 }
 
+/**
+ * Open the delegation that makes a coordinator wait for one worker answer.
+ *
+ * Every way a coordinator can ask a worker for something funnels through here —
+ * a launch, a job, a follow-up message — because the wake contract is per
+ * request, not per launch: a coordinator that reads a report and replies has
+ * asked a new question and earns exactly one more wake for it.
+ *
+ * Reuses the environment association when one already exists so a conversation
+ * that delegates repeatedly to the same worker keeps one record rather than
+ * accumulating one per message. Best-effort by contract: the delegation governs
+ * when the coordinator is woken, and failing to open it must not fail the
+ * request the user actually made.
+ */
+async function openWorkerDelegation(
+  context: CommandContext,
+  scope: { projectId: string; coordinatorId: string; conversationId: string },
+  workerEnvironmentId: string,
+  workerTabId: string,
+): Promise<void> {
+  const existing = (
+    await context.storage.listCoordinatorWorkflowAssociations(scope.projectId)
+  ).find(
+    (association) =>
+      association.coordinatorId === scope.coordinatorId &&
+      association.conversationId === scope.conversationId &&
+      association.kind === "environment" &&
+      association.resourceId === workerEnvironmentId &&
+      !association.pending,
+  );
+  const associationId =
+    existing?.id ??
+    (
+      await context.storage.saveCoordinatorWorkflowAssociation({
+        id: randomUUID(),
+        projectId: scope.projectId,
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        kind: "environment",
+        resourceId: workerEnvironmentId,
+        requestId: `delegation-${scope.conversationId}-${workerEnvironmentId}-${workerTabId}`,
+        createdAt: new Date().toISOString(),
+      })
+    ).id;
+  await context.storage.openCoordinatorDelegation(associationId, workerTabId);
+}
+
 async function assertContainerDelegationCommitPublished(
   context: CommandContext,
   projectId: string,
@@ -265,7 +312,8 @@ export function registerCoordinatorCommands(
       if (!destination || destination.projectId !== project) {
         throw new Error("Coordinator messages must stay within their project");
       }
-      return context.storage.sendAgentMail(
+      const destinationTabId = asNonBlankString(toTabId, "toTabId");
+      const message = await context.storage.sendAgentMail(
         {
           kind: "coordinator",
           projectId: project,
@@ -277,12 +325,30 @@ export function registerCoordinatorCommands(
         {
           requestId: asNonBlankString(requestId, "requestId"),
           toEnvironmentId: destination.id,
-          toTabId: asNonBlankString(toTabId, "toTabId"),
+          toTabId: destinationTabId,
           body: asNonBlankString(body, "body"),
           ...(typeof subject === "string" ? { subject } : {}),
           ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
         },
       );
+      // Asking a worker something is a delegation, so the coordinator is woken
+      // once when that worker's turn ends rather than on whatever it says
+      // along the way. A message the recipient bounced or that was never
+      // scheduled for delivery has asked nothing and opens nothing.
+      if (message.placement !== "bounced") {
+        await openWorkerDelegation(
+          context,
+          { projectId: project, coordinatorId: coordinator, conversationId: conversation },
+          destination.id,
+          destinationTabId,
+        ).catch((error: unknown) => {
+          console.warn(
+            "[coordinator] Failed to open a delegation for an outbound message:",
+            error instanceof Error ? error.message : error,
+          );
+        });
+      }
+      return message;
     },
   );
   register(
@@ -382,7 +448,7 @@ export function registerCoordinatorCommands(
       }
       const delegatedPrompt =
         typeof input.initialPrompt === "string"
-          ? `<orkestrator-coordinator-delegation>\nProject: ${projectId}\nCoordinator: ${coordinatorId}\nConversation: ${conversationId}\nBase branch: ${input.delegationBaseBranch}\nBase commit: ${input.delegationBaseCommit}\nThis is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.\n</orkestrator-coordinator-delegation>\n\n${input.initialPrompt}`
+          ? `<orkestrator-coordinator-delegation>\nProject: ${projectId}\nCoordinator: ${coordinatorId}\nConversation: ${conversationId}\nBase branch: ${input.delegationBaseBranch}\nBase commit: ${input.delegationBaseCommit}\nThis is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.\nThe coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to environment ${coordinatorRuntimeId(coordinatorId, conversationId)}, then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.\n</orkestrator-coordinator-delegation>\n\n${input.initialPrompt}`
           : input.initialPrompt;
       const environment = await dependencies.commands.get("create_environment")?.(
         { ...input, initialPrompt: delegatedPrompt, controlRequestId: stableRequestId },
@@ -395,6 +461,10 @@ export function registerCoordinatorCommands(
         receipt.association.id,
         environment.id,
       );
+      // The worker owes this conversation exactly one answer from here. Its
+      // startup tab is the addressee; anything it sends before that turn ends
+      // is held rather than delivered, and the turn's end is the single wake.
+      await context.storage.openCoordinatorDelegation(receipt.association.id, "startup-agent");
       let startError: string | undefined;
       if (environment.status !== "running" && environment.status !== "creating") {
         try {
@@ -408,6 +478,25 @@ export function registerCoordinatorCommands(
       }
       return { environment, ...(startError ? { startError } : {}) };
     });
+  });
+  register("open_coordinator_delegation", async ({ scope, environmentId, tabId }, context) => {
+    if (!record(scope)) throw new Error("Coordinator scope is required");
+    const projectId = asNonBlankString(scope.projectId, "projectId");
+    const coordinatorId = asNonBlankString(scope.coordinatorId, "coordinatorId");
+    const conversationId = asNonBlankString(scope.conversationId, "conversationId");
+    await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
+    const worker = asNonBlankString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(worker);
+    if (!environment || environment.projectId !== projectId) {
+      throw new Error("Coordinator delegations must stay within their project");
+    }
+    await openWorkerDelegation(
+      context,
+      { projectId, coordinatorId, conversationId },
+      worker,
+      asNonBlankString(tabId, "tabId"),
+    );
+    return { opened: true };
   });
   register("start_coordinator_build_pipeline", async ({ scope, requestId, input }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");

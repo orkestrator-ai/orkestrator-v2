@@ -85,6 +85,32 @@ export interface CoordinatorConversation {
   bridgePid?: number;
 }
 
+/**
+ * One outstanding request from a coordinator conversation to a worker tab.
+ *
+ * A delegation exists so the coordinator can be woken exactly once, when the
+ * worker is finished, rather than on every message the worker sends. It opens
+ * when the coordinator launches or messages a worker and closes on the worker's
+ * turn-end edge; mail the worker sends while it is open is held rather than
+ * delivered. A worker that is `waiting` on an approval has not finished — that
+ * needs a human, not a coordinator turn — so `waiting` does not close it.
+ */
+export interface CoordinatorDelegation {
+  requestedAt: string;
+  /** The worker tab this delegation was sent to, within `resourceId`. */
+  workerTabId: string;
+  state: "running" | "completed" | "failed" | "stopped";
+  completedAt?: string;
+  /**
+   * When the coordinator was actually woken for this delegation.
+   *
+   * Distinct from `completedAt` so a crash between observing the edge and
+   * delivering the wake retries rather than losing it, and so a delivered wake
+   * is never sent twice.
+   */
+  wokenAt?: string;
+}
+
 export interface CoordinatorWorkflowAssociation {
   id: string;
   coordinatorId: string;
@@ -105,7 +131,23 @@ export interface CoordinatorWorkflowAssociation {
   lastNotifiedRevision?: number;
   terminalNotifiedAt?: string;
   adoptedByConversationId?: string;
+  /** Present on `environment` associations that a coordinator is waiting on. */
+  delegation?: CoordinatorDelegation;
 }
+
+/** The mail-store hold reason that keeps worker progress from waking anyone. */
+export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
+
+/**
+ * The asynchronous contract every delegating coordinator is told, verbatim.
+ *
+ * One constant because three surfaces have to agree: the coordinator's own
+ * context prompt, the delegation tool results, and the polling guard's refusal.
+ * A model that reads two different descriptions of when it will be woken has
+ * been given a reason to poll.
+ */
+export const COORDINATOR_ASYNC_CONTRACT =
+  "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
 
 export interface CoordinatorRepositoryContextEvent {
   revision: number;

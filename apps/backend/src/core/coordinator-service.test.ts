@@ -14,6 +14,7 @@ import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 describe("project coordinator", () => {
@@ -1004,5 +1005,291 @@ describe("project coordinator", () => {
     await expect(
       prepareCoordinatorCodexHome(path.join(root, "linked-destination"), linkedSource),
     ).rejects.toThrow("not a symbolic link");
+  });
+  describe("worker delegations", () => {
+    /** A coordinator with one assigned conversation and one running worker. */
+    async function delegationFixture(): Promise<{
+      coordinator: CoordinatorService;
+      projectId: string;
+      coordinatorId: string;
+      conversation: { id: string; tabId: string };
+      workerId: string;
+      associationId: string;
+      runtimeId: string;
+    }> {
+      const project = await storage.addProject(
+        createProject("https://example.invalid/repo.git", checkout),
+      );
+      const coordinator = new CoordinatorService(storage, () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }));
+      const initial = await coordinator.ensure(project.id);
+      const conversation = initial.workspace.conversations[0]!;
+      await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
+      const worker = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+      worker.status = "running";
+      worker.setupPhase = "ready";
+      worker.setupScriptsComplete = true;
+      await storage.addEnvironment(worker);
+      // The worker's addressable mailbox comes from its committed pane layout,
+      // exactly as it would in a real environment.
+      await storage.savePaneLayout(
+        worker.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "pane",
+          root: {
+            kind: "leaf",
+            id: "pane",
+            tabs: [
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: { environmentId: worker.id, platform: "codex" },
+              },
+            ],
+            activeTabId: "startup-agent",
+          },
+        },
+        0,
+      );
+      await storage.synchronizeAgentMailboxes();
+      const association = await storage.saveCoordinatorWorkflowAssociation({
+        id: "delegation-association",
+        coordinatorId: initial.workspace.id,
+        projectId: project.id,
+        conversationId: conversation.id,
+        kind: "environment",
+        resourceId: worker.id,
+        requestId: "delegation-request",
+        createdAt: new Date().toISOString(),
+      });
+      await storage.openCoordinatorDelegation(association.id, "startup-agent");
+      return {
+        coordinator,
+        projectId: project.id,
+        coordinatorId: initial.workspace.id,
+        conversation: { id: conversation.id, tabId: conversation.tabId },
+        workerId: worker.id,
+        associationId: association.id,
+        runtimeId: coordinatorRuntimeId(initial.workspace.id, conversation.id),
+      };
+    }
+
+    async function workerSays(
+      fixture: Awaited<ReturnType<typeof delegationFixture>>,
+      requestId: string,
+      body: string,
+    ) {
+      return storage.sendAgentMail(
+        {
+          kind: "tab",
+          environmentId: fixture.workerId,
+          projectId: fixture.projectId,
+          tabId: "startup-agent",
+        },
+        {
+          requestId,
+          toEnvironmentId: fixture.runtimeId,
+          toTabId: fixture.conversation.tabId,
+          body,
+        },
+      );
+    }
+
+    test("holds worker progress and releases it all on one completion", async () => {
+      const fixture = await delegationFixture();
+      const first = await workerSays(fixture, "progress-1", "Started reading the code.");
+      const second = await workerSays(fixture, "progress-2", "Halfway through.");
+
+      // Held, not delivered: neither wakes the coordinator while it waits.
+      expect(first.placement).toBe("inject-held");
+      expect(first.placementReason).toBe("delegation-running");
+      expect(second.placement).toBe("inject-held");
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+
+      const pending = await storage.listPendingAgentMailInjects();
+      expect(pending.map(({ message }) => message.id).toSorted()).toEqual(
+        [first.id, second.id].toSorted(),
+      );
+      // The worker reported, so no synthesized notice is added on top of it.
+      expect(pending.some(({ message }) => message.from.kind === "system")).toBe(false);
+    });
+
+    test("a silent worker still wakes its coordinator, exactly once", async () => {
+      const fixture = await delegationFixture();
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+
+      const first = await storage.listPendingAgentMailInjects();
+      expect(first).toHaveLength(1);
+      expect(first[0]!.message.from.kind).toBe("system");
+      expect(first[0]!.message.subject).toContain("finished");
+
+      // A second observation of the same edge settles nothing new.
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      await fixture.coordinator.deliverDelegationWakes();
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+    });
+
+    test("a waiting worker is not a finished worker", async () => {
+      const fixture = await delegationFixture();
+      await workerSays(fixture, "progress-1", "Blocked on an approval.");
+      // `waiting` is not a state settleWorkerDelegations accepts, and the sweep
+      // only closes environments that can no longer finish. A running worker
+      // asking for an approval is neither.
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+      const open = await storage.listOpenCoordinatorDelegations();
+      expect(open.map((item) => item.id)).toEqual([fixture.associationId]);
+    });
+
+    test("a stopped worker releases its coordinator", async () => {
+      const fixture = await delegationFixture();
+      await storage.updateEnvironment(fixture.workerId, { status: "stopped" });
+      await fixture.coordinator.reconcileWorkerDelegations();
+
+      const pending = await storage.listPendingAgentMailInjects();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.message.subject).toContain("stopped");
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+    });
+
+    test("a wake lost between closing and delivering is retried, not duplicated", async () => {
+      const fixture = await delegationFixture();
+      // Exactly the durable state a crash between the two writes leaves behind.
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      expect(await storage.listPendingAgentMailInjects()).toEqual([]);
+
+      await fixture.coordinator.deliverDelegationWakes();
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+
+      await fixture.coordinator.deliverDelegationWakes();
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+    });
+
+    test("a follow-up message opens a fresh delegation, and earns one more wake", async () => {
+      const fixture = await delegationFixture();
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      expect(await storage.listOpenCoordinatorDelegations()).toEqual([]);
+
+      await storage.openCoordinatorDelegation(fixture.associationId, "startup-agent");
+      const report = await workerSays(fixture, "second-report", "Second round done.");
+      expect(report.placement).toBe("inject-held");
+
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      expect(
+        (await storage.listPendingAgentMailInjects()).some(
+          ({ message }) => message.id === report.id,
+        ),
+      ).toBe(true);
+    });
+
+    test("a delegation only holds mail for the conversation that opened it", async () => {
+      const fixture = await delegationFixture();
+      const second = await fixture.coordinator.createConversation(fixture.projectId, "Second");
+      const other = second.workspace.conversations.find((item) => item.title === "Second")!;
+      await fixture.coordinator.assignConversationAgent(fixture.projectId, other.id, "codex");
+      await storage.synchronizeAgentMailboxes();
+
+      // The same worker writes to a conversation that never delegated to it.
+      // That conversation is not waiting, so nothing would ever release the
+      // message — holding it would silence it permanently.
+      const message = await storage.sendAgentMail(
+        {
+          kind: "tab",
+          environmentId: fixture.workerId,
+          projectId: fixture.projectId,
+          tabId: "startup-agent",
+        },
+        {
+          requestId: "to-other-conversation",
+          toEnvironmentId: coordinatorRuntimeId(fixture.coordinatorId, other.id),
+          toTabId: other.tabId,
+          body: "Unrelated.",
+        },
+      );
+      expect(message.placement).toBe("pending-inject");
+    });
+
+    test("a turn that ended before the request arrived does not report finished", async () => {
+      const fixture = await delegationFixture();
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+
+      // The coordinator messages the worker. Delivery is pending because the
+      // worker is mid-turn on something else.
+      await storage.updateAgentMailboxPolicy(fixture.workerId, "startup-agent", {
+        inject: "idle",
+      });
+      const request = await storage.sendAgentMail(
+        {
+          kind: "coordinator",
+          projectId: fixture.projectId,
+          coordinatorId: fixture.coordinatorId,
+          conversationId: fixture.conversation.id,
+          environmentId: fixture.runtimeId,
+          tabId: fixture.conversation.tabId,
+        },
+        {
+          requestId: "follow-up",
+          toEnvironmentId: fixture.workerId,
+          toTabId: "startup-agent",
+          body: "Also update the changelog.",
+        },
+      );
+      expect(request.placement).toBe("pending-inject");
+      await storage.openCoordinatorDelegation(fixture.associationId, "startup-agent");
+
+      // That earlier turn now ends. It never saw the request, so calling it
+      // finished would be a "done" for work that has not started.
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      expect((await storage.listOpenCoordinatorDelegations()).map((item) => item.id)).toEqual([
+        fixture.associationId,
+      ]);
+      expect(
+        (await storage.listPendingAgentMailInjects()).some(
+          ({ mailbox }) => mailbox.tabId === fixture.conversation.tabId,
+        ),
+      ).toBe(false);
+    });
+
+    test("unsolicited worker mail is not held", async () => {
+      const fixture = await delegationFixture();
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+
+      const message = await workerSays(fixture, "unsolicited", "One more thing.");
+      expect(message.placement).toBe("pending-inject");
+    });
   });
 });

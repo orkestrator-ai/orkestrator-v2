@@ -112,6 +112,7 @@ import { NativeAgentServiceReconciliation } from "./native-agent-service-reconci
 import { agentSessionOwnerKey } from "@orkestrator/protocol/coordinator";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import {
+  coordinatorRuntimeEnvironment,
   coordinatorRuntimeUnavailableMessage,
   resolveCoordinatorRuntime,
 } from "./coordinator-runtime.js";
@@ -352,24 +353,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
     }
     if (coordinator.status === "ready") {
-      return {
-        id: environmentId,
-        projectId: coordinator.workspace.projectId,
-        name: "Coordinator",
-        branch: coordinator.workspace.repositoryStatus?.branch ?? "",
-        containerId: null,
-        status: "running",
-        prUrl: null,
-        prState: null,
-        hasMergeConflicts: null,
-        createdAt: coordinator.workspace.createdAt,
-        networkAccessMode: "restricted",
-        order: 0,
-        environmentType: "local",
-        worktreePath: coordinator.project.localPath,
-        setupPhase: "ready",
-        setupScriptsComplete: true,
-      } as Environment;
+      return coordinatorRuntimeEnvironment(environmentId, coordinator);
     }
     const environment = await this.storage.getEnvironment(environmentId);
     if (!environment || environment.deletionRequestedAt) {

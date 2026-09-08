@@ -10,6 +10,18 @@ import type { MailboxDescriptor, MailboxPresence } from "@orkestrator/protocol/a
 
 const OBSERVED_PRESENCE_TTL_MS = 4_000;
 
+/**
+ * How many waiting messages one injected turn may carry, and how large the
+ * combined carrier may get.
+ *
+ * Both bounds exist because the batch is built from whatever a worker chose to
+ * send: without them a chatty or hostile worker decides how big the
+ * coordinator's next prompt is. Anything over budget stays pending and is
+ * delivered by a later pass rather than dropped.
+ */
+const MAX_MAIL_INJECT_BATCH = 10;
+const MAX_MAIL_INJECT_BATCH_BYTES = 128 * 1024;
+
 export class AgentMailService {
   private drainTask: Promise<void> | null = null;
   private recovered = false;
@@ -311,7 +323,53 @@ export class AgentMailService {
         mailbox.incarnationId,
       );
       if (!claimed) continue;
-      const carrier = renderAgentMailCarrier(claimed);
+      /*
+       * Everything else already waiting for this same mailbox rides along.
+       *
+       * Dispatching one message per drain pass looks equivalent but is not:
+       * the first dispatch marks the session working, so every sibling is held
+       * `busy` and arrives as its own later turn. A worker that sent three
+       * messages would wake its coordinator three times, which is the drip this
+       * batching exists to prevent. One prompt, one turn, in send order.
+       */
+      const batched = [claimed];
+      let carrierBytes = Buffer.byteLength(renderAgentMailCarrier(claimed), "utf8");
+      for (const sibling of pending) {
+        if (batched.length >= MAX_MAIL_INJECT_BATCH) break;
+        if (sibling.mailbox.mailboxId !== mailbox.mailboxId) continue;
+        if (sibling.message.id === message.id || sibling.deferredUntil) continue;
+        const siblingClaim = await this.storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          sibling.message.id,
+          mailbox.incarnationId,
+        );
+        if (!siblingClaim) continue;
+        const rendered = renderAgentMailCarrier(siblingClaim);
+        const renderedBytes = Buffer.byteLength(rendered, "utf8");
+        if (carrierBytes + renderedBytes > MAX_MAIL_INJECT_BATCH_BYTES) {
+          // Over budget: give it back rather than carry it, so the next pass
+          // delivers it as its own turn instead of dropping it.
+          await this.storage.finishAgentMailInject(mailbox.mailboxId, sibling.message.id, {
+            outcome: "held",
+            reason: "batch-full",
+          });
+          break;
+        }
+        carrierBytes += renderedBytes;
+        batched.push(siblingClaim);
+      }
+      batched.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const carrier = batched.map((entry) => renderAgentMailCarrier(entry)).join("\n\n");
+      const settle = async (
+        result:
+          | { outcome: "accepted" }
+          | { outcome: "held"; reason: string }
+          | { outcome: "failed"; reason: "ambiguous" | "rejected" },
+      ): Promise<void> => {
+        for (const entry of batched) {
+          await this.storage.finishAgentMailInject(mailbox.mailboxId, entry.id, result);
+        }
+      };
       let outcome:
         | Awaited<ReturnType<PromptQueueDrainer["dispatchMailInject"]>>
         | Awaited<ReturnType<NativeAgentService["dispatchMailInject"]>>;
@@ -333,23 +391,15 @@ export class AgentMailService {
                 allowProviderCommands: false,
               });
       } catch {
-        await this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
-          outcome: "failed",
-          reason: "ambiguous",
-        });
+        await settle({ outcome: "failed", reason: "ambiguous" });
         continue;
       }
       if (outcome.outcome === "accepted") {
-        await this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
-          outcome: "accepted",
-        });
+        await settle({ outcome: "accepted" });
       } else if (outcome.outcome === "held") {
-        await this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
-          outcome: "held",
-          reason: outcome.reason,
-        });
+        await settle({ outcome: "held", reason: outcome.reason });
       } else {
-        await this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
+        await settle({
           outcome: "failed",
           reason: outcome.outcome === "unknown" ? "ambiguous" : "rejected",
         });

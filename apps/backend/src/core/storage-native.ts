@@ -1,5 +1,8 @@
 import * as shared from "./storage-shared.js";
-import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
+import type {
+  CoordinatorWorkflowAssociation,
+  CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
@@ -157,6 +160,19 @@ export abstract class StorageNative extends StorageReviews {
 
   async listCoordinatorWorkspaces(): Promise<CoordinatorWorkspace[]> {
     throw new Error("Coordinator storage is unavailable in this storage layer");
+  }
+
+  /**
+   * Delegations the mail layer must consult before it schedules an injection.
+   *
+   * Declared here rather than only on the composed service because the mail
+   * store sits below the coordinator store in the storage chain and still has
+   * to answer "is this worker's coordinator waiting on it right now?". Empty is
+   * the honest answer for a layer with no coordinator store: no delegation is
+   * open, so nothing is held.
+   */
+  async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return [];
   }
 
   private announceNativeAgentRecord(

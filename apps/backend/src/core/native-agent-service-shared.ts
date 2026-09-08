@@ -293,6 +293,25 @@ export interface NativeAgentActivityTransition {
   providerSessionId: string;
   previousState?: AgentActivityState;
   state: AgentActivityState;
+  /**
+   * The session's addressable identity.
+   *
+   * `sessionKey` is a hash and cannot be taken apart, so a consumer that needs
+   * the prompt-queue key or the mailbox tab — both derived from these two —
+   * would otherwise have to read the session back out of storage on an edge it
+   * was just handed.
+   */
+  agent?: BuildPipelineAgent;
+  logicalSessionKey?: string;
+  /**
+   * Which runtime the session belongs to.
+   *
+   * A coordinator runtime has no `Environment` row, so a consumer that reaches
+   * for one — the PR probe, the environment activity aggregate — has to know
+   * not to. Absent means environment, so existing consumers keep their
+   * behaviour without a migration.
+   */
+  owner?: "environment" | "coordinator";
 }
 
 /**

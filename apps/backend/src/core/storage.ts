@@ -300,6 +300,93 @@ export class StorageService extends StorageKanban {
     });
   }
 
+  /**
+   * Open or re-open the delegation on an association.
+   *
+   * Re-opening is the normal case for a follow-up: the coordinator reads a
+   * worker's report and sends it more work, which is a new outstanding request
+   * against the same environment and therefore earns exactly one more wake.
+   */
+  async openCoordinatorDelegation(
+    associationId: string,
+    workerTabId: string,
+    at = new Date().toISOString(),
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    if (!workerTabId.trim()) throw new Error("Coordinator delegation worker tab id is required");
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association) return null;
+      association.delegation = { requestedAt: at, workerTabId, state: "running" };
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      this.announce("coordinator", association.projectId, association.projectId);
+      return association;
+    });
+  }
+
+  /** Every delegation still waiting on its worker, for turn-end matching. */
+  async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) => association.delegation?.state === "running",
+    );
+  }
+
+  /**
+   * Every delegation whose worker has finished but whose wake was not delivered.
+   *
+   * The close and the wake are two writes, so a crash between them is possible.
+   * This is what the reconcile sweep re-reads to finish the job.
+   */
+  async listUnwokenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) =>
+        association.delegation !== undefined &&
+        association.delegation.state !== "running" &&
+        !association.delegation.wokenAt,
+    );
+  }
+
+  /**
+   * Record that a delegation's worker finished.
+   *
+   * Returns null when the delegation was already closed, so the caller can tell
+   * "I observed the edge" from "I am the one that observed it first" and only
+   * the winner releases mail or sends a notice.
+   */
+  async closeCoordinatorDelegation(
+    associationId: string,
+    state: "completed" | "failed" | "stopped",
+    at = new Date().toISOString(),
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.state !== "running") return null;
+      association.delegation = { ...association.delegation, state, completedAt: at };
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      this.announce("coordinator", association.projectId, association.projectId);
+      return association;
+    });
+  }
+
+  /** Stamp a delivered wake so a retry after a crash cannot send a second one. */
+  async markCoordinatorDelegationWoken(
+    associationId: string,
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.wokenAt) return;
+      association.delegation = { ...association.delegation, wokenAt: at };
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      this.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
   async markCoordinatorWorkflowNotified(associationId: string, revision: number): Promise<void> {
     await this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();

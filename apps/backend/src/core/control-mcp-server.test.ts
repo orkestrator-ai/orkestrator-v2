@@ -1076,4 +1076,92 @@ describe("Orkestrator control MCP server", () => {
       error: "Control MCP request body is too large",
     });
   });
+  test("coordinator delegation tools promise a wake and refuse a poll loop", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("get_project_git_status", () => ({
+      branch: "main",
+      headCommit: "a".repeat(40),
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    }));
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-worker", projectId: "project-1", status: "running" },
+    }));
+    const opened: Array<Record<string, unknown>> = [];
+    overrides.set("open_coordinator_delegation", (args) => {
+      opened.push(args);
+      return { opened: true };
+    });
+    let mailbox: Record<string, unknown> = {
+      messages: [{ id: "message-1", placement: "injected" }],
+      total: 1,
+    };
+    overrides.set("get_agent_mail_mailbox", () => mailbox);
+
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments", "jobs", "mail"],
+    });
+
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-1",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Fix the failing test.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    // The tool answers the question the model is about to ask anyway.
+    expect(launched.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+      delivery: "async",
+      nextStep: "Finish your turn now. Do not poll.",
+    });
+    // And the wake it promises is actually arranged before it says so.
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ environmentId: "env-worker", tabId: "startup-agent" });
+
+    const read = async () =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "read_messages",
+        arguments: {
+          environmentId: "coordinator:coordinator-1:conversation-1",
+          tabId: "coordinator-tab",
+        },
+      });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const page = await read();
+      expect(page.body.result?.structuredContent).toMatchObject({ total: 1 });
+    }
+    // Fourth identical answer: it is waiting, not working.
+    const refused = await read();
+    expect(refused.body.result?.structuredContent).toMatchObject({ status: "no-new-mail" });
+
+    // Real new mail clears the guard immediately; the budget never hides it.
+    mailbox = {
+      messages: [
+        { id: "message-1", placement: "injected" },
+        { id: "message-2", placement: "pending-inject" },
+      ],
+      total: 2,
+    };
+    const afterNewMail = await read();
+    expect(afterNewMail.body.result?.structuredContent).toMatchObject({ total: 2 });
+  });
 });

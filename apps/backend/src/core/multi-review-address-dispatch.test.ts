@@ -115,6 +115,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     { adoptSession, ensureSession, dispatchIntent },
     custom,
     { ensureNativeAgentJobTab },
+    true,
   );
 
   expect(adoptSession).not.toHaveBeenCalled();
@@ -130,7 +131,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     expect.objectContaining({
       tabId: "multi-review-fix:multi-1:launch-1",
       providerSessionId: "provider-custom",
-      activate: false,
+      activate: true,
       isReviewTab: true,
     }),
   );
@@ -149,6 +150,25 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
       status: "idle",
     },
   });
+});
+
+test("dispatchMultiReviewAddressPrompt preserves focus without foreground activation consent", async () => {
+  const ensureNativeAgentJobTab = mock(async () => undefined);
+  await dispatchMultiReviewAddressPrompt(
+    {
+      adoptSession: mock(async () => undefined as never),
+      ensureSession: mock(async () => undefined as never),
+      dispatchIntent: mock(async () => ({
+        outcome: "accepted" as const,
+        requestId: "multi-review-address:multi-1",
+      })),
+    },
+    workflow,
+    { ensureNativeAgentJobTab },
+  );
+  expect(ensureNativeAgentJobTab).toHaveBeenCalledWith(
+    expect.objectContaining({ activate: false }),
+  );
 });
 
 test("dispatchMultiReviewAddressPrompt does not let tab presentation block execution", async () => {

@@ -10,31 +10,16 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./commands-runtime-state.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput, isStartMultiReviewInput } from "./commands-dependencies.js";
 import { runCommand } from "./shell.js";
+import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
+import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
-
-function actionHash(value: unknown): string {
-  const canonicalize = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(canonicalize);
-    if (!record(item)) return item;
-    return Object.fromEntries(
-      Object.keys(item)
-        .sort()
-        .flatMap((key) =>
-          item[key] === undefined ? [] : [[key, canonicalize(item[key])] as const],
-        ),
-    );
-  };
-  return createHash("sha256")
-    .update(JSON.stringify(canonicalize(value)))
-    .digest("hex");
-}
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -59,23 +44,6 @@ function multiReviewInputFromSnapshot(value: unknown): Record<string, unknown> |
       : value.reviewers,
     fixModel: value.fixModel,
   };
-}
-
-async function requireCoordinatorConversation(
-  context: CommandContext,
-  projectId: string,
-  coordinatorId: string,
-  conversationId: string,
-): Promise<void> {
-  const workspace = await context.storage.getCoordinatorWorkspaceById(coordinatorId);
-  if (
-    !workspace ||
-    workspace.projectId !== projectId ||
-    workspace.lifecycleState !== "ready" ||
-    !workspace.conversations.some((item) => item.id === conversationId && !item.closedAt)
-  ) {
-    throw new Error("Coordinator identity is unavailable");
-  }
 }
 
 /**
@@ -163,6 +131,7 @@ export function registerCoordinatorCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
+  registerCoordinatorReviewActions(register);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);

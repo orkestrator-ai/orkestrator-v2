@@ -117,6 +117,93 @@ injected, acknowledged, and completed remain distinct states. Pause or mute
 messaging, or set a mailbox's injection policy explicitly to **Off**, to hold
 automatic delivery.
 
+## Complete application actions
+
+Use `launch_multi_review` for an environment's **Multi Review** button. Pass a
+stable `requestId`, the environment ID, and the same `reviewers` and `fixModel`
+rows accepted by the launch dialog (`agent`, `model`, optional
+`reasoningEffort`). `get_launch_options` supplies available model choices.
+The caller chooses the rows explicitly; this API does not invent reviewer
+defaults. Omitted `targetBranch` and `reviewInstruction` use the repository's
+PR base branch (falling back to `main`) and the global review instruction.
+An empty instruction explicitly clears the instruction for this launch.
+
+This action has no build-pipeline prerequisite. It reopens an active review
+regardless of the new selections, or reserves an immutable workflow ID and
+starts one review. It then creates or focuses the root Multi Review tab in the
+environment's selected pane. It does not change the global project/environment
+navigation: an inactive environment receives the durable tab and selection,
+which its renderer adopts when the user returns.
+
+`open_multi_review` reopens/focuses that root without starting work.
+`open_multi_review_fix` opens/focuses the authoritative Fix provider session
+without sending a turn. `address_multi_review` now opens the root first and
+records the backend's idempotent fix handoff; the supervisor publishes and
+selects Fix after confirmed dispatch when the foreground action initiated that
+attempt. A background retry or backend-restart resume publishes Fix without
+changing the current tab or pane. A repeated address call returns the existing
+interactive handoff. An unassociated workflow started from the renderer remains
+available within its project. When an association exists, these controls require
+it to belong to the current coordinator conversation; use `adopt_workflow` for
+an orphaned or closed conversation's association before opening it.
+
+Read the result before reporting success:
+
+- `outcome: "opened"` and `ui.status: "opened"` confirm durable presentation;
+  `ui` names the tab, pane, and layout revision. `reused` distinguishes reattach
+  from a new launch. MCP returns a bounded workflow summary; backend commands
+  return the workflow snapshot with controller fences removed.
+- `outcome: "pending"` on address confirms a durable intent, not prompt delivery.
+  Inspect `get_multi_review` for `addressPromptPending`, `presentationError`, and
+  `fixTabId`. Do not send another fix prompt manually.
+- `outcome: "partial"` is an MCP error result with the saved workflow and an
+  actionable `recovery` message. A new launch whose tab cannot be published
+  requests cancellation. Cancellation may still be in progress or unconfirmed;
+  the result says which. An already active review is never cancelled because
+  reattachment failed. Completed cancellation records are retained as retry and
+  recovery evidence, rather than deleted as the renderer's older handler did.
+
+Retry launches with the same request ID and payload. The durable coordinator
+receipt and reserved workflow identity survive backend restarts, including the
+gap between workflow persistence and receipt completion. Reusing a key with a
+different payload is rejected. If the associated workflow was explicitly
+deleted, retry fails instead of silently starting fresh work. Change the key
+only when deliberately asking for a new action.
+
+Tab writes recompute their semantic intent against the latest layout after a
+CAS conflict. They preserve concurrent pane structure, moves, and tabs, enforce
+the tab limit on each attempt, and announce the existing `pane-layout` resource.
+Workflow writes announce `multi-review`. Both initial restoration and live
+authoritative reconciliation load referenced workflows before installing tabs.
+Initial restoration handles a pane snapshot newer than the workflow-list
+snapshot; default terminal seeding checks current store state so a stale render
+cannot take focus from a newly published tab.
+Older pane schema versions require the normal renderer migration before these
+controls modify them; container generations are never silently replaced.
+
+### Exposed-action audit
+
+| Existing control / button family | Durable consequences and disposition |
+| --- | --- |
+| `start_multi_review` / Multi Review | Backend-only and build-gated; retained for diagnostics/recovery. Its metadata explicitly prefers `launch_multi_review`, which adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. |
+| Multi Review open / Open fix session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
+| `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Fix publication; it now selects that tab when published and reports queued/partial outcomes. |
+| `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |
+| `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. |
+| `launch_environment` / New environment | Existing backend operation owns creation, startup tab/initial-prompt state, and background start. Its accepted/created/error distinction already reports partial startup. |
+| `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
+| `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
+| Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
+
+Terminal/tmux launch already has a backend `launch_terminal_job` command with
+stable tabs, process ownership and bootstrap journaling, but it is not currently
+exposed by coordinator MCP. Browser launch/navigation, arbitrary pane editing,
+custom-fix model switches, reviewer subtabs, looped review and feature-plan
+launch are likewise not exposed coordinator controls. New APIs for those buttons
+are deferred to their own authority and idempotency designs; this change does
+not add speculative surfaces. Repository checkout mutation controls remain
+unavailable to coordinators.
+
 ## Delegation is asynchronous
 
 A coordinator turn ends when it has delegated. It does not wait for the worker,

@@ -112,6 +112,39 @@ beforeEach(() => {
 });
 
 describe("collectPaneDependencyIds", () => {
+  test("hydrates and selects a backend Multi Review action on reconciliation and reload", async () => {
+    const root = leaf("default", [
+      { id: "plain", type: "plain" },
+      {
+        id: "multi-review:action-1",
+        type: "multi-review",
+        multiReviewTabData: { environmentId: "env-1", workflowId: "action-1", isLocal: false },
+      },
+    ]);
+    if (root.kind !== "leaf") throw new Error("expected leaf");
+    root.activeTabId = "multi-review:action-1";
+    hydrateMultiReviewWorkflow.mockImplementation(async (id) => {
+      useMultiReviewStore
+        .getState()
+        .replaceWorkflow({ id, environmentId: "env-1", backendRevision: 3 } as never);
+    });
+    for (let reconnect = 0; reconnect < 2; reconnect += 1) {
+      // A new client has missed both creation events. Dependency hydration must
+      // precede layout reconciliation or the only visible review tab is dropped.
+      useMultiReviewStore.setState({ workflows: new Map() });
+      await hydratePaneLayoutDependencies(root);
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(root),
+        paneState(leaf("default", [{ id: "plain", type: "plain" }])),
+      );
+      expect(restored?.root).toMatchObject({
+        activeTabId: "multi-review:action-1",
+        tabs: [{ id: "plain" }, { id: "multi-review:action-1", type: "multi-review" }],
+      });
+      expect(useMultiReviewStore.getState().workflows.get("action-1")?.backendRevision).toBe(3);
+    }
+  });
   test("finds ids in a leaf", () => {
     const root = leaf("default", [
       { id: "build", type: "claude-build", buildTabData: { pipelineId: "pipeline-1" } },

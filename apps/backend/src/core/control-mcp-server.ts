@@ -16,6 +16,8 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { z } from "zod";
+import { registerControlReviewActions } from "./control-mcp-review-actions.js";
+import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const CONTROL_MCP_PATH = "/mcp";
@@ -67,6 +69,9 @@ const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["resume_build_pipeline", "build-pipelines"],
   ["cancel_build_pipeline", "build-pipelines"],
   ["start_multi_review", "multi-review"],
+  ["launch_multi_review", "multi-review"],
+  ["open_multi_review", "multi-review"],
+  ["open_multi_review_fix", "multi-review"],
   ["get_multi_review", "multi-review"],
   ["cancel_multi_review", "multi-review"],
   ["address_multi_review", "multi-review"],
@@ -354,35 +359,6 @@ function ticketDetail(task: JsonRecord): JsonRecord {
     description: task.description,
     acceptanceCriteria: task.acceptanceCriteria,
     comments: Array.isArray(task.comments) ? task.comments.slice(-50) : [],
-  };
-}
-
-function workflowSummary(workflow: JsonRecord): JsonRecord {
-  return {
-    id: workflow.id,
-    projectId: workflow.projectId,
-    environmentId: workflow.environmentId,
-    taskId: workflow.taskId,
-    phase: workflow.phase,
-    error: workflow.error,
-    createdAt: workflow.createdAt,
-    updatedAt: workflow.updatedAt,
-    revision: workflow.revision ?? workflow.backendRevision,
-  };
-}
-
-function normalizedWorkflow(value: unknown): JsonRecord | null {
-  const transported = isRecord(value) && isRecord(value.record) ? value.record : value;
-  if (!isRecord(transported)) return null;
-  if (!isRecord(transported.snapshot)) return transported;
-  const snapshot = transported.snapshot;
-  return {
-    ...snapshot,
-    id: snapshot.id ?? transported.id,
-    projectId: snapshot.projectId ?? transported.projectId,
-    environmentId: snapshot.environmentId ?? transported.environmentId,
-    updatedAt: transported.updatedAt ?? snapshot.updatedAt,
-    revision: transported.revision ?? snapshot.revision ?? snapshot.backendRevision,
   };
 }
 
@@ -681,7 +657,11 @@ async function createControlMcp(
       instructions:
         "Control Orkestrator through project IDs returned by list_projects. " +
         "Use launch_environment for a new workspace and launch_job for an independent " +
-        "agent tab in an existing ready environment. Reuse requestId when retrying mutations." +
+        "agent tab in an existing ready environment. " +
+        (coordinatorScope
+          ? "Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          : "") +
+        "Reuse requestId when retrying mutations." +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : ""),
     },
   );
@@ -1191,13 +1171,13 @@ async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, prompt: delegation.source },
+            { ...input, prompt: delegation.source, activateTab: true },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : input;
+        : { ...input, activateTab: true };
       const job = await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
       // Only against the tab the job actually landed in. A guessed tab id would
@@ -1273,6 +1253,7 @@ async function createControlMcp(
   );
 
   if (coordinatorScope) {
+    registerControlReviewActions(server, invoke, coordinatorScope);
     server.registerTool(
       "get_repository_context",
       {
@@ -1511,7 +1492,8 @@ async function createControlMcp(
       "start_multi_review",
       {
         title: "Start a multi-review",
-        description: "Start a durable multi-model review in an existing worker environment.",
+        description:
+          "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           buildPipelineId: z.string().trim().min(1).max(200),
@@ -1556,7 +1538,6 @@ async function createControlMcp(
 
     for (const [tool, command, title] of [
       ["cancel_multi_review", "cancel_multi_review", "Cancel a multi-review"],
-      ["address_multi_review", "address_multi_review", "Address multi-review findings"],
     ] as const) {
       server.registerTool(
         tool,

@@ -4837,7 +4837,7 @@ describe("AgentInfoButton backend-owned steering", () => {
     render(<AgentInfoButton activeTab={tab} />);
     open();
 
-    expect(screen.getByText(/Sends directly to the current Pi turn/)).not.toBeNull();
+    expect(screen.getByText(/Sends directly to the current Pi turn/) !== null).toBe(true);
     expect(screen.queryByText(/current Codex turn/) === null).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText("Correct or redirect Pi"), {

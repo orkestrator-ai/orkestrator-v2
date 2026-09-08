@@ -722,7 +722,8 @@ test("MultiReviewService resumes an interrupted address dispatch through the sup
         );
       });
       expect(dispatches).toBe(2);
-      await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+      await expect(service.address(started.id)).resolves.toMatchObject({ phase: "interactive" });
+      expect(dispatches).toBe(2);
 
       // Both terminal operations release their short-lived controller claims.
       const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
@@ -1222,6 +1223,7 @@ test("MultiReviewService bounds permanent address failures and retires activity"
 test("MultiReviewService resumes a persisted address attempt after restart", async () => {
   const provider = new Provider();
   let dispatches = 0;
+  const activationRequests: boolean[] = [];
   await withService(
     "env-address-restart",
     provider,
@@ -1231,6 +1233,21 @@ test("MultiReviewService resumes a persisted address attempt after restart", asy
         await service.advanceNow(started.id);
         return (await snapshot(started.id))?.phase === "ready";
       });
+      await storage.savePaneLayout(
+        started.environmentId,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "stay-active", type: "plain" }],
+            activeTabId: "stay-active",
+          },
+        },
+        0,
+      );
       await service.address(started.id);
       await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
       await service.shutdown();
@@ -1239,8 +1256,18 @@ test("MultiReviewService resumes a persisted address attempt after restart", asy
         autoAdvance: true,
         pollIntervalMs: 5,
         provider: async () => provider,
-        dispatchAddressPrompt: async () => {
+        dispatchAddressPrompt: async (workflow, presentation) => {
           dispatches += 1;
+          activationRequests.push(presentation.activateTab);
+          await storage.ensureNativeAgentJobTab({
+            environmentId: workflow.environmentId,
+            tabId: workflow.addressTabId ?? `multi-review-fix:${workflow.id}`,
+            agent: workflow.fixModel.agent,
+            providerSessionId: workflow.fixSession?.providerSessionId,
+            title: "Fix",
+            isReviewTab: true,
+            activate: presentation.activateTab,
+          });
         },
       });
       try {
@@ -1257,6 +1284,16 @@ test("MultiReviewService resumes a persisted address attempt after restart", asy
         });
         expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
         expect(dispatches).toBe(2);
+        expect(activationRequests).toEqual([true, false]);
+        const layout = await storage.getPaneLayout(started.environmentId);
+        expect(layout?.root).toMatchObject({
+          kind: "leaf",
+          activeTabId: "stay-active",
+          tabs: [
+            { id: "stay-active" },
+            { id: `multi-review-fix:${started.id}`, type: "agent-native" },
+          ],
+        });
         expect(await storage.getEnvironment("env-address-restart")).toMatchObject({
           agentActivitySources: { "multi-review": { state: "idle" } },
         });
@@ -1267,8 +1304,9 @@ test("MultiReviewService resumes a persisted address attempt after restart", asy
     {
       serviceOptions: {
         addressDispatchRetryMs: 60_000,
-        dispatchAddressPrompt: async () => {
+        dispatchAddressPrompt: async (_workflow, presentation) => {
           dispatches += 1;
+          activationRequests.push(presentation.activateTab);
           throw new Error("temporary disconnect");
         },
       },

@@ -15,6 +15,7 @@ import { StorageKanban } from "./storage-kanban.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 
 const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
+const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 
 export class StorageService extends StorageKanban {
   override async init(): Promise<void> {
@@ -294,6 +295,67 @@ export class StorageService extends StorageKanban {
       association.resourceId = resourceId;
       association.pending = false;
       delete association.claimPid;
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
+  async addCoordinatorWorkflowRequestAlias(
+    associationId: string,
+    coordinatorId: string,
+    conversationId: string,
+    requestId: string,
+    payloadHash: string,
+  ): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const existingRequest = store.workflows.find(
+        (item) =>
+          item.coordinatorId === coordinatorId &&
+          (item.requestId === requestId ||
+            (Array.isArray(item.requestAliases) &&
+              item.requestAliases.some(
+                (alias) =>
+                  alias && typeof alias.requestId === "string" && alias.requestId === requestId,
+              ))),
+      );
+      if (existingRequest) {
+        const existingHash =
+          existingRequest.requestId === requestId
+            ? existingRequest.payloadHash
+            : Array.isArray(existingRequest.requestAliases)
+              ? existingRequest.requestAliases.find(
+                  (alias) =>
+                    alias &&
+                    typeof alias.requestId === "string" &&
+                    typeof alias.payloadHash === "string" &&
+                    alias.requestId === requestId,
+                )?.payloadHash
+              : undefined;
+        if (existingRequest.id !== associationId || existingHash !== payloadHash) {
+          throw new Error("Coordinator request id was reused with a different payload");
+        }
+        return existingRequest;
+      }
+      const association = store.workflows.find(
+        (item) =>
+          item.id === associationId &&
+          item.coordinatorId === coordinatorId &&
+          item.conversationId === conversationId &&
+          !item.pending,
+      );
+      if (!association) throw new Error("Coordinator workflow association is unavailable");
+      const aliases = Array.isArray(association.requestAliases)
+        ? association.requestAliases.filter(
+            (alias) =>
+              alias && typeof alias.requestId === "string" && typeof alias.payloadHash === "string",
+          )
+        : [];
+      if (aliases.length >= MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+        throw new Error("Coordinator workflow association has too many request aliases");
+      }
+      association.requestAliases = [...aliases, { requestId, payloadHash }];
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
       return association;

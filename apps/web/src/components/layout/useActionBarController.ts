@@ -45,7 +45,10 @@ import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
 import { createUuid } from "@/lib/uuid";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
+import {
+  beginPaneTabActivationRequest,
+  requestPaneTabActivation,
+} from "@/lib/pane-layout-authoritative";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
@@ -960,6 +963,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const handleRun = useCallback(async () => {
     const environmentId = selectedEnvironmentId;
     if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
+    const activationRequest = beginPaneTabActivationRequest(environmentId);
     try {
       const result = await backend.launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
@@ -969,7 +973,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         title: "Run Commands",
         activateTab: true,
       });
-      requestPaneTabActivation(environmentId, result.tabId);
+      requestPaneTabActivation(environmentId, result.tabId, activationRequest);
     } catch (error) {
       toast.error("Could not run commands", {
         description: error instanceof Error ? error.message : String(error),
@@ -1005,6 +1009,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ? configuredFastMode
           : undefined;
       const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
+      const activationRequest = beginPaneTabActivationRequest(environmentId);
       return backend
         .launchNativeAgentJob({
           requestId: `run-script-${createUuid()}`,
@@ -1019,7 +1024,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         })
         .then((result) => {
-          requestPaneTabActivation(environmentId, result.tabId);
+          requestPaneTabActivation(environmentId, result.tabId, activationRequest);
           if (result.status !== "rejected") return true;
           toast.error("Could not start script creation", {
             description: result.error || "The agent rejected the request.",
@@ -1342,6 +1347,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
             ? configuredFastMode
             : undefined;
+        const activationRequest = beginPaneTabActivationRequest(operationEnvironmentId);
         const result = await backend.launchNativeAgentJob({
           requestId: `create-pr-${createUuid()}`,
           environmentId: operationEnvironmentId,
@@ -1354,7 +1360,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        requestPaneTabActivation(operationEnvironmentId, result.tabId);
+        requestPaneTabActivation(operationEnvironmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           releaseCreatePrLaunch(operationEnvironmentId);
           toast.error("Could not start pull request creation", {
@@ -1505,6 +1511,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const actionDefault = actionDefaultFor("push");
       const agent = agentOverride || actionDefault.agent;
       const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+      const activationRequest = beginPaneTabActivationRequest(environmentId);
       try {
         const result = await backend.launchNativeAgentJob({
           requestId: `push-changes-${createUuid()}`,
@@ -1519,7 +1526,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             ? { reasoningId: defaultForAgent.reasoningEffort }
             : {}),
         });
-        requestPaneTabActivation(environmentId, result.tabId);
+        requestPaneTabActivation(environmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           throw new Error(result.error || "The agent rejected the request.");
         }
@@ -1587,6 +1594,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
         const initialReasoningEffort =
           launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+        const activationRequest = beginPaneTabActivationRequest(operationEnvironmentId);
         const result = await backend.launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
           environmentId: operationEnvironmentId,
@@ -1599,7 +1607,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
         });
-        requestPaneTabActivation(operationEnvironmentId, result.tabId);
+        requestPaneTabActivation(operationEnvironmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
           return fail(result.error || "The conflict-resolution agent rejected the prompt.");
         }

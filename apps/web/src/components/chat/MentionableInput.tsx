@@ -27,10 +27,10 @@ interface MentionableInputProps {
 export interface MentionableInputRef {
   focus: () => void;
   /**
-   * Focus and park the caret after the last character of the *next* rendered
-   * value. Callers that replace the whole draft (slash-command completion)
-   * need this: the caret is otherwise restored to the offset it held in the
-   * text the user typed, landing mid-word in the completed command.
+   * Focus and park the caret after the last character of the current or next
+   * rendered value. Callers that replace the whole draft (slash-command
+   * completion) need this: the caret is otherwise restored to the offset it
+   * held in the text the user typed, landing mid-word in the completed command.
    */
   focusAtEnd: () => void;
   blur: () => void;
@@ -257,10 +257,20 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         }
       },
       focusAtEnd: () => {
-        if (!inputRef.current) return;
+        const input = inputRef.current;
+        if (!input) return;
         pendingCursorRef.current = "end";
         pendingFocusRef.current = true;
-        focusEditableElement(inputRef.current);
+        focusEditableElement(input);
+
+        // Store-backed callers can commit the replacement synchronously before
+        // invoking this method, leaving no subsequent render to consume the
+        // pending cursor. Move the live selection as well; if the replacement
+        // is still batched, the layout effect below repeats this against the
+        // next value.
+        const cursorPosition = extractText(input).length;
+        lastCursorPositionRef.current = cursorPosition;
+        setCursorOffset(input, cursorPosition);
       },
       blur: () => inputRef.current?.blur(),
       getCursorPosition: () => (inputRef.current ? getCursorOffset(inputRef.current) : 0),

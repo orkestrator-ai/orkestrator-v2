@@ -131,6 +131,8 @@ export interface AgentMailMessage {
   autonomousSequence?: number;
   placement: AgentMailPlacement;
   placementReason?: string;
+  /** Coordinator delegation whose completion releases this held report. */
+  coordinatorDelegationId?: string;
   injectedAt?: string;
   injectRequestId?: string;
   ackedAt?: string;

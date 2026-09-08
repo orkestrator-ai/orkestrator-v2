@@ -7,6 +7,10 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
+  COORDINATOR_ASYNC_CONTRACT,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
@@ -574,6 +578,63 @@ async function validateSelection(
   }
 }
 
+/**
+ * What every coordinator delegation tool says about what happens next.
+ *
+ * Carried on the result rather than left to the prompt because this is the
+ * answer to the question the model is actually asking at that moment — "is it
+ * done yet?" — and a tool that returns `accepted` with nothing else invites a
+ * poll loop as the only obvious way to find out.
+ */
+function asyncDelegationResult(): JsonRecord {
+  return {
+    delivery: "async",
+    wake: "This conversation will be woken with a message when the worker's turn ends. Progress the worker sends before then is held and delivered with that wake, so silence means it is still working.",
+    nextStep: "Finish your turn now. Do not poll.",
+  };
+}
+
+async function tryOpenCoordinatorDelegation(
+  invoke: ControlMcpInvoker,
+  scope: CoordinatorControlScope,
+  input: { environmentId: string; tabId: string; requestId: string },
+): Promise<boolean> {
+  try {
+    const result = await invoke<unknown>("open_coordinator_delegation", { scope, ...input });
+    return isRecord(result) && result.opened === true;
+  } catch (error) {
+    console.warn(
+      "[control-mcp] Failed to open coordinator delegation:",
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
+}
+
+/**
+ * A stable summary of what a mailbox page actually said.
+ *
+ * Identity and delivery state only: two reads that return the same messages in
+ * the same states are the same answer, however the page was paginated or how
+ * unread counts happened to render.
+ */
+function mailboxFingerprint(page: JsonRecord): string {
+  const messages = Array.isArray(page.messages) ? page.messages : [];
+  return JSON.stringify(
+    messages.map((message) =>
+      isRecord(message) ? [message.id, message.placement, message.ackedAt ?? null] : message,
+    ),
+  );
+}
+
+/** The worker's half of the contract: one report, at the end, then stop. */
+function workerAsyncContract(scope: CoordinatorControlScope): string {
+  return (
+    `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report — use reply_message for the message that assigned this work, or send_message to environment ${coordinatorRuntimeId(scope.coordinatorId, scope.conversationId)} — and then end your turn. ` +
+    `Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`
+  );
+}
+
 function readAnnotations() {
   return {
     readOnlyHint: true,
@@ -583,9 +644,30 @@ function readAnnotations() {
   };
 }
 
+/**
+ * Whether this read is a poll: the same answer, asked again, too many times.
+ *
+ * Returns the refusal to send back instead of the page, or null to answer
+ * normally. Deliberately fingerprint-based rather than time-based — a model
+ * that reads its inbox once at the start of a turn and once before finishing is
+ * doing the right thing however fast it does it, while one asking the same
+ * unchanged question a fifth time is waiting, which is the thing this design
+ * removed the need for.
+ */
+type CoordinatorPollGuard = (key: string, fingerprint: string) => JsonRecord | null;
+
+/**
+ * How many identical answers a conversation may collect before it is told to
+ * stop asking, and how long that judgement stands.
+ */
+const COORDINATOR_POLL_BUDGET = 3;
+const COORDINATOR_POLL_WINDOW_MS = 120_000;
+const MAX_COORDINATOR_POLL_ENTRIES = 256;
+
 async function createControlMcp(
   invoke: ControlMcpInvoker,
   coordinatorScope?: CoordinatorControlScope,
+  pollGuard?: CoordinatorPollGuard,
 ): Promise<McpServer> {
   const config = await invoke<unknown>("get_config");
   const messagingEnabled =
@@ -599,7 +681,8 @@ async function createControlMcp(
       instructions:
         "Control Orkestrator through project IDs returned by list_projects. " +
         "Use launch_environment for a new workspace and launch_job for an independent " +
-        "agent tab in an existing ready environment. Reuse requestId when retrying mutations.",
+        "agent tab in an existing ready environment. Reuse requestId when retrying mutations." +
+        (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : ""),
     },
   );
 
@@ -1032,10 +1115,16 @@ async function createControlMcp(
           startError = error instanceof Error ? error.message : "Environment start failed";
         }
       }
+      const delegationOpened =
+        coordinatorScope &&
+        !startError &&
+        isRecord(launch) &&
+        launch.coordinatorDelegationOpened === true;
       return toolResult({
         environmentId: environment.id,
         tabId: "startup-agent",
         status: startError ? "created" : "accepted",
+        ...(delegationOpened ? asyncDelegationResult() : {}),
         ...(isRecord(repository)
           ? {
               delegationBaseBranch: input.baseBranch,
@@ -1093,7 +1182,9 @@ async function createControlMcp(
               projectId: coordinatorScope.projectId,
               coordinatorId: coordinatorScope.coordinatorId,
               conversationId: coordinatorScope.conversationId,
-              instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+              instruction:
+                `${COORDINATOR_JOB_DELEGATION_INSTRUCTION}\n` +
+                workerAsyncContract(coordinatorScope),
             },
             input.prompt,
           )
@@ -1109,7 +1200,18 @@ async function createControlMcp(
         : input;
       const job = await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
-      return toolResult(job);
+      // Only against the tab the job actually landed in. A guessed tab id would
+      // open a delegation nothing can ever close, leaving the conversation
+      // shown as waiting on a worker that does not exist.
+      const delegationOpened =
+        coordinatorScope && typeof job.tabId === "string"
+          ? await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
+              environmentId: input.environmentId,
+              tabId: job.tabId,
+              requestId: input.requestId,
+            })
+          : false;
+      return toolResult({ ...job, ...(delegationOpened ? asyncDelegationResult() : {}) });
     },
   );
 
@@ -1134,6 +1236,14 @@ async function createControlMcp(
       },
     },
     async ({ requestId, environmentId, tabId, prompt, conversationMode }) => {
+      if (coordinatorScope) {
+        await invoke("assert_coordinator_delegation_available", {
+          scope: coordinatorScope,
+          environmentId,
+          tabId,
+          requestId,
+        });
+      }
       const layout = await invoke<unknown>("get_pane_layout", { environmentId });
       const native = nativeTab(layout, tabId);
       if (!native) throw new Error(`Native agent tab not found: ${tabId}`);
@@ -1146,7 +1256,19 @@ async function createControlMcp(
         ...(conversationMode ? { mode: conversationMode } : {}),
       });
       if (!isRecord(outcome)) throw new Error("Prompt dispatch returned no result");
-      return toolResult({ environmentId, tabId, ...outcome });
+      const delegationOpened = coordinatorScope
+        ? await tryOpenCoordinatorDelegation(invoke, coordinatorScope, {
+            environmentId,
+            tabId,
+            requestId,
+          })
+        : false;
+      return toolResult({
+        environmentId,
+        tabId,
+        ...outcome,
+        ...(delegationOpened ? asyncDelegationResult() : {}),
+      });
     },
   );
 
@@ -1521,8 +1643,11 @@ async function createControlMcp(
           coordinatorScope ? { ...input, ...coordinatorScope } : input,
         );
         if (!isRecord(message)) throw new Error("Message send returned no result");
-        const { body: _body, ...summary } = message;
-        return toolResult({ message: summary });
+        const { body: _body, coordinatorDelegationOpened: delegationOpened, ...summary } = message;
+        return toolResult({
+          message: summary,
+          ...(coordinatorScope && delegationOpened === true ? asyncDelegationResult() : {}),
+        });
       },
     );
 
@@ -1567,7 +1692,11 @@ async function createControlMcp(
           }
           const page = await invoke<unknown>("get_agent_mail_mailbox", input);
           if (!isRecord(page)) throw new Error("Mailbox returned no result");
-          return toolResult(page);
+          const guidance = pollGuard?.(
+            `read_messages:${JSON.stringify(input)}`,
+            mailboxFingerprint(page),
+          );
+          return toolResult(guidance ? { ...page, ...guidance } : page);
         },
       );
 
@@ -1637,7 +1766,18 @@ async function createControlMcp(
               throw new Error("Coordinator credential cannot inspect that message");
             }
           }
-          return toolResult({ message: status });
+          // Guarded only after authorization, so a refusal can never answer for
+          // a message this credential was not allowed to look at.
+          const statusRefusal = pollGuard?.(
+            `get_message_status:${messageId}`,
+            JSON.stringify({
+              placement: status.placement,
+              injectedAt: status.injectedAt,
+              ackedAt: status.ackedAt,
+              revision: status.revision,
+            }),
+          );
+          return toolResult({ message: status, ...statusRefusal });
         },
       );
 
@@ -1705,6 +1845,17 @@ export class ControlMcpServer {
     string,
     { scope: CoordinatorControlScope; expiresAt: number }
   >();
+  /**
+   * Repeated-unchanged-read counters, per conversation and read.
+   *
+   * Lives here rather than on the MCP server because that one is rebuilt for
+   * every request — a counter kept there would reset on each call and never
+   * observe a loop at all.
+   */
+  private readonly coordinatorPolls = new Map<
+    string,
+    { fingerprint: string; unchanged: number; windowStartedAt: number }
+  >();
 
   constructor(
     private readonly dataDir: string,
@@ -1727,6 +1878,43 @@ export class ControlMcpServer {
       url: this.info?.url ?? this.configuredUrl(),
       token: enabled ? this.token : "",
       error: this.startError,
+    };
+  }
+
+  /**
+   * The per-conversation poll guard handed to one request's MCP server.
+   *
+   * Bounded on both axes: one entry per conversation and exact read input, and
+   * the whole table is dropped when a credential is revoked. The budget is small
+   * on purpose — a turn legitimately reads its inbox once on entry and once
+   * before it finishes, so the fourth identical answer in two minutes is a wait
+   * loop, not work.
+   */
+  private coordinatorPollGuard(scope: CoordinatorControlScope): CoordinatorPollGuard {
+    return (read, fingerprint) => {
+      const key = `${scope.coordinatorId}:${scope.conversationId}:${read}`;
+      const now = Date.now();
+      const previous = this.coordinatorPolls.get(key);
+      if (
+        !previous ||
+        previous.fingerprint !== fingerprint ||
+        now - previous.windowStartedAt > COORDINATOR_POLL_WINDOW_MS
+      ) {
+        this.coordinatorPolls.set(key, { fingerprint, unchanged: 1, windowStartedAt: now });
+        if (this.coordinatorPolls.size > MAX_COORDINATOR_POLL_ENTRIES) {
+          const oldest = Array.from(this.coordinatorPolls.entries()).sort(
+            (a, b) => a[1].windowStartedAt - b[1].windowStartedAt,
+          )[0];
+          if (oldest) this.coordinatorPolls.delete(oldest[0]);
+        }
+        return null;
+      }
+      previous.unchanged += 1;
+      if (previous.unchanged <= COORDINATOR_POLL_BUDGET) return null;
+      return {
+        repeatedRead: true,
+        instruction: COORDINATOR_ASYNC_CONTRACT,
+      };
     };
   }
 
@@ -1762,6 +1950,19 @@ export class ControlMcpServer {
         (conversationId === undefined || scope.conversationId === conversationId)
       ) {
         this.coordinatorCredentials.delete(token);
+      }
+    }
+    // A conversation that lost its credential is starting over. Carrying its
+    // poll history forward would refuse the first read of the next one.
+    for (const key of this.coordinatorPolls.keys()) {
+      if (
+        key.startsWith(
+          conversationId === undefined
+            ? `${coordinatorId}:`
+            : `${coordinatorId}:${conversationId}:`,
+        )
+      ) {
+        this.coordinatorPolls.delete(key);
       }
     }
   }
@@ -2000,9 +2201,11 @@ export class ControlMcpServer {
           return this.invoke<T>(command, args);
         }
       : this.invoke;
-    const handler = createMcpHandler(() => createControlMcp(scopedInvoke, coordinatorScope), {
-      legacy: "stateless",
-    });
+    const pollGuard = coordinatorScope ? this.coordinatorPollGuard(coordinatorScope) : undefined;
+    const handler = createMcpHandler(
+      () => createControlMcp(scopedInvoke, coordinatorScope, pollGuard),
+      { legacy: "stateless" },
+    );
     try {
       await toNodeHandler(handler)(request, response, body);
     } finally {

@@ -608,4 +608,60 @@ describe("CoordinatorPanel", () => {
     expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
   });
+
+  test("shows waiting workers only for the selected conversation", async () => {
+    const secondConversation = {
+      ...snapshot.workspace.conversations[0]!,
+      id: "conversation-2",
+      tabId: "coordinator-tab-2",
+      logicalSessionKey: "coordinator-coordinator-1:conversation-2",
+      title: "Second",
+    };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [...snapshot.workspace.conversations, secondConversation],
+        selectedConversationId: "conversation-1",
+      },
+      workflows: [
+        {
+          id: "first-worker",
+          coordinatorId: "coordinator-1",
+          projectId: "project-1",
+          conversationId: "conversation-1",
+          kind: "environment",
+          resourceId: "worker-for-first",
+          requestId: "first",
+          createdAt: new Date(0).toISOString(),
+          delegation: {
+            requestedAt: new Date(0).toISOString(),
+            workerTabId: "agent-1",
+            state: "running",
+          },
+        },
+        {
+          id: "second-worker",
+          coordinatorId: "coordinator-1",
+          projectId: "project-1",
+          conversationId: "conversation-2",
+          kind: "environment",
+          resourceId: "worker-for-second",
+          requestId: "second",
+          createdAt: new Date(0).toISOString(),
+          delegation: {
+            requestedAt: new Date(0).toISOString(),
+            workerTabId: "agent-2",
+            state: "running",
+          },
+        },
+      ],
+    };
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    const badge = screen.getByText(/Waiting on 1 worker/);
+    expect(badge.getAttribute("title")).toContain("worker-for-first");
+    expect(badge.getAttribute("title")).not.toContain("worker-for-second");
+  });
 });

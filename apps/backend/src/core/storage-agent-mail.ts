@@ -31,7 +31,10 @@ import {
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { StorageDrafts } from "./storage-drafts.ts";
 import { paneLayoutLeaves } from "./storage-shared.js";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_DELEGATION_HOLD_REASON,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 
 type PersistedMailbox = {
   mailboxId: string;
@@ -129,7 +132,11 @@ function metadataMessage(message: AgentMailMessage): AgentMailMessageSummary {
 function countsAsPendingInject(message: AgentMailMessage | AgentMailMessageSummary): boolean {
   return (
     message.placement === "pending-inject" ||
-    (message.placement === "inject-held" && message.placementReason === "loop-budget-exhausted")
+    (message.placement === "inject-held" &&
+      (message.placementReason === "loop-budget-exhausted" ||
+        // Held until its delegation completes, not withheld from delivery: it
+        // is still on its way to the recipient, so it counts as pending.
+        message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON))
   );
 }
 
@@ -843,6 +850,39 @@ export class StorageAgentMail extends StorageDrafts {
     };
   }
 
+  /**
+   * Whether a coordinator request is still sitting undelivered in this worker's
+   * inbox.
+   *
+   * A delegation opened by messaging a worker that was already mid-turn would
+   * otherwise be settled by that in-flight turn ending — the worker has not
+   * read the request yet, so reporting it as finished is a lie, and it is
+   * exactly the kind of unsolicited "done" this design exists to prevent.
+   *
+   * Deliberately not filtered by time. The obvious version compares against the
+   * delegation's `requestedAt`, but the request is *sent* before the delegation
+   * is opened, so its `createdAt` is at best equal and usually earlier — the
+   * comparison decides on a millisecond boundary and drops the very case it was
+   * written for. Delivery state alone is the evidence, and it is unambiguous:
+   * an uninjected request has not reached any turn.
+   */
+  async hasUndeliveredCoordinatorRequest(
+    workerEnvironmentId: string,
+    workerTabId: string,
+  ): Promise<boolean> {
+    const store = await this.loadAgentMailStore();
+    const mailbox = store.mailboxes[agentMailboxId(workerEnvironmentId, workerTabId)];
+    if (!mailbox) return false;
+    return mailbox.messages.some(
+      (message) =>
+        message.from.kind === "coordinator" &&
+        !message.injectedAt &&
+        !message.ackedAt &&
+        !message.discardedAt &&
+        (message.placement === "pending-inject" || message.placement === "inject-held"),
+    );
+  }
+
   async getAgentMailMessage(
     environmentId: string,
     tabId: string,
@@ -1108,9 +1148,39 @@ export class StorageAgentMail extends StorageDrafts {
         recipient.agent,
         recipient.locked,
       ).canInject;
+      /*
+       * A worker reporting to the coordinator that is currently waiting on it
+       * does not get to interrupt. The coordinator asked for one answer and is
+       * woken once, when the worker's turn ends; anything the worker sends
+       * before then — a progress note, a partial finding, a second thought — is
+       * stored and released together with that wake.
+       *
+       * This is the difference between a dispatcher and a chat room. Without it
+       * a chatty worker turns one delegation into a turn per message, each one
+       * billable and each one interrupting whatever the user is doing with the
+       * coordinator. The message is never lost: it is readable immediately
+       * through the mail tools and delivered in full on completion.
+       */
+      const holdingDelegation =
+        sender.kind === "tab" && recipient.ownerKind === "coordinator" && trust === "same-project"
+          ? (await this.listOpenCoordinatorDelegations()).find(
+              (association) =>
+                association.resourceId === sender.environmentId &&
+                association.delegation?.workerTabId === sender.tabId &&
+                // The delegation has to belong to *this* conversation. A second
+                // conversation that never asked this worker for anything is not
+                // waiting on it, so holding its mail would silence a message
+                // nothing will ever release.
+                association.conversationId !== undefined &&
+                coordinatorRuntimeId(association.coordinatorId, association.conversationId) ===
+                  recipient.environmentId,
+            )
+          : undefined;
+      const heldForDelegation = Boolean(holdingDelegation);
       const shouldScheduleInject =
         (effectivePolicy === "idle" || coordinatorExchange) &&
         !recipient.mutedInbound &&
+        !heldForDelegation &&
         trust !== "cross-project" &&
         trust !== "external" &&
         (injectDepth === 0 || coordinatorExchange) &&
@@ -1141,7 +1211,7 @@ export class StorageAgentMail extends StorageDrafts {
         ...(coordinatorExchange ? { autonomousSequence: store.revision + 1 } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
-          : heldForLoopBudget
+          : heldForDelegation || heldForLoopBudget
             ? "inject-held"
             : "stored",
         ...(shouldScheduleInject
@@ -1149,9 +1219,18 @@ export class StorageAgentMail extends StorageDrafts {
               injectRequestId: `mail-inject-${id}`,
               ...(settings.paused ? { placementReason: "paused" } : {}),
             }
-          : heldForLoopBudget
-            ? { placementReason: "loop-budget-exhausted" }
-            : {}),
+          : heldForDelegation
+            ? {
+                // Minted now, not on release: the delegation's completion
+                // pushes this straight onto the pending index, and an inject
+                // identity invented at that point would differ across a retry.
+                injectRequestId: `mail-inject-${id}`,
+                placementReason: COORDINATOR_DELEGATION_HOLD_REASON,
+                coordinatorDelegationId: holdingDelegation!.id,
+              }
+            : heldForLoopBudget
+              ? { placementReason: "loop-budget-exhausted" }
+              : {}),
         revision: 1,
       };
       if (recipient.mutedInbound) {
@@ -1306,6 +1385,92 @@ export class StorageAgentMail extends StorageDrafts {
       this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
       this.announce("agent-mail-summary", "all");
       return promoted;
+    });
+  }
+
+  /** Whether this exact delegation has a worker report waiting to be released. */
+  async hasDelegationHeldAgentMail(
+    associationId: string,
+    coordinatorEnvironmentId: string,
+    coordinatorTabId: string,
+    workerEnvironmentId: string,
+    workerTabId: string,
+  ): Promise<boolean> {
+    const store = await this.loadAgentMailStore();
+    const mailbox = store.mailboxes[agentMailboxId(coordinatorEnvironmentId, coordinatorTabId)];
+    return Boolean(
+      mailbox?.messages.some(
+        (message) =>
+          message.placement === "inject-held" &&
+          message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
+          (message.coordinatorDelegationId === associationId ||
+            message.coordinatorDelegationId === undefined) &&
+          message.from.kind === "tab" &&
+          message.from.environmentId === workerEnvironmentId &&
+          message.from.tabId === workerTabId &&
+          !message.ackedAt &&
+          !message.discardedAt,
+      ),
+    );
+  }
+
+  /**
+   * Release the mail a finished worker sent while its coordinator was waiting.
+   *
+   * Every held message becomes deliverable at once, oldest first, so the
+   * coordinator's next turn sees the whole exchange in order rather than one
+   * message now and the rest on later sweeps. The durable delegation wake kind,
+   * recorded before this mutation, distinguishes a silent worker from a retry
+   * after an earlier pass already released the report.
+   */
+  async releaseDelegationHeldAgentMail(
+    associationId: string,
+    coordinatorEnvironmentId: string,
+    coordinatorTabId: string,
+    workerEnvironmentId: string,
+    workerTabId: string,
+  ): Promise<number> {
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const mailboxId = agentMailboxId(coordinatorEnvironmentId, coordinatorTabId);
+      const mailbox = store.mailboxes[mailboxId];
+      if (!mailbox) return 0;
+      let released = 0;
+      const held = mailbox.messages
+        .filter(
+          (message) =>
+            message.placement === "inject-held" &&
+            message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON &&
+            (message.coordinatorDelegationId === associationId ||
+              message.coordinatorDelegationId === undefined) &&
+            message.from.kind === "tab" &&
+            message.from.environmentId === workerEnvironmentId &&
+            message.from.tabId === workerTabId &&
+            !message.ackedAt &&
+            !message.discardedAt,
+        )
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      for (const message of held) {
+        message.placement = "pending-inject";
+        delete message.placementReason;
+        message.injectRequestId ??= `mail-inject-${message.id}`;
+        message.revision += 1;
+        if (
+          !store.pendingInject.some(
+            (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
+          )
+        ) {
+          store.pendingInject.push({ mailboxId, messageId: message.id });
+        }
+        released += 1;
+      }
+      if (released === 0) return 0;
+      mailbox.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.announce("agent-mail-summary", "all");
+      return released;
     });
   }
 

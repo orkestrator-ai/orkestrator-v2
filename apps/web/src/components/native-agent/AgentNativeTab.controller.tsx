@@ -2062,7 +2062,12 @@ export function SharedNativeAgentController({
               : draftSessionAction
                 ? (draftSessionAction.error ?? `Send to the current ${label} turn`)
                 : canQueue
-                  ? "Add to queue"
+                  ? // A coordinator turn is short by design — it delegates and
+                    // ends — so "queue" understates what happens: the message
+                    // runs as the next turn, usually within seconds.
+                    isReadOnlyCoordinator
+                    ? "Send after this turn"
+                    : "Add to queue"
                   : "Send"
           }
           onSend={() => {

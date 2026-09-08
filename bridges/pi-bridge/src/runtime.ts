@@ -11,8 +11,8 @@
  * bridge that cannot reach a provider must still start and serve its
  * transcript.
  */
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { agentDirectory, CATALOG_TIMEOUT_MS } from "./config.js";
+import { ModelRuntime } from "./pi-sdk.js";
 
 let runtime: ModelRuntime | null = null;
 let creation: Promise<ModelRuntime> | null = null;

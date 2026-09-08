@@ -8,7 +8,7 @@ const selection = z
   .object({
     agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
     model: z.string().trim().min(1).max(512),
-    reasoningEffort: z.string().trim().min(1).max(512).optional(),
+    reasoningEffort: z.string().trim().min(1).max(128).optional(),
   })
   .strict();
 
@@ -84,7 +84,7 @@ export function registerControlReviewActions(
         title,
         description:
           name === "address_multi_review"
-            ? "Complete Address findings action: open the root review, persist an idempotent fix handoff, then the backend publishes/selects Fix after dispatch. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's workflow first."
+            ? "Complete Address findings action: open the root review, persist an idempotent fix handoff, then publish Fix after dispatch. The foreground action selects Fix, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
             : `${title}. Complete durable UI action; no workflow or turn is launched. Works in inactive environments and survives reload. Adopt workflows owned by another conversation first. Inspect outcome/ui/recovery for presentation failure.`,
         inputSchema: z.object({ workflowId: z.string().trim().min(1).max(200) }).strict(),
         annotations: {

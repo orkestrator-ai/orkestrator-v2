@@ -139,10 +139,13 @@ which its renderer adopts when the user returns.
 `open_multi_review_fix` opens/focuses the authoritative Fix provider session
 without sending a turn. `address_multi_review` now opens the root first and
 records the backend's idempotent fix handoff; the supervisor publishes and
-selects Fix after confirmed dispatch. A repeated address call returns the
-existing interactive handoff. These open/address controls require an association
-with the current coordinator conversation. Use `adopt_workflow` for an orphaned
-or closed conversation's association before opening it.
+selects Fix after confirmed dispatch when the foreground action initiated that
+attempt. A background retry or backend-restart resume publishes Fix without
+changing the current tab or pane. A repeated address call returns the existing
+interactive handoff. An unassociated workflow started from the renderer remains
+available within its project. When an association exists, these controls require
+it to belong to the current coordinator conversation; use `adopt_workflow` for
+an orphaned or closed conversation's association before opening it.
 
 Read the result before reporting success:
 

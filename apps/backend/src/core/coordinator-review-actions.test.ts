@@ -188,6 +188,34 @@ test("existing active workflows reattach even with a different model selection a
   });
   expect(start).toHaveBeenCalledTimes(1);
   expect(cancel).not.toHaveBeenCalled();
+  const associations = await storage.listCoordinatorWorkflowAssociations(scope.projectId);
+  expect(associations).toHaveLength(1);
+  expect(associations[0]?.requestAliases).toContainEqual(
+    expect.objectContaining({ requestId: "new-click" }),
+  );
+  await expect(
+    launch({
+      requestId: "new-click",
+      targetBranch: "changed",
+      fixModel: { agent: "claude", model: "default" },
+    }),
+  ).rejects.toThrow("different payload");
+});
+
+test("an active review cannot be implicitly associated with another open conversation", async () => {
+  await launch();
+  const other = await context.coordinators!.createConversation(scope.projectId, "Other");
+  const otherScope = {
+    ...scope,
+    conversationId: other.workspace.selectedConversationId,
+  };
+  await expect(
+    commands.get("launch_coordinator_multi_review_action")!(
+      { scope: otherScope, input: { ...input(), requestId: "other-conversation" } },
+      context,
+    ),
+  ).rejects.toThrow("another conversation");
+  expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toHaveLength(1);
 });
 
 async function fullLayout(workflowId?: string, tabId?: string) {
@@ -217,6 +245,37 @@ async function fullLayout(workflowId?: string, tabId?: string) {
   );
 }
 
+function consolidatedReport(): NonNullable<MultiReviewWorkflow["consolidatedReport"]> {
+  return {
+    reviewScope: {
+      targetBranch: "main",
+      baseRef: "origin/main...HEAD",
+      commit: null,
+      filesReviewed: [],
+      filesSkipped: [],
+      filesLeftUncommitted: [],
+      commandsRun: [],
+      commandsNotRun: [],
+      limitations: [],
+    },
+    whatChanged: {
+      overview: "Fixture",
+      before: "Before",
+      after: "After",
+      keyCodeChanges: [],
+      userImpact: "None",
+    },
+    riskProfile: { changeTypes: [], riskAreas: [], overallRisk: "low", reasoning: "Fixture" },
+    testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
+    strengths: [],
+    issues: [],
+    testCoverageGaps: [],
+    verdict: { ready: "yes", reasoning: "Fixture" },
+    summaryOfChange: "Fixture",
+    reviewSummary: "Fixture",
+  };
+}
+
 test("tab limit and environment readiness fail before launch", async () => {
   await fullLayout();
   await expect(launch()).rejects.toThrow("maximum 9");
@@ -242,6 +301,19 @@ test("saved branch and review instruction defaults match the environment button"
     reviewers: [expect.objectContaining(selection)],
     fixModel: selection,
   });
+});
+
+test("an explicit blank review instruction clears the saved default for one launch", async () => {
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    reviewInstruction: "Check failure recovery",
+  });
+  const outcome = await launch({ reviewInstruction: "" });
+  expect(outcome.workflow.reviewInstruction).toBeUndefined();
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({ reviewInstruction: undefined }),
+    outcome.workflow.id,
+  );
 });
 
 test("reattach failure never cancels the already running review", async () => {
@@ -468,34 +540,7 @@ test("Fix opening is presentation-only, stable, and refuses pending handoffs", a
 
 test("address opens the root before persisting a handoff and reports pending without claiming delivery", async () => {
   const launched = await launch();
-  const report = {
-    reviewScope: {
-      targetBranch: "main",
-      baseRef: "origin/main...HEAD",
-      commit: null,
-      filesReviewed: [],
-      filesSkipped: [],
-      filesLeftUncommitted: [],
-      commandsRun: [],
-      commandsNotRun: [],
-      limitations: [],
-    },
-    whatChanged: {
-      overview: "Fixture",
-      before: "Before",
-      after: "After",
-      keyCodeChanges: [],
-      userImpact: "None",
-    },
-    riskProfile: { changeTypes: [], riskAreas: [], overallRisk: "low", reasoning: "Fixture" },
-    testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
-    strengths: [],
-    issues: [],
-    testCoverageGaps: [],
-    verdict: { ready: "yes", reasoning: "Fixture" },
-    summaryOfChange: "Fixture",
-    reviewSummary: "Fixture",
-  };
+  const report = consolidatedReport();
   const ready = {
     ...launched.workflow,
     phase: "ready",
@@ -567,17 +612,85 @@ test("address does not arm hidden work when the root cannot be presented", async
   await fullLayout();
   const address = mock(async () => launched.workflow);
   context.multiReviews!.address = address;
-  expect(
-    await commands.get("address_coordinator_multi_review_action")!(
-      { scope, workflowId: launched.workflow.id },
-      context,
-    ),
-  ).toMatchObject({ outcome: "partial" });
+  const outcome = (await commands.get("address_coordinator_multi_review_action")!(
+    { scope, workflowId: launched.workflow.id },
+    context,
+  )) as MultiReviewActionResult;
+  expect(outcome).toMatchObject({ outcome: "partial", ui: { status: "unavailable" } });
+  expect(outcome.recovery).toContain("maximum 9");
+  expect(outcome.recovery).toContain("No fix handoff was queued");
+  expect(outcome.recovery).not.toContain("durable handoff key");
   expect(address).not.toHaveBeenCalled();
+});
+
+test("address preserves an opened root and reports the supervisor failure", async () => {
+  const launched = await launch();
+  context.multiReviews!.address = mock(async () => {
+    throw new Error("The consolidated review is not ready to address");
+  });
+  const outcome = (await commands.get("address_coordinator_multi_review_action")!(
+    { scope, workflowId: launched.workflow.id },
+    context,
+  )) as MultiReviewActionResult;
+  expect(outcome).toMatchObject({ outcome: "partial", ui: { status: "opened" } });
+  expect(outcome.recovery).toContain("The consolidated review is not ready to address");
+  expect(outcome.recovery).toContain("could not be queued");
+});
+
+test("address accepts a renderer-started review with no coordinator association", async () => {
+  const rendererStarted = await start(
+    {
+      environmentId,
+      projectId: scope.projectId,
+      targetBranch: "main",
+      reviewers: [selection],
+      fixModel: selection,
+    },
+    "renderer-review",
+  );
+  const ready: MultiReviewWorkflow = {
+    ...rendererStarted,
+    phase: "ready",
+    consolidatedReport: consolidatedReport(),
+    fixSession: {
+      ...selection,
+      providerSessionId: "provider-renderer",
+      sessionKey: "renderer-fix-session",
+      status: "idle",
+      requestIds: [],
+      startedAt: new Date().toISOString(),
+    },
+  };
+  const written = await storage.saveMultiReviewWorkflow(
+    ready.id,
+    environmentId,
+    1,
+    ready,
+    rendererStarted.backendRevision,
+  );
+  const address = mock(async () => ({
+    ...ready,
+    backendRevision: written.revision,
+    phase: "interactive" as const,
+    addressPromptPending: true,
+    addressSessionKey: `multi-review:${ready.id}:interactive`,
+    addressRequestId: `multi-review-address:${ready.id}`,
+    addressTabId: `multi-review-fix:${ready.id}`,
+  }));
+  context.multiReviews!.address = address;
+  const outcome = (await commands.get("address_coordinator_multi_review_action")!(
+    { scope, workflowId: ready.id },
+    context,
+  )) as MultiReviewActionResult;
+  expect(outcome).toMatchObject({ outcome: "pending", workflow: { id: ready.id } });
+  expect(address).toHaveBeenCalledWith(ready.id);
+  expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toEqual([]);
 });
 
 test("terminal workflows remain idempotent and an explicitly deleted workflow is not relaunched", async () => {
   const launched = await launch();
+  const reattachInput = { requestId: "terminal-reattach" };
+  expect((await launch(reattachInput)).workflow.id).toBe(launched.workflow.id);
   await storage.saveMultiReviewWorkflow(
     launched.workflow.id,
     environmentId,
@@ -586,8 +699,10 @@ test("terminal workflows remain idempotent and an explicitly deleted workflow is
     launched.workflow.backendRevision,
   );
   expect((await launch()).workflow.phase).toBe("cancelled");
+  expect((await launch(reattachInput)).workflow.phase).toBe("cancelled");
   await storage.deleteMultiReviewWorkflow(launched.workflow.id);
   await expect(launch()).rejects.toThrow("removed");
+  await expect(launch(reattachInput)).rejects.toThrow("removed");
   expect(start).toHaveBeenCalledTimes(1);
 });
 

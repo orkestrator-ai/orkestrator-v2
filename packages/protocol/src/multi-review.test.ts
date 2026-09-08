@@ -50,6 +50,8 @@ describe("multi review protocol", () => {
       fixModel: { agent: "claude", model: "default" },
     };
     expect(isLaunchMultiReviewActionInput(input)).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "" })).toBe(true);
+    expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "   " })).toBe(true);
     for (const override of [
       { requestId: " " },
       { requestId: "x".repeat(257) },
@@ -57,6 +59,8 @@ describe("multi review protocol", () => {
       { fixModel: { agent: "invalid", model: "default" } },
       { projectId: "forged" },
       { targetBranch: "--upload-pack=bad" },
+      { reviewInstruction: "x".repeat(100_001) },
+      { reviewInstruction: null },
       { scope: {} },
     ])
       expect(isLaunchMultiReviewActionInput({ ...input, ...override })).toBe(false);

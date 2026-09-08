@@ -154,6 +154,7 @@ export async function dispatchMultiReviewAddressPrompt(
   nativeAgents: AddressNativeAgents,
   workflow: MultiReviewWorkflow,
   tabs?: AddressTabPublisher,
+  activateTab = false,
 ): Promise<MultiReviewAddressDispatchResult> {
   const session = workflow.fixSession;
   if (!session) throw new MissingMultiReviewAddressSessionError();
@@ -184,7 +185,7 @@ export async function dispatchMultiReviewAddressPrompt(
     agent: selection.agent,
     title: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
-    activate: true,
+    activate: activateTab,
   };
   let providerSessionId: string;
   if (customFix) {

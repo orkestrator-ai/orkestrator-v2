@@ -219,7 +219,7 @@ export interface LaunchMultiReviewActionInput {
   environmentId: string;
   reviewers: MultiReviewModelSelection[];
   fixModel: MultiReviewModelSelection;
-  /** Omitted values use the repository base branch and global review instruction. */
+  /** Omitted values use saved defaults; an explicit blank instruction clears its default. */
   targetBranch?: string;
   reviewInstruction?: string;
 }
@@ -241,6 +241,8 @@ export interface MultiReviewActionResult {
 export function isLaunchMultiReviewActionInput(
   value: unknown,
 ): value is LaunchMultiReviewActionInput {
+  const hasReviewInstruction = record(value) && Object.hasOwn(value, "reviewInstruction");
+  const reviewInstruction = record(value) ? value.reviewInstruction : undefined;
   return (
     record(value) &&
     hasOnlyKeys(value, [
@@ -252,11 +254,16 @@ export function isLaunchMultiReviewActionInput(
       "reviewInstruction",
     ]) &&
     nonBlank(value.requestId, 256) &&
+    (!hasReviewInstruction ||
+      (typeof reviewInstruction === "string" && reviewInstruction.length <= 100_000)) &&
     isStartMultiReviewInput({
       environmentId: value.environmentId,
       projectId: "validated-by-caller",
       targetBranch: value.targetBranch ?? "main",
-      reviewInstruction: value.reviewInstruction,
+      reviewInstruction:
+        typeof reviewInstruction === "string" && reviewInstruction.trim().length === 0
+          ? undefined
+          : reviewInstruction,
       reviewers: value.reviewers,
       fixModel: value.fixModel,
     })

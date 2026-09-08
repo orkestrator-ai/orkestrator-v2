@@ -292,8 +292,13 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
-        dispatchAddressPrompt: (workflow) =>
-          dispatchMultiReviewAddressPrompt(this.nativeAgents, workflow, storage),
+        dispatchAddressPrompt: (workflow, presentation) =>
+          dispatchMultiReviewAddressPrompt(
+            this.nativeAgents,
+            workflow,
+            storage,
+            presentation.activateTab,
+          ),
         recoverAddressSession: (workflow, replacement) =>
           recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
         invalidateAddressSession: async (workflow, session) => {

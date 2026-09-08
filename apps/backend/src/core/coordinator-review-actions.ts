@@ -9,9 +9,25 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
+import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
+
+function requestAlias(
+  association: { requestAliases?: Array<{ requestId: string; payloadHash: string }> },
+  requestId: string,
+) {
+  return Array.isArray(association.requestAliases)
+    ? association.requestAliases.find(
+        (alias) =>
+          alias &&
+          typeof alias.requestId === "string" &&
+          typeof alias.payloadHash === "string" &&
+          alias.requestId === requestId,
+      )
+    : undefined;
+}
 
 async function identity(scope: unknown, context: CommandContext) {
   if (!scope || typeof scope !== "object" || Array.isArray(scope))
@@ -68,30 +84,111 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
       if (!environment || environment.projectId !== caller.projectId)
         throw new Error("Environment not found in this project");
       const config = await context.storage.loadConfig();
+      const instructionWasProvided = Object.hasOwn(input, "reviewInstruction");
       const start: StartMultiReviewInput = {
         environmentId: input.environmentId,
         projectId: caller.projectId,
         targetBranch:
           input.targetBranch ?? (config.repositories[caller.projectId]?.prBaseBranch || "main"),
-        reviewInstruction: input.reviewInstruction ?? config.global.reviewInstruction,
+        reviewInstruction: instructionWasProvided
+          ? input.reviewInstruction?.trim()
+            ? input.reviewInstruction
+            : undefined
+          : config.global.reviewInstruction,
         reviewers: input.reviewers,
         fixModel: input.fixModel,
       };
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
+      const payloadHash = actionHash({ action: "launch-multi-review", input });
+      const associations = await context.storage.listCoordinatorWorkflowAssociations(
+        caller.projectId,
+      );
+      const requestAssociation = associations.find(
+        (item) =>
+          item.coordinatorId === caller.coordinatorId &&
+          (item.requestId === input.requestId || requestAlias(item, input.requestId) !== undefined),
+      );
+      const requestPayloadHash = requestAssociation
+        ? requestAssociation.requestId === input.requestId
+          ? requestAssociation.payloadHash
+          : requestAlias(requestAssociation, input.requestId)?.payloadHash
+        : undefined;
+      if (
+        requestAssociation &&
+        (requestAssociation.kind !== "multi-review" ||
+          requestAssociation.projectId !== caller.projectId ||
+          requestPayloadHash !== payloadHash)
+      )
+        throw new Error("Coordinator request id was reused with a different payload");
       const active = (await context.storage.listMultiReviewWorkflows(environment.id)).find(
         (entry) =>
           isMultiReviewWorkflow(entry.snapshot) &&
           !isMultiReviewTerminalPhase(entry.snapshot.phase),
       );
-      const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
-        id: randomUUID(),
-        ...caller,
-        kind: "multi-review",
-        resourceId: active?.id ?? reservedId,
-        requestId: input.requestId,
-        payloadHash: actionHash({ action: "launch-multi-review", input }),
-        createdAt: new Date().toISOString(),
-      });
+      const activeAssociations = active
+        ? associations.filter(
+            (item) => item.kind === "multi-review" && item.resourceId === active.id,
+          )
+        : [];
+      const reusableAssociation = activeAssociations.find(
+        (item) =>
+          !item.pending &&
+          item.coordinatorId === caller.coordinatorId &&
+          item.conversationId === caller.conversationId,
+      );
+      const conflictingAssociation = activeAssociations.find(
+        (item) =>
+          !item.pending &&
+          (item.coordinatorId !== caller.coordinatorId ||
+            item.conversationId !== caller.conversationId),
+      );
+      if (!requestAssociation && !reusableAssociation && conflictingAssociation)
+        throw new Error(
+          "This active review belongs to another conversation; adopt its workflow before opening it",
+        );
+      const conflictingPendingAssociation = activeAssociations.find(
+        (item) =>
+          item.pending &&
+          (item.coordinatorId !== caller.coordinatorId ||
+            item.conversationId !== caller.conversationId ||
+            item.requestId !== input.requestId),
+      );
+      if (!requestAssociation && !reusableAssociation && conflictingPendingAssociation)
+        throw new Error(
+          "This active review has a pending launch receipt; retry its original requestId before adopting it",
+        );
+      const receipt = requestAssociation
+        ? requestAssociation.pending
+          ? await context.storage.reserveCoordinatorWorkflowAssociation({
+              id: randomUUID(),
+              ...caller,
+              kind: "multi-review",
+              resourceId: active?.id ?? reservedId,
+              requestId: input.requestId,
+              payloadHash,
+              createdAt: new Date().toISOString(),
+            })
+          : { association: requestAssociation, claimed: false }
+        : reusableAssociation
+          ? {
+              association: await context.storage.addCoordinatorWorkflowRequestAlias(
+                reusableAssociation.id,
+                caller.coordinatorId,
+                caller.conversationId,
+                input.requestId,
+                payloadHash,
+              ),
+              claimed: false,
+            }
+          : await context.storage.reserveCoordinatorWorkflowAssociation({
+              id: randomUUID(),
+              ...caller,
+              kind: "multi-review",
+              resourceId: active?.id ?? reservedId,
+              requestId: input.requestId,
+              payloadHash,
+              createdAt: new Date().toISOString(),
+            });
       if (receipt.association.conversationId !== caller.conversationId)
         throw new Error(
           "This request belongs to another conversation; adopt its workflow before opening it",
@@ -138,10 +235,11 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
         );
       let workflow = { ...saved.snapshot, backendRevision: saved.revision };
       try {
-        await context.storage.completeCoordinatorWorkflowAssociation(
-          receipt.association.id,
-          workflow.id,
-        );
+        if (receipt.association.pending)
+          await context.storage.completeCoordinatorWorkflowAssociation(
+            receipt.association.id,
+            workflow.id,
+          );
       } catch {
         let cancellation = "";
         if (!reused && !isMultiReviewTerminalPhase(workflow.phase)) {
@@ -195,22 +293,6 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
       async ({ scope, workflowId }, context) => {
         const caller = await identity(scope, context);
         const id = asNonBlankString(workflowId, "workflowId");
-        const associations = await context.storage.listCoordinatorWorkflowAssociations(
-          caller.projectId,
-        );
-        if (
-          !associations.some(
-            (item) =>
-              item.kind === "multi-review" &&
-              item.resourceId === id &&
-              item.coordinatorId === caller.coordinatorId &&
-              item.conversationId === caller.conversationId &&
-              !item.pending,
-          )
-        )
-          throw new Error(
-            "Adopt this workflow into the current coordinator conversation before opening it",
-          );
         const saved = await context.storage.getMultiReviewWorkflow(id);
         if (
           !saved ||
@@ -218,33 +300,103 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
           saved.snapshot.projectId !== caller.projectId
         )
           throw new Error("Multi Review not found in this project");
+        const associations = await context.storage.listCoordinatorWorkflowAssociations(
+          caller.projectId,
+        );
+        const workflowAssociations = associations.filter(
+          (item) => item.kind === "multi-review" && item.resourceId === id,
+        );
+        const ownedAssociation = workflowAssociations.some(
+          (item) =>
+            item.coordinatorId === caller.coordinatorId &&
+            item.conversationId === caller.conversationId &&
+            !item.pending,
+        );
+        const ownedPendingAssociation = workflowAssociations.some(
+          (item) =>
+            item.coordinatorId === caller.coordinatorId &&
+            item.conversationId === caller.conversationId &&
+            item.pending,
+        );
+        if (!ownedAssociation && ownedPendingAssociation)
+          throw new Error(
+            "This workflow launch is still pending; retry launch_multi_review with its original requestId",
+          );
+        if (!ownedAssociation && workflowAssociations.length > 0)
+          throw new Error(
+            "Adopt this workflow into the current coordinator conversation before opening it",
+          );
         let workflow = { ...saved.snapshot, backendRevision: saved.revision };
-        try {
-          if (surface === "address") {
-            if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
+        if (surface === "address") {
+          if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
+          let rootUi: MultiReviewActionResult["ui"];
+          try {
             // Make the supervisor's pending/error state reachable before arming
             // the handoff. The supervisor publishes and selects Fix on delivery.
-            const ui = await openMultiReviewTab(context.storage, workflow);
+            rootUi = await openMultiReviewTab(context.storage, workflow);
+          } catch (error) {
+            return result(
+              workflow,
+              true,
+              { status: "unavailable" },
+              `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No fix handoff was queued.`,
+            );
+          }
+          try {
             workflow = await context.multiReviews.address(id);
-            if (workflow.addressPromptPending)
-              return {
-                ...result(workflow, true, ui),
-                outcome: "pending",
-                recovery:
-                  "The fix handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Fix tab failure. Do not send a separate fix prompt.",
-              } satisfies MultiReviewActionResult;
+          } catch (error) {
+            const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
+            if (latest && isMultiReviewWorkflow(latest.snapshot))
+              workflow = { ...latest.snapshot, backendRevision: latest.revision };
+            const handoffArmed =
+              workflow.phase === "interactive" && workflow.addressPromptPending === true;
+            return {
+              ...result(
+                workflow,
+                true,
+                rootUi,
+                handoffArmed
+                  ? `The review tab opened, but the address action reported: ${conciseError(error)} The durable fix handoff remains queued; inspect get_multi_review before retrying.`
+                  : `The review tab opened, but the fix handoff could not be queued: ${conciseError(error)} Resolve the reported state and retry address_multi_review.`,
+              ),
+              outcome: "partial",
+            };
+          }
+          if (workflow.addressPromptPending)
+            return {
+              ...result(workflow, true, rootUi),
+              outcome: "pending",
+              recovery:
+                "The fix handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Fix tab failure. Do not send a separate fix prompt.",
+            } satisfies MultiReviewActionResult;
+          try {
             return result(
               workflow,
               true,
               await openMultiReviewTab(context.storage, workflow, "fix"),
             );
+          } catch (error) {
+            const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
+            if (latest && isMultiReviewWorkflow(latest.snapshot))
+              workflow = { ...latest.snapshot, backendRevision: latest.revision };
+            return {
+              ...result(
+                workflow,
+                true,
+                rootUi,
+                `The fix handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
+              ),
+              outcome: "partial",
+            };
           }
+        }
+        try {
           return result(
             workflow,
             true,
             await openMultiReviewTab(context.storage, workflow, surface),
           );
-        } catch {
+        } catch (error) {
           const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
           if (latest && isMultiReviewWorkflow(latest.snapshot))
             workflow = { ...latest.snapshot, backendRevision: latest.revision };
@@ -252,11 +404,9 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
             workflow,
             true,
             { status: "unavailable" },
-            surface === "address"
-              ? "The address action could not complete. Inspect the saved workflow before retrying address_multi_review; its durable handoff key prevents a second fix turn. If presentationError is set, use open_multi_review_fix."
-              : surface === "fix"
-                ? "The fix session tab could not be opened. Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched."
-                : "The review tab could not be opened. Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.",
+            surface === "fix"
+              ? `The fix session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
+              : `The review tab could not be opened: ${conciseError(error)} Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.`,
           );
         }
       },

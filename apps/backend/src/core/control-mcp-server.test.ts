@@ -259,7 +259,7 @@ describe("Orkestrator control MCP server", () => {
       arguments: {
         requestId: "launch-review",
         environmentId: "env-1",
-        reviewers: [{ agent: "codex", model: "default" }],
+        reviewers: [{ agent: "codex", model: "default", reasoningEffort: "x".repeat(128) }],
         fixModel: { agent: "claude", model: "default" },
       },
     });
@@ -282,6 +282,22 @@ describe("Orkestrator control MCP server", () => {
       },
       input: { requestId: "launch-review", environmentId: "env-1" },
     });
+    const launchInvocationsBeforeInvalidEffort = invocations.filter(
+      (entry) => entry.command === "launch_coordinator_multi_review_action",
+    ).length;
+    const invalidEffort = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: {
+        requestId: "launch-review-invalid-effort",
+        environmentId: "env-1",
+        reviewers: [{ agent: "codex", model: "default", reasoningEffort: "x".repeat(129) }],
+        fixModel: { agent: "claude", model: "default" },
+      },
+    });
+    expect(invalidEffort.body.result?.isError).toBe(true);
+    expect(
+      invocations.filter((entry) => entry.command === "launch_coordinator_multi_review_action"),
+    ).toHaveLength(launchInvocationsBeforeInvalidEffort);
     expect(listed.body.result?.structuredContent).toMatchObject({
       total: 1,
       projects: [{ id: "project-1" }],

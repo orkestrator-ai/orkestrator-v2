@@ -173,6 +173,7 @@ export interface MultiReviewServiceOptions {
    */
   dispatchAddressPrompt?: (
     workflow: MultiReviewWorkflow,
+    presentation: { activateTab: boolean },
   ) => Promise<MultiReviewAddressDispatchResult | MultiReviewFixSession | void>;
   /** Rebinds and seeds a renderer-created replacement for a missing Fix session. */
   recoverAddressSession?: (
@@ -198,6 +199,12 @@ export class MultiReviewService {
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private readonly progress: MultiReviewProgressTracker;
   private readonly addressDispatchRetryAt = new Map<string, number>();
+  /**
+   * Focus is permission from the foreground action, not durable workflow state.
+   * It is consumed by the first dispatch attempt and intentionally disappears
+   * across retries and backend restarts.
+   */
+  private readonly foregroundAddressDispatches = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
@@ -256,6 +263,7 @@ export class MultiReviewService {
     this.providerUsers.clear();
     this.providerReaders.clear();
     this.addressDispatchRetryAt.clear();
+    this.foregroundAddressDispatches.clear();
     await Promise.allSettled(
       [...this.leases].map(([workflowId, lease]) =>
         this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token),
@@ -389,6 +397,7 @@ export class MultiReviewService {
         // without trying to transition the already-interactive workflow again.
         if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
           this.addressDispatchRetryAt.delete(workflow.id);
+          this.foregroundAddressDispatches.add(workflow.id);
           void this.advanceNow(workflow.id);
           return workflow;
         }
@@ -416,6 +425,7 @@ export class MultiReviewService {
         delete workflow.error;
         const saved = await this.save(workflow, token);
         this.addressDispatchRetryAt.delete(workflow.id);
+        this.foregroundAddressDispatches.add(workflow.id);
         void this.advanceNow(workflow.id);
         return saved;
       } finally {
@@ -443,6 +453,7 @@ export class MultiReviewService {
           workflow.customFixModel.reasoningEffort === input.fixModel.reasoningEffort
         ) {
           this.addressDispatchRetryAt.delete(workflow.id);
+          this.foregroundAddressDispatches.add(workflow.id);
           void this.advanceNow(workflow.id);
           return workflow;
         }
@@ -467,6 +478,7 @@ export class MultiReviewService {
         delete workflow.error;
         const saved = await this.save(workflow, token);
         this.addressDispatchRetryAt.delete(workflow.id);
+        this.foregroundAddressDispatches.add(workflow.id);
         void this.advanceNow(workflow.id);
         return saved;
       } finally {
@@ -1213,7 +1225,8 @@ export class MultiReviewService {
   private async advanceAddressPrompt(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     try {
       const previousFixSession = workflow.fixSession;
-      const dispatched = await this.options.dispatchAddressPrompt!(workflow);
+      const activateTab = this.foregroundAddressDispatches.delete(workflow.id);
+      const dispatched = await this.options.dispatchAddressPrompt!(workflow, { activateTab });
       const result: MultiReviewAddressDispatchResult | undefined =
         dispatched && "fixSession" in dispatched
           ? dispatched

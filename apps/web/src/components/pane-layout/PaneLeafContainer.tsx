@@ -289,12 +289,19 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
           if (nativeAgentData) {
             return (
               <div
-                key={tab.id}
+                key={`${environmentId}:${tab.id}`}
                 className={cn(
                   "absolute inset-0 flex flex-col",
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
+                {/*
+                  App reuses the foreground TerminalContainer when the user
+                  selects another environment. Pane and tab ids are only
+                  unique inside an environment, so the whole stateful subtree
+                  must be remounted to avoid carrying banner, error-boundary,
+                  or optimistic prompt state into the next environment.
+                */}
                 <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
                 <div className="relative min-h-0 flex-1">
                   <LazyLoadBoundary

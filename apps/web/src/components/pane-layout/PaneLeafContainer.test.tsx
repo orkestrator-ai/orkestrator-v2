@@ -1,6 +1,11 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import type {
+  AgentMailMailboxSnapshot,
+  AgentMailMessageSummary,
+  AgentMailSummaryEntry,
+} from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -128,6 +133,11 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
   ),
 }));
 
+/** Set to make the native-agent tab throw during render for one environment. */
+let nativeAgentTabFailureEnvironment: string | null = null;
+/** Bumped once per native-agent mount so remounts are observable. */
+let nativeAgentMountCount = 0;
+
 mock.module("@/components/native-agent", () => ({
   AgentNativeTab: ({
     tabId,
@@ -157,23 +167,32 @@ mock.module("@/components/native-agent", () => ({
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
     ownsGlobalShortcuts?: boolean;
-  }) => (
-    <div
-      data-testid={`${data.platform}-tab`}
-      data-tab-id={tabId}
-      data-environment-id={data.environmentId}
-      data-session-id={data.sessionId}
-      data-active={String(isActive)}
-      data-initial-prompt={initialPrompt}
-      data-agent-model={initialAgentModel}
-      data-agent-handoff-id={agentHandoffId}
-      data-consumed-agent-handoff-id={consumedAgentHandoffId}
-      data-reasoning-effort={initialReasoningEffort}
-      data-refresh-request-id={refreshRequestId}
-      data-review-tab={String(Boolean(isReviewTab))}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-    />
-  ),
+  }) => {
+    const [mountedForEnvironment] = useState(data.environmentId);
+    const [mountIndex] = useState(() => ++nativeAgentMountCount);
+    if (nativeAgentTabFailureEnvironment === data.environmentId) {
+      throw new TypeError("transient native-agent render failure");
+    }
+    return (
+      <div
+        data-testid={`${data.platform}-tab`}
+        data-tab-id={tabId}
+        data-environment-id={data.environmentId}
+        data-mounted-for-environment={mountedForEnvironment}
+        data-mount-index={String(mountIndex)}
+        data-session-id={data.sessionId}
+        data-active={String(isActive)}
+        data-initial-prompt={initialPrompt}
+        data-agent-model={initialAgentModel}
+        data-agent-handoff-id={agentHandoffId}
+        data-consumed-agent-handoff-id={consumedAgentHandoffId}
+        data-reasoning-effort={initialReasoningEffort}
+        data-refresh-request-id={refreshRequestId}
+        data-review-tab={String(Boolean(isReviewTab))}
+        data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
+      />
+    );
+  },
 }));
 
 mock.module("@/components/browser/BrowserTab", () => ({
@@ -315,6 +334,84 @@ mock.module("@/stores/terminalPortalStore", () => ({
 
 const { PaneLeafContainer } = await import("./PaneLeafContainer");
 
+function installPendingMail(environmentIds: string[], tabId: string): void {
+  const summaries = new Map<string, AgentMailSummaryEntry>();
+  const mailboxes = new Map<string, AgentMailMailboxSnapshot>();
+  for (const environmentId of environmentIds) {
+    const mailboxId = `${environmentId}\0${tabId}`;
+    const message: AgentMailMessageSummary = {
+      version: 1,
+      id: `message-${environmentId}`,
+      threadId: `thread-${environmentId}`,
+      requestId: `request-${environmentId}`,
+      createdAt: new Date(0).toISOString(),
+      from: { kind: "user" },
+      toEnvironmentId: environmentId,
+      toTabId: tabId,
+      toIncarnationId: `incarnation-${environmentId}`,
+      bodyBytes: 5,
+      trust: "user",
+      injectDepth: 0,
+      threadDepth: 0,
+      placement: "pending-inject",
+      revision: 1,
+    };
+    summaries.set(mailboxId, {
+      mailboxId,
+      projectId: "project-1",
+      environmentId,
+      tabId,
+      unreadCount: 1,
+      userUnseenCount: 1,
+      agentUnackedCount: 1,
+      pendingInjectCount: 1,
+      failedInjectCount: 0,
+      revision: 1,
+    });
+    mailboxes.set(mailboxId, {
+      descriptor: {
+        mailboxId,
+        incarnationId: `incarnation-${environmentId}`,
+        projectId: "project-1",
+        projectName: "Project",
+        environmentId,
+        environmentName: environmentId,
+        environmentStatus: "running",
+        tabId,
+        tabType: "agent-native",
+        title: "Codex",
+        displayName: "Codex",
+        tabOrdinal: 1,
+        agent: "codex",
+        kind: "native",
+        presence: "idle",
+        injectPolicy: "idle",
+        injectOverride: "idle",
+        mutedInbound: false,
+        mutedOutbound: false,
+        unreadCount: 1,
+        userUnseenCount: 1,
+        agentUnackedCount: 1,
+        pendingInjectCount: 1,
+        failedInjectCount: 0,
+        capabilities: { canPull: true, canSend: true, canInject: true },
+      },
+      messages: [message],
+      total: 1,
+      offset: 0,
+      limit: 100,
+      revision: 1,
+    });
+  }
+  useAgentMailStore.setState({
+    revision: 1,
+    summary: summaries,
+    mailboxes,
+    refreshSummary: mock(async () => undefined),
+    refreshMailbox: mock(async () => undefined),
+  });
+}
+
 describe("PaneLeafContainer", () => {
   afterAll(() => {
     mock.module("@/components/claude/ClaudeTmuxChatTab", () => realClaudeTmuxChatTabSnapshot);
@@ -336,6 +433,19 @@ describe("PaneLeafContainer", () => {
     ],
     activeTabId: "tab-1",
   };
+
+  const nativePaneForEnvironment = (environmentId: string): PaneLeaf => ({
+    kind: "leaf",
+    id: "shared-pane-id",
+    tabs: [
+      {
+        id: "shared-tab-id",
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId },
+      },
+    ],
+    activeTabId: "shared-tab-id",
+  });
 
   beforeEach(() => {
     cleanup();
@@ -400,6 +510,8 @@ describe("PaneLeafContainer", () => {
     useMultiReviewStore.setState({ workflows: new Map() });
     useAgentMailStore.setState(useAgentMailStore.getInitialState());
     clearPersistedVirtuosoState.mockClear();
+    nativeAgentTabFailureEnvironment = null;
+    nativeAgentMountCount = 0;
     multiReviewTabFailure = null;
     multiReviewMountCount = 0;
     paneRenderCount = 0;
@@ -621,6 +733,122 @@ describe("PaneLeafContainer", () => {
         filePath: "src/index.ts",
       },
     });
+  });
+
+  test("remounts a native agent tab when its owning environment changes", async () => {
+    const view = render(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-tab")).dataset.mountedForEnvironment).toBe(
+      "env-first",
+    );
+
+    view.rerender(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-second")}
+        containerId="container-second"
+        environmentId="env-second"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-tab")).dataset.mountedForEnvironment).toBe(
+      "env-second",
+    );
+  });
+
+  test("keeps a native agent tab mounted across same-environment rerenders", async () => {
+    const view = render(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive
+      />,
+    );
+    const initialMount = (await screen.findByTestId("codex-tab")).dataset.mountIndex;
+
+    view.rerender(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-updated"
+        environmentId="env-first"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-tab")).dataset.mountIndex).toBe(initialMount);
+  });
+
+  test("does not carry a dismissed mail banner into another environment", async () => {
+    installPendingMail(["env-first", "env-second"], "shared-tab-id");
+    const view = render(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive
+      />,
+    );
+
+    expect(
+      await screen.findByText("1 message waiting · delivers when this agent is idle"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss agent mail notice" }));
+    expect(screen.queryByText("1 message waiting · delivers when this agent is idle")).toBeNull();
+
+    view.rerender(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-second")}
+        containerId="container-second"
+        environmentId="env-second"
+        isActive
+      />,
+    );
+
+    expect(
+      await screen.findByText("1 message waiting · delivers when this agent is idle"),
+    ).toBeTruthy();
+  });
+
+  test("recovers a failed native agent boundary when the environment changes", async () => {
+    nativeAgentTabFailureEnvironment = "env-first";
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+
+    try {
+      const view = render(
+        <PaneLeafContainer
+          pane={nativePaneForEnvironment("env-first")}
+          containerId="container-first"
+          environmentId="env-first"
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      nativeAgentTabFailureEnvironment = null;
+      view.rerender(
+        <PaneLeafContainer
+          pane={nativePaneForEnvironment("env-second")}
+          containerId="container-second"
+          environmentId="env-second"
+          isActive
+        />,
+      );
+
+      expect(await screen.findByTestId("codex-tab")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      console.error = originalError;
+      nativeAgentTabFailureEnvironment = null;
+    }
   });
 
   test("grants global shortcut ownership only to the focused pane", async () => {

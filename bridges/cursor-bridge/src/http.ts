@@ -541,6 +541,10 @@ async function handlePrompt(
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = readBoundedString(body.requestId, 512, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
+  const readOnly = body.readOnly;
+  if (readOnly !== undefined && typeof readOnly !== "boolean") {
+    throw new HttpError(400, "readOnly must be a boolean");
+  }
 
   // Shape validation happens before the turn is claimed: a malformed
   // attachment list is a caller error, not a turn that half-started.
@@ -591,6 +595,10 @@ async function handlePrompt(
     // attached, and it is far cheaper than a cold start.
     images = await readPromptImages(attachments, workingDirectory);
     applyComposerPatch(state, parseComposerPatch(body));
+    if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
+      await detachAgent(state);
+      state.readOnly = readOnly;
+    }
     agent = await ensureAgent(state);
   } catch (error) {
     // The turn provably did not run, so release the claim and let the caller

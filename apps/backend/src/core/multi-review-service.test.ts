@@ -4752,7 +4752,7 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(consolidation?.options).toMatchObject({
         model: "review-coordinator",
         effort: "medium",
-        mode: "plan",
+        mode: "build",
         readOnly: true,
       });
       expect(consolidation?.prompt).toContain("same backend-verified immutable review package");

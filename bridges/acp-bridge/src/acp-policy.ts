@@ -35,3 +35,10 @@ export function effectiveExecutionPolicy(
   if (!processExecutionPolicyIsCoordinator(env)) return requested;
   return coordinatorProcessPolicy();
 }
+
+export function effectiveTurnExecutionPolicy(input: {
+  policy?: NativeAgentExecutionPolicy;
+  readOnly?: boolean;
+}): NativeAgentExecutionPolicy | undefined {
+  return input.readOnly ? coordinatorProcessPolicy() : effectiveExecutionPolicy(input.policy);
+}

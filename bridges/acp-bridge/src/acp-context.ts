@@ -368,6 +368,8 @@ export interface SessionState {
    */
   health: RuntimeHealthRecorder;
   policy?: NativeAgentExecutionPolicy;
+  /** Per-turn review boundary; changing it restarts the child on the same ACP session. */
+  readOnly?: boolean;
 }
 
 export interface PersistedUsage {

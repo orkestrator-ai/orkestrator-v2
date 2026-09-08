@@ -4294,8 +4294,11 @@ describe("AgentNativeTab", () => {
         models: [],
         fastModeEnabled: false,
         fastModeAvailable: false,
-        selectedModeId: "build" as const,
-        modes: [{ id: "build" as const, label: "Build" }],
+        selectedModeId: "plan" as const,
+        modes: [
+          { id: "build" as const, label: "Build" },
+          { id: "plan" as const, label: "Plan" },
+        ],
       },
       capabilities: {
         attachments: { files: true, images: true },
@@ -4322,9 +4325,14 @@ describe("AgentNativeTab", () => {
     );
     expect(await screen.findByText("Recovered provider notice")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Address all" }));
+    await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+    expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      update: { mode: "build" },
+    });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
     expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
       prompt: ADDRESS_ALL_REVIEW_PROMPT,
+      mode: "build",
     });
 
     const readsBeforeRefresh = getNativeAgentProjectionMock.mock.calls.length;

@@ -72,7 +72,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 import { getClaudeModelCatalog } from "@/lib/backend";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { submitClaudeTmuxAddressAll } from "@/lib/claude-tmux-address-all";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 
 interface Props {
@@ -839,7 +839,29 @@ export function ClaudeTmuxChatTab({
   }, [storeKey]);
 
   const handleAddressAll = async () => {
-    await submitPrompt(ADDRESS_ALL_REVIEW_PROMPT, [], false);
+    setError(null);
+    try {
+      const result = await submitClaudeTmuxAddressAll({
+        planMode,
+        switchToBuild: async () => {
+          setModeSwitching(true);
+          try {
+            const permissionMode = await switchPlanMode(tabId, false, environmentId);
+            permissionModeEventVersionRef.current += 1;
+            setPlanMode(permissionMode === "plan");
+            return permissionMode;
+          } finally {
+            setModeSwitching(false);
+          }
+        },
+        submit: (prompt) => submitPrompt(prompt, [], false),
+      });
+      if (result === "mode-switch-failed") {
+        setError("Claude remained in plan mode; the fixes were not submitted.");
+      }
+    } catch (error) {
+      setError(String(error));
+    }
   };
 
   const handleInterrupt = async () => {

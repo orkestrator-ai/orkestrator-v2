@@ -18,6 +18,8 @@ export type CreateMainWindowOptions = {
   rendererRoot?: string;
   devServerUrl?: string;
   title?: string;
+  partition?: string;
+  beforeLoad?: (window: BrowserWindow) => void | Promise<void>;
 };
 
 export function isTrustedRendererUrl(candidateUrl: string, trustedRendererUrl: string): boolean {
@@ -62,6 +64,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      ...(options.partition ? { partition: options.partition } : {}),
     },
   });
 
@@ -87,6 +90,8 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
   mainWindow.webContents.on("will-frame-navigate", preventPreviewNavigationToRenderer);
   mainWindow.webContents.on("will-redirect", preventPreviewNavigationToRenderer);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  await options.beforeLoad?.(mainWindow);
 
   if (options.isDev) {
     await mainWindow.loadURL(trustedRendererUrl);

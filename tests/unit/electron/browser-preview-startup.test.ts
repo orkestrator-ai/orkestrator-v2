@@ -148,6 +148,7 @@ describe("browser preview startup wiring", () => {
 
     const runtime = initializeBrowserPreviews({
       fromPartition: fromPartition as never,
+      partition: "orkestrator-browser-previews-window-1",
       WebContentsViewCtor: FakeWebContentsView as never,
       menu: { buildFromTemplate } as never,
       getWindow: () => window as never,
@@ -160,7 +161,7 @@ describe("browser preview startup wiring", () => {
         url.startsWith("https://desk.example/__orkestrator/") ? "Bearer test" : null,
     });
 
-    expect(fromPartition).toHaveBeenCalledWith("persist:orkestrator-browser-previews");
+    expect(fromPartition).toHaveBeenCalledWith("orkestrator-browser-previews-window-1");
     expect(runtime.browserSession).toBe(browserSession as never);
     expect(runtime.manager).toBeInstanceOf(BrowserPreviewManager);
     expect(

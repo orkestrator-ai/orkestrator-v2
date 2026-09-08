@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
   claimSingleInstanceLock,
   registerSecondInstanceFocus,
 } from "../../../apps/desktop/electron/single-instance";
 
-type Listener = () => void;
+type Listener = (...args: unknown[]) => void;
 
 function fakeApp(hasLock: boolean) {
   const listeners = new Map<string, Listener[]>();
@@ -13,8 +13,8 @@ function fakeApp(hasLock: boolean) {
     get quitCalls() {
       return quitCalls;
     },
-    emit(event: string) {
-      for (const listener of listeners.get(event) ?? []) listener();
+    emit(event: string, ...args: unknown[]) {
+      for (const listener of listeners.get(event) ?? []) listener(...args);
     },
     listenerCount(event: string) {
       return (listeners.get(event) ?? []).length;
@@ -110,5 +110,17 @@ describe("registerSecondInstanceFocus", () => {
     const harness = fakeApp(true);
     registerSecondInstanceFocus(harness.app, () => null);
     expect(harness.listenerCount("second-instance")).toBe(1);
+  });
+
+  test("opens an explicit new-window launch in the primary instance", () => {
+    const harness = fakeApp(true);
+    const { calls, window } = fakeWindow(false);
+    const createWindow = mock(() => undefined);
+    registerSecondInstanceFocus(harness.app, () => window, createWindow);
+
+    harness.emit("second-instance", {}, ["orkestrator", "--new-window"]);
+
+    expect(createWindow).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([]);
   });
 });

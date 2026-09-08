@@ -5,6 +5,8 @@ import {
   applyStoredPaneSelection,
   clearStoredPaneSelection,
   readStoredPaneSelection,
+  readWindowPaneSelection,
+  writeWindowPaneSelection,
 } from "./pane-selection-storage";
 
 const STORAGE_KEY = "orkestrator.pane-selection.v1";
@@ -58,6 +60,21 @@ afterEach(() => {
 });
 
 describe("read/clear", () => {
+  test("stores current window selection separately from legacy migration state", () => {
+    const state = paneState(
+      split(leaf("left", ["a", "b"], "b"), leaf("right", ["c", "d"], "d")),
+      "right",
+    );
+
+    writeWindowPaneSelection("env-1", state);
+
+    expect(readWindowPaneSelection("env-1")).toEqual({
+      activePaneId: "right",
+      activeTabIds: { left: "b", right: "d" },
+    });
+    expect(readStoredPaneSelection("env-1")).toBeNull();
+  });
+
   test("reads a legacy selection per environment", () => {
     writeStoredPaneSelection("env-1", {
       activePaneId: "right",

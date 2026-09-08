@@ -48,7 +48,7 @@ async function waitForUrl(url: string): Promise<void> {
     .toBe(true);
 }
 
-test("real Electron main process uses the profile identity and preload IPC", async () => {
+test("real Electron main process shares one backend across independent windows", async () => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
   let vite: ChildProcess | null = null;
   let launchedApp: ElectronApplication | null = null;
@@ -99,6 +99,11 @@ test("real Electron main process uses the profile identity and preload IPC", asy
     launchedApp = app;
     const window = await app.firstWindow();
     await expect(window).toHaveTitle(profile.electronTitle);
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null),
+      )
+      .toBe(`${profile.electronTitle} — Local`);
     const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"));
     expect(userData).toBe(profile.dataDir);
     const greeting = await window.evaluate(async () => {
@@ -130,6 +135,75 @@ test("real Electron main process uses the profile identity and preload IPC", asy
       .not.toBeNull()
       .then(() => backendChildPid(electronPid!));
     expect(backendPid).not.toBeNull();
+
+    await app.evaluate(({ BrowserWindow, Menu }) => {
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+      const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
+      const newWindow = fileMenu?.submenu?.items.find((item) => item.label === "New Window");
+      if (!focusedWindow || !newWindow?.click)
+        throw new Error("New Window menu item is unavailable");
+      newWindow.click(undefined, focusedWindow, focusedWindow.webContents);
+    });
+    await expect
+      .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(2);
+    await expect
+      .poll(
+        () => app.windows().filter((candidate) => candidate.url().startsWith(rendererUrl)).length,
+        { timeout: 10_000 },
+      )
+      .toBe(2);
+    const secondWindow = app
+      .windows()
+      .find((candidate) => candidate !== window && candidate.url().startsWith(rendererUrl));
+    expect(secondWindow).toBeDefined();
+    await expect(secondWindow!).toHaveTitle(profile.electronTitle);
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((candidate) => candidate.getTitle()),
+        ),
+      )
+      .toEqual([`${profile.electronTitle} — Local`, `${profile.electronTitle} — Local`]);
+    await secondWindow!
+      .evaluate(async () => {
+        const api = (
+          globalThis as typeof globalThis & {
+            orkestrator: {
+              invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+              isolatedViewState?: boolean;
+            };
+          }
+        ).orkestrator;
+        return {
+          isolatedViewState: api.isolatedViewState,
+          greeting: await api.invoke<string>("greet", { name: "Second window" }),
+        };
+      })
+      .then((value) => {
+        expect(value.isolatedViewState).toBe(true);
+        expect(value.greeting).toContain("Hello, Second window");
+      });
+    expect(backendChildPid(electronPid!)).toBe(backendPid);
+
+    await window.close();
+    await expect
+      .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(1);
+    expect(backendChildPid(electronPid!)).toBe(backendPid);
+    await secondWindow!
+      .evaluate(async () => {
+        const api = (
+          globalThis as typeof globalThis & {
+            orkestrator: {
+              invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+            };
+          }
+        ).orkestrator;
+        return api.invoke<string>("greet", { name: "Remaining window" });
+      })
+      .then((value) => expect(value).toContain("Hello, Remaining window"));
+
     await app.close();
     launchedApp = null;
     await expect.poll(() => processExists(backendPid!), { timeout: 10_000 }).toBe(false);

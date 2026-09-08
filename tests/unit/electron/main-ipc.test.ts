@@ -94,6 +94,7 @@ function createHarness(
   const updateConnectionToken = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
   const forgetConnection = mock(async () => connectionList);
+  const openConnectionWindow = mock(async () => undefined);
   const browserPreviewState = {
     tabId: "browser-1",
     url: "http://localhost:3000/",
@@ -136,6 +137,7 @@ function createHarness(
     updateConnectionToken,
     useConnection,
     forgetConnection,
+    openConnectionWindow,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
     trustedRendererUrl,
   });
@@ -188,6 +190,7 @@ function createHarness(
     updateConnectionToken,
     useConnection,
     forgetConnection,
+    openConnectionWindow,
     browserPreviews,
   };
 }
@@ -237,7 +240,7 @@ describe("main IPC registration", () => {
       enabled: false,
       running: false,
     });
-    expect(harness.setWebClientEnabled).toHaveBeenCalledWith(false);
+    expect(harness.setWebClientEnabled).toHaveBeenCalledWith(false, expect.anything());
     await expect(harness.invoke("orkestrator:web-client:reset-serve")).resolves.toMatchObject({
       running: true,
     });
@@ -253,7 +256,10 @@ describe("main IPC registration", () => {
     ).resolves.toMatchObject({
       token: "replacement-token-123456",
     });
-    expect(harness.setGatewayToken).toHaveBeenCalledWith("replacement-token-123456");
+    expect(harness.setGatewayToken).toHaveBeenCalledWith(
+      "replacement-token-123456",
+      expect.anything(),
+    );
   });
 
   test("validates web client toggle values", async () => {
@@ -397,7 +403,7 @@ describe("main IPC registration", () => {
     );
   });
 
-  test("lists, creates, updates, selects, and forgets server connections", async () => {
+  test("lists, creates, updates, selects, opens, and forgets server connections", async () => {
     const harness = createHarness();
     await expect(harness.invoke("orkestrator:connections:list")).resolves.toMatchObject({
       activeConnectionId: "local",
@@ -407,15 +413,18 @@ describe("main IPC registration", () => {
     });
     expect(harness.listConnections).toHaveBeenCalledTimes(2);
     await expect(harness.invoke("orkestrator:connections:probe", "remote-1")).resolves.toBe(true);
-    expect(harness.probeConnection).toHaveBeenCalledWith("remote-1");
+    expect(harness.probeConnection).toHaveBeenCalledWith("remote-1", expect.anything());
     await harness.invoke("orkestrator:connections:connect", {
       address: "https://desk.example",
       token: "gateway-token-123456",
     });
-    expect(harness.connectToRemote).toHaveBeenCalledWith({
-      address: "https://desk.example",
-      token: "gateway-token-123456",
-    });
+    expect(harness.connectToRemote).toHaveBeenCalledWith(
+      {
+        address: "https://desk.example",
+        token: "gateway-token-123456",
+      },
+      expect.anything(),
+    );
     await harness.invoke(
       "orkestrator:connections:update-token",
       "remote-1",
@@ -424,11 +433,14 @@ describe("main IPC registration", () => {
     expect(harness.updateConnectionToken).toHaveBeenCalledWith(
       "remote-1",
       "replacement-token-123456",
+      expect.anything(),
     );
     await harness.invoke("orkestrator:connections:use", "remote-1");
-    expect(harness.useConnection).toHaveBeenCalledWith("remote-1");
+    expect(harness.useConnection).toHaveBeenCalledWith("remote-1", expect.anything());
+    await harness.invoke("orkestrator:connections:open-window", "remote-1");
+    expect(harness.openConnectionWindow).toHaveBeenCalledWith("remote-1", expect.anything());
     await harness.invoke("orkestrator:connections:forget", "remote-1");
-    expect(harness.forgetConnection).toHaveBeenCalledWith("remote-1");
+    expect(harness.forgetConnection).toHaveBeenCalledWith("remote-1", expect.anything());
   });
 
   test("validates connection IPC input", async () => {
@@ -449,6 +461,9 @@ describe("main IPC registration", () => {
       "connection ID",
     );
     await expect(harness.invoke("orkestrator:connections:forget", null)).rejects.toThrow(
+      "connection ID",
+    );
+    await expect(harness.invoke("orkestrator:connections:open-window", null)).rejects.toThrow(
       "connection ID",
     );
   });

@@ -171,6 +171,24 @@ describe("Electron connection manager", () => {
     expect(local.backend.probe).toHaveBeenCalledWith(3_000);
   });
 
+  test("keeps the in-memory remote catalogue usable after the local backend exits", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    manager.markLocalBackendUnavailable();
+
+    await expect(manager.probe("local")).resolves.toBe(false);
+    await expect(
+      manager.connect({ address: "https://desk.example", token }, "remote-window"),
+    ).resolves.toMatchObject({ connections: expect.any(Array) });
+    expect(local.backend.invoke).toHaveBeenCalledTimes(1);
+  });
+
   test("uses the active remote's in-memory token for session-only probes", async () => {
     const local = localBackendHarness();
     const storage = secureStorage(false);
@@ -980,6 +998,94 @@ describe("Electron connection manager", () => {
     });
     await expect(manager.forget("local")).rejects.toThrow("cannot be removed");
     await expect(manager.forget("missing")).rejects.toThrow("no longer exists");
+  });
+
+  test("keeps window connection bindings independent and pools a shared remote event stream", async () => {
+    const local = localBackendHarness();
+    const eventSignals: AbortSignal[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/__orkestrator/events") {
+        eventSignals.push(init?.signal as AbortSignal);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }
+      if (url.pathname === "/__orkestrator/status") {
+        return new Response(JSON.stringify({ ok: true }));
+      }
+      return new Response(JSON.stringify({ result: url.hostname }));
+    }) as unknown as typeof fetch;
+    const onConnectionEvent = mock(() => undefined);
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+      onConnectionEvent,
+    });
+    await manager.initialize();
+    await manager.bind("local-window", "local");
+    const remoteList = await manager.connect(
+      { address: "https://desk.example", token },
+      "remote-window-a",
+    );
+    const remoteId = remoteList.activeConnectionId;
+    await manager.bind("remote-window-b", remoteId);
+    await Promise.resolve();
+
+    expect(manager.getList("local-window").activeConnectionId).toBe("local");
+    expect(manager.getList("remote-window-a").activeConnectionId).toBe(remoteId);
+    expect(manager.getList("remote-window-b").activeConnectionId).toBe(remoteId);
+    await expect(manager.invoke("get_projects", {}, "local-window")).resolves.toMatchObject({
+      local: true,
+    });
+    await expect(manager.invoke("get_projects", {}, "remote-window-a")).resolves.toBe(
+      "desk.example",
+    );
+    expect(eventSignals).toHaveLength(1);
+
+    await manager.connect(
+      { address: "https://desk.example", token: "replacement-token-123456" },
+      "remote-window-c",
+    );
+    await Promise.resolve();
+    expect(eventSignals).toHaveLength(2);
+    expect(eventSignals[0]?.aborted).toBe(true);
+
+    manager.handleLocalEvent("environment-updated", { id: "local-environment" });
+    expect(onConnectionEvent).toHaveBeenCalledWith("local", "environment-updated", {
+      id: "local-environment",
+    });
+
+    manager.release("remote-window-a");
+    expect(eventSignals[1]?.aborted).toBe(false);
+    manager.release("remote-window-b");
+    expect(eventSignals[1]?.aborted).toBe(false);
+    manager.release("remote-window-c");
+    expect(eventSignals[1]?.aborted).toBe(true);
+  });
+
+  test("does not remove a saved connection while a window is using it", async () => {
+    const local = localBackendHarness();
+    installHealthyRemoteFetch();
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: mock(() => undefined),
+    });
+    await manager.initialize();
+    const list = await manager.connect({ address: "https://desk.example", token }, "remote-window");
+
+    await manager.bind("other-remote-window", list.activeConnectionId);
+    await expect(manager.forget(list.activeConnectionId, "remote-window")).rejects.toThrow(
+      "every window using this connection",
+    );
+    manager.release("other-remote-window");
+    await expect(manager.forget(list.activeConnectionId, "remote-window")).resolves.toMatchObject({
+      activeConnectionId: "local",
+    });
   });
 
   test("reports address, authentication, network, malformed response, and timeout errors", async () => {

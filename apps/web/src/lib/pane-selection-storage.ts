@@ -1,8 +1,9 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
+import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 
 /**
- * Legacy renderer-local storage for which pane and tab this client focused.
+ * Renderer-local storage for which pane and tab this client focused.
  *
  * Selection is now backend-owned as part of the pane-layout snapshot. These
  * helpers remain only to read/apply v1 records during migration and clean them
@@ -15,6 +16,7 @@ import type { PaneNode } from "@/types/paneLayout";
  */
 
 const STORAGE_KEY = "orkestrator.pane-selection.v1";
+const WINDOW_STORAGE_KEY = "orkestrator.window-pane-selection.v1";
 
 /** Bounds on the record, so an app that has opened many environments over its
  * lifetime cannot grow this without limit. Oldest-written entries are evicted
@@ -60,12 +62,12 @@ function parseEntry(value: unknown): StoredPaneSelectionEntry | null {
   return { environmentId, activePaneId, activeTabIds: tabIds };
 }
 
-function readEntries(): StoredPaneSelectionEntry[] {
+function readEntries(storageKey = STORAGE_KEY): StoredPaneSelectionEntry[] {
   const store = storage();
   if (!store) return [];
   let raw: string | null;
   try {
-    raw = store.getItem(STORAGE_KEY);
+    raw = store.getItem(storageKey);
   } catch {
     return [];
   }
@@ -81,7 +83,7 @@ function readEntries(): StoredPaneSelectionEntry[] {
   }
 }
 
-function writeEntries(entries: StoredPaneSelectionEntry[]): void {
+function writeEntries(entries: StoredPaneSelectionEntry[], storageKey = STORAGE_KEY): void {
   const store = storage();
   if (!store) return;
   // Trim newest-last until both bounds hold. A single entry over the byte
@@ -93,7 +95,7 @@ function writeEntries(entries: StoredPaneSelectionEntry[]): void {
     serialized = JSON.stringify({ version: 1, entries: bounded });
   }
   try {
-    store.setItem(STORAGE_KEY, serialized);
+    store.setItem(storageKey, serialized);
   } catch {
     // Quota or a denied write. Nothing to recover; selection simply is not
     // remembered for this session.
@@ -120,6 +122,26 @@ export function clearStoredPaneSelection(environmentId: string): void {
   const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
   writeEntries(remaining);
+}
+
+export function readWindowPaneSelection(environmentId: string): StoredPaneSelection | null {
+  const entry = readEntries(desktopConnectionStorageKey(WINDOW_STORAGE_KEY)).find(
+    (candidate) => candidate.environmentId === environmentId,
+  );
+  return entry ? { activePaneId: entry.activePaneId, activeTabIds: entry.activeTabIds } : null;
+}
+
+export function writeWindowPaneSelection(environmentId: string, state: EnvironmentPaneState): void {
+  const activeTabIds: Record<string, string> = {};
+  forEachLeaf(state.root, (leaf) => {
+    if (leaf.kind === "leaf" && leaf.activeTabId) activeTabIds[leaf.id] = leaf.activeTabId;
+  });
+  const storageKey = desktopConnectionStorageKey(WINDOW_STORAGE_KEY);
+  const entries = readEntries(storageKey).filter(
+    (candidate) => candidate.environmentId !== environmentId,
+  );
+  entries.push({ environmentId, activePaneId: state.activePaneId, activeTabIds });
+  writeEntries(entries, storageKey);
 }
 
 /**

@@ -120,6 +120,31 @@ describe("createMainWindow", () => {
     expect(harness.windows[0].loadURL).toHaveBeenCalledWith("http://127.0.0.1:1420");
   });
 
+  test("registers a partitioned window before loading its renderer", async () => {
+    const harness = createHarness();
+    const beforeLoad = mock((window: (typeof harness.windows)[number]) => {
+      expect(window.loadFile).not.toHaveBeenCalled();
+      expect(window.loadURL).not.toHaveBeenCalled();
+    });
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+      partition: "orkestrator-renderer-window-1",
+      beforeLoad: beforeLoad as never,
+    });
+
+    expect(harness.windows[0].options.webPreferences).toMatchObject({
+      partition: "orkestrator-renderer-window-1",
+    });
+    expect(beforeLoad).toHaveBeenCalledWith(harness.windows[0]);
+    expect(harness.windows[0].loadFile).toHaveBeenCalledTimes(1);
+  });
+
   test("blocks untrusted navigation and renderer-created windows", async () => {
     const harness = createHarness();
 

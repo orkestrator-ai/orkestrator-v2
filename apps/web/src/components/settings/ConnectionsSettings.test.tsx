@@ -39,6 +39,7 @@ function installConnections(
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
     forget: (connectionId: string) => Promise<ConnectionList>;
+    openWindow: (connectionId: string) => Promise<void>;
   }> = {},
 ) {
   const list = mock(overrides.list ?? (async () => connectionList));
@@ -55,6 +56,7 @@ function installConnections(
         ),
       })),
   );
+  const openWindow = mock(overrides.openWindow ?? (async () => undefined));
   window.orkestrator = {
     invoke: mock(async () => undefined) as unknown as NonNullable<Window["orkestrator"]>["invoke"],
     listen: mock(() => () => undefined),
@@ -65,11 +67,11 @@ function installConnections(
       writeImage: mock(async () => undefined),
     },
     dialog: { open: mock(async () => null) },
-    connections: { list, probe, connect, updateToken, use, forget },
+    connections: { list, probe, connect, updateToken, use, forget, openWindow },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list, probe, connect, updateToken, use, forget };
+  return { list, probe, connect, updateToken, use, forget, openWindow };
 }
 
 afterEach(() => {
@@ -116,6 +118,17 @@ describe("ConnectionsSettings", () => {
         token: "gateway-token-123456",
       }),
     );
+  });
+
+  test("opens a saved connection in a new window without switching this one", async () => {
+    const api = installConnections();
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open desk.tailnet.ts.net in new window" }));
+
+    await waitFor(() => expect(api.openWindow).toHaveBeenCalledWith("remote-1"));
+    expect(api.use).not.toHaveBeenCalled();
   });
 
   test("replaces a saved token without switching connections", async () => {

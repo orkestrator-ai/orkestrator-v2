@@ -7,6 +7,7 @@ import {
   HardDrive,
   KeyRound,
   Loader2,
+  PanelsTopLeft,
   Plus,
   RadioTower,
   RefreshCw,
@@ -190,6 +191,18 @@ export function ConnectionsSettings() {
     }
   };
 
+  const handleOpenWindow = async (connection: ConnectionSummary) => {
+    if (!api?.openWindow) return;
+    setBusyId(connection.id);
+    try {
+      await api.openWindow(connection.id);
+      setBusyId(null);
+    } catch (error) {
+      setBusyId(null);
+      toast.error("Could not open a new window", { description: errorMessage(error) });
+    }
+  };
+
   if (!api) {
     return (
       <div className="max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/40 p-5">
@@ -304,6 +317,26 @@ export function ConnectionsSettings() {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-zinc-400 hover:text-zinc-100"
+                      onClick={() => void handleOpenWindow(connection)}
+                      disabled={
+                        busyId !== null ||
+                        connection.requiresToken ||
+                        typeof api.openWindow !== "function"
+                      }
+                      aria-label={`Open ${connection.name} in new window`}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <PanelsTopLeft className="h-3.5 w-3.5" />
+                      )}
+                      New window
+                    </Button>
                     {!connection.active && (
                       <Button
                         type="button"

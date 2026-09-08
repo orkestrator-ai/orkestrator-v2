@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 
 const MAX_DISMISSED_NOTICE_SESSIONS = 50;
 const MAX_DISMISSED_NOTICES_PER_SESSION = 20;
@@ -49,7 +50,7 @@ export const useNativeNoticeDismissalStore = create<NativeNoticeDismissalState>(
       clear: () => set({ sessions: [] }),
     }),
     {
-      name: "native-notice-dismissals",
+      name: desktopConnectionStorageKey("native-notice-dismissals"),
       partialize: (state) => ({ sessions: state.sessions }),
     },
   ),

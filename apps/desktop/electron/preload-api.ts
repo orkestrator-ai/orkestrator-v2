@@ -47,6 +47,7 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
   });
 
   return {
+    isolatedViewState: true as const,
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
       return ipcRenderer.invoke("orkestrator:invoke", command, args ?? {});
     },
@@ -123,6 +124,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       forget(connectionId: string): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:forget", connectionId);
+      },
+      openWindow(connectionId: string): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:connections:open-window", connectionId);
       },
     },
 

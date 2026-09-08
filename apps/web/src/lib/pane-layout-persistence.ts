@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/pane-layout";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
-import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
+import { clearStoredPaneSelection, writeWindowPaneSelection } from "@/lib/pane-selection-storage";
 import {
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -783,6 +783,13 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
           authoritative.delete(environmentId);
         }
         continue;
+      }
+
+      if (
+        window.orkestrator?.isolatedViewState &&
+        environment !== previous.environments.get(environmentId)
+      ) {
+        writeWindowPaneSelection(environmentId, environment);
       }
 
       const input = createPersistedPaneLayoutInput(environment);

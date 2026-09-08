@@ -6,6 +6,7 @@ import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { shouldPublishTerminalGeometry } from "@/lib/terminal-geometry-owner";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import {
   useTerminalSessionStore,
@@ -1267,9 +1268,11 @@ export function PersistentTerminal({
       if (!fitAddon || !terminal) return;
       fitAddon.fit();
       const { cols, rows } = terminal;
-      resize(cols, rows);
+      if (shouldPublishTerminalGeometry(isFocused)) {
+        resize(cols, rows);
+      }
     });
-  }, [fitAddon, terminal, resize]);
+  }, [fitAddon, terminal, resize, isFocused]);
 
   // Keep write ref up to date
   useEffect(() => {
@@ -1712,10 +1715,12 @@ export function PersistentTerminal({
     resizeObserver.observe(terminalRef.current);
 
     window.addEventListener("resize", handleResize);
+    window.addEventListener("focus", handleResize);
 
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("focus", handleResize);
       if (fitAnimationFrameRef.current !== null) {
         cancelAnimationFrame(fitAnimationFrameRef.current);
         fitAnimationFrameRef.current = null;

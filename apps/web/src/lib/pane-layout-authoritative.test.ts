@@ -264,6 +264,33 @@ describe("reconcileAuthoritativePaneLayout", () => {
     expect((restored!.root as { activeTabId: string }).activeTabId).toBe("tab-1");
   });
 
+  test("preserves pane selection inside an isolated Electron window", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const currentRoot = leaf("default", [
+        { id: "tab-1", type: "plain" },
+        { id: "tab-2", type: "plain" },
+      ]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "tab-2";
+
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(plainRoot),
+        paneState(currentRoot),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "tab-2" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
   test("does not treat a legacy record's canonical pointers as real focus", () => {
     const currentRoot = leaf("default", [
       { id: "tab-1", type: "plain" },

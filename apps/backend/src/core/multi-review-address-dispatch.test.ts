@@ -249,7 +249,7 @@ test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provi
 test("recoverMissingMultiReviewFixSession adopts and seeds the replacement before returning it", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
-  const dispatchIntent = mock(async (input: { requestId: string }) => ({
+  const dispatchIntent = mock(async (input: { prompt: string; requestId: string }) => ({
     outcome: "accepted" as const,
     requestId: input.requestId,
   }));
@@ -298,6 +298,9 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
       prompt: expect.stringContaining("Lost-session regression"),
       mode: "build",
     }),
+  );
+  expect(dispatchIntent.mock.calls[0]?.[0].prompt).toEndWith(
+    MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   );
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({

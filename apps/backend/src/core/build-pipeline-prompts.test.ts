@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_MAX_CONTEXT_BYTES,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -351,6 +352,7 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Run the relevant validation.");
     expect(prompt).toContain("Stage only related safe files");
     expect(prompt).toContain("commit every relevant fix before finishing");
+    expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 
   test("structuredReportRepairPrompt lists every error and states the attempt budget", () => {

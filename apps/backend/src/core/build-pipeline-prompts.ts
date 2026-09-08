@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
+import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_MAX_CONTEXT_BYTES,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -506,7 +507,9 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 
 ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 
-${ADDRESS_REVIEW_FINDINGS_TAIL}`;
+${ADDRESS_REVIEW_FINDINGS_TAIL}
+
+${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
 }
 
 export const VERIFICATION_OUTPUT_CONTRACT =

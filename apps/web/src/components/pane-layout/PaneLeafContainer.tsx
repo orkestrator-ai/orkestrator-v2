@@ -301,7 +301,15 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     loadingFallback={renderTabFallback(isTabActive && isActive)}
                     renderError={renderTabError(isTabActive && isActive)}
                   >
+                    {/*
+                      App reuses the foreground TerminalContainer when the user
+                      selects another environment. Pane and tab ids are only
+                      unique inside an environment, so React can otherwise
+                      retain this component's local optimistic prompt and flash
+                      it over the next environment's transcript.
+                    */}
                     <LazyAgentNativeTab
+                      key={`${environmentId}:${tab.id}`}
                       tabId={tab.id}
                       data={nativeAgentData}
                       isActive={isTabActive && isActive}

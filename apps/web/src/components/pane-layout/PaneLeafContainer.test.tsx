@@ -157,23 +157,27 @@ mock.module("@/components/native-agent", () => ({
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
     ownsGlobalShortcuts?: boolean;
-  }) => (
-    <div
-      data-testid={`${data.platform}-tab`}
-      data-tab-id={tabId}
-      data-environment-id={data.environmentId}
-      data-session-id={data.sessionId}
-      data-active={String(isActive)}
-      data-initial-prompt={initialPrompt}
-      data-agent-model={initialAgentModel}
-      data-agent-handoff-id={agentHandoffId}
-      data-consumed-agent-handoff-id={consumedAgentHandoffId}
-      data-reasoning-effort={initialReasoningEffort}
-      data-refresh-request-id={refreshRequestId}
-      data-review-tab={String(Boolean(isReviewTab))}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-    />
-  ),
+  }) => {
+    const [mountedForEnvironment] = useState(data.environmentId);
+    return (
+      <div
+        data-testid={`${data.platform}-tab`}
+        data-tab-id={tabId}
+        data-environment-id={data.environmentId}
+        data-mounted-for-environment={mountedForEnvironment}
+        data-session-id={data.sessionId}
+        data-active={String(isActive)}
+        data-initial-prompt={initialPrompt}
+        data-agent-model={initialAgentModel}
+        data-agent-handoff-id={agentHandoffId}
+        data-consumed-agent-handoff-id={consumedAgentHandoffId}
+        data-reasoning-effort={initialReasoningEffort}
+        data-refresh-request-id={refreshRequestId}
+        data-review-tab={String(Boolean(isReviewTab))}
+        data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
+      />
+    );
+  },
 }));
 
 mock.module("@/components/browser/BrowserTab", () => ({
@@ -621,6 +625,47 @@ describe("PaneLeafContainer", () => {
         filePath: "src/index.ts",
       },
     });
+  });
+
+  test("remounts a native agent tab when its owning environment changes", async () => {
+    const paneForEnvironment = (environmentId: string): PaneLeaf => ({
+      kind: "leaf",
+      id: "shared-pane-id",
+      tabs: [
+        {
+          id: "shared-tab-id",
+          type: "agent-native",
+          nativeAgentData: { platform: "codex", environmentId },
+        },
+      ],
+      activeTabId: "shared-tab-id",
+    });
+
+    const view = render(
+      <PaneLeafContainer
+        pane={paneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-tab")).dataset.mountedForEnvironment).toBe(
+      "env-first",
+    );
+
+    view.rerender(
+      <PaneLeafContainer
+        pane={paneForEnvironment("env-second")}
+        containerId="container-second"
+        environmentId="env-second"
+        isActive
+      />,
+    );
+
+    expect((await screen.findByTestId("codex-tab")).dataset.mountedForEnvironment).toBe(
+      "env-second",
+    );
   });
 
   test("grants global shortcut ownership only to the focused pane", async () => {

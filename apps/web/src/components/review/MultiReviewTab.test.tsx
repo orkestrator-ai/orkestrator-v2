@@ -22,6 +22,7 @@ import {
   multiReviewStepRuntimeSummary,
   fixStep,
   multiReviewFixSessionTabOptions,
+  multiReviewReviewSessionTabOptions,
   reviewPackageGenerationStep,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
@@ -1831,6 +1832,25 @@ describe("MultiReviewTab pipeline step cards", () => {
       tabId: "multi-review-fix:multi-1",
       displayTitle: "Fix",
       resumeSessionId: "provider-fix",
+    });
+  });
+
+  test("keeps legacy preparation and fix tabs on the shared provider session", () => {
+    const legacy = readyWorkflow();
+
+    expect(multiReviewReviewSessionTabOptions(legacy)).toMatchObject({
+      tabId: "multi-review-review:multi-1",
+      resumeSessionId: "provider-fix",
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "plan",
+    });
+    expect(multiReviewFixSessionTabOptions(legacy)).toMatchObject({
+      tabId: "multi-review-fix:multi-1",
+      resumeSessionId: "provider-fix",
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "build",
     });
   });
 

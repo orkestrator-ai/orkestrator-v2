@@ -73,6 +73,10 @@ test("dispatchMultiReviewAddressPrompt creates a fix session separate from revie
       status: "idle",
       startedAt: new Date(0).toISOString(),
     },
+    consolidatedReport: {
+      issues: [{ title: "Separate-session finding" }],
+      testCoverageGaps: [{ untestedBehavior: "Separate-session coverage" }],
+    } as MultiReviewWorkflow["consolidatedReport"],
     fixSession: undefined,
   } as MultiReviewWorkflow;
 
@@ -94,7 +98,34 @@ test("dispatchMultiReviewAddressPrompt creates a fix session separate from revie
     providerSessionId: "provider-fix-new",
     model: "gpt-5.6",
   });
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: expect.stringContaining("Separate-session finding"),
+    }),
+  );
   expect(separate.reviewSession?.providerSessionId).toBe("provider-review");
+});
+
+test("dispatchMultiReviewAddressPrompt rejects a separate fix session without a report", async () => {
+  const ensureSession = mock(async () => ({ providerSessionId: "unexpected" }) as never);
+  await expect(
+    dispatchMultiReviewAddressPrompt(
+      {
+        adoptSession: mock(async () => undefined as never),
+        ensureSession,
+        dispatchIntent: mock(async () => ({
+          outcome: "accepted" as const,
+          requestId: "unexpected",
+        })),
+      },
+      {
+        ...workflow,
+        reviewModel: { agent: "claude", model: "review-coordinator" },
+        fixSession: undefined,
+      },
+    ),
+  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressStateError);
+  expect(ensureSession).not.toHaveBeenCalled();
 });
 
 test("dispatchMultiReviewAddressPrompt classifies authoritative session loss", async () => {

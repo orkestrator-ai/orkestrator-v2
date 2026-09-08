@@ -629,11 +629,23 @@ export class MultiReviewService {
           delete reviewer.startedAt;
           delete reviewer.completedAt;
         }
+        const staleReviewSession = reviewSession(workflow);
         await this.abandonSession(
           workflow,
           reviewModel(workflow),
-          reviewSession(workflow)?.providerSessionId,
+          staleReviewSession?.providerSessionId,
         );
+        if (staleReviewSession) this.progress.forget(staleReviewSession.providerSessionId);
+        if (workflow.reviewModel && workflow.fixSession) {
+          await this.abandonSession(
+            workflow,
+            workflow.fixModel,
+            workflow.fixSession.providerSessionId,
+          );
+          this.progress.forget(workflow.fixSession.providerSessionId);
+          delete workflow.fixSession;
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        }
         if (replacement) workflow.reviewWorktreeSnapshot = replacement;
         workflow.phase = "preparing";
         delete workflow.reviewPackage;
@@ -1363,17 +1375,17 @@ export class MultiReviewService {
         // A definitive miss cannot recover under the old provider id. Other
         // persistent failures stop after a bounded budget so activity and user
         // controls cannot remain wedged forever.
-        const failedCustomSession =
+        const failedPreparedSession =
           error instanceof MultiReviewAddressDispatchError ? error.preparedSession : undefined;
-        if (failedCustomSession && workflow.customFixModel) {
+        if (failedPreparedSession) {
           await this.abandonSession(
             workflow,
-            workflow.customFixModel,
-            failedCustomSession.providerSessionId,
+            workflow.customFixModel ?? workflow.fixModel,
+            failedPreparedSession.providerSessionId,
           );
-          this.progress.forget(failedCustomSession.providerSessionId);
+          this.progress.forget(failedPreparedSession.providerSessionId);
           await this.options
-            .invalidateAddressSession?.(workflow, failedCustomSession)
+            .invalidateAddressSession?.(workflow, failedPreparedSession)
             .catch(() => undefined);
         }
         workflow.phase = "failed";

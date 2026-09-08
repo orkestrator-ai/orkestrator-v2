@@ -1305,6 +1305,50 @@ describe("per-step stage coverage", () => {
       ]);
     });
   });
+
+  test("falls back to step settings when redispatching a pre-upgrade session", async () => {
+    await withService(async ({ service, storage, sent, providerFor }) => {
+      const started = await service.start(startInput());
+      await advanceToStage(service, storage, started.id, "build");
+      const running = await snapshot(storage, started.id);
+      const session = running.sessions[0]!;
+
+      delete session.model;
+      delete session.reasoningEffort;
+      running.pendingPromptAttempt = {
+        id: "attempt-pre-upgrade",
+        sessionId: session.sdkSessionId,
+        requestId: "request-pre-upgrade",
+        phase: "building",
+        prompt: "Resume the build",
+        useTaskImages: false,
+        startedAt: new Date().toISOString(),
+      };
+      session.status = "idle";
+      const record = await storage.getBuildPipeline(started.id);
+      await storage.saveBuildPipeline(
+        running.id,
+        running.projectId,
+        running.environmentId,
+        2,
+        running,
+        record!.revision,
+      );
+
+      providerFor("claude").phases.set(session.sdkSessionId, "build");
+      const before = sent.length;
+      await service.advanceNow(started.id);
+
+      expect(sent.slice(before)).toEqual([
+        expect.objectContaining({
+          agent: "claude",
+          sessionId: session.sdkSessionId,
+          model: "claude-a",
+          effort: "high",
+        }),
+      ]);
+    });
+  });
 });
 
 describe("per-step reconnect accounting", () => {

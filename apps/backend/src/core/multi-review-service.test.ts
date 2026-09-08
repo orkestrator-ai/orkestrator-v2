@@ -1141,6 +1141,69 @@ test("MultiReviewService cleans up an exhausted custom launch and rotates the ne
   );
 });
 
+test("MultiReviewService cleans up an exhausted standard separate fix handoff", async () => {
+  const provider = new Provider();
+  const invalidated: string[] = [];
+  await withService(
+    "env-standard-fix-failure",
+    provider,
+    async ({ service, storage, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-standard-fix-failure",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "opus" }],
+        reviewModel: { agent: "claude", model: "review-coordinator" },
+        fixModel: { agent: "claude", model: "fix-model" },
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      await service.address(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      const failed = (await snapshot(started.id))!;
+      expect(failed.fixSession).toBeUndefined();
+      expect(failed.addressPromptPending).toBeUndefined();
+      expect(provider.aborted).toContain("provider-failed-standard");
+      expect(invalidated).toEqual(["provider-failed-standard"]);
+
+      await service.cancel(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "cancelled";
+      });
+      await service.close(started.id);
+      expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
+    },
+    {
+      packageFlow: true,
+      serviceOptions: {
+        addressDispatchRetryMs: 0,
+        maxAddressDispatchAttempts: 3,
+        invalidateAddressSession: async (_workflow, session) => {
+          invalidated.push(session.providerSessionId);
+        },
+        dispatchAddressPrompt: async (workflow) => {
+          throw new MultiReviewAddressDispatchError("credentials are invalid", {
+            ...workflow.fixModel,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-failed-standard",
+            requestIds: [workflow.addressRequestId!],
+            status: "idle",
+            startedAt: "2026-09-08T00:00:00.000Z",
+          });
+        },
+      },
+    },
+  );
+});
+
 test("MultiReviewService honors address backoff and resumes a transient failure on demand", async () => {
   const provider = new Provider();
   let dispatches = 0;
@@ -4926,6 +4989,54 @@ test("package tampering fails closed and retry discards reports before preparing
           ? ({ valid, reason: "hash mismatch" } as never)
           : stableReviewInvoker(command, args),
     },
+  );
+});
+
+test("stale-snapshot retry abandons both separate review and fix sessions", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-stale-separate-sessions",
+    provider,
+    async ({ service, storage, snapshot }) => {
+      const started = await service.start({
+        environmentId: "env-stale-separate-sessions",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [{ agent: "claude", model: "opus" }],
+        reviewModel: { agent: "claude", model: "review-coordinator" },
+        fixModel: { agent: "claude", model: "fix-model" },
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const oldFixSessionKey = ready.fixSessionKey;
+
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.phase = "failed";
+        workflow.reviewSnapshotStale = true;
+        workflow.error = "The review snapshot is stale";
+        workflow.fixSession = {
+          ...workflow.fixModel,
+          sessionKey: workflow.fixSessionKey ?? `multi-review:${workflow.id}:fix`,
+          providerSessionId: "provider-stale-fix",
+          requestIds: ["fix-stale"],
+          status: "idle",
+          startedAt: "2026-09-08T00:00:00.000Z",
+        };
+      });
+
+      const retried = await service.retry(started.id);
+
+      expect(retried.phase).toBe("preparing");
+      expect(retried.reviewSession).toBeUndefined();
+      expect(retried.fixSession).toBeUndefined();
+      expect(retried.fixSessionKey).not.toBe(oldFixSessionKey);
+      expect(provider.aborted).toContain(ready.reviewSession!.providerSessionId);
+      expect(provider.aborted).toContain("provider-stale-fix");
+    },
+    { packageFlow: true },
   );
 });
 

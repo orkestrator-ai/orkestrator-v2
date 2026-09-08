@@ -449,7 +449,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     switch (pipeline.phase) {
       case "building":
       case "fixing":
-        if (usesReviewFanout(pipeline) && session.label !== "Package Preparation Session") {
+        if (
+          (usesReviewFanout(pipeline) || pipeline.reviewPreparation) &&
+          session.label !== "Package Preparation Session"
+        ) {
           await this.startReviewPackagePreparation(pipeline);
           return;
         }
@@ -1061,22 +1064,29 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             ? VERIFICATION_SCHEMA
             : undefined
       : undefined;
-    // Redispatch has to carry the same step selection the session was opened
-    // with: Claude and OpenCode take the model per prompt, so omitting it here
-    // would quietly retry the turn on the connection default instead.
+    // A real stage has to carry the selection its session was opened with:
+    // Claude and OpenCode take the model per prompt, so omitting it would retry
+    // on the connection default. Pre-upgrade sessions have no persisted
+    // selection and fall back field-by-field. Stage-less recovery attempts stay
+    // unpinned because no pipeline step owns their prompt.
     const sessionPhase = sessionPhaseFor(attempt.phase);
     const session = pipeline.sessions.find(
       (candidate) => candidate.sdkSessionId === attempt.sessionId,
     );
-    const step = session
-      ? {
-          agent: sessionAgent(pipeline, session),
-          model: session.model,
-          effort: session.reasoningEffort,
-        }
-      : sessionPhase
+    const fallbackStep =
+      sessionPhase &&
+      (!session || session.model === undefined || session.reasoningEffort === undefined)
         ? await this.stepSettings(pipeline, sessionPhase)
         : undefined;
+    const step = !sessionPhase
+      ? undefined
+      : session
+        ? {
+            agent: sessionAgent(pipeline, session),
+            model: session.model ?? fallbackStep?.model,
+            effort: session.reasoningEffort ?? fallbackStep?.effort,
+          }
+        : fallbackStep;
     // Re-state the mode the session was opened with so a redispatch cannot land
     // in a different sandbox. Addressing is a writable, independent session.
     const mode =

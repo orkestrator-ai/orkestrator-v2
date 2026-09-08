@@ -362,6 +362,37 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("uses a configured preparation model before a single-reviewer stage", async () => {
+    await withPipeline(async ({ service, read, providers }) => {
+      const started = await service.start({
+        ...startInput([{ agent: "claude", model: "opus" }]),
+        reviewPreparation: {
+          agent: "codex",
+          model: "review-coordinator",
+          reasoningEffort: "medium",
+        },
+      });
+
+      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.reviewers).toBeUndefined();
+      expect(providers.get("codex")!.created).toContainEqual(
+        expect.objectContaining({
+          phase: "fix",
+          label: "Package Preparation Session",
+          options: expect.objectContaining({
+            model: "review-coordinator",
+            effort: "medium",
+          }),
+        }),
+      );
+      expect(providers.get("claude")!.created).toContainEqual(
+        expect.objectContaining({ phase: "review" }),
+      );
+    });
+  });
+
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       const started = await service.start(

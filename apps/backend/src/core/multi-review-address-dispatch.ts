@@ -159,9 +159,10 @@ export async function dispatchMultiReviewAddressPrompt(
   const session = workflow.fixSession;
   const selection = workflow.customFixModel ?? workflow.fixModel;
   const customFix = workflow.customFixInstruction !== undefined;
-  if (customFix && workflow.consolidatedReport === undefined) {
+  const createsFreshFixSession = Boolean(workflow.reviewModel || customFix);
+  if (createsFreshFixSession && workflow.consolidatedReport === undefined) {
     throw new InvalidMultiReviewAddressStateError(
-      "The consolidated review report is missing from the custom fix request",
+      "The consolidated review report is missing from the fix request",
     );
   }
   const logicalSessionKey = workflow.addressSessionKey ?? `multi-review:${workflow.id}:interactive`;
@@ -191,7 +192,7 @@ export async function dispatchMultiReviewAddressPrompt(
   // interactive session so opening Fix can never expose the review coordinator
   // conversation.
   let providerSessionId: string;
-  if (workflow.reviewModel || customFix) {
+  if (createsFreshFixSession) {
     const ensured = await nativeAgents.ensureSession(identity);
     providerSessionId = ensured.providerSessionId;
   } else {
@@ -210,22 +211,23 @@ export async function dispatchMultiReviewAddressPrompt(
     }
   }
   const requestId = workflow.addressRequestId ?? `multi-review-address:${workflow.id}`;
-  const prompt = !customFix
-    ? MULTI_REVIEW_ADDRESS_PROMPT
-    : multiReviewCustomFixPrompt(workflow.consolidatedReport!, workflow.customFixInstruction!);
-  const preparedSession: MultiReviewFixSession | undefined =
-    workflow.reviewModel || customFix
-      ? {
-          ...selection,
-          sessionKey: logicalSessionKey,
-          providerSessionId,
-          requestIds: session?.requestIds?.includes(requestId)
-            ? session.requestIds
-            : [...(session?.requestIds?.slice(-255) ?? []), requestId],
-          status: "idle",
-          startedAt: new Date().toISOString(),
-        }
-      : undefined;
+  const prompt = customFix
+    ? multiReviewCustomFixPrompt(workflow.consolidatedReport!, workflow.customFixInstruction!)
+    : createsFreshFixSession
+      ? addressPrompt(workflow.consolidatedReport!)
+      : MULTI_REVIEW_ADDRESS_PROMPT;
+  const preparedSession: MultiReviewFixSession | undefined = createsFreshFixSession
+    ? {
+        ...selection,
+        sessionKey: logicalSessionKey,
+        providerSessionId,
+        requestIds: session?.requestIds?.includes(requestId)
+          ? session.requestIds
+          : [...(session?.requestIds?.slice(-255) ?? []), requestId],
+        status: "idle",
+        startedAt: new Date().toISOString(),
+      }
+    : undefined;
   let outcome: Awaited<ReturnType<AddressNativeAgents["dispatchIntent"]>>;
   try {
     outcome = await nativeAgents.dispatchIntent({

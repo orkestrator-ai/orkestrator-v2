@@ -4044,4 +4044,57 @@ describe("paneLayoutStore remaining branch coverage", () => {
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
     expect(usePaneLayoutStore.getState().getActivePaneId("env-active-pane-guard")).toBe("default");
   });
+  test("retires a dead setup tab's marker in place, keeping the tab and its identity", () => {
+    seedSingleTabEnvironment("env-retire-setup", null, {
+      id: "default",
+      type: "plain",
+      displayTitle: "Terminal 1",
+      isSetupTab: true,
+    });
+
+    const retired = usePaneLayoutStore
+      .getState()
+      .retireSetupTabMarker("default", "env-retire-setup");
+
+    expect(retired).toBe(true);
+    const root = usePaneLayoutStore.getState().getRoot("env-retire-setup") as any;
+    // The tab the user is looking at stays put; only the marker that made it
+    // attach-only is gone, so it can now create a PTY of its own.
+    expect(root.tabs).toHaveLength(1);
+    expect(root.tabs[0]).toMatchObject({
+      id: "default",
+      type: "plain",
+      displayTitle: "Terminal 1",
+    });
+    expect("isSetupTab" in root.tabs[0]).toBe(false);
+    expect(root.activeTabId).toBe("default");
+  });
+
+  test("leaves a tab that is not a setup tab untouched", () => {
+    seedSingleTabEnvironment("env-retire-noop", null, { id: "default", type: "plain" });
+    const seeded = usePaneLayoutStore.getState().environments;
+
+    const retired = usePaneLayoutStore
+      .getState()
+      .retireSetupTabMarker("default", "env-retire-noop");
+
+    expect(retired).toBe(false);
+    // No write at all, so nothing downstream re-renders or re-persists.
+    expect(usePaneLayoutStore.getState().environments).toBe(seeded);
+  });
+
+  test("reports no change for an unknown tab or environment", () => {
+    seedSingleTabEnvironment("env-retire-missing", null, {
+      id: "default",
+      type: "plain",
+      isSetupTab: true,
+    });
+
+    expect(
+      usePaneLayoutStore.getState().retireSetupTabMarker("no-such-tab", "env-retire-missing"),
+    ).toBe(false);
+    expect(usePaneLayoutStore.getState().retireSetupTabMarker("default", "no-such-env")).toBe(
+      false,
+    );
+  });
 });

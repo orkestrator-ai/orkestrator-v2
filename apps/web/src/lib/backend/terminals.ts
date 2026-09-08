@@ -7,7 +7,11 @@ import {
 } from "@orkestrator/protocol/terminal-history";
 import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
 import type { EnvironmentSetupSession } from "@/types";
-import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./shared";
+import {
+  parseTerminalSessionCreateResult,
+  terminalWriteWasDelivered,
+  type TerminalSessionCreateResult,
+} from "./shared";
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -200,8 +204,8 @@ export async function teardownTab(input: TabTeardownInput): Promise<{ completed:
   return invoke("teardown_tab", { ...input });
 }
 
-export async function writeTerminal(sessionId: string, data: string): Promise<void> {
-  return invoke("terminal_write", { sessionId, data });
+export async function writeTerminal(sessionId: string, data: string): Promise<boolean> {
+  return terminalWriteWasDelivered(await invoke("terminal_write", { sessionId, data }));
 }
 
 export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {

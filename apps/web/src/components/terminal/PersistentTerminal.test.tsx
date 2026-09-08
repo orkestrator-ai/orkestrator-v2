@@ -22,6 +22,7 @@ import {
 
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
+const reconnectMock = mock(async () => {});
 const writeMock = mock(async (_data: string) => {});
 const markBootstrappedMock = mock((_sessionId: string) => true);
 const invokeMock = invoke as ReturnType<typeof mock>;
@@ -105,6 +106,7 @@ mock.module("@/hooks/useTerminal", () => ({
       error: null,
       connect: connectMock,
       disconnect: mock(async () => {}),
+      reconnect: reconnectMock,
       markBootstrapped,
       resize: resizeMock,
       write: writeMock,
@@ -233,6 +235,39 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function interceptDisconnectedNoticeTimer() {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const handle = 910_003;
+  let callback: (() => void) | undefined;
+  globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 3_000 && typeof handler === "function") {
+      callback = () => handler(...args);
+      return handle;
+    }
+    return Reflect.apply(originalSetTimeout, globalThis, [handler, delay, ...args]) as never;
+  }) as unknown as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = ((timer: unknown) => {
+    if (timer === handle) {
+      callback = undefined;
+      return;
+    }
+    Reflect.apply(originalClearTimeout, globalThis, [timer]);
+  }) as typeof globalThis.clearTimeout;
+  return {
+    hasTimer: () => callback !== undefined,
+    fire: () => {
+      const pending = callback;
+      callback = undefined;
+      pending?.();
+    },
+    restore: () => {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    },
+  };
 }
 
 useTerminalPortalStoreMock.getState = () => ({
@@ -407,6 +442,8 @@ describe("PersistentTerminal", () => {
     resizeMock.mockClear();
     connectMock.mockReset();
     connectMock.mockImplementation(async () => {});
+    reconnectMock.mockReset();
+    reconnectMock.mockImplementation(async () => {});
     writeMock.mockClear();
     markBootstrappedMock.mockClear();
     markBootstrappedMock.mockImplementation(() => true);
@@ -2165,6 +2202,137 @@ describe("PersistentTerminal", () => {
       dismiss();
 
       expect(screen.queryByRole("status") === null).toBe(true);
+    });
+  });
+
+  describe("disconnected notice", () => {
+    const disconnectedProps = (terminalData: ReturnType<typeof createTerminalData>) => ({
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    });
+
+    it("waits until connecting stops, outranks warnings, and restores them after reconnect", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = true;
+        connectMock.mockImplementation(() => new Promise(() => {}));
+        const terminalData = createTerminalData();
+        const props = disconnectedProps(terminalData);
+        const view = render(<PersistentTerminal {...props} />);
+
+        await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+        act(() => {
+          lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
+            preserveExisting: true,
+            degraded: "truncated",
+          });
+        });
+        expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+        expect(timer.hasTimer()).toBe(false);
+
+        useTerminalIsConnecting = false;
+        view.rerender(<PersistentTerminal {...props} />);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        expect(screen.getByRole("status").textContent).toContain("not accepting input");
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+        expect(reconnectMock).toHaveBeenCalledTimes(1);
+        await waitFor(() =>
+          expect((terminalData.terminal as unknown as MockTerminal).focus).toHaveBeenCalled(),
+        );
+        expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+      } finally {
+        timer.restore();
+      }
+    });
+
+    it("keeps dismissal for one outage and resets it after a successful connection", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        connectMock.mockImplementation(() => new Promise(() => {}));
+        const terminalData = createTerminalData();
+        const props = disconnectedProps(terminalData);
+        const view = render(<PersistentTerminal {...props} />);
+
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss disconnected notice" }));
+        expect(screen.queryByRole("status") === null).toBe(true);
+
+        useTerminalIsConnected = true;
+        view.rerender(<PersistentTerminal {...props} />);
+        useTerminalIsConnected = false;
+        view.rerender(<PersistentTerminal {...props} />);
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+
+        expect(screen.getByRole("status").textContent).toContain("not accepting input");
+      } finally {
+        timer.restore();
+      }
+    });
+
+    it("converts an attach-only setup tab without reconnecting to its dead session", async () => {
+      const timer = interceptDisconnectedNoticeTimer();
+      try {
+        useTerminalIsConnected = false;
+        useTerminalIsConnecting = false;
+        useTerminalSessionId = "env-1:setup";
+        connectMock.mockImplementation(() => new Promise(() => {}));
+        usePaneLayoutStore.setState((state) => ({
+          ...state,
+          activeEnvironmentId: "env-1",
+          environments: new Map(state.environments).set("env-1", {
+            root: {
+              kind: "leaf",
+              id: "pane-1",
+              tabs: [{ id: "tab-1", type: "plain", isSetupTab: true }],
+              activeTabId: "tab-1",
+            },
+            activePaneId: "pane-1",
+            containerId: "container-1",
+          }),
+        }));
+        const sessionKey = createSessionKey("container-1", "tab-1", "env-1");
+        useTerminalSessionStore.getState().setSession(sessionKey, {
+          sessionId: "env-1:setup",
+        });
+        const terminalData = createTerminalData({ serializedBuffer: "saved setup output\r\n" });
+        render(<PersistentTerminal {...disconnectedProps(terminalData)} isSetupTab />);
+
+        await waitFor(() => expect(timer.hasTimer()).toBe(true));
+        act(() => timer.fire());
+        // The real parent removes `isSetupTab` in the same store transaction,
+        // causing useTerminal to drop its dead attach-only result. Mirror that
+        // next render before the click-triggered store update is observed.
+        useTerminalSessionId = null;
+        fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+        expect(reconnectMock).not.toHaveBeenCalled();
+        expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toEqual([
+          { id: "tab-1", type: "plain" },
+        ]);
+        expect(
+          useTerminalSessionStore.getState().sessions.get(sessionKey)?.sessionId,
+        ).toBeUndefined();
+        expect(useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer).toBe(
+          "saved setup output\r\n",
+        );
+      } finally {
+        timer.restore();
+      }
     });
   });
 

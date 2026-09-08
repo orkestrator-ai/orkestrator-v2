@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
+import { TerminalDisconnectedBanner } from "@/components/terminal/TerminalDisconnectedBanner";
 import { CheckCircle2, History } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
@@ -76,6 +77,11 @@ const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
 // replaced.
 const TERMINAL_CONNECT_MAX_ATTEMPTS = 3;
 const TERMINAL_CONNECT_RETRY_BASE_MS = 250;
+// A terminal that has lost its PTY still renders its replayed scrollback and
+// still takes focus, so nothing distinguishes it from a working one until the
+// user types. Say so — but only once the connection machinery has stopped
+// trying, so an ordinary slow attach does not flash a failure at the user.
+const TERMINAL_DISCONNECTED_NOTICE_DELAY_MS = 3000;
 // Backoff for re-listing an environment's persisted sessions. Retrying rather
 // than falling open matters: proceeding without an authoritative snapshot would
 // create a duplicate persistent session for a tab that already has one.
@@ -234,6 +240,7 @@ export function PersistentTerminal({
   const clearTabInitialAgentOptions = usePaneLayoutStore(
     (state) => state.clearTabInitialAgentOptions,
   );
+  const retireSetupTabMarker = usePaneLayoutStore((state) => state.retireSetupTabMarker);
   const previousContainerIdRef = useRef<string>(containerId);
   // Initialize with current paneId so first mount doesn't trigger false paneChanged
   const previousPaneIdRef = useRef<string>(paneId);
@@ -806,6 +813,7 @@ export function PersistentTerminal({
     markBootstrapped,
     resize,
     write,
+    reconnect,
   } = useTerminal({
     containerId,
     environmentId,
@@ -1956,6 +1964,82 @@ export function PersistentTerminal({
     }
   }, [tabId, onSetupComplete]);
 
+  // Raised only after the connection machinery has been quiet for a while.
+  // `isConnecting` and the settle revision are both dependencies so that every
+  // attempt — including the backoff between bounded retries — pushes the notice
+  // out; it therefore appears only once nothing is still trying to attach.
+  const [disconnectedNoticeVisible, setDisconnectedNoticeVisible] = useState(false);
+  const [disconnectedNoticeDismissed, setDisconnectedNoticeDismissed] = useState(false);
+  useEffect(() => {
+    if (!terminalIsOpened || isConnected || isConnecting) {
+      setDisconnectedNoticeVisible(false);
+      return;
+    }
+    const timer = setTimeout(
+      () => setDisconnectedNoticeVisible(true),
+      TERMINAL_DISCONNECTED_NOTICE_DELAY_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [
+    terminalIsOpened,
+    isConnected,
+    isConnecting,
+    connectionAttemptSettledRevision,
+    connectionAttemptTarget,
+  ]);
+
+  // A reconnection the user asked for is a new recovery episode, so it is not
+  // charged to the exhausted automatic budget that stopped the retries.
+  useEffect(() => {
+    if (isConnected) setDisconnectedNoticeDismissed(false);
+  }, [isConnected]);
+  const handleReconnect = useCallback(() => {
+    setDisconnectedNoticeVisible(false);
+    connectionAttemptCountRef.current = 0;
+    connectionAttemptInFlightRef.current = null;
+    if (isBackendManagedSetupTab) {
+      const key = createSessionKey(containerId ?? null, tabId, environmentId);
+      const terminalStore = useTerminalSessionStore.getState();
+      const existing = terminalStore.sessions.get(key);
+      const { sessionId: _deadSetupSession, ...preserved } = existing ?? {};
+      let preservedBuffer = existing?.serializedBuffer;
+      if (!preservedBuffer) {
+        try {
+          preservedBuffer = serializeLegacyTerminalBuffer(
+            terminalData.serializeAddon.serialize.bind(terminalData.serializeAddon),
+            terminal.options.scrollback,
+          );
+        } catch (error) {
+          console.warn("[setup-terminal] failed to preserve terminal before conversion", error);
+        }
+      }
+      terminalStore.setSession(key, {
+        ...preserved,
+        ...(preservedBuffer ? { serializedBuffer: preservedBuffer } : {}),
+      });
+      if (retireSetupTabMarker(tabId, environmentId)) {
+        terminal.focus();
+        return;
+      }
+    }
+    void reconnect().finally(() => terminal.focus());
+  }, [
+    containerId,
+    environmentId,
+    isBackendManagedSetupTab,
+    reconnect,
+    retireSetupTabMarker,
+    tabId,
+    terminal,
+    terminalData.serializeAddon,
+  ]);
+  const handleDismissDisconnectedNotice = useCallback(() => {
+    setDisconnectedNoticeDismissed(true);
+    // Same reason the warning banner hands focus back: the button unmounts with
+    // the banner, and focus would otherwise fall to the document body.
+    terminal.focus();
+  }, [terminal]);
+
   // Each slot is suppressed only while it still holds the exact message that
   // was dismissed, so dismissing the bootstrap warning uncovers a replay
   // warning underneath it rather than hiding both.
@@ -1979,9 +2063,26 @@ export function PersistentTerminal({
     terminal.focus();
   }, [terminal, visibleBootstrapWarning, visibleReplayWarning]);
 
+  // Losing the shell outranks any warning about the transcript: the warnings
+  // describe what is on screen, this describes why nothing the user types will
+  // ever reach it. They share a slot, so only the more actionable one shows.
+  const showDisconnectedNotice =
+    disconnectedNoticeVisible && !disconnectedNoticeDismissed && isActive;
+
   return (
     <>
-      {visibleWarning !== null && isActive && (
+      {showDisconnectedNotice && (
+        <TerminalDisconnectedBanner
+          message={
+            attachExistingOnly && !existingSessionId
+              ? "This terminal's shell is no longer running, so it cannot accept input."
+              : "This terminal is disconnected and is not accepting input."
+          }
+          onReconnect={handleReconnect}
+          onDismiss={handleDismissDisconnectedNotice}
+        />
+      )}
+      {visibleWarning !== null && isActive && !showDisconnectedNotice && (
         <TerminalWarningBanner message={visibleWarning} onDismiss={handleDismissWarning} />
       )}
       {isActive && sessionId && !historyOpen && (

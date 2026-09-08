@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { terminalWriteWasDelivered } from "@/lib/backend/shared";
 import type {
   CreateFeatureBuildInput,
   CreateFeatureBuildResult,
@@ -1133,9 +1134,12 @@ export async function startLocalTerminalSession(sessionId: string): Promise<void
   return invoke("start_local_terminal_session", { sessionId });
 }
 
-/** Write data to a local terminal session */
-export async function writeLocalTerminal(sessionId: string, data: string): Promise<void> {
-  return invoke("local_terminal_write", { sessionId, data });
+/**
+ * Write data to a local terminal session. Resolves to whether the backend
+ * actually reached a live PTY; see `terminalWriteWasDelivered`.
+ */
+export async function writeLocalTerminal(sessionId: string, data: string): Promise<boolean> {
+  return terminalWriteWasDelivered(await invoke("local_terminal_write", { sessionId, data }));
 }
 
 /** Resize a local terminal session */

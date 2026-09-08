@@ -128,6 +128,8 @@ interface UseTerminalReturn {
   markBootstrapped: (sessionId: string) => boolean;
   resize: (cols: number, rows: number) => Promise<void>;
   write: (data: string) => Promise<void>;
+  /** Tear down the current attachment and attach again from scratch. */
+  reconnect: () => Promise<void>;
 }
 
 function safelyUnlisten(unlisten: UnlistenFn | null): void {
@@ -966,15 +968,32 @@ export function useTerminal({
   // A failed write can leave the browser gateway's input queue closed until the
   // session restarts, while output keeps streaming so the terminal still looks
   // alive. Reconnecting is the only recovery, so the failure toast offers it.
+  //
+  // `connect` refuses while a renderer-owned connection is already established,
+  // so that session has to restart. Attach-only sessions are backend-owned,
+  // however, and an explicit detach would destroy their retained history. The
+  // renderer may also retain a dead attach-only id after an unsuccessful attach,
+  // even though there is no live renderer attachment to release.
+  const reconnect = useCallback(async () => {
+    if (isConnectedRef.current && !attachExistingOnly) {
+      await disconnect();
+    } else {
+      connectGenerationRef.current += 1;
+      isConnectingRef.current = false;
+      cleanupEventListener();
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setBootstrapped(false);
+      setIsConnected(false);
+      setIsConnecting(false);
+      setError(null);
+    }
+    await connect();
+  }, [attachExistingOnly, connect, disconnect, cleanupEventListener]);
   const reconnectRef = useRef<() => void>(() => {});
   useEffect(() => {
-    reconnectRef.current = () => {
-      void (async () => {
-        await disconnect();
-        await connect();
-      })();
-    };
-  }, [connect, disconnect]);
+    reconnectRef.current = () => void reconnect();
+  }, [reconnect]);
 
   const resize = useCallback(
     async (newCols: number, newRows: number) => {
@@ -997,34 +1016,61 @@ export function useTerminal({
     [sessionId],
   );
 
+  // Every way a keystroke can fail to reach a shell reports the same way. The
+  // silent cases below are the ones that made a dead terminal indistinguishable
+  // from a live one: the user types, nothing echoes, and nothing says why.
+  const reportInputFailure = useCallback(
+    (description: string, failedSessionId: string | null) => {
+      toast.error("Terminal input failed", {
+        // Keyed on the session so repeated failures against one shell collapse
+        // into a single toast. A terminal with no session has no such key, so
+        // it falls back to its own stable identity.
+        id: `terminal-input-${
+          failedSessionId ?? terminalKey ?? environmentId ?? containerId ?? "unknown"
+        }`,
+        description,
+        action: {
+          label: "Reconnect",
+          onClick: () => reconnectRef.current(),
+        },
+      });
+    },
+    [containerId, environmentId, terminalKey],
+  );
+
   // Use ref-based write function to always have access to current sessionId
   const write = useCallback(
     async (data: string) => {
       const currentSessionId = sessionIdRef.current;
       if (!currentSessionId) {
-        console.log("[useTerminal] write called but no sessionId");
+        // Xterm accepts input as soon as it mounts, before the asynchronous
+        // create/attach path has published a session id. That normal type-ahead
+        // remains undelivered, but it is not evidence of a dead shell.
+        if (isConnectingRef.current) return;
+        // Not an error state the user can see anywhere else: the terminal keeps
+        // rendering whatever was replayed into it, so without this it just
+        // stops accepting input for no stated reason.
+        console.warn("[useTerminal] write called but no sessionId");
+        reportInputFailure("This terminal is not connected to a running shell.", null);
         return;
       }
 
       try {
-        if (isLocalRef.current) {
-          await backend.writeLocalTerminal(currentSessionId, data);
-        } else {
-          await backend.writeTerminal(currentSessionId, data);
+        const delivered = isLocalRef.current
+          ? await backend.writeLocalTerminal(currentSessionId, data)
+          : await backend.writeTerminal(currentSessionId, data);
+        // The backend refuses in band rather than throwing when the PTY is
+        // gone, so a resolved promise is not proof the keystroke landed.
+        if (!delivered) {
+          console.warn("[useTerminal] Terminal input was not delivered:", currentSessionId);
+          reportInputFailure("The shell for this terminal is no longer running.", currentSessionId);
         }
       } catch (err) {
         console.error("[useTerminal] Failed to write to terminal:", err);
-        toast.error("Terminal input failed", {
-          id: `terminal-input-${currentSessionId}`,
-          description: err instanceof Error ? err.message : String(err),
-          action: {
-            label: "Reconnect",
-            onClick: () => reconnectRef.current(),
-          },
-        });
+        reportInputFailure(err instanceof Error ? err.message : String(err), currentSessionId);
       }
     },
-    [], // No deps - uses refs for sessionId and isLocal
+    [reportInputFailure], // Otherwise refs, for sessionId and isLocal
   );
 
   // Auto-connect when containerId changes
@@ -1045,5 +1091,6 @@ export function useTerminal({
     markBootstrapped,
     resize,
     write,
+    reconnect,
   };
 }

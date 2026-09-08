@@ -150,6 +150,36 @@ Playwright/E2E specifications and unrelated fixtures. Use `bun run test` for
 the repository's complete validation suite. Reserve `bun test` for an explicit
 test file or directory when intentionally running a focused subset.
 
+### Updating Bun and lockfiles
+
+When bumping the Bun runtime, changing a dependency, or changing package
+metadata that Bun records (including a workspace package's `version`),
+regenerate lockfiles with the Bun version pinned by `mise.toml`. Do not hand-edit
+`bun.lock`, and do not omit a lockfile change just because no dependency version
+changed.
+
+Regenerate every tracked lockfile from the directory that owns it. The root
+install does not replace the standalone Claude bridge lockfile:
+
+```bash
+mise exec -- bun install
+mise exec -- bun install --cwd bridges/claude-bridge
+```
+
+Review the lockfile diff, then prove both files are current by repeating the
+installs in frozen mode and running the drift test:
+
+```bash
+git diff -- bun.lock bridges/claude-bridge/bun.lock
+mise exec -- bun install --frozen-lockfile
+mise exec -- bun install --cwd bridges/claude-bridge --frozen-lockfile
+mise exec -- bun test tests/unit/version-drift.test.ts
+```
+
+If another standalone `bun.lock` is added later, add its owning directory to
+both command lists and to the lockfile coverage in
+`tests/unit/version-drift.test.ts`.
+
 ## Formatting and Linting - oxc
 
 Formatting is [oxfmt](https://oxc.rs) (`.oxfmtrc.json`), linting is
@@ -270,6 +300,11 @@ and has the intended version:
 ```bash
 rg -n '"version"\s*:' --glob 'package.json' --glob '!node_modules/**'
 ```
+
+Then follow **Updating Bun and lockfiles** above. A version-only bump still
+changes the workspace metadata in the root `bun.lock`; leaving the old values
+there causes a later non-frozen `bun install` to dirty an otherwise clean build
+worktree.
 
 ## OpenCode SDK v2 - CRITICAL
 

@@ -8,9 +8,9 @@ import {
   Pause,
   Play,
   Plus,
+  MessagesSquare,
   RefreshCw,
   RotateCcw,
-  X,
 } from "lucide-react";
 import {
   coordinatorRuntimeId,
@@ -23,6 +23,8 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { AgentNativeTab } from "@/components/native-agent";
+import { TAB_ICON_CLASS, TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -431,20 +433,29 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ) : null}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2 py-1.5">
+      {/* Coordinator conversations are tabs, so they use the same tab chrome as
+          the pane tab strip rather than a look of their own. */}
+      <div className={cn(TAB_STRIP_CLASS, "shrink-0 pr-2")}>
         {conversations.map((item) => (
-          <div
+          <TabShell
             key={item.id}
-            className={cn(
-              "flex items-center rounded-md",
-              selected?.id === item.id
-                ? "bg-elevated text-foreground"
-                : "text-muted-foreground hover:bg-elevated/60",
-            )}
+            isActive={selected?.id === item.id}
+            className="cursor-pointer"
+            closeLabel={`Close ${item.title}`}
+            onClose={() => {
+              setOperation("conversation");
+              void backend
+                .closeCoordinatorConversation(projectId, item.id)
+                .then(setSnapshot)
+                .catch((cause) =>
+                  setError(cause instanceof Error ? cause.message : "Could not close conversation"),
+                )
+                .finally(() => setOperation(null));
+            }}
           >
             <button
               type="button"
-              className="flex max-w-44 items-center gap-1.5 px-3 py-1.5 text-xs"
+              className="flex max-w-44 items-center gap-1.5"
               // The badge is part of what identifies the tab, so it belongs in
               // the accessible name rather than being read as loose text after it.
               aria-label={
@@ -464,38 +475,26 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   );
               }}
             >
-              <span className="truncate">{item.title}</span>
               {/* Which agent a conversation belongs to is fixed at its first
                   prompt and cannot be changed afterwards, so the tab strip is
-                  where that has to be legible. */}
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {item.agent ? AGENT_PLATFORM_LABELS[item.agent] : "Choose agent"}
-              </span>
+                  where that has to be legible: the brand mark once assigned,
+                  and an explicit prompt while it is not. */}
+              {item.agent ? (
+                <AgentPlatformIcon platform={item.agent} accent className={TAB_ICON_CLASS} />
+              ) : (
+                <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
+              )}
+              <span className="truncate">{item.title}</span>
+              {item.agent ? null : (
+                <span className="shrink-0 text-[10px] text-muted-foreground">Choose agent</span>
+              )}
             </button>
-            <button
-              type="button"
-              className="mr-1 rounded p-1 hover:bg-background/60"
-              aria-label={`Close ${item.title}`}
-              onClick={() => {
-                setOperation("conversation");
-                void backend
-                  .closeCoordinatorConversation(projectId, item.id)
-                  .then(setSnapshot)
-                  .catch((cause) =>
-                    setError(
-                      cause instanceof Error ? cause.message : "Could not close conversation",
-                    ),
-                  )
-                  .finally(() => setOperation(null));
-              }}
-            >
-              <X className="size-3" />
-            </button>
-          </div>
+          </TabShell>
         ))}
         <Button
           size="sm"
           variant="ghost"
+          className="ml-1 shrink-0"
           disabled={operation !== null}
           onClick={() => {
             setOperation("conversation");
@@ -515,6 +514,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         <Button
           size="sm"
           variant="ghost"
+          className="shrink-0"
           disabled={operation !== null}
           onClick={() => {
             setOperation("conversation");

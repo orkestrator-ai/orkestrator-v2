@@ -1233,6 +1233,64 @@ describe("session lifecycle", () => {
     expect(persisted?.structuredOutputTurns).toEqual([{ turnId: "turn-1", accepted: true }]);
   });
 
+  test.each([
+    [
+      "commentary only",
+      [{ id: "commentary", phase: "commentary", text: '{"summary":"Still working"}' }],
+      null,
+    ],
+    [
+      "final answer followed by commentary",
+      [
+        { id: "final", phase: "final_answer", text: '{"summary":"Looks good"}' },
+        { id: "commentary", phase: "commentary", text: '{"summary":"Recording results"}' },
+      ],
+      "Looks good",
+    ],
+    [
+      "commentary followed by final answer",
+      [
+        { id: "commentary", phase: "commentary", text: '{"summary":"Still working"}' },
+        { id: "final", phase: "final_answer", text: '{"summary":"Looks good"}' },
+      ],
+      "Looks good",
+    ],
+  ] as const)(
+    "keeps %s out of structured-result authority",
+    async (_name, items, expectedSummary) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: "review",
+        requestId: `structured-phase-${items.length}-${expectedSummary ?? "missing"}`,
+        attachments: [],
+        outputSchema: { type: "object" },
+      });
+      for (const item of items) {
+        h.child().notify("item/completed", {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "agentMessage", ...item },
+        });
+      }
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+
+      const result = h.runtime.getStructuredOutput(sessionId).structuredOutput;
+      if (expectedSummary === null) {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code: "malformed_output", retryable: true },
+        });
+      } else {
+        expect(result).toMatchObject({ ok: true, value: { summary: expectedSummary } });
+      }
+    },
+  );
+
   test("recovers a schema-constrained response wrapped in thinking or commentary", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

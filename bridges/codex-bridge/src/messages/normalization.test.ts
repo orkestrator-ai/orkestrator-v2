@@ -52,7 +52,33 @@ describe("agent-message normalization", () => {
     ).toEqual([{ type: "text", content: "Tracing the missing transcript updates." }]);
   });
 
-  test("leaves ordinary commentary unchanged and labels unknown schema shapes", async () => {
+  test("unwraps verification and structured-review commentary fields", async () => {
+    expect(
+      await itemToParts(
+        {
+          id: "verification",
+          type: "agent_message",
+          phase: "commentary",
+          text: '{"complete":false,"rationale":"Still checking the validation results."}',
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Still checking the validation results." }]);
+
+    expect(
+      await itemToParts(
+        {
+          id: "review",
+          type: "agent_message",
+          phase: "commentary",
+          text: '{"reviewSummary":"Inspecting the changed bridge paths."}',
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Inspecting the changed bridge paths." }]);
+  });
+
+  test("leaves prose and unrecognized or streaming machine output unchanged", async () => {
     const prose = "Checking the transcript now.";
     expect(
       await itemToParts(
@@ -61,17 +87,19 @@ describe("agent-message normalization", () => {
       ),
     ).toEqual([{ type: "text", content: prose }]);
 
-    const [fallback] = await itemToParts(
-      {
-        id: "fallback",
-        type: "agent_message",
-        phase: "commentary",
-        text: '{"status":"checking"}',
-      },
-      "/tmp",
-    );
-    expect(fallback?.content).toStartWith("Progress update (provider-formatted):");
-    expect(fallback?.content).toContain('{"status":"checking"}');
+    for (const text of ['{"status":"checking"}', '{"reviewSummary":"still checking"']) {
+      expect(
+        await itemToParts(
+          {
+            id: "fallback",
+            type: "agent_message",
+            phase: "commentary",
+            text,
+          },
+          "/tmp",
+        ),
+      ).toEqual([{ type: "text", content: text }]);
+    }
   });
 });
 

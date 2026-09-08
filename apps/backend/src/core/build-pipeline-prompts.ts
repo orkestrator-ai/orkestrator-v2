@@ -41,7 +41,7 @@ const ADDRESS_REVIEW_FINDINGS_TAIL =
  */
 export const REVIEW_PREPARATION_OUTPUT_CONTRACT =
   "Send interim progress only through the provider's commentary or update channel, using ordinary prose sentences that say what you are doing and what you found, because a human watches them while the run works. " +
-  "A provider may apply the enforced schema to commentary as well as the final response. If it does, put one useful progress sentence in the most suitable `commentary`, `summary`, `notes`, or `limitations` field and leave unrelated fields empty or neutral; Orkestrator displays that provider-labelled field as progress. " +
+  "A provider may apply the enforced schema to commentary as well as the final response. If it does, put one useful progress sentence in the `limitations` field and leave `validation` and `uncommittedFiles` as empty arrays; Orkestrator displays that provider-labelled field as progress. " +
   "Do not use the final-response channel for progress, and do not draft, preview, restate, or incrementally build the preparation metadata there. " +
   "After every implementation step, validation command, tool call, and subagent has finished, make the final assistant response the one authoritative JSON object containing the provider-enforced preparation metadata.";
 

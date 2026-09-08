@@ -69,6 +69,7 @@ import {
 } from "./messages/render-turn.js";
 import { UpdateCoalescer } from "./messages/coalescer.js";
 import { describeDiffBudget } from "./messages/diff-budget.js";
+import { isAuthoritativeAgentMessage } from "./messages/agent-message.js";
 import { getTranscriptCacheStats } from "./transcript-cache.js";
 import {
   createMessageId,
@@ -509,7 +510,7 @@ export function parseCodexStructuredOutput(turn: TurnAccumulator): StructuredOut
   if (turn.phase !== "completed") return codexStructuredOutputFailure(turn);
   const finalAgentMessage = turn
     .ordered()
-    .filter((entry) => entry.item?.type === "agent_message")
+    .filter((entry) => isAuthoritativeAgentMessage(entry.item))
     .at(-1);
   const text = finalAgentMessage ? turn.effectiveText(finalAgentMessage) : "";
   if (!text.trim()) {

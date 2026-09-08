@@ -138,10 +138,15 @@ describe("backend looped-review prompt contracts", () => {
 
     expect(prompt).toContain("## Output contract");
     expect(prompt).toContain("may apply the enforced schema to commentary");
-    expect(prompt).toContain("`commentary`, `summary`, `notes`, or `limitations` field");
+    expect(prompt).toContain("progress sentence in the `limitations` field");
+    expect(prompt).toContain("leave `validation` and `uncommittedFiles` as empty arrays");
     expect(prompt).toContain("provider-labelled field as progress");
     expect(prompt).toContain("Do not use the final-response channel for progress");
     expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).toHaveProperty("limitations");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("commentary");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("summary");
+    expect(REVIEW_PREPARATION_RESULT_JSON_SCHEMA.properties).not.toHaveProperty("notes");
   });
 
   test("omits absent context and keeps package values subordinate in discovery", () => {

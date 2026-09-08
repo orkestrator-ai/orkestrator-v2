@@ -29,7 +29,10 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
-import { visibleCommentaryText } from "../messages/agent-message.js";
+import {
+  isAuthoritativeAgentMessagePhase,
+  visibleCommentaryText,
+} from "../messages/agent-message.js";
 import { extractAttachmentTags } from "../messages/attachment-tags.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import {
@@ -1091,7 +1094,7 @@ export async function hydrateMessagesFromPersistedSession(
       record.type === "response_item" &&
       record.payload?.type === "message" &&
       record.payload.role === "assistant" &&
-      record.payload.phase !== "commentary"
+      isAuthoritativeAgentMessagePhase(record.payload.phase)
     ) {
       finalAssistantRecordByTurn.set(indexedTurnId, recordIndex);
     }

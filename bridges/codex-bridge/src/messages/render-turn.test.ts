@@ -1313,6 +1313,37 @@ describe("renderTurn", () => {
     expect(completed.content).toBe(finalPayload);
   });
 
+  test("keeps the final result authoritative when commentary arrives after it", async () => {
+    const accumulator = structuredTurn();
+    const finalPayload = '{"validation":"passed"}';
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      phase: "final_answer",
+      text: finalPayload,
+    });
+    accumulator.onItemCompleted({
+      id: "late-commentary",
+      type: "agent_message",
+      phase: "commentary",
+      text: '{"limitations":["Recording the completed validation."]}',
+    });
+    accumulator.complete("completed");
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts.map((part) => part.content)).toEqual([
+      finalPayload,
+      "Recording the completed validation.",
+    ]);
+    expect(rendered.content).toBe("Recording the completed validation.");
+  });
+
   test("withholds incomplete, fenced, malformed, and concatenated machine output", async () => {
     for (const text of [
       '{"validation":',

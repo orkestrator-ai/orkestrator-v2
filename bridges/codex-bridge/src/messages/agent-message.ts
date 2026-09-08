@@ -9,6 +9,7 @@
  * that the structured-output renderer must withhold.
  */
 import type { AgentMessageItem } from "../codex-item-types.js";
+import type { EngineItem } from "../engine/types.js";
 import {
   isWithheldMachineOutput,
   lastMachineJsonDocument,
@@ -20,6 +21,8 @@ const COMMENTARY_TEXT_FIELDS = [
   "message",
   "commentary",
   "summary",
+  "reviewSummary",
+  "rationale",
   "notes",
   "limitations",
 ] as const;
@@ -87,14 +90,26 @@ export function visibleCommentaryText(text: string): string {
       const snippets = commentaryStrings(JSON.parse(document));
       if (snippets.length > 0) return snippets.join("\n\n");
     } catch {
-      // A delimiter-complete but invalid document is still provider-formatted
-      // commentary. The labelled fallback below keeps it visible and honest.
+      // Keep the original document below. Prefixing it with prose would make
+      // downstream machine-output filters mistake it for user-facing text.
     }
   }
 
-  return `Progress update (provider-formatted):\n\n${document ?? text}`;
+  return document ?? text;
 }
 
 export function agentMessageDisplayText(item: AgentMessageItem): string {
   return item.phase === "commentary" ? visibleCommentaryText(item.text) : item.text;
+}
+
+/** Commentary is progress, never the authoritative result of a structured turn. */
+export function isAuthoritativeAgentMessagePhase(phase: unknown): boolean {
+  return phase !== "commentary";
+}
+
+/** Select final-output candidates consistently in parsing and transcript rendering. */
+export function isAuthoritativeAgentMessage(
+  item: EngineItem | null | undefined,
+): item is AgentMessageItem {
+  return item?.type === "agent_message" && isAuthoritativeAgentMessagePhase(item.phase);
 }

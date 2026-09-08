@@ -1241,6 +1241,11 @@ describe("rollout public helpers (continued)", () => {
         ),
         message("assistant", '{"draft":true}'),
         message("assistant", '{"final":true}', "final_answer"),
+        message(
+          "assistant",
+          '{"validation":[],"limitations":["Recording the accepted result."]}',
+          "commentary",
+        ),
         { type: "turn_context", payload: { turn_id: "failed", cwd: "/workspace" } },
         message("user", "failed prompt"),
         message(
@@ -1265,7 +1270,11 @@ describe("rollout public helpers (continued)", () => {
         .filter((entry) => entry.role === "assistant")
         .map((entry) => [entry.turnId, entry.content, entry.parts.map((part) => part.content)]),
     ).toEqual([
-      ["accepted", '{"final":true}', ["Inspecting the accepted turn.", '{"final":true}']],
+      [
+        "accepted",
+        "Recording the accepted result.",
+        ["Inspecting the accepted turn.", '{"final":true}', "Recording the accepted result."],
+      ],
       ["failed", "Inspecting the failed turn.", ["Inspecting the failed turn."]],
       ["ordinary", '{"ordinary":true}', ['{"ordinary":true}']],
     ]);

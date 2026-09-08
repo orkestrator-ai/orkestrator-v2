@@ -30,7 +30,7 @@ import {
 } from "../history/rollout.js";
 import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output";
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
-import { agentMessageDisplayText } from "./agent-message.js";
+import { agentMessageDisplayText, isAuthoritativeAgentMessage } from "./agent-message.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
@@ -150,7 +150,7 @@ function terminalStructuredOutputItemId(turn: TurnAccumulator): string | undefin
   // actual final record.
   return turn
     .ordered()
-    .filter((entry) => entry.item?.type === "agent_message")
+    .filter((entry) => isAuthoritativeAgentMessage(entry.item))
     .at(-1)?.id;
 }
 

@@ -192,6 +192,29 @@ describe("showOnlyFinalVerificationMessage", () => {
     expect(messages[0]?.parts.map((part) => part.content)).toEqual(["bun test"]);
   });
 
+  test("keeps an extracted verification rationale as progress, not a verdict", () => {
+    const rationale = "Still checking the validation results.";
+    const messages = hideMachineOutputText(
+      showOnlyFinalVerificationMessage(
+        [
+          {
+            id: "verification-commentary",
+            role: "assistant",
+            content: rationale,
+            parts: [{ type: "text", content: rationale }],
+            createdAt: "2026-08-07T22:00:00.000Z",
+          },
+        ],
+        false,
+      ),
+      { retainPayloadKind: "verification" },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(rationale);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([rationale]);
+  });
+
   test("keeps a final verdict stored only in message content", () => {
     const messages = showOnlyFinalVerificationMessage(
       [

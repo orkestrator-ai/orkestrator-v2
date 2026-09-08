@@ -1901,15 +1901,7 @@ export function SharedNativeAgentController({
                   disabled={settingsLocked}
                 />
                 {(projection?.composerControls ?? [])
-                  .filter(
-                    (control) =>
-                      control.id.startsWith("parameter:") &&
-                      !(
-                        platform === "claude" &&
-                        (control.id === "parameter:thinking" ||
-                          control.id === "parameter:context1m")
-                      ),
-                  )
+                  .filter((control) => control.id.startsWith("parameter:"))
                   .map((control) => {
                     const parameterId = control.id.slice("parameter:".length);
                     if (control.kind === "toggle") {

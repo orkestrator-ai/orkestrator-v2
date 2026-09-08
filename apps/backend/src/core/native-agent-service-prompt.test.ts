@@ -442,6 +442,84 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps Claude session defaults when the selected model changes", async () => {
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            {
+              platform: "claude",
+              id: "sonnet",
+              label: "Sonnet",
+              parameters: [
+                {
+                  id: "thinking",
+                  label: "Thinking",
+                  kind: "select",
+                  options: [{ id: "budget-16384", label: "16K budget" }],
+                  scope: "session",
+                },
+                {
+                  id: "context1m",
+                  label: "1M context beta",
+                  kind: "toggle",
+                  scope: "session",
+                },
+              ],
+            },
+            { platform: "claude", id: "haiku", label: "Haiku" },
+          ],
+          selectedModelId: "sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-claude-session-defaults-model-change-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:claude-session-defaults",
+        };
+        const parameterValues = { thinking: "budget-16384", context1m: true };
+        await service.ensureSession({ ...identity, parameterValues });
+
+        await service.updateProjectionControls({
+          ...identity,
+          update: { modelId: "haiku" },
+        });
+
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.controls).toMatchObject({
+          modelId: "haiku",
+          parameterValues,
+        });
+        await service.dispatchIntent({
+          ...identity,
+          prompt: "Keep the session defaults",
+          requestId: "claude-model-change-1",
+        });
+        expect(stub.send).toHaveBeenCalledWith(
+          "provider-session",
+          "Keep the session defaults",
+          expect.objectContaining({ parameterValues }),
+        );
+      },
+    );
+  });
+
   test("keeps persisted session options ahead of provider composer defaults", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({

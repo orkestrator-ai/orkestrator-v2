@@ -5089,7 +5089,7 @@ describe("AgentInfoButton ACP agents", () => {
     // Collapsed, but a server that is down still says so.
     expect(summary.textContent).toContain("2 servers");
     expect(summary.textContent).toContain("1 down");
-    expect(screen.queryByRole("button", { name: /codex_apps/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /codex_apps/ }) === null).toBe(true);
 
     fireEvent.click(summary);
     const row = screen.getByRole("button", { name: /codex_apps/ });
@@ -5214,7 +5214,7 @@ describe("AgentInfoButton ACP agents", () => {
 
     fireEvent.click(await waitFor(() => screen.getByRole("button", { name: /Tools 9/ })));
     expect(screen.getByText("orkestrator")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /orkestrator/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /orkestrator/ }) === null).toBe(true);
   });
 
   test("renders drift and notices for a non-Codex platform through the same panel", async () => {

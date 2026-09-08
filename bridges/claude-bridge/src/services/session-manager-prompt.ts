@@ -248,6 +248,15 @@ function appendTranscriptNotice(
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
 const MAX_SDK_CAPABILITIES = 64;
 
+function supportsClaudeContext1m(model: string | undefined): boolean {
+  const selected = model?.trim();
+  // The SDK catalogue's `default` entry, and an omitted model on backend-owned
+  // startup turns, both resolve to the provider's recommended Opus model. They
+  // must not disable an explicitly requested session default merely because
+  // the alias is not itself named "opus".
+  return !selected || selected === "default" || /opus|sonnet/i.test(selected);
+}
+
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
   status: "info",
   informational: "info",
@@ -956,7 +965,7 @@ export async function sendPrompt(
                   display: "summarized",
                 }
               : { type: "adaptive", display: "summarized" },
-        ...(options?.parameterValues?.context1m === true && /opus|sonnet/i.test(options.model ?? "")
+        ...(options?.parameterValues?.context1m === true && supportsClaudeContext1m(options.model)
           ? { betas: ["context-1m-2025-08-07" as const] }
           : {}),
         ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0

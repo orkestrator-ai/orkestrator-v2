@@ -208,7 +208,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // the user still sees their conversation; the next prompt starts a fresh
       // thread with reconstructed context.
       if (!isMissingRolloutError(error)) throw error;
-      const hydrated = await hydrateMessagesFromPersistedSession(threadId);
+      const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
+        structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
+      });
       session.title = hydrated.title;
       session.titleSource = hydrated.titleSource;
       this.registry.appendLocalMessages(session, ...hydrated.messages);
@@ -229,7 +231,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // Only hydrate when this is the first tab on the thread; a second tab must
     // join the existing canonical transcript rather than rebuild it.
     if (context.messages.length === 0) {
-      const hydrated = await hydrateMessagesFromPersistedSession(threadId);
+      const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
+        structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
+      });
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
@@ -319,6 +323,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       titleSource: "explicit",
       titleGenerationAttempted: true,
       confirmedModelsByTurn: { ...parent.confirmedModelsByTurn },
+      structuredOutputTurns: parent.structuredOutputTurns?.map((entry) => ({ ...entry })),
     });
     try {
       const context = this.registry.attach(child.id, fork.id, {
@@ -329,7 +334,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         modelId: fork.model,
       });
       context.materialized = true;
-      const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
+      const hydrated = await hydrateMessagesFromPersistedSession(fork.id, {
+        structuredOutputTurns: this.structuredOutputTurnsForThread(fork.id),
+      });
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
@@ -1290,6 +1297,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
           lastAcceptedRequestId: session.lastAcceptedRequestId,
           structuredOutputRequestId: session.structuredOutputRequestId,
           structuredOutput: session.structuredOutput,
+          structuredOutputTurns: session.structuredOutputTurns,
           confirmedModelsByTurn: session.confirmedModelsByTurn,
           asyncQuestionItemIds: session.asyncQuestionItemIds,
         }),

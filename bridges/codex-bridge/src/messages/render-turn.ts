@@ -28,6 +28,7 @@ import {
   createSharedTranscriptMetaLoader,
   resolvePersistedChildThreadIds,
 } from "../history/rollout.js";
+import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output";
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
@@ -50,6 +51,11 @@ export interface TurnRenderState {
    * every older text/tool/diff object in the turn.
    */
   completedItemParts: Map<string, { source: EngineItem | null; parts: NormalizedPart[] }>;
+  /** Machine-output classification cached by the accumulator mutation version. */
+  machineOutputByItem: Map<
+    string,
+    { source: EngineItem | null; version: number; withheld: boolean }
+  >;
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
   /** Positive, ambiguous, and absent child-path lookups retained for this turn. */
@@ -78,6 +84,7 @@ export function createTurnRenderState(): TurnRenderState {
   return {
     timelineOrder: [],
     completedItemParts: new Map(),
+    machineOutputByItem: new Map(),
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
     subagentPathIds: new Map(),
@@ -107,6 +114,7 @@ export function beginTurnRenderState(previous: TurnRenderState | undefined): Tur
 export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
   state.completedItemParts.clear();
+  state.machineOutputByItem.clear();
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
   state.subagentPathIds.clear();
@@ -133,53 +141,37 @@ function joinReasoning(summary: string[], content: string[]): string {
   return source.filter(hasVisibleText).join("\n\n");
 }
 
-/** Kept aligned with the web payload renderer's bounded parse. */
-const MAX_JSON_DRAFT_PARSE_CHARS = 262_144;
-
-/**
- * Whether an agent message is exactly a JSON container rather than prose that
- * happens to mention JSON.
- *
- * A schema-constrained Codex turn can emit a fresh payload after each tool
- * call even though only its last agent message is the authoritative result.
- * Match the documents the web transcript would promote to payload cards while
- * leaving ordinary progress such as `Found {x} in the config` alone.
- */
-function isJsonContainerDocument(text: string): boolean {
-  const trimmed = text.trim();
-  const fenced = /^```(?:json[5c]?)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i.exec(trimmed);
-  const candidate = (fenced?.[1] ?? trimmed).trim();
-  if (
-    candidate.length === 0 ||
-    candidate.length > MAX_JSON_DRAFT_PARSE_CHARS ||
-    !(
-      (candidate.startsWith("{") && candidate.endsWith("}")) ||
-      (candidate.startsWith("[") && candidate.endsWith("]"))
-    )
-  ) {
-    return false;
-  }
-  try {
-    const value: unknown = JSON.parse(candidate);
-    return value !== null && typeof value === "object";
-  } catch {
-    return false;
-  }
-}
-
 function terminalStructuredOutputItemId(turn: TurnAccumulator): string | undefined {
-  if (!turn.expectsStructuredOutput || !turn.isTerminal()) return undefined;
+  if (!turn.expectsStructuredOutput || turn.phase !== "completed") return undefined;
+  // Keep this selection identical to parseCodexStructuredOutput: the last
+  // authoritative agent item wins even when its text is empty. Falling back to
+  // an earlier non-empty item would promote a draft after parsing rejected the
+  // actual final record.
   return turn
     .ordered()
-    .filter((entry) => {
-      const item = effectiveItem(turn, entry);
-      return item?.type === "agent_message" && item.text.length > 0;
-    })
+    .filter((entry) => entry.item?.type === "agent_message")
     .at(-1)?.id;
+}
+
+function isMachineOutput(
+  state: TurnRenderState,
+  accumulator: ItemAccumulator | undefined,
+  item: EngineItem,
+): boolean {
+  if (item.type !== "agent_message") return false;
+  const version = accumulator?.version ?? -1;
+  const source = accumulator?.item ?? null;
+  const cached = state.machineOutputByItem.get(item.id);
+  if (cached?.version === version && cached.source === source) return cached.withheld;
+  const withheld = isWithheldMachineOutput(item.text);
+  state.machineOutputByItem.set(item.id, { source, version, withheld });
+  return withheld;
 }
 
 function suppressStructuredOutputDraft(
   turn: TurnAccumulator,
+  state: TurnRenderState,
+  accumulator: ItemAccumulator | undefined,
   item: EngineItem,
   finalItemId: string | undefined,
 ): boolean {
@@ -187,7 +179,7 @@ function suppressStructuredOutputDraft(
     turn.expectsStructuredOutput &&
     item.type === "agent_message" &&
     item.id !== finalItemId &&
-    isJsonContainerDocument(item.text)
+    isMachineOutput(state, accumulator, item)
   );
 }
 
@@ -539,6 +531,11 @@ export async function renderTurn(
   // from `[...itemKeys, ...existingSubagentKeys]` on every render would instead
   // pin even completed agents below every parent message that followed them.
   const currentItemKeys = new Set(itemKeys);
+  for (const itemId of options.state.machineOutputByItem.keys()) {
+    if (!currentItemKeys.has(`${CODEX_TIMELINE_ITEM_PREFIX}${itemId}`)) {
+      options.state.machineOutputByItem.delete(itemId);
+    }
+  }
   const timelineOrder = options.state.timelineOrder.filter(
     (key) => key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
   );
@@ -570,7 +567,13 @@ export async function renderTurn(
         const itemId = key.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
         const accumulator = accumulatorsByKey.get(itemId);
         const cached = options.state.completedItemParts.get(itemId);
-        const suppressDraft = suppressStructuredOutputDraft(turn, item, structuredOutputItemId);
+        const suppressDraft = suppressStructuredOutputDraft(
+          turn,
+          options.state,
+          accumulator,
+          item,
+          structuredOutputItemId,
+        );
         if (accumulator?.completed && cached?.source === accumulator.item) {
           // `itemToParts` touches a file's baseline while rendering its diff.
           // A completed-item cache hit skips that function, so without the
@@ -622,7 +625,13 @@ export async function renderTurn(
       (item): item is Extract<EngineItem, { type: "agent_message" }> =>
         item.type === "agent_message" &&
         item.text.length > 0 &&
-        !suppressStructuredOutputDraft(turn, item, structuredOutputItemId),
+        !suppressStructuredOutputDraft(
+          turn,
+          options.state,
+          accumulatorsByKey.get(item.id),
+          item,
+          structuredOutputItemId,
+        ),
     )
     .at(-1)?.text;
 

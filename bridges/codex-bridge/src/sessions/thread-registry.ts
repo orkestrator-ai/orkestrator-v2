@@ -19,7 +19,11 @@ import type { EngineGeneration, EngineTurnConfig } from "../engine/types.js";
 import type { NormalizedMessage } from "../messages/types.js";
 import type { TurnAccumulator } from "./turn-accumulator.js";
 import type { PersistedSessionTitleSource } from "../session-titles.js";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  MAX_STRUCTURED_OUTPUT_TURNS,
+  type StructuredOutputResult,
+  type StructuredOutputTurnRecord,
+} from "@orkestrator/protocol/structured-output";
 
 export type SessionTitleSource = "codex" | PersistedSessionTitleSource;
 
@@ -100,6 +104,8 @@ export interface BridgeSession {
   structuredOutput?: StructuredOutputResult;
   /** Request id for the structured turn currently running or last completed. */
   structuredOutputRequestId?: string;
+  /** Bounded turn ledger used to reproduce live filtering after rollout hydration. */
+  structuredOutputTurns?: StructuredOutputTurnRecord[];
   /** Bridge-observed turn reroutes that Codex does not write to its rollout. */
   confirmedModelsByTurn?: Record<string, string>;
   lastAccessed: number;
@@ -255,6 +261,7 @@ export class ThreadRegistry {
   ): BridgeSession {
     const record: BridgeSession = {
       ...session,
+      structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
       pendingAttachments: [],
       localMessages: [],
       asyncQuestionItemIds: [],
@@ -287,6 +294,7 @@ export class ThreadRegistry {
   ): BridgeSession {
     const record: BridgeSession = {
       ...session,
+      structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
       pendingAttachments: [],
       localMessages: [],
       asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
@@ -590,6 +598,26 @@ export class ThreadRegistry {
    */
   boundSessionsForThread(threadId: string): BridgeSession[] {
     return [...this.sessions.values()].filter((session) => session.threadId === threadId);
+  }
+
+  /** Record one constrained turn for every durable tab bound to the thread. */
+  recordStructuredOutputTurn(threadId: string, turnId: string, accepted: boolean): BridgeSession[] {
+    const changed: BridgeSession[] = [];
+    for (const session of this.boundSessionsForThread(threadId)) {
+      const turns = (session.structuredOutputTurns ??= []);
+      const existing = turns.find((entry) => entry.turnId === turnId);
+      if (existing) {
+        if (!existing.accepted && accepted) {
+          existing.accepted = true;
+          changed.push(session);
+        }
+        continue;
+      }
+      turns.push({ turnId, accepted });
+      if (turns.length > MAX_STRUCTURED_OUTPUT_TURNS) turns.shift();
+      changed.push(session);
+    }
+    return changed;
   }
 
   /**

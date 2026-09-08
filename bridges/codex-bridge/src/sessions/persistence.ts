@@ -30,8 +30,10 @@ import type { EngineTurnConfig } from "../engine/types.js";
 import type { SessionTitleSource } from "./thread-registry.js";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
+  MAX_STRUCTURED_OUTPUT_TURNS,
   isStructuredOutputResult,
   type StructuredOutputResult,
+  type StructuredOutputTurnRecord,
 } from "@orkestrator/protocol/structured-output";
 
 export const BRIDGE_SESSION_REGISTRY_VERSION = 2;
@@ -48,6 +50,7 @@ export interface PersistedBridgeSession {
   lastAcceptedRequestId?: string;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  structuredOutputTurns?: StructuredOutputTurnRecord[];
   /** Sparse turn -> model overlay for reroutes absent from Codex rollouts. */
   confirmedModelsByTurn?: Record<string, string>;
   /** Bounded content-free async-question attention index. */
@@ -151,6 +154,23 @@ function isPersistedBridgeSession(
   if (
     session.structuredOutput !== undefined &&
     !isStructuredOutputResult(session.structuredOutput)
+  ) {
+    return false;
+  }
+  if (
+    session.structuredOutputTurns !== undefined &&
+    (!Array.isArray(session.structuredOutputTurns) ||
+      session.structuredOutputTurns.length > MAX_STRUCTURED_OUTPUT_TURNS ||
+      session.structuredOutputTurns.some((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return true;
+        const record = entry as Record<string, unknown>;
+        return (
+          typeof record.turnId !== "string" ||
+          record.turnId.trim().length === 0 ||
+          record.turnId.length > 2_048 ||
+          typeof record.accepted !== "boolean"
+        );
+      }))
   ) {
     return false;
   }
@@ -444,6 +464,7 @@ export class BridgeSessionStore {
     lastAcceptedRequestId?: string;
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
+    structuredOutputTurns?: StructuredOutputTurnRecord[];
     confirmedModelsByTurn?: Record<string, string>;
     asyncQuestionItemIds?: string[];
   }): PersistedBridgeSession {
@@ -458,6 +479,7 @@ export class BridgeSessionStore {
       lastAcceptedRequestId: options.lastAcceptedRequestId,
       structuredOutputRequestId: options.structuredOutputRequestId,
       structuredOutput: options.structuredOutput,
+      structuredOutputTurns: options.structuredOutputTurns?.map((entry) => ({ ...entry })),
       confirmedModelsByTurn: options.confirmedModelsByTurn,
       asyncQuestionItemIds: options.asyncQuestionItemIds,
       lastAccessed: new Date(this.now()).toISOString(),

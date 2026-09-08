@@ -2,6 +2,30 @@ import { describe, expect, test } from "bun:test";
 import { adaptAppServerItem, planUpdateToTodoList, userMessageClientId } from "./item-adapter.js";
 
 describe("item adapter edge cases", () => {
+  test("preserves supported agent-message phases and drops unknown phases", () => {
+    expect(
+      adaptAppServerItem({
+        id: "commentary",
+        type: "agentMessage",
+        text: '{"limitations":["Checking tests."]}',
+        phase: "commentary",
+      }).item,
+    ).toEqual({
+      id: "commentary",
+      type: "agent_message",
+      text: '{"limitations":["Checking tests."]}',
+      phase: "commentary",
+    });
+    expect(
+      adaptAppServerItem({
+        id: "unknown",
+        type: "agentMessage",
+        text: "hello",
+        phase: "future-phase",
+      }).item,
+    ).toEqual({ id: "unknown", type: "agent_message", text: "hello" });
+  });
+
   test("defaults malformed command and file fields without throwing", () => {
     expect(
       adaptAppServerItem({

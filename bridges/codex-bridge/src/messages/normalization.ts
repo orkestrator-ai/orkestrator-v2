@@ -28,6 +28,7 @@ import {
   touchBaseline,
 } from "./diff-budget.js";
 import { rawApplyPatchParts } from "./apply-patch.js";
+import { agentMessageDisplayText } from "./agent-message.js";
 import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./types.js";
 
 const execFile = promisify(execFileCallback);
@@ -317,7 +318,7 @@ export async function itemToParts(
           },
         ];
       }
-      return [{ type: "text", content: item.text }];
+      return [{ type: "text", content: agentMessageDisplayText(item) }];
     case "reasoning":
       return hasVisibleText(item.text) ? [{ type: "thinking", content: item.text }] : [];
     case "command_execution": {

@@ -496,7 +496,7 @@ describe("MentionableInput", () => {
 
     act(() => {
       getByTestId("replace-draft").click();
-      inputRef.current!.focusAtEnd();
+      inputRef.current!.focusAtEnd("/steer ");
     });
 
     expect(input.textContent).toBe("/steer ");
@@ -524,10 +524,22 @@ describe("MentionableInput", () => {
     rerender(<MentionableInput ref={inputRef} value="/steer " mentions={[]} onChange={onChange} />);
     expect(inputRef.current!.getCursorPosition()).toBe("/st".length);
 
-    act(() => inputRef.current!.focusAtEnd());
+    act(() => inputRef.current!.focusAtEnd("/steer "));
 
     expect(document.activeElement).toBe(input);
     expect(inputRef.current!.getCursorPosition()).toBe("/steer ".length);
+
+    const laterRange = document.createRange();
+    laterRange.setStart(input.firstChild!, 3);
+    laterRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(laterRange);
+
+    rerender(
+      <MentionableInput ref={inputRef} value="/st!eer " mentions={[]} onChange={onChange} />,
+    );
+
+    expect(inputRef.current!.getCursorPosition()).toBe(3);
   });
 
   test("inserts a mention at the last known cursor position when focus moved outside", () => {

@@ -1256,6 +1256,12 @@ describe("renderTurn", () => {
       text: '{"validation":null,"filesLeftUncommitted":null,"limitations":["working"]}',
     });
     accumulator.onItemCompleted({
+      id: "schema-commentary",
+      type: "agent_message",
+      phase: "commentary",
+      text: '{"validation":[],"uncommittedFiles":[],"limitations":["Running the focused tests."]}',
+    });
+    accumulator.onItemCompleted({
       id: "command",
       type: "command_execution",
       command: "git status --short",
@@ -1277,9 +1283,10 @@ describe("renderTurn", () => {
 
     expect(active.parts.map((part) => part.content)).toEqual([
       "Checking the working tree.",
+      "Running the focused tests.",
       "git status --short",
     ]);
-    expect(active.content).toBe("Checking the working tree.");
+    expect(active.content).toBe("Running the focused tests.");
 
     const finalPayload =
       '{"validation":"bun run check","filesLeftUncommitted":[],"limitations":[]}';
@@ -1299,10 +1306,42 @@ describe("renderTurn", () => {
 
     expect(completed.parts.map((part) => part.content)).toEqual([
       "Checking the working tree.",
+      "Running the focused tests.",
       "git status --short",
       finalPayload,
     ]);
     expect(completed.content).toBe(finalPayload);
+  });
+
+  test("keeps the final result authoritative when commentary arrives after it", async () => {
+    const accumulator = structuredTurn();
+    const finalPayload = '{"validation":"passed"}';
+    accumulator.onItemCompleted({
+      id: "final",
+      type: "agent_message",
+      phase: "final_answer",
+      text: finalPayload,
+    });
+    accumulator.onItemCompleted({
+      id: "late-commentary",
+      type: "agent_message",
+      phase: "commentary",
+      text: '{"limitations":["Recording the completed validation."]}',
+    });
+    accumulator.complete("completed");
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts.map((part) => part.content)).toEqual([
+      finalPayload,
+      "Recording the completed validation.",
+    ]);
+    expect(rendered.content).toBe("Recording the completed validation.");
   });
 
   test("withholds incomplete, fenced, malformed, and concatenated machine output", async () => {

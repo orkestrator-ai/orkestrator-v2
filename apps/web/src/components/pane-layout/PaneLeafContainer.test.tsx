@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import type {
   AgentMailMailboxSnapshot,
   AgentMailMessageSummary,
@@ -801,7 +802,10 @@ describe("PaneLeafContainer", () => {
       await screen.findByText("1 message waiting · delivers when this agent is idle"),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss agent mail notice" }));
-    expect(screen.queryByText("1 message waiting · delivers when this agent is idle")).toBeNull();
+    expectDomAbsent(
+      screen.queryByText("1 message waiting · delivers when this agent is idle"),
+      "dismissed agent mail notice",
+    );
 
     view.rerender(
       <PaneLeafContainer
@@ -844,7 +848,7 @@ describe("PaneLeafContainer", () => {
       );
 
       expect(await screen.findByTestId("codex-tab")).toBeTruthy();
-      expect(screen.queryByRole("alert")).toBeNull();
+      expectDomAbsent(screen.queryByRole("alert"), "recovered native agent error");
     } finally {
       console.error = originalError;
       nativeAgentTabFailureEnvironment = null;

@@ -33,6 +33,76 @@ async function withIsolatedTempDir<T>(callback: (directory: string) => Promise<T
   }
 }
 
+describe("agent-message normalization", () => {
+  test("unwraps schema-shaped commentary into readable progress", async () => {
+    expect(
+      await itemToParts(
+        {
+          id: "commentary",
+          type: "agent_message",
+          phase: "commentary",
+          text: JSON.stringify({
+            validation: [],
+            uncommittedFiles: [],
+            reviewScope: { limitations: ["Tracing the missing transcript updates."] },
+          }),
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Tracing the missing transcript updates." }]);
+  });
+
+  test("unwraps verification and structured-review commentary fields", async () => {
+    expect(
+      await itemToParts(
+        {
+          id: "verification",
+          type: "agent_message",
+          phase: "commentary",
+          text: '{"complete":false,"rationale":"Still checking the validation results."}',
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Still checking the validation results." }]);
+
+    expect(
+      await itemToParts(
+        {
+          id: "review",
+          type: "agent_message",
+          phase: "commentary",
+          text: '{"reviewSummary":"Inspecting the changed bridge paths."}',
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Inspecting the changed bridge paths." }]);
+  });
+
+  test("leaves prose and unrecognized or streaming machine output unchanged", async () => {
+    const prose = "Checking the transcript now.";
+    expect(
+      await itemToParts(
+        { id: "prose", type: "agent_message", phase: "commentary", text: prose },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: prose }]);
+
+    for (const text of ['{"status":"checking"}', '{"reviewSummary":"still checking"']) {
+      expect(
+        await itemToParts(
+          {
+            id: "fallback",
+            type: "agent_message",
+            phase: "commentary",
+            text,
+          },
+          "/tmp",
+        ),
+      ).toEqual([{ type: "text", content: text }]);
+    }
+  });
+});
+
 describe("reasoning normalization", () => {
   test("drops text made only of whitespace and default-ignorable code points", async () => {
     for (const text of [

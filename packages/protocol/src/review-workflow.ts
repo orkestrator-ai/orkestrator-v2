@@ -1388,12 +1388,13 @@ The change under review may be committed, entirely uncommitted, or a mix of both
     outputFormat === "structured"
       ? `## Output contract
 
-The output schema applies to your final message only. Everything before it is an ordinary conversation.
+The provider enforces the structured review schema on your final message and may also apply it to commentary samples. Commentary is progress only; the final message is the sole authoritative report.
 
-- Write interim progress updates as plain sentences describing what you are doing and what you found. These are shown to a human watching the review, so they are worth writing well.
-- An interim message must never be a JSON object or array. Do not draft, preview, restate, or incrementally build the report in your messages, and do not wrap progress in schema field names. A message that begins with \`{\` or \`[\` is withheld from the reader as machine output, so a drafted report is not progress they can see.
+- Send interim progress only through the provider's commentary or update channel, using ordinary prose sentences describing what you are doing and what you found. These are shown to a human watching the review, so they are worth writing well.
+- If the provider applies the schema to commentary, put one useful progress sentence in \`reviewSummary\` and leave unrelated fields empty or neutral. Orkestrator displays that provider-labelled field as progress.
+- Do not use the final-response channel for progress, and never draft, preview, restate, or incrementally build the report there.
 - Never emit a partial or provisional structured report.
-- After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.
+- After every validation command, tool call, and subagent has finished, make the final assistant message the one authoritative provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.
 
 ${buildStructuredReviewOutputGuide()}`
       : `## Output Format

@@ -45,15 +45,16 @@ describe("multi review reviewer prompt", () => {
     });
 
     expect(prompt).toContain("You are independent reviewer 1 of 3");
-    // A reviewer that spends the whole run re-drafting its report into the text
-    // channel looks like a silent tab, because the viewer withholds machine
-    // output. The schema binds only the final message; progress must be prose.
+    // Provider-labelled commentary stays visible even when the provider applies
+    // the structured schema to it; the final response remains authoritative.
     expect(prompt).toContain(
       "The provider enforces the structured review schema on your final message",
     );
     expect(prompt).toContain("Narrate your progress in ordinary prose as you go");
-    expect(prompt).toContain("The output schema applies to your final message only");
-    expect(prompt).toContain("An interim message must never be a JSON object or array");
+    expect(prompt).toContain("may also apply it to commentary samples");
+    expect(prompt).toContain("progress sentence in `reviewSummary`");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).not.toContain("An interim message must never be a JSON object or array");
     expect(prompt).toContain("the backend observed these uncommitted paths");
     expect(prompt).toContain("- `src/feature.ts`");
     expect(prompt).toContain("- `src/feature.test.ts`");
@@ -198,13 +199,13 @@ describe("multi review preparation prompt", () => {
 
     expect(prompt).toContain("Prepare the existing change for Multi Review");
     expect(prompt).toContain("Do not push, merge, rebase, reset, switch branches");
-    // Preparation shares the reviewer's channel discipline: prose while it
-    // works, one JSON object at the end.
-    expect(prompt).toContain("The enforced schema applies to your final response only");
-    expect(prompt).toContain("Never send a JSON object or array as an interim update");
-    expect(prompt).toContain(
-      "a message that begins with `{` or `[` is folded away as machine output",
-    );
-    expect(prompt).toContain("make the final assistant response the only JSON object");
+    // Preparation shares the reviewer's channel discipline: visible provider
+    // commentary while it works, one authoritative JSON object at the end.
+    expect(prompt).toContain("may apply the enforced schema to commentary");
+    expect(prompt).toContain("progress sentence in the `limitations` field");
+    expect(prompt).toContain("leave `validation` and `uncommittedFiles` as empty arrays");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).toContain("Do not use the final-response channel for progress");
+    expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
   });
 });

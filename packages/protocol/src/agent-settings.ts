@@ -30,6 +30,7 @@ import type { NativeAgentExecutionPolicyOverride } from "./native-agent.js";
 
 export type AgentLaunchMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
+export type ClaudeThinkingMode = "adaptive" | "budget-8192" | "budget-16384" | "disabled";
 
 /** One platform's settings at one tier. */
 export interface AgentPlatformSettings {
@@ -46,6 +47,10 @@ export interface AgentPlatformSettings {
   fastMode?: boolean;
   /** Claude only; meaningful when the resolved mode is `native`. */
   claudeNativeBackend?: ClaudeNativeBackend;
+  /** Claude Agent SDK thinking configuration for new native sessions. */
+  claudeThinkingMode?: ClaudeThinkingMode;
+  /** Whether new Claude Agent SDK sessions opt into the 1M-context beta. */
+  claudeContext1m?: boolean;
 }
 
 export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
@@ -95,10 +100,26 @@ export interface ResolvedAgentPlatformSettings {
   fastMode?: boolean;
   /** Only meaningful when `platform` is `claude` and `mode` is `native`. */
   claudeNativeBackend: ClaudeNativeBackend;
+  /** Claude Agent SDK thinking configuration; absent means its adaptive default. */
+  claudeThinkingMode?: ClaudeThinkingMode;
+  /** Claude Agent SDK 1M-context beta; absent means its disabled default. */
+  claudeContext1m?: boolean;
 }
 
 export const DEFAULT_AGENT_PLATFORM: AgentPlatform = "claude";
 export const DEFAULT_CLAUDE_NATIVE_BACKEND: ClaudeNativeBackend = "sdk";
+export const DEFAULT_CLAUDE_THINKING_MODE: ClaudeThinkingMode = "adaptive";
+export const DEFAULT_CLAUDE_CONTEXT_1M = false;
+
+/** Translate persisted Claude defaults to the bridge's generic parameter ids. */
+export function claudeNativeParameterValues(
+  settings: Pick<ResolvedAgentPlatformSettings, "claudeThinkingMode" | "claudeContext1m">,
+): Record<string, string | boolean> {
+  return {
+    thinking: settings.claudeThinkingMode ?? DEFAULT_CLAUDE_THINKING_MODE,
+    context1m: settings.claudeContext1m ?? DEFAULT_CLAUDE_CONTEXT_1M,
+  };
+}
 
 /**
  * What each platform does when no tier has an opinion.
@@ -172,12 +193,19 @@ export function resolveAgentPlatformSettings(
     global?.claudeNativeBackend ??
     DEFAULT_CLAUDE_NATIVE_BACKEND;
 
+  const claudeThinkingMode =
+    environment?.claudeThinkingMode ?? repository?.claudeThinkingMode ?? global?.claudeThinkingMode;
+  const claudeContext1m =
+    environment?.claudeContext1m ?? repository?.claudeContext1m ?? global?.claudeContext1m;
+
   return {
     mode,
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     claudeNativeBackend,
+    ...(claudeThinkingMode ? { claudeThinkingMode } : {}),
+    ...(claudeContext1m !== undefined ? { claudeContext1m } : {}),
   };
 }
 
@@ -212,12 +240,26 @@ function normalizePlatformSettings(
     record.claudeNativeBackend === "sdk" || record.claudeNativeBackend === "tmux"
       ? record.claudeNativeBackend
       : undefined;
+  const claudeThinkingMode =
+    platform === "claude" &&
+    (record.claudeThinkingMode === "adaptive" ||
+      record.claudeThinkingMode === "budget-8192" ||
+      record.claudeThinkingMode === "budget-16384" ||
+      record.claudeThinkingMode === "disabled")
+      ? record.claudeThinkingMode
+      : undefined;
+  const claudeContext1m =
+    platform === "claude" && typeof record.claudeContext1m === "boolean"
+      ? record.claudeContext1m
+      : undefined;
   const normalized: AgentPlatformSettings = {
     ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(claudeNativeBackend ? { claudeNativeBackend } : {}),
+    ...(claudeThinkingMode ? { claudeThinkingMode } : {}),
+    ...(claudeContext1m !== undefined ? { claudeContext1m } : {}),
   };
   // An all-empty block is "inherit everything", which is what absence already
   // means. Dropping it keeps persisted config free of blocks the UI wrote on

@@ -1,8 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_EXECUTION_PROFILE_ID_LENGTH,
+  asDispatchNativeAgentPromptInput,
   asNativeAgentControlUpdate,
 } from "./commands-validation.js";
+
+describe("asDispatchNativeAgentPromptInput", () => {
+  test("retains bounded provider parameter defaults", () => {
+    expect(
+      asDispatchNativeAgentPromptInput({
+        environmentId: "env-1",
+        agent: "claude",
+        logicalSessionKey: "env-env-1:tab-1",
+        prompt: "hello",
+        requestId: "request-1",
+        parameterValues: { thinking: "adaptive", context1m: true },
+      }).parameterValues,
+    ).toEqual({ thinking: "adaptive", context1m: true });
+  });
+});
 
 describe("asNativeAgentControlUpdate", () => {
   test("accepts an ordinary execution profile id", () => {

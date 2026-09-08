@@ -133,6 +133,8 @@ export interface EnsureNativeAgentSessionInput {
   fastMode?: boolean;
   /** Primary execution profile to persist before the first interactive prompt. */
   executionProfileId?: string;
+  /** Generic provider parameters to persist before the first prompt. */
+  parameterValues?: Record<string, string | boolean>;
   /** Trusted backend ownership. Renderer-supplied values are replaced. */
   owner?: AgentSessionOwner;
   executionPolicy?: "coordinator-read-only";
@@ -256,6 +258,7 @@ export function controlsFromSessionInput(
     ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
     ...(input.sessionMode ? { mode: input.sessionMode } : {}),
     ...(input.executionProfileId ? { executionProfileId: input.executionProfileId } : {}),
+    ...(input.parameterValues ? { parameterValues: input.parameterValues } : {}),
   };
   return Object.keys(controls).length > 0 ? controls : undefined;
 }

@@ -928,6 +928,75 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test.each([
+    ["claude", ["parameter:audit"]],
+    ["cursor", ["parameter:thinking", "parameter:context1m", "parameter:audit"]],
+  ] as const)(
+    "projects settings-backed parameter controls for %s at the backend boundary",
+    async (agent, expectedParameterControls) => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      });
+      const invoke: Invoke = async <T>(command: string): Promise<T> => {
+        if (command !== "get_native_agent_model_catalog") {
+          throw new Error(`Unexpected backend command: ${command}`);
+        }
+        return [
+          {
+            platform: agent,
+            id: "model-1",
+            label: "Model 1",
+            parameters: [
+              {
+                id: "thinking",
+                label: "Thinking",
+                kind: "select",
+                options: [{ id: "adaptive", label: "Adaptive" }],
+                defaultValue: "adaptive",
+                scope: "session",
+              },
+              {
+                id: "context1m",
+                label: "1M context beta",
+                kind: "toggle",
+                defaultValue: false,
+                scope: "session",
+              },
+              {
+                id: "audit",
+                label: "Audit mode",
+                kind: "toggle",
+                defaultValue: false,
+                scope: "session",
+              },
+            ],
+          },
+        ] as T;
+      };
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-settings-controls-`,
+          provider: async () => stub.provider,
+          invoke,
+        },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: `env-env-1:${agent}-settings-controls`,
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(
+            projection?.composerControls
+              .map((control) => control.id)
+              .filter((id) => id.startsWith("parameter:")),
+          ).toEqual(Array.from(expectedParameterControls));
+        },
+      );
+    },
+  );
+
   test("renders provider terminal states as uniform durable transcript rows", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({

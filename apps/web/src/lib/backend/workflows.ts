@@ -313,6 +313,7 @@ export async function ensureNativeAgentSession(input: {
   sessionMode?: "plan" | "build";
   fastMode?: boolean;
   executionProfileId?: string;
+  parameterValues?: Record<string, string | boolean>;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>("ensure_native_agent_session", input);
 }

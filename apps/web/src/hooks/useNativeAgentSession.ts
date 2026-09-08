@@ -172,6 +172,8 @@ interface UseNativeAgentSessionOptions {
   initialFastMode?: boolean;
   initialExecutionProfileId?: string;
   defaultFastMode?: boolean;
+  /** Generic provider parameters applied only when a fresh session is created. */
+  defaultParameterValues?: Record<string, string | boolean>;
   isActive?: boolean;
   /** Setup-gated tabs mount presentation without starting provider I/O. */
   enabled?: boolean;
@@ -217,6 +219,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   initialFastMode,
   initialExecutionProfileId,
   defaultFastMode,
+  defaultParameterValues,
   isActive = true,
   enabled = true,
 }: UseNativeAgentSessionOptions) {
@@ -938,6 +941,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             sessionMode: initialConversationMode,
             fastMode: initialFastMode ?? defaultFastMode,
             executionProfileId: initialExecutionProfileId,
+            parameterValues: defaultParameterValues,
           });
           await onResumeSessionReplaced?.({
             requestedProviderSessionId: initialProviderSessionId,
@@ -963,6 +967,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           sessionMode: initialConversationMode,
           fastMode: initialFastMode ?? defaultFastMode,
           executionProfileId: initialExecutionProfileId,
+          parameterValues: defaultParameterValues,
         });
       }
       isInitializedRef.current = true;
@@ -1005,6 +1010,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     acknowledgeInitialLaunchOptions,
     defaultAgentModel,
     defaultFastMode,
+    defaultParameterValues,
     defaultReasoningEffort,
     identity,
     initialAgentModel,

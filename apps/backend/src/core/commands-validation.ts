@@ -356,6 +356,10 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
             ? undefined
             : "plan",
     fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+    parameterValues:
+      args.parameterValues === undefined
+        ? undefined
+        : asNativeAgentParameterValues(args.parameterValues),
     subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
     executionAgent: typeof args.executionAgent === "string" ? args.executionAgent : undefined,
     includeLocalSettings:
@@ -433,7 +437,7 @@ export function asNativeAgentControlUpdate(
   return update;
 }
 
-function asNativeAgentParameterValues(value: unknown): Record<string, string | boolean> {
+export function asNativeAgentParameterValues(value: unknown): Record<string, string | boolean> {
   const raw = asRecord(value, "parameterValues");
   const entries = Object.entries(raw);
   if (entries.length > 64) throw new Error("parameterValues has too many entries");

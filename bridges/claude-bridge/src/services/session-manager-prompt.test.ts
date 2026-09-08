@@ -81,6 +81,23 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test.each([undefined, "default", "claude-sonnet-test"])(
+    "applies the 1M-context parameter to the supported model selection %s",
+    async (model) => {
+      const session = createSession();
+      track(session.id);
+      const prompt = sendPrompt(session.id, "Use the configured context", {
+        ...(model ? { model } : {}),
+        parameterValues: { context1m: true },
+      });
+      const call = await nextQueryCall();
+      expect(call.options.betas).toEqual(["context-1m-2025-08-07"]);
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+    },
+  );
+
   test("passes the current managed GitHub credential only to the SDK query", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-query-github-env-"));
     const credentialFile = join(directory, "github-token");

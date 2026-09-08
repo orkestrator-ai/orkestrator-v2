@@ -1,6 +1,7 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, LogIn, X } from "lucide-react";
+import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   nativeAsyncQuestionRequestId,
   resolveReasoningId,
@@ -198,6 +199,16 @@ export function SharedNativeAgentController({
     initialAgentModel ?? configuredModel,
   );
   const configuredFastMode = speedCompatible ? configured.fastMode : undefined;
+  const configuredParameterValues = useMemo(
+    () =>
+      platform === "claude"
+        ? claudeNativeParameterValues({
+            claudeThinkingMode: configured.claudeThinkingMode,
+            claudeContext1m: configured.claudeContext1m,
+          })
+        : undefined,
+    [configured.claudeContext1m, configured.claudeThinkingMode, platform],
+  );
   // Coordinator runtimes deliberately have no Environment record: they run
   // against the project's checkout under their own read-only lifecycle. The
   // ordinary worker setup gate would otherwise classify that absence as
@@ -308,6 +319,7 @@ export function SharedNativeAgentController({
     initialFastMode,
     initialExecutionProfileId,
     defaultFastMode: configuredFastMode,
+    defaultParameterValues: configuredParameterValues,
     isActive,
     enabled: !setupPending,
   });

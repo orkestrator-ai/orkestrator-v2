@@ -1,5 +1,6 @@
 import * as shared from "./native-agent-service-shared.js";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
+import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   ABSENT_BRIDGE_RECHECK_MS,
   ACTIVITY_RETRY_BASE_MS,
@@ -1118,6 +1119,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const model = environment.initialAgentModel ?? resolved.model;
     const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
     const conversationMode = environment.initialConversationMode;
+    const parameterValues = agent === "claude" ? claudeNativeParameterValues(resolved) : undefined;
     const nativeProviderLaunch =
       mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
 
@@ -1292,6 +1294,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         reasoningEffort,
         ...(conversationMode ? { mode: conversationMode } : {}),
         ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
+        ...(parameterValues ? { parameterValues } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
@@ -1327,6 +1330,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               reasoningEffort,
               ...(conversationMode ? { sessionMode: conversationMode } : {}),
               ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
+              ...(parameterValues ? { parameterValues } : {}),
             });
 
       // The provider mapping is not enough to satisfy the launch: the user

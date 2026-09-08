@@ -124,6 +124,103 @@ const cursorCatalog: AgentModelCatalog = {
   ],
 };
 
+function ClaudeSettingsHarness({ onChange }: { onChange: (tier: AgentSettingsTier) => void }) {
+  const [tier, setTier] = useState<AgentSettingsTier>({});
+  return (
+    <AgentPlatformPane
+      platform="claude"
+      tier={tier}
+      onChange={(next) => {
+        setTier(next);
+        onChange(next);
+      }}
+      tiers={{ global: tier }}
+      canInherit={false}
+      catalog={catalog}
+    />
+  );
+}
+
+function InheritedClaudeSettingsHarness({
+  onChange,
+}: {
+  onChange: (tier: AgentSettingsTier) => void;
+}) {
+  const global: AgentSettingsTier = {
+    platforms: {
+      claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+    },
+  };
+  const [tier, setTier] = useState<AgentSettingsTier>({
+    platforms: {
+      claude: { claudeThinkingMode: "disabled", claudeContext1m: false },
+    },
+  });
+  return (
+    <AgentPlatformPane
+      platform="claude"
+      tier={tier}
+      onChange={(next) => {
+        setTier(next);
+        onChange(next);
+      }}
+      tiers={{ global, repository: tier }}
+      canInherit
+      catalog={catalog}
+    />
+  );
+}
+
+describe("AgentPlatformPane Claude SDK defaults", () => {
+  test("stores thinking and 1M context choices in Claude settings", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<ClaudeSettingsHarness onChange={onChange} />);
+
+    const thinking = screen.getByRole("combobox", { name: "Thinking" });
+    fireEvent.keyDown(thinking, { key: "Enter" });
+    fireEvent.click(screen.getByRole("option", { name: "16K budget" }));
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.claudeThinkingMode).toBe(
+      "budget-16384",
+    );
+
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Claude 1M context beta" })).getByRole(
+        "radio",
+        { name: "On" },
+      ),
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude).toMatchObject({
+      claudeThinkingMode: "budget-16384",
+      claudeContext1m: true,
+    });
+  });
+
+  test("labels and restores inherited Claude SDK defaults", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<InheritedClaudeSettingsHarness onChange={onChange} />);
+
+    const thinking = screen.getByRole("combobox", { name: "Thinking" });
+    fireEvent.keyDown(thinking, { key: "Enter" });
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: "Inherit — 16K budget (from app settings)",
+      }),
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude).toMatchObject({
+      claudeContext1m: false,
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.claudeThinkingMode).toBeUndefined();
+
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Claude 1M context beta" })).getByRole(
+        "radio",
+        { name: "Inherit — On (from app settings)" },
+      ),
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude).toBeUndefined();
+  });
+});
+
 function CursorSettingsHarness({
   onChange,
   initialFastMode,

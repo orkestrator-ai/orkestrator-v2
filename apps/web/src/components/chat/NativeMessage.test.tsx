@@ -2809,6 +2809,31 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
   });
 
+  test("renders only the user text and image when an initial prompt includes path boilerplate", async () => {
+    const rawContent =
+      "Make the profile match\n\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- screenshot.png: /tmp/screenshot.png";
+    const message = makeMessage(
+      [
+        { type: "text", content: rawContent },
+        {
+          type: "file",
+          content: "/tmp/screenshot.png",
+          fileUrl: "/tmp/screenshot.png",
+          filename: "screenshot.png",
+        },
+      ],
+      { id: "initial-prompt-path-reference", role: "user", content: rawContent },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Make the profile match")).toBeTruthy();
+    expect(screen.queryByText(/Attached files have been saved/) === null).toBe(true);
+    expect(await screen.findByAltText("Thumbnail: screenshot.png")).toBeTruthy();
+  });
+
   test("renders a rehydrated attachment part, which has a path but no inline data", async () => {
     // The same attachment after a reload: the bridge rebuilt it from the
     // persisted marker, so the renderer has to read the bytes from the path.

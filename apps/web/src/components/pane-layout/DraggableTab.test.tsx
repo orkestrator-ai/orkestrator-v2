@@ -904,7 +904,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: "Close Terminal 1" }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
     // handleClose stops propagation so the tab is not also selected.

@@ -229,7 +229,9 @@ describe("CoordinatorPanel", () => {
     // as "locked to codex".
     expect(agent.getAttribute("data-platform")).toBe("");
     expect(agent.getAttribute("data-available-platforms")).toBe("claude,codex");
-    expect(screen.getByRole("button", { name: "First, no agent chosen yet" })).toBeTruthy();
+    const unassignedTab = screen.getByRole("button", { name: "First, no agent chosen yet" });
+    expect(unassignedTab.querySelector("svg.text-muted-foreground")).toBeTruthy();
+    expect(screen.getByText("Choose agent")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
     await waitFor(() =>
@@ -420,6 +422,19 @@ describe("CoordinatorPanel", () => {
     const newConversation = await screen.findAllByRole("button", { name: "New conversation" });
     fireEvent.click(newConversation.at(-1)!);
     expect(await screen.findByText("create failed")).toBeTruthy();
+  });
+
+  test("selects a conversation from the full tab shell and shows its agent brand", async () => {
+    render(<CoordinatorPanel projectId="project-1" />);
+
+    const selectionButton = await screen.findByRole("button", { name: "First, Codex" });
+    expect(selectionButton.querySelector("svg.text-emerald-400")).toBeTruthy();
+
+    const tabShell = selectionButton.parentElement;
+    expect(tabShell).toBeTruthy();
+    fireEvent.click(tabShell!);
+
+    await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "conversation-1"));
   });
 
   test("renders missing-checkout, unavailable, paused, startup-error, and dirty states", async () => {

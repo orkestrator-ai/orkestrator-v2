@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer, Repeat2 } from "lucide-react";
+import { FileCode, Globe2, Terminal as TerminalIcon, Hammer, Repeat2 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -31,10 +31,8 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
+import { TAB_ICON_CLASS, TabShell } from "./TabShell";
 import { useConfigStore } from "@/stores/configStore";
-
-/** Every agent brand mark in the tab strip is drawn at this size. */
-const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
 const isOpenCodeTab = (type: TabType): boolean => type === "opencode";
@@ -308,11 +306,6 @@ export function DraggableTab({
     return <TerminalIcon className="h-3 w-3 shrink-0" />;
   };
 
-  const handleClose = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onClose?.();
-  };
-
   const title = getTabTitle();
   const icon = getTabIcon();
   const titleElement = (
@@ -334,44 +327,28 @@ export function DraggableTab({
     [setNodeRef],
   );
   const tabTrigger = (
-    <div
+    <TabShell
       ref={setTabRefs}
       style={style}
       {...attributes}
       {...listeners}
-      className={cn(
-        "group relative flex shrink-0 items-center gap-1.5 bg-background px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
-        isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-        isDragging && "opacity-50 z-50",
-      )}
+      isActive={isActive}
+      isFocused={isFocused}
+      className={cn("cursor-grab active:cursor-grabbing", isDragging && "opacity-50 z-50")}
       onClick={onSelect}
       onMouseEnter={tooltipContent ? tabTooltip.show : undefined}
       onMouseLeave={tooltipContent ? tabTooltip.hide : undefined}
       onFocus={tooltipContent ? tabTooltip.show : undefined}
       onBlur={tooltipContent ? tabTooltip.hide : undefined}
+      onClose={canClose ? () => onClose?.() : undefined}
+      closeLabel={`Close ${title}`}
     >
-      {/* Keep the active tab identifiable when it shares the pane background. */}
-      {isActive && (
-        <div
-          aria-hidden="true"
-          className={cn("absolute inset-x-0 bottom-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
-        />
-      )}
       {icon}
       {titleElement}
       {isDirty && (
         <span className="h-2 w-2 rounded-full bg-muted-foreground" title="Unsaved changes" />
       )}
-      {canClose && (
-        <button
-          className="ml-1 flex h-7 w-7 items-center justify-center opacity-100 transition-opacity hover:text-red-400 md:h-auto md:w-auto md:opacity-0 md:group-hover:opacity-100"
-          onClick={handleClose}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      )}
-    </div>
+    </TabShell>
   );
 
   return (

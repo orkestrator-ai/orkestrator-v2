@@ -34,12 +34,13 @@ export function registerControlReviewActions(
     {
       title: "Launch and open environment Multi Review (preferred)",
       description:
-        "Preferred complete Multi Review button action: accept the launch dialog's reviewer rows and fix model, use saved branch/instruction defaults when omitted, reuse an active review, start at most once, and durably create/focus its root tab in the selected pane even while the environment UI is inactive. No build pipeline prerequisite. Reuse requestId with the same payload on retry; inspect outcome/ui/recovery before claiming success. Use get_launch_options to choose models.",
+        "Preferred complete Multi Review button action: accept the launch dialog's reviewer rows, preparation/consolidation model, and fix model, use saved branch/instruction defaults when omitted, reuse an active review, start at most once, and durably create/focus its root tab in the selected pane even while the environment UI is inactive. No build pipeline prerequisite. Reuse requestId with the same payload on retry; inspect outcome/ui/recovery before claiming success. Use get_launch_options to choose models.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256),
           environmentId: z.string().trim().min(1).max(200),
           reviewers: z.array(selection).min(1).max(32),
+          reviewModel: selection.optional(),
           fixModel: selection,
           targetBranch: z.string().trim().min(1).max(500).optional(),
           reviewInstruction: z.string().max(100_000).optional(),

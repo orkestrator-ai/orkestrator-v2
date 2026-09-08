@@ -15,8 +15,8 @@
  * reviewer, a schema repair or a dispatch race lands in both at once. What this
  * module owns is what only the pipeline knows: that its state is a field on the
  * pipeline snapshot, that its reviewers are mirrored into `pipeline.sessions`
- * so the build tab can render them, and that consolidation runs on the address
- * step's model.
+ * so the build tab can render them, and that consolidation runs on the shared
+ * review preparation selection.
  *
  * Every reviewer is also a real {@link PipelineSession}. That is deliberate:
  * the build tab, the interaction summaries and the review handoff prompt all
@@ -326,12 +326,7 @@ export class BuildPipelineReviewFanout {
   // -------------------------------------------------------------------------
 
   /**
-   * Merges the reviewer reports into one, on the address step's model.
-   *
-   * The address step is the one that will act on the result, so consolidating
-   * on a different model would hand the fixer a summary written in a voice it
-   * never reads. It is also the same choice Multi Review makes, where the fix
-   * model owns the consolidation turn.
+   * Merges the reviewer reports on the same model that prepared their package.
    */
   private async advanceConsolidation(
     pipeline: BuildPipeline,
@@ -339,7 +334,13 @@ export class BuildPipelineReviewFanout {
     targetBranch: string,
   ): Promise<ReviewFanoutStep> {
     if (!state.consolidation) {
-      const step = await this.deps.stepSettings(pipeline, "address");
+      const step = pipeline.reviewPreparation
+        ? {
+            agent: pipeline.reviewPreparation.agent,
+            model: pipeline.reviewPreparation.model,
+            effort: pipeline.reviewPreparation.reasoningEffort,
+          }
+        : await this.deps.stepSettings(pipeline, "address");
       const provider = await this.deps.provider(pipeline, step.agent);
       const sessionKey = `${pipeline.id}:review-consolidation:${pipeline.iteration}:${randomUUID()}`;
       const providerSessionId = await provider.createSession("review", "Review · Consolidation", {

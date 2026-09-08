@@ -426,6 +426,72 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("uses the review preparation model for package creation and consolidation, not fixing", async () => {
+    await withPipeline(async ({ service, read, providers }) => {
+      const started = await service.start({
+        ...startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+        reviewPreparation: {
+          agent: "codex",
+          model: "review-coordinator",
+          reasoningEffort: "medium",
+        },
+        steps: {
+          address: { agent: "opencode", model: "fixer", reasoningEffort: "high" },
+        },
+      });
+
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      for (
+        let attempt = 0;
+        attempt < 3 && providers.get("opencode")!.created.length === 0;
+        attempt += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const coordinator = providers.get("codex")!;
+      expect(coordinator.created).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "fix",
+            label: "Package Preparation Session",
+            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+          }),
+          expect.objectContaining({
+            phase: "review",
+            label: "Review · Consolidation",
+            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+          }),
+        ]),
+      );
+      expect(
+        coordinator.sent
+          .filter(
+            (entry) =>
+              entry.prompt.includes("review package") ||
+              entry.prompt.includes("<multi-review-reports-json>"),
+          )
+          .every((entry) => entry.model === "review-coordinator"),
+      ).toBe(true);
+
+      const fixer = providers.get("opencode")!;
+      expect(fixer.created).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "address",
+            options: expect.objectContaining({ model: "fixer", effort: "high" }),
+          }),
+        ]),
+      );
+      expect(fixer.created.some((entry) => entry.label.includes("Preparation"))).toBe(false);
+      expect(fixer.created.some((entry) => entry.label.includes("Consolidation"))).toBe(false);
+    });
+  });
+
   test("a failed reviewer does not stop the panel", async () => {
     await withPipeline(async ({ service, read, provider }) => {
       // Armed before the fan-out opens its sessions: a reviewer is one

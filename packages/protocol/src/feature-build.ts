@@ -38,6 +38,8 @@ export interface CreateFeatureBuildInput {
   steps?: BuildStepConfigs;
   /** More than one turns the review stage into the shared reviewer fan-out. */
   reviewers?: BuildStepConfig[];
+  /** Model shared by review package preparation and fan-out consolidation. */
+  reviewPreparation?: BuildStepConfig;
   /** Images attached to the feature and supplied to image-aware build stages. */
   images?: TaskSnapshotImage[];
   /**
@@ -93,6 +95,8 @@ export function isCreateFeatureBuildInput(value: unknown): value is CreateFeatur
     AGENTS.has(value.agentType as BuildPipelineAgent) &&
     (value.steps === undefined || isBuildStepConfigs(value.steps)) &&
     (value.reviewers === undefined || isBuildStepConfigList(value.reviewers)) &&
+    (value.reviewPreparation === undefined ||
+      isBuildStepConfigs({ review: value.reviewPreparation })) &&
     (value.images === undefined ||
       (Array.isArray(value.images) && value.images.every(isTaskSnapshotImage))) &&
     (value.requestId === undefined ||

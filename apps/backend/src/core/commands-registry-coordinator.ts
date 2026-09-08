@@ -42,6 +42,7 @@ function multiReviewInputFromSnapshot(value: unknown): Record<string, unknown> |
           };
         })
       : value.reviewers,
+    reviewModel: value.reviewModel,
     fixModel: value.fixModel,
   };
 }

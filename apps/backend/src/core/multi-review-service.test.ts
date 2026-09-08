@@ -4602,7 +4602,7 @@ async function startLegacyReview(
   return workflow;
 }
 
-test("Multi Review prepares once with the fix model and reviews the same immutable package read-only", async () => {
+test("Multi Review prepares and consolidates with its review model before opening a separate fix session", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
   const commands: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -4618,6 +4618,11 @@ test("Multi Review prepares once with the fix model and reviews the same immutab
           { agent: "claude", model: "review-a" },
           { agent: "codex", model: "review-b" },
         ],
+        reviewModel: {
+          agent: "claude",
+          model: "review-coordinator",
+          reasoningEffort: "medium",
+        },
         fixModel: { agent: "claude", model: "fix-model", reasoningEffort: "high" },
       });
       expect(started.phase).toBe("preparing");
@@ -4627,8 +4632,8 @@ test("Multi Review prepares once with the fix model and reviews the same immutab
       expect(preparing.activeRequest).toMatchObject({ kind: "prepare", state: "sent" });
       expect(provider.creates).toHaveLength(1);
       expect(provider.creates[0]?.options).toMatchObject({
-        model: "fix-model",
-        effort: "high",
+        model: "review-coordinator",
+        effort: "medium",
         mode: "build",
       });
       expect([...provider.sends.values()][0]?.options.schema).toEqual(
@@ -4677,11 +4682,25 @@ test("Multi Review prepares once with the fix model and reviews the same immutab
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
-      expect(consolidation?.options).toMatchObject({ mode: "plan", readOnly: true });
+      expect(consolidation?.options).toMatchObject({
+        model: "review-coordinator",
+        effort: "medium",
+        mode: "plan",
+        readOnly: true,
+      });
       expect(consolidation?.prompt).toContain("same backend-verified immutable review package");
       expect(consolidation?.prompt).toContain(reviewing.reviewPackage!.filePath);
-      await service.address(started.id);
-      expect((await snapshot(started.id))?.phase).toBe("interactive");
+      expect(ready.reviewSession).toMatchObject({
+        model: "review-coordinator",
+        providerSessionId: "session-1",
+        status: "idle",
+      });
+      expect(ready.fixSession).toBeUndefined();
+      const interactive = await service.address(started.id);
+      expect(interactive.phase).toBe("interactive");
+      expect(interactive.addressPromptPending).toBe(true);
+      expect(interactive.fixSession).toBeUndefined();
+      expect(interactive.reviewSession?.providerSessionId).toBe("session-1");
     },
     {
       invoke: async (command, args) => {

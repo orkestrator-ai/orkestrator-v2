@@ -54,6 +54,49 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(ensureSession).not.toHaveBeenCalled();
 });
 
+test("dispatchMultiReviewAddressPrompt creates a fix session separate from review coordination", async () => {
+  const adoptSession = mock(async () => undefined as never);
+  const ensureSession = mock(async () => ({ providerSessionId: "provider-fix-new" }) as never);
+  const dispatchIntent = mock(async () => ({
+    outcome: "accepted" as const,
+    requestId: "multi-review-address:multi-1",
+  }));
+  const separate = {
+    ...workflow,
+    reviewModel: { agent: "claude", model: "review-coordinator" },
+    reviewSession: {
+      agent: "claude",
+      model: "review-coordinator",
+      sessionKey: "multi-review:multi-1:review",
+      providerSessionId: "provider-review",
+      requestIds: ["prepare-1", "consolidate-1"],
+      status: "idle",
+      startedAt: new Date(0).toISOString(),
+    },
+    fixSession: undefined,
+  } as MultiReviewWorkflow;
+
+  const dispatched = await dispatchMultiReviewAddressPrompt(
+    { adoptSession, ensureSession, dispatchIntent },
+    separate,
+  );
+
+  expect(adoptSession).not.toHaveBeenCalled();
+  expect(ensureSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agent: "codex",
+      model: "gpt-5.6",
+      logicalSessionKey: "multi-review:multi-1:interactive",
+      sessionMode: "build",
+    }),
+  );
+  expect(dispatched.fixSession).toMatchObject({
+    providerSessionId: "provider-fix-new",
+    model: "gpt-5.6",
+  });
+  expect(separate.reviewSession?.providerSessionId).toBe("provider-review");
+});
+
 test("dispatchMultiReviewAddressPrompt classifies authoritative session loss", async () => {
   const adoptSession = mock(async () => {
     throw new NativeAgentProviderSessionMissingError();

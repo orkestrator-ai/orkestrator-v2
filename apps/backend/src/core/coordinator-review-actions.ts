@@ -96,6 +96,7 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
             : undefined
           : config.global.reviewInstruction,
         reviewers: input.reviewers,
+        reviewModel: input.reviewModel,
         fixModel: input.fixModel,
       };
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;

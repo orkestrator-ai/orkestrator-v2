@@ -48,6 +48,7 @@ describe("multi review protocol", () => {
       environmentId: "env",
       requestId: "click",
       reviewers: [{ agent: "codex", model: "default" }],
+      reviewModel: { agent: "codex", model: "gpt-5.6" },
       fixModel: { agent: "claude", model: "default" },
     };
     expect(isLaunchMultiReviewActionInput(input)).toBe(true);
@@ -72,6 +73,7 @@ describe("multi review protocol", () => {
       projectId: "project-1",
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
+      reviewModel: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
       fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     };
     expect(isStartMultiReviewInput(input)).toBe(true);
@@ -96,11 +98,13 @@ describe("multi review protocol", () => {
         { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
       ],
       fixModel: { agent: "codex", model: "gpt-5.6" },
-      fixSession: {
-        agent: "codex",
-        model: "gpt-5.6",
-        sessionKey: "fix-session",
-        providerSessionId: "provider-fix",
+      reviewModel: { agent: "claude", model: "sonnet" },
+      reviewSessionKey: "review-session",
+      reviewSession: {
+        agent: "claude",
+        model: "sonnet",
+        sessionKey: "review-session",
+        providerSessionId: "provider-review",
         requestIds: ["request-1"],
         status: "idle",
         startedAt: new Date(0).toISOString(),

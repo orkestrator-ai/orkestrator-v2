@@ -157,7 +157,6 @@ export async function dispatchMultiReviewAddressPrompt(
   activateTab = false,
 ): Promise<MultiReviewAddressDispatchResult> {
   const session = workflow.fixSession;
-  if (!session) throw new MissingMultiReviewAddressSessionError();
   const selection = workflow.customFixModel ?? workflow.fixModel;
   const customFix = workflow.customFixInstruction !== undefined;
   if (customFix && workflow.consolidatedReport === undefined) {
@@ -187,11 +186,16 @@ export async function dispatchMultiReviewAddressPrompt(
     isReviewTab: true,
     activate: activateTab,
   };
+  // Preparation and consolidation deliberately live in a different provider
+  // session. The fix handoff always creates (or reuses by logical key) its own
+  // interactive session so opening Fix can never expose the review coordinator
+  // conversation.
   let providerSessionId: string;
-  if (customFix) {
+  if (workflow.reviewModel || customFix) {
     const ensured = await nativeAgents.ensureSession(identity);
     providerSessionId = ensured.providerSessionId;
   } else {
+    if (!session) throw new MissingMultiReviewAddressSessionError();
     try {
       await nativeAgents.adoptSession({
         ...identity,
@@ -209,16 +213,19 @@ export async function dispatchMultiReviewAddressPrompt(
   const prompt = !customFix
     ? MULTI_REVIEW_ADDRESS_PROMPT
     : multiReviewCustomFixPrompt(workflow.consolidatedReport!, workflow.customFixInstruction!);
-  const preparedSession: MultiReviewFixSession | undefined = customFix
-    ? {
-        ...selection,
-        sessionKey: logicalSessionKey,
-        providerSessionId,
-        requestIds: [requestId],
-        status: "idle",
-        startedAt: new Date().toISOString(),
-      }
-    : undefined;
+  const preparedSession: MultiReviewFixSession | undefined =
+    workflow.reviewModel || customFix
+      ? {
+          ...selection,
+          sessionKey: logicalSessionKey,
+          providerSessionId,
+          requestIds: session?.requestIds?.includes(requestId)
+            ? session.requestIds
+            : [...(session?.requestIds?.slice(-255) ?? []), requestId],
+          status: "idle",
+          startedAt: new Date().toISOString(),
+        }
+      : undefined;
   let outcome: Awaited<ReturnType<AddressNativeAgents["dispatchIntent"]>>;
   try {
     outcome = await nativeAgents.dispatchIntent({
@@ -254,7 +261,7 @@ export async function dispatchMultiReviewAddressPrompt(
     );
   }
   return {
-    fixSession: preparedSession ?? session,
+    fixSession: preparedSession ?? session!,
     tabId: tab.tabId,
     ...(presentationError ? { presentationError } : {}),
   };

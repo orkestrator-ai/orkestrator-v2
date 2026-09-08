@@ -220,6 +220,7 @@ export function pipelineAgents(pipeline: BuildPipeline): Set<BuildPipelineAgent>
   for (const reviewer of pipeline.reviewers ?? []) {
     agents.add(reviewer.agent);
   }
+  if (pipeline.reviewPreparation) agents.add(pipeline.reviewPreparation.agent);
   for (const reviewer of pipeline.reviewFanout?.reviewers ?? []) {
     agents.add(reviewer.agent as BuildPipelineAgent);
   }
@@ -292,6 +293,12 @@ export function normalizeReviewers(
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
     };
   });
+}
+
+export function normalizeReviewPreparation(
+  selection: BuildStepConfig | undefined,
+): BuildStepConfig | undefined {
+  return selection ? normalizeSteps({ review: selection })?.review : undefined;
 }
 
 export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {

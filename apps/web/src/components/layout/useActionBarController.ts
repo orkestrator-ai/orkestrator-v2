@@ -683,6 +683,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
           reviewInstruction: config.global.reviewInstruction,
           reviewers: selection.reviewers,
+          reviewModel: selection.reviewModel,
           fixModel: selection.fixModel,
         });
         workflowId = workflow.id;

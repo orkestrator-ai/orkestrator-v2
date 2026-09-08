@@ -39,6 +39,8 @@ export const MULTI_REVIEW_ADDRESS_PROMPT =
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
+/** Stable pane label for the shared preparation and consolidation session. */
+export const MULTI_REVIEW_REVIEW_TAB_TITLE = "Review preparation & consolidation";
 /** Former pane title retained for restored layouts and backend session metadata. */
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
 export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
@@ -118,7 +120,7 @@ export type MultiReviewPhase =
   | "cancelled"
   | "failed";
 
-/** The three fix-session turns, named by the request that runs each of them. */
+/** The preparation/consolidation turns plus the separate fix turn. */
 export type MultiReviewStepKind = "prepare" | "consolidate" | "fix";
 
 /**
@@ -138,13 +140,13 @@ export interface MultiReviewStepRuntime {
 
 export type MultiReviewStepRuntimes = Partial<Record<MultiReviewStepKind, MultiReviewStepRuntime>>;
 
-export interface MultiReviewFixSession extends MultiReviewModelSelection {
+export interface MultiReviewSession extends MultiReviewModelSelection {
   sessionKey: string;
   providerSessionId: string;
   requestIds: string[];
   status: "running" | "idle" | "failed" | "cancelled";
   startedAt: string;
-  /** Cumulative provider tokens for the whole session, across all three steps. */
+  /** Cumulative provider tokens for this provider session. */
   tokenCount?: number;
   /** Last time the supervisor observed this session's transcript change. */
   progressAt?: string;
@@ -158,6 +160,8 @@ export interface MultiReviewFixSession extends MultiReviewModelSelection {
   completedAt?: string;
   error?: string;
 }
+
+export type MultiReviewFixSession = MultiReviewSession;
 
 /** Durable identity shared by every reviewer and the consolidation turn. */
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
@@ -173,8 +177,13 @@ export interface MultiReviewWorkflow {
   targetBranch: string;
   reviewInstruction?: string;
   reviewers: MultiReviewReviewer[];
+  /** One model used for both immutable-package preparation and report consolidation. */
+  reviewModel?: MultiReviewModelSelection;
+  /** Durable key for the preparation/consolidation provider session. */
+  reviewSessionKey?: string;
+  reviewSession?: MultiReviewSession;
   fixModel: MultiReviewModelSelection;
-  /** Durable key reserved for the next or current consolidation/fix session. */
+  /** Durable key reserved for the next or current fix session. */
   fixSessionKey?: string;
   fixSession?: MultiReviewFixSession;
   /** Per-step timing and token consumption, kept once the shared session moves on. */
@@ -237,6 +246,8 @@ export interface StartMultiReviewInput {
   targetBranch: string;
   reviewInstruction?: string;
   reviewers: MultiReviewModelSelection[];
+  /** Absent only for compatibility with callers predating the separate review default. */
+  reviewModel?: MultiReviewModelSelection;
   fixModel: MultiReviewModelSelection;
 }
 
@@ -245,6 +256,7 @@ export interface LaunchMultiReviewActionInput {
   requestId: string;
   environmentId: string;
   reviewers: MultiReviewModelSelection[];
+  reviewModel?: MultiReviewModelSelection;
   fixModel: MultiReviewModelSelection;
   /** Omitted values use saved defaults; an explicit blank instruction clears its default. */
   targetBranch?: string;
@@ -276,6 +288,7 @@ export function isLaunchMultiReviewActionInput(
       "requestId",
       "environmentId",
       "reviewers",
+      "reviewModel",
       "fixModel",
       "targetBranch",
       "reviewInstruction",
@@ -292,6 +305,7 @@ export function isLaunchMultiReviewActionInput(
           ? undefined
           : reviewInstruction,
       reviewers: value.reviewers,
+      reviewModel: value.reviewModel,
       fixModel: value.fixModel,
     })
   );
@@ -329,6 +343,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
       "targetBranch",
       "reviewInstruction",
       "reviewers",
+      "reviewModel",
       "fixModel",
     ]) ||
     !nonBlank(value.environmentId) ||
@@ -339,6 +354,7 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
     !value.reviewers.every(isMultiReviewModelSelection) ||
+    (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
     !isMultiReviewModelSelection(value.fixModel)
   ) {
     return false;
@@ -538,6 +554,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "targetBranch",
       "reviewInstruction",
       "reviewers",
+      "reviewModel",
+      "reviewSessionKey",
+      "reviewSession",
       "fixModel",
       "fixSessionKey",
       "fixSession",
@@ -575,6 +594,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !Array.isArray(value.reviewers) ||
     value.reviewers.length < MULTI_REVIEW_MIN_REVIEWERS ||
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
+    (value.reviewModel !== undefined && !isMultiReviewModelSelection(value.reviewModel)) ||
+    (value.reviewSessionKey !== undefined && !nonBlank(value.reviewSessionKey)) ||
+    (value.reviewSession !== undefined && !isFixSession(value.reviewSession)) ||
     !record(value.fixModel) ||
     !isMultiReviewModelSelection(value.fixModel) ||
     (value.fixSessionKey !== undefined && !nonBlank(value.fixSessionKey)) ||
@@ -617,7 +639,13 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       value.phase === "fixing" ||
       value.phase === "interactive" ||
       value.phase === "completed") &&
-    (!isStructuredReviewReport(value.consolidatedReport) || !isFixSession(value.fixSession))
+    !isStructuredReviewReport(value.consolidatedReport)
+  ) {
+    return false;
+  }
+  if (
+    (value.phase === "fixing" || value.phase === "completed") &&
+    !isFixSession(value.fixSession)
   ) {
     return false;
   }

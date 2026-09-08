@@ -449,6 +449,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     switch (pipeline.phase) {
       case "building":
       case "fixing":
+        if (usesReviewFanout(pipeline) && session.label !== "Package Preparation Session") {
+          await this.startReviewPackagePreparation(pipeline);
+          return;
+        }
         await this.finishReviewPackagePreparation(pipeline, provider, session);
         return;
       case "reviewing":
@@ -832,6 +836,14 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       prompt: reviewPackagePreparationPrompt(pipeline, targetBranch),
       images: [],
       schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+      label: "Package Preparation Session",
+      settings: pipeline.reviewPreparation
+        ? {
+            agent: pipeline.reviewPreparation.agent,
+            model: pipeline.reviewPreparation.model,
+            effort: pipeline.reviewPreparation.reasoningEffort,
+          }
+        : await this.stepSettings(pipeline, "address"),
     });
   }
 
@@ -868,6 +880,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       images: BuildPipeline["taskSnapshot"]["images"];
       mode?: ProviderExecutionMode;
       schema?: JsonSchema;
+      label?: string;
+      settings?: { agent: BuildPipelineAgent; model?: string; effort?: string };
     },
   ): Promise<void> {
     // A pipeline retains reports only for its newest review attempt. This is
@@ -903,9 +917,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         !override && sessionPhase === "verify"
           ? await this.validationBaseline(pipeline, sessionPhase)
           : undefined;
-      const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
+      const { agent, model, effort } =
+        override?.settings ?? (await this.stepSettings(pipeline, sessionPhase));
       const provider = await this.provider(pipeline, agent);
-      const label = SESSION_LABELS[sessionPhase];
+      const label = override?.label ?? SESSION_LABELS[sessionPhase];
       // Stated rather than left to each provider's own default, so the sandbox a
       // stage runs under is one decision in one place and does not move when a
       // step pins a different harness.
@@ -947,6 +962,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const session: PipelineSession = {
         phase: sessionPhase,
         agent,
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         iteration: pipeline.iteration,
@@ -1048,7 +1065,18 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // with: Claude and OpenCode take the model per prompt, so omitting it here
     // would quietly retry the turn on the connection default instead.
     const sessionPhase = sessionPhaseFor(attempt.phase);
-    const step = sessionPhase ? await this.stepSettings(pipeline, sessionPhase) : undefined;
+    const session = pipeline.sessions.find(
+      (candidate) => candidate.sdkSessionId === attempt.sessionId,
+    );
+    const step = session
+      ? {
+          agent: sessionAgent(pipeline, session),
+          model: session.model,
+          effort: session.reasoningEffort,
+        }
+      : sessionPhase
+        ? await this.stepSettings(pipeline, sessionPhase)
+        : undefined;
     // Re-state the mode the session was opened with so a redispatch cannot land
     // in a different sandbox. Addressing is a writable, independent session.
     const mode =
@@ -1064,10 +1092,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         model: step?.model,
         effort: step?.effort,
       });
-      const session = pipeline.sessions.find(
+      const dispatchedSession = pipeline.sessions.find(
         (candidate) => candidate.sdkSessionId === attempt.sessionId,
       );
-      if (session) session.status = "running";
+      if (dispatchedSession) dispatchedSession.status = "running";
       delete pipeline.pendingPromptAttempt;
       delete pipeline.reconnectAttempt;
       delete pipeline.error;

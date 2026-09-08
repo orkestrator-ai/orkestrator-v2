@@ -38,6 +38,7 @@ export interface MultiReviewRowDefaults {
 
 export interface MultiReviewLaunchSelection {
   reviewers: MultiReviewModelSelection[];
+  reviewModel: MultiReviewModelSelection;
   fixModel: MultiReviewModelSelection;
 }
 
@@ -50,6 +51,7 @@ export interface MultiReviewLaunchDefaults {
   reviewerDefaults?: MultiReviewRowDefaults[];
   /** @deprecated Compatibility for callers that have not moved to reviewerDefaults. */
   secondReviewerDefaults?: MultiReviewRowDefaults;
+  reviewModelDefaults?: MultiReviewRowDefaults;
   fixModelDefaults?: MultiReviewRowDefaults;
 }
 
@@ -124,6 +126,7 @@ function catalogWithConfiguredOpenCodeFallbacks(
     defaults,
     ...(defaults.reviewerDefaults ?? []),
     defaults.secondReviewerDefaults,
+    defaults.reviewModelDefaults,
     defaults.fixModelDefaults,
   ].filter((row): row is MultiReviewRowDefaults => row?.defaultAgent === "opencode");
   const configuredModels = new Map<string, Set<string>>();
@@ -157,8 +160,13 @@ function initialRows({
   preferredReasoningEfforts,
   reviewerDefaults,
   secondReviewerDefaults,
+  reviewModelDefaults,
   fixModelDefaults,
-}: MultiReviewLaunchDefaults): { reviewers: PickerRow[]; fixModel: PickerRow } {
+}: MultiReviewLaunchDefaults): {
+  reviewers: PickerRow[];
+  reviewModel: PickerRow;
+  fixModel: PickerRow;
+} {
   const resolvedCatalog = catalogWithConfiguredOpenCodeFallbacks({
     defaultAgent,
     catalog,
@@ -166,6 +174,7 @@ function initialRows({
     preferredReasoningEfforts,
     reviewerDefaults,
     secondReviewerDefaults,
+    reviewModelDefaults,
     fixModelDefaults,
   });
   const fallbackDefaults: MultiReviewRowDefaults = {
@@ -181,6 +190,7 @@ function initialRows({
     reviewers: configuredReviewers.map((defaults) =>
       initialConfiguredRow(defaults, fallbackDefaults, resolvedCatalog),
     ),
+    reviewModel: initialConfiguredRow(reviewModelDefaults, fallbackDefaults, resolvedCatalog),
     fixModel: initialConfiguredRow(fixModelDefaults, fallbackDefaults, resolvedCatalog),
   };
 }
@@ -192,6 +202,7 @@ export function defaultMultiReviewLaunchSelection(
   const rows = initialRows(defaults);
   return {
     reviewers: rows.reviewers.map(cleanRow),
+    reviewModel: cleanRow(rows.reviewModel),
     fixModel: cleanRow(rows.fixModel),
   };
 }
@@ -312,6 +323,7 @@ export function MultiReviewLaunchDialog({
   preferredReasoningEfforts,
   reviewerDefaults,
   secondReviewerDefaults,
+  reviewModelDefaults,
   fixModelDefaults,
   busy = false,
   onConfirm,
@@ -331,6 +343,9 @@ export function MultiReviewLaunchDialog({
   const [fixModel, setFixModel] = useState<PickerRow>(() =>
     initialConfiguredRow(fixModelDefaults, fallbackDefaults, catalog),
   );
+  const [reviewModel, setReviewModel] = useState<PickerRow>(() =>
+    initialConfiguredRow(reviewModelDefaults, fallbackDefaults, catalog),
+  );
   const wasOpen = useRef(false);
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout
@@ -347,9 +362,11 @@ export function MultiReviewLaunchDialog({
       preferredReasoningEfforts,
       reviewerDefaults,
       secondReviewerDefaults,
+      reviewModelDefaults,
       fixModelDefaults,
     });
     setReviewers(rows.reviewers);
+    setReviewModel(rows.reviewModel);
     setFixModel(rows.fixModel);
   }, [
     catalog,
@@ -360,6 +377,7 @@ export function MultiReviewLaunchDialog({
     preferredModels,
     preferredReasoningEfforts,
     reviewerDefaults,
+    reviewModelDefaults,
     secondReviewerDefaults,
   ]);
 
@@ -374,8 +392,9 @@ export function MultiReviewLaunchDialog({
             Configure Multi Review
           </DialogTitle>
           <DialogDescription>
-            The fix model commits relevant pending changes and collects validation once. Independent
-            read-only reviewers share that package, then their findings become one report.
+            The preparation model commits relevant pending changes and collects validation once.
+            Independent read-only reviewers share that package, then the same model consolidates
+            their findings.
           </DialogDescription>
         </DialogHeader>
 
@@ -385,7 +404,11 @@ export function MultiReviewLaunchDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (busy) return;
-            onConfirm({ reviewers: reviewers.map(cleanRow), fixModel: cleanRow(fixModel) });
+            onConfirm({
+              reviewers: reviewers.map(cleanRow),
+              reviewModel: cleanRow(reviewModel),
+              fixModel: cleanRow(fixModel),
+            });
           }}
         >
           <div
@@ -451,8 +474,27 @@ export function MultiReviewLaunchDialog({
                 <span className="h-px flex-1 bg-zinc-800" />
               </div>
               <ModelRow
+                row={reviewModel}
+                label="Preparation & consolidation model"
+                models={models}
+                catalog={catalog}
+                favorites={favorites}
+                onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
+                onChange={setReviewModel}
+              />
+              <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                This model prepares the immutable package and deduplicates every reviewer report.
+              </p>
+
+              <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
+                <span className="h-px flex-1 bg-zinc-800" />
+                <Wrench className="size-3.5" />
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+              <ModelRow
                 row={fixModel}
-                label="Preparation, consolidation & fix model"
+                label="Fix model"
                 models={models}
                 catalog={catalog}
                 favorites={favorites}
@@ -461,8 +503,8 @@ export function MultiReviewLaunchDialog({
                 onChange={setFixModel}
               />
               <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-                This model deduplicates every report and remains attached to address the final
-                issues and coverage gaps.
+                This model receives the consolidated report and addresses its issues and coverage
+                gaps in a separate session.
               </p>
             </fieldset>
           </div>

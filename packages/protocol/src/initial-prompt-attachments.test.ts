@@ -3,6 +3,7 @@ import {
   MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
   buildInitialPromptWithAttachmentReferences,
   serializedInitialPromptAttachmentBytes,
+  stripInitialPromptAttachmentReferences,
   toDurableInitialPromptAttachments,
 } from "./initial-prompt-attachments";
 
@@ -25,6 +26,27 @@ describe("initial prompt attachment protocol", () => {
         "- diagram.png: /workspace/diagram.png",
     );
     expect(buildInitialPromptWithAttachmentReferences("  text only  ", [])).toBe("text only");
+  });
+
+  test("strips generated path references from transcript text", () => {
+    const withText = buildInitialPromptWithAttachmentReferences("Implement this", [
+      { name: "diagram.png", path: "/workspace/diagram.png" },
+      { name: "requirements.md", path: "/workspace/product requirements.md" },
+    ]);
+    const attachmentOnly = buildInitialPromptWithAttachmentReferences("", [
+      { name: "diagram.png", path: "/workspace/diagram.png" },
+    ]);
+
+    expect(stripInitialPromptAttachmentReferences(withText)).toBe("Implement this");
+    expect(stripInitialPromptAttachmentReferences(attachmentOnly)).toBe("");
+  });
+
+  test("does not strip user-authored prose that only resembles the generated suffix", () => {
+    expect(
+      stripInitialPromptAttachmentReferences(
+        "Explain this phrase:\n\nAttached files have been saved in the workspace. Use these paths as task context:",
+      ),
+    ).toContain("Attached files have been saved");
   });
 
   test("measures only the durable representation and preserves attachment kinds", () => {

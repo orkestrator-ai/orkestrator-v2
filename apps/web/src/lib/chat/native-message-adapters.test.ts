@@ -2178,6 +2178,41 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("hides initial-prompt path boilerplate while preserving the image part", () => {
+    const rawContent =
+      "Make the profile match\n\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- screenshot.png: /workspace/.orkestrator/initial-prompt/screenshot.png";
+    const message: NativeMessage = {
+      id: "native-initial-prompt-path-reference",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T16:25:00.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/initial-prompt/screenshot.png",
+          fileUrl: "/workspace/.orkestrator/initial-prompt/screenshot.png",
+          filename: "screenshot.png",
+        },
+      ],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.content).toBe("Make the profile match");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Make the profile match" },
+      {
+        type: "file",
+        content: "/workspace/.orkestrator/initial-prompt/screenshot.png",
+        fileUrl: "/workspace/.orkestrator/initial-prompt/screenshot.png",
+        filename: "screenshot.png",
+      },
+    ]);
+  });
+
   test("decodes numeric attribute entities and leaves undecodable ones verbatim", () => {
     const attachments = [
       // Decimal, uppercase hex, and lowercase hex all round-trip.

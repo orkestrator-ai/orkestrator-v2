@@ -17,6 +17,7 @@ import {
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
+import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
 
 interface AttachmentTag {
@@ -104,7 +105,7 @@ function parseNativeUserContent(content: string): {
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
   return {
-    cleanContent: parsedAttachments.cleanContent,
+    cleanContent: stripInitialPromptAttachmentReferences(parsedAttachments.cleanContent),
     parts: [
       ...parsedAttachments.attachments,
       ...parsedReferences.references.map((reference) => ({

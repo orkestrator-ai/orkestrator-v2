@@ -1000,6 +1000,53 @@ describe("HTTP bridge provider", () => {
     expect(snapshot).toEqual({ status: "missing", messages: [] });
   });
 
+  test("projects Pi's bounded queue while keeping provider warnings out of tab notices", async () => {
+    const queueItems = Array.from({ length: 513 }, (_, index) => ({
+      id: `queued-${index}`,
+      text: `Follow-up ${index}`,
+      mode: "follow-up",
+    }));
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [],
+          messageWindow: { truncated: false },
+          status: "idle",
+          revision: 4,
+        });
+      }
+      if (url.endsWith("/status")) {
+        return Response.json({
+          status: "idle",
+          revision: 4,
+          composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+        });
+      }
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({
+          summary: { state: "attached" },
+          notices: [{ message: "Pi rerouted the model", severity: "warning" }],
+        });
+      }
+      if (url.endsWith("/queue")) return Response.json({ items: queueItems });
+      return new Response(null, { status: 404 });
+    }, piConnection);
+
+    const snapshot = await provider.interactiveSnapshot!("pi-session");
+
+    expect(snapshot.providerQueue?.items).toHaveLength(512);
+    expect(snapshot.providerQueue?.items[0]).toEqual(queueItems[0]);
+    expect(snapshot.providerQueue?.items.at(-1)).toEqual(queueItems[511]);
+    expect(snapshot.runtime?.notices).toEqual([
+      {
+        message: "Pi rerouted the model",
+        severity: "warning",
+        source: "bridge",
+      },
+    ]);
+    expect(snapshot.notices).toBeUndefined();
+  });
+
   test("projects and updates Pi's composer, then steers the running session", async () => {
     const composer = {
       models: [

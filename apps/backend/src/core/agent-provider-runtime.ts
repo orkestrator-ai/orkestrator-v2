@@ -438,39 +438,37 @@ export function normalizeProviderRuntimeNotices(value: unknown): NativeAgentRunt
 /**
  * Provider advisories the tab should show, not only the health panel.
  *
- * Only `warning` and `error` cross: an `info` notice is inventory. Bounded to
- * five and deduplicated by message, because these are appended to a projection
- * a renderer holds for the life of a session.
+ * Only `error` crosses. A `warning` is something the provider reported about
+ * itself — a deprecation, a rerouted model, an MCP server that did not start —
+ * and belongs with the rest of the runtime inventory in the health panel, where
+ * it can be expanded for the occurrences behind it. Pinning it above the
+ * composer put a dismissable banner in front of the transcript for a condition
+ * the user cannot act on mid-turn. An `error` still crosses because it says the
+ * session in front of the user is broken. Bounded to five and deduplicated by
+ * message, because these are appended to a projection a renderer holds for the
+ * life of a session.
  */
 export function providerAdvisoryNotices(
   notices: readonly NativeAgentRuntimeNotice[],
   limit = MAX_PROJECTION_ADVISORIES,
 ): NativeAgentNotice[] {
-  const advisories = new Map<
-    string,
-    NativeAgentNotice & { kind: "advisory"; severity: "warning" | "error" }
-  >();
-  const severityRank: Record<"warning" | "error", number> = { warning: 0, error: 1 };
+  const advisories = new Map<string, NativeAgentNotice & { kind: "advisory"; severity: "error" }>();
   for (const notice of notices) {
-    const severity = notice.severity ?? "warning";
-    if (severity !== "warning" && severity !== "error") continue;
+    if (notice.severity !== "error") continue;
     const latestOccurrence = notice.occurrences?.at(-1);
     const occurrenceId = latestOccurrence?.receivedAt
       ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000${latestOccurrence.receivedAt}\u0000${notice.count ?? 1}`
       : notice.count !== undefined
         ? `${notice.source ?? "bridge"}\u0000${notice.method ?? ""}\u0000count:${notice.count}`
         : undefined;
-    const advisory = {
+    // Reinsert replacements so the bound follows the most recent occurrence.
+    advisories.delete(notice.message);
+    advisories.set(notice.message, {
       kind: "advisory" as const,
       message: notice.message,
-      severity,
+      severity: "error",
       ...(occurrenceId ? { occurrenceId } : {}),
-    };
-    const existing = advisories.get(notice.message);
-    if (existing && severityRank[existing.severity] > severityRank[severity]) continue;
-    // Reinsert replacements so the bound follows the most recent occurrence.
-    if (existing) advisories.delete(notice.message);
-    advisories.set(notice.message, advisory);
+    });
   }
   return [...advisories.values()].slice(-limit);
 }

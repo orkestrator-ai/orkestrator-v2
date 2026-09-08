@@ -177,8 +177,10 @@ const {
   AgentInfoButton,
   describeRewindTarget,
   formatResetDateTime,
+  labelWindowMinutes,
+  limitWindowPosition,
   summarizeRewindPreview,
-  weeklyWindowPosition,
+  windowDurationMinutes,
 } = await import("./AgentInfoButton");
 
 afterAll(() => {
@@ -1300,12 +1302,12 @@ describe("AgentInfoButton usage panel", () => {
     expect(call).toHaveLength(1);
   });
 
-  test("positions the current-week marker relative to the reset boundary", () => {
+  test("positions the marker relative to the reset boundary of any period", () => {
     const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
     const halfwayMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;
 
     expect(
-      weeklyWindowPosition(
+      limitWindowPosition(
         {
           label: "Secondary",
           resetsAt: new Date(resetMs).toISOString(),
@@ -1316,7 +1318,7 @@ describe("AgentInfoButton usage panel", () => {
     ).toBe(50);
     // Claude names the period but does not currently report its duration.
     expect(
-      weeklyWindowPosition(
+      limitWindowPosition(
         {
           label: "Weekly (Sonnet)",
           resetsAt: new Date(resetMs).toISOString(),
@@ -1324,22 +1326,42 @@ describe("AgentInfoButton usage panel", () => {
         halfwayMs,
       ),
     ).toBe(50);
-  });
-
-  test("does not place a weekly marker on other or stale limit periods", () => {
-    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    // A short window is placed on the same terms as a weekly one.
     expect(
-      weeklyWindowPosition(
+      limitWindowPosition(
         {
           label: "Five Hour",
           resetsAt: new Date(resetMs).toISOString(),
           windowMinutes: 300,
         },
+        resetMs - 150 * 60_000,
+      ),
+    ).toBe(50);
+  });
+
+  test("reads a window duration from its name when the provider omits one", () => {
+    expect(labelWindowMinutes("Weekly (Fable)")).toBe(10_080);
+    expect(labelWindowMinutes("Codex · Daily limit")).toBe(1_440);
+    expect(labelWindowMinutes("5-hour limit")).toBe(300);
+    expect(labelWindowMinutes("5h window")).toBe(300);
+    expect(labelWindowMinutes("Five Hour")).toBe(300);
+    expect(labelWindowMinutes("Usage limit")).toBeNull();
+    // A reported duration outranks the name, and a nonsensical one is refused.
+    expect(windowDurationMinutes({ label: "Weekly", windowMinutes: 60 })).toBe(60);
+    expect(windowDurationMinutes({ label: "Weekly", windowMinutes: 0 })).toBeNull();
+  });
+
+  test("does not place a marker on an unmeasurable or stale limit period", () => {
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    // Neither the payload nor the label says how long the period is.
+    expect(
+      limitWindowPosition(
+        { label: "Usage limit", resetsAt: new Date(resetMs).toISOString() },
         resetMs - 60_000,
       ),
     ).toBeNull();
     expect(
-      weeklyWindowPosition(
+      limitWindowPosition(
         {
           label: "Weekly",
           resetsAt: new Date(resetMs).toISOString(),
@@ -1347,7 +1369,7 @@ describe("AgentInfoButton usage panel", () => {
         resetMs + 1,
       ),
     ).toBeNull();
-    expect(weeklyWindowPosition({ label: "Weekly", resetsAt: "not-a-date" }, resetMs)).toBeNull();
+    expect(limitWindowPosition({ label: "Weekly", resetsAt: "not-a-date" }, resetMs)).toBeNull();
   });
 
   test("handles missing, non-finite, and exact weekly period boundaries", () => {
@@ -1356,11 +1378,11 @@ describe("AgentInfoButton usage panel", () => {
     const periodStartMs = resetMs - 7 * 24 * 60 * 60 * 1_000;
     const weeklyLimit = { label: "Weekly", resetsAt: reset };
 
-    expect(weeklyWindowPosition({ label: "Weekly" }, resetMs)).toBeNull();
-    expect(weeklyWindowPosition(weeklyLimit, Number.POSITIVE_INFINITY)).toBeNull();
-    expect(weeklyWindowPosition(weeklyLimit, periodStartMs - 1)).toBeNull();
-    expect(weeklyWindowPosition(weeklyLimit, periodStartMs)).toBe(0);
-    expect(weeklyWindowPosition(weeklyLimit, resetMs)).toBe(100);
+    expect(limitWindowPosition({ label: "Weekly" }, resetMs)).toBeNull();
+    expect(limitWindowPosition(weeklyLimit, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(limitWindowPosition(weeklyLimit, periodStartMs - 1)).toBeNull();
+    expect(limitWindowPosition(weeklyLimit, periodStartMs)).toBe(0);
+    expect(limitWindowPosition(weeklyLimit, resetMs)).toBe(100);
   });
 
   test("prompts for a first snapshot when usage is unavailable", () => {
@@ -1388,7 +1410,7 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
-    expect(screen.getByText("Limits")).toBeTruthy();
+    expect(screen.getByText("Account")).toBeTruthy();
     expect(screen.getByText("31% used")).toBeTruthy();
     expect(screen.getByText("Weekly")).toBeTruthy();
     expect(screen.getByText("claude-sonnet")).toBeTruthy();
@@ -1753,13 +1775,113 @@ describe("AgentInfoButton usage panel", () => {
     [{ balance: "$12.34" }, "$12.34"],
     [{ hasCredits: true }, "Available"],
     [{ hasCredits: false }, "Unavailable"],
-  ])("renders credits %p as %p", (credits, expected) => {
+  ])("renders credits %p as %p in the account section", (credits, expected) => {
     useClaudeStore.setState({
       contextUsage: new Map([[CLAUDE_KEY, usage({ credits })]]),
     } as never);
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
-    expect(metricValue("Credits")).toBe(expected);
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByText("Credits")).toBeTruthy();
+    expect(within(account).getByText(expected)).toBeTruthy();
+  });
+
+  test("preserves every fact on a mixed credits window", () => {
+    const resetsAt = "2026-09-14T10:12:23.000Z";
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            credits: { balance: "$12.34" },
+            account: [
+              {
+                window: "credits",
+                label: "Credit allowance",
+                creditBalance: "$9.99",
+                usedPercent: 42.4,
+                resetsAt,
+                tokens: 1_200,
+                spendUsd: 1.25,
+                limitUsd: 5,
+              },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByText("Credit allowance")).toBeTruthy();
+    expect(within(account).getByText("42% used")).toBeTruthy();
+    expect(
+      within(account).getByRole("progressbar", { name: "Credit allowance: 42% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText(`Resets ${formatResetDateTime(resetsAt)}`)).toBeTruthy();
+    expect(within(account).getByText("1.2k")).toBeTruthy();
+    expect(within(account).getByText("$1.25")).toBeTruthy();
+    expect(within(account).getByText("$5.00")).toBeTruthy();
+    expect(within(account).getByText("$12.34")).toBeTruthy();
+    expect(within(account).queryByText("$9.99")).toBe(null);
+  });
+
+  test("merges complementary account facts into one matching limit row", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [{ label: "Weekly quota", usedPercent: 25 }],
+            account: [
+              {
+                window: "weekly",
+                label: "Weekly quota",
+                tokens: 1_200,
+                spendUsd: 1.25,
+                limitUsd: 5,
+                creditsRemaining: 4,
+              },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getAllByText("Weekly quota")).toHaveLength(1);
+    expect(
+      within(account).getByRole("progressbar", { name: "Weekly quota: 25% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText("1.2k")).toBeTruthy();
+    expect(within(account).getByText("$1.25")).toBeTruthy();
+    expect(within(account).getByText("$5.00")).toBeTruthy();
+    expect(within(account).getByText("4")).toBeTruthy();
+  });
+
+  test("names each account progress bar with its window and displayed percentage", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [
+              { label: "5h window", usedPercent: 9.4 },
+              { label: "Weekly", usedPercent: 42 },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByRole("progressbar", { name: "5h window: 9.4% used" })).toBeTruthy();
+    expect(within(account).getByRole("progressbar", { name: "Weekly: 42% used" })).toBeTruthy();
   });
 
   test("renders rate limits, including a window with no percentage and a reset time", () => {
@@ -1780,7 +1902,9 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
-    expect(screen.getByText("Limits")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Account usage" })).getByText("Account"),
+    ).toBeTruthy();
     expect(screen.getByText("42% used")).toBeTruthy();
     // No percentage is not "0% used" — it means the window was not reported.
     expect(screen.getByText("Available")).toBeTruthy();
@@ -1812,7 +1936,7 @@ describe("AgentInfoButton usage panel", () => {
       open();
 
       const marker = screen.getByRole("img", {
-        name: "Current point in weekly period: 50%",
+        name: "Current point in the Weekly period: 50%",
       });
       expect(marker.className).toContain("bg-red-500");
       expect((marker as HTMLElement).style.left).toBe("50%");
@@ -1859,7 +1983,7 @@ describe("AgentInfoButton usage panel", () => {
       open();
       expect(
         screen.getByRole("img", {
-          name: "Current point in weekly period: 25%",
+          name: "Current point in the Weekly period: 25%",
         }),
       ).toBeTruthy();
 
@@ -1867,7 +1991,7 @@ describe("AgentInfoButton usage panel", () => {
       act(() => intervalCallback?.());
       expect(
         screen.getByRole("img", {
-          name: "Current point in weekly period: 75%",
+          name: "Current point in the Weekly period: 75%",
         }),
       ).toBeTruthy();
 
@@ -1928,7 +2052,7 @@ describe("AgentInfoButton usage panel", () => {
       });
       expect(
         screen.getByRole("img", {
-          name: "Current point in weekly period: 50%",
+          name: "Current point in the Weekly period: 50%",
         }),
       ).toBeTruthy();
       expect(setIntervalCalls).toBe(1);
@@ -2003,13 +2127,61 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText(/Invalid Date/) === null).toBe(true);
   });
 
-  test("omits the limits section entirely when there are none", () => {
+  test("places the account section below the session's own context readout", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [CLAUDE_KEY, usage({ rateLimits: [{ label: "Weekly", usedPercent: 4 }] })],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const context = screen.getByText("Context");
+    const account = screen.getByRole("region", { name: "Account usage" });
+    // The context window is what this session is spending; the account is the
+    // ceiling it is spent against, so it reads second.
+    expect(context.compareDocumentPosition(account) & 4).toBe(4);
+  });
+
+  test("marks a window whose duration only its label gives up", () => {
+    const originalDateNow = Date.now;
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    Date.now = () => resetMs - 60 * 60_000;
+    try {
+      useClaudeStore.setState({
+        contextUsage: new Map([
+          [
+            CLAUDE_KEY,
+            usage({
+              rateLimits: [
+                {
+                  label: "Five Hour",
+                  usedPercent: 30,
+                  resetsAt: new Date(resetMs).toISOString(),
+                },
+              ],
+            }),
+          ],
+        ]),
+      } as never);
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+
+      expect(
+        screen.getByRole("img", { name: "Current point in the Five Hour period: 80%" }),
+      ).toBeTruthy();
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  test("omits the account section entirely when nothing account-scoped is reported", () => {
     useClaudeStore.setState({
       contextUsage: new Map([[CLAUDE_KEY, usage({ rateLimits: [] })]]),
     } as never);
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
-    expect(screen.queryByText("Limits") === null).toBe(true);
+    expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
   });
 
   test("an authoritative empty Claude limit snapshot hides stale nested limits", () => {
@@ -2022,7 +2194,7 @@ describe("AgentInfoButton usage panel", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
 
-    expect(screen.queryByText("Limits") === null).toBe(true);
+    expect(screen.queryByRole("region", { name: "Account usage" })).toBe(null);
     expect(screen.queryByText("Stale 5h") === null).toBe(true);
     expect(screen.getByText("Context")).toBeTruthy();
   });
@@ -2622,7 +2794,6 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(within(account).getByText("10% used")).toBeTruthy();
     expect(within(account).getByText("0.00")).toBeTruthy();
     expect(screen.getAllByText("Credits")).toHaveLength(1);
-    expect(screen.queryByText("Limits") === null).toBe(true);
     expect(screen.queryByText("99% used") === null).toBe(true);
   });
 
@@ -2703,6 +2874,44 @@ describe("AgentInfoButton Codex runtime panel", () => {
         { label: "1-hour limit", windowMinutes: 60 },
       ]),
     );
+  });
+
+  test("draws Codex limits in the account section with the shared bar and marker", async () => {
+    const originalDateNow = Date.now;
+    const resetsAtSeconds = 1_800_000_000;
+    const resetMs = resetsAtSeconds * 1_000;
+    Date.now = () => resetMs - 75 * 60_000;
+    try {
+      seedCodex();
+      useCodexStore.setState({
+        contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
+      } as never);
+      mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+        rateLimits: {
+          rateLimits: {
+            primary: {
+              usedPercent: 17,
+              resetsAt: resetsAtSeconds,
+              windowDurationMins: 300,
+            },
+          },
+        },
+      }));
+      render(<AgentInfoButton activeTab={codexTab()} />);
+      open();
+
+      const account = await waitFor(() => screen.getByRole("region", { name: "Account usage" }));
+      expect(within(account).getByText("5-hour limit")).toBeTruthy();
+      expect(within(account).getByText("17% used")).toBeTruthy();
+      // Three quarters through a five-hour window, on the same marker Claude gets.
+      const marker = within(account).getByRole("img", {
+        name: "Current point in the 5-hour limit period: 75%",
+      });
+      expect(marker.className).toContain("bg-red-500");
+      expect((marker as HTMLElement).style.left).toBe("75%");
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   test("does not invent a usage snapshot when the session has none yet", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_MAX_CONTEXT_BYTES,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -351,6 +352,9 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Run the relevant validation.");
     expect(prompt).toContain("Stage only related safe files");
     expect(prompt).toContain("commit every relevant fix before finishing");
+    // Automated pipeline fix turns still receive their enforced result schema;
+    // only the manual Multi Review handoff supersedes prior JSON contracts.
+    expect(prompt).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
   });
 
   test("structuredReportRepairPrompt lists every error and states the attempt budget", () => {

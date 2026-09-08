@@ -34,8 +34,22 @@ export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
 export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
+/**
+ * Ends the schema contract from preparation/consolidation when their session
+ * becomes an ordinary, user-facing Fix conversation.
+ *
+ * Multi Review deliberately reuses that session so the model retains the
+ * review context. The provider schema is per turn, but the earlier prompt is
+ * still conversation history and models can keep obeying its JSON-only final
+ * response instruction unless the interactive handoff supersedes it.
+ */
+export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
+  "This is now a manual interactive Fix conversation, not an automated pipeline stage. " +
+  "Any JSON-only or structured-output contract from earlier turns has ended and does not apply to this turn or later replies. " +
+  "When you finish, respond in ordinary Markdown prose with a concise summary and validation results. Do not return JSON unless the user explicitly asks for JSON.";
 export const MULTI_REVIEW_ADDRESS_PROMPT =
-  "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
+  "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.\n\n" +
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION;
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
@@ -68,7 +82,9 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 
 ${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
-${instruction}`;
+${instruction}
+
+${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
 }
 
 /**

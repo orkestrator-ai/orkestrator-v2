@@ -1,5 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import {
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -45,8 +46,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt:
-        "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+      prompt: expect.stringContaining(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -138,8 +138,11 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       requestId: "multi-review-address:multi-1:launch-1",
-      prompt: expect.stringContaining("Fix the reported regression"),
+      prompt: expect.stringContaining(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
     }),
+  );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: expect.stringContaining("Fix the reported regression") }),
   );
   expect(events).toEqual(["dispatch", "publish"]);
   expect(session).toMatchObject({
@@ -290,9 +293,12 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
-      prompt: expect.stringContaining("Lost-session regression"),
+      prompt: expect.stringContaining(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
       mode: "build",
     }),
+  );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({ prompt: expect.stringContaining("Lost-session regression") }),
   );
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({

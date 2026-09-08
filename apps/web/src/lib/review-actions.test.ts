@@ -20,8 +20,15 @@ describe("multiReviewCustomFixPrompt", () => {
     );
     expect(ADDRESS_ALL_REVIEW_PROMPT).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(MULTI_REVIEW_ADDRESS_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("Do not invoke EnterPlanMode");
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("make the necessary edits");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("This is an implementation turn");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain(
+      "Do not invoke CreatePlan, create_plan, EnterPlanMode",
+    );
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain(
+      "A plan, plan-review card, or approval request is not a valid response",
+    );
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("begin editing the files now");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("complete the necessary edits");
   });
 
   test("retires both structured-output and read-only review-stage constraints", () => {

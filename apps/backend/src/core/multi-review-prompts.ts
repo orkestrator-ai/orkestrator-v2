@@ -90,6 +90,7 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 - Reconcile disagreements using the supplied evidence; do not decide by majority vote.${scopeReconciliationRule(input.worktree, input.reviewPackage)}
 - Combine useful strengths, limitations, test results, scope details, change explanation, and reviewer commentary without inventing evidence.
 - The output must stand alone. Do not mention reviewer numbers or assume the reader can see the source reports.
+- This is a report-consolidation turn, not a planning turn. Do not invoke CreatePlan, create_plan, EnterPlanMode, or any equivalent planning or mode-switch tool, even if the provider offers one. A plan, plan-review card, or approval request is not a valid result. Do not ask anyone to approve a plan or switch modes. Return the consolidated structured report directly.
 - Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.
 
 ${buildStructuredReviewOutputGuide()}`;

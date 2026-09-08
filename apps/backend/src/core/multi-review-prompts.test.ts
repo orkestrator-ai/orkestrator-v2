@@ -143,6 +143,10 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain("Set reviewModels to null");
     expect(prompt).toContain('"reviewSourceIds":["reviewer-1/');
     expect(prompt).toContain("record the narrower scope as a limitation");
+    expect(prompt).toContain("This is a report-consolidation turn, not a planning turn");
+    expect(prompt).toContain("Do not invoke CreatePlan, create_plan, EnterPlanMode");
+    expect(prompt).toContain("A plan, plan-review card, or approval request is not a valid result");
+    expect(prompt).toContain("Return the consolidated structured report directly");
     expect(prompt).toContain("## Structured report structural preflight");
     expect(prompt.indexOf("- Semantically deduplicate equivalent issues")).toBeLessThan(
       prompt.indexOf("## Structured report structural preflight"),

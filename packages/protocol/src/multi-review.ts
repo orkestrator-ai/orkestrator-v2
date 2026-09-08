@@ -36,7 +36,7 @@ export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
 export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION =
-  "You are already in build mode. Remain in build mode and implement the fixes now. Do not enter, propose, or switch to plan mode. Do not invoke EnterPlanMode or any equivalent plan-mode tool, and do not ask the user to switch modes. Do not stop after describing a plan: make the necessary edits and run relevant validation.";
+  "This is an implementation turn, not a planning turn. You are already in build mode: remain in build mode and begin editing the files now. Do not enter, propose, switch to, or imitate plan mode. Do not invoke CreatePlan, create_plan, EnterPlanMode, or any equivalent planning or mode-switch tool, even if the provider offers one. A plan, plan-review card, or approval request is not a valid response to this prompt. Do not ask the user to approve a plan or switch modes, and do not pause before implementation. Use the file-editing and command tools directly, complete the necessary edits, and run relevant validation in this turn.";
 /**
  * Ends the automated preparation/consolidation contract when their session
  * becomes an ordinary, user-facing Fix conversation.

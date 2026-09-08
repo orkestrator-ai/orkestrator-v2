@@ -33,6 +33,48 @@ async function withIsolatedTempDir<T>(callback: (directory: string) => Promise<T
   }
 }
 
+describe("agent-message normalization", () => {
+  test("unwraps schema-shaped commentary into readable progress", async () => {
+    expect(
+      await itemToParts(
+        {
+          id: "commentary",
+          type: "agent_message",
+          phase: "commentary",
+          text: JSON.stringify({
+            validation: [],
+            uncommittedFiles: [],
+            reviewScope: { limitations: ["Tracing the missing transcript updates."] },
+          }),
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: "Tracing the missing transcript updates." }]);
+  });
+
+  test("leaves ordinary commentary unchanged and labels unknown schema shapes", async () => {
+    const prose = "Checking the transcript now.";
+    expect(
+      await itemToParts(
+        { id: "prose", type: "agent_message", phase: "commentary", text: prose },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "text", content: prose }]);
+
+    const [fallback] = await itemToParts(
+      {
+        id: "fallback",
+        type: "agent_message",
+        phase: "commentary",
+        text: '{"status":"checking"}',
+      },
+      "/tmp",
+    );
+    expect(fallback?.content).toStartWith("Progress update (provider-formatted):");
+    expect(fallback?.content).toContain('{"status":"checking"}');
+  });
+});
+
 describe("reasoning normalization", () => {
   test("drops text made only of whitespace and default-ignorable code points", async () => {
     for (const text of [

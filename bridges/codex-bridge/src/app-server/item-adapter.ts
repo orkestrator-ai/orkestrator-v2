@@ -157,11 +157,14 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
         raw.delivery === "async" && id.length <= MAX_ASYNC_ITEM_ID_LENGTH
           ? asyncQuestions(raw.questions)
           : undefined;
+      const phase =
+        raw.phase === "commentary" || raw.phase === "final_answer" ? raw.phase : undefined;
       return {
         item: {
           id,
           type: "agent_message",
           text: str(raw.text) ?? "",
+          ...(phase ? { phase } : {}),
           ...(questions ? { delivery: "async" as const, questions } : {}),
         } as EngineItem,
       };

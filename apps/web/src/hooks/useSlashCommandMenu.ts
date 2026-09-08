@@ -14,7 +14,7 @@ interface UseSlashCommandMenuOptions<TCommand extends SlashCommandOption> {
    * space. Composers restore the caret offset the user had while typing the
    * prefix, which lands mid-word once the name is completed.
    */
-  focusInputAtEnd?: () => void;
+  focusInputAtEnd?: (expectedValue: string) => void;
 }
 
 interface UseSlashCommandMenuResult<TCommand extends SlashCommandOption> {
@@ -79,9 +79,10 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
 
   const selectCommand = useCallback(
     (command: TCommand) => {
-      setText(`${command.name} `);
+      const completedCommand = `${command.name} `;
+      setText(completedCommand);
       setIsOpen(false);
-      focusInputAtEnd?.();
+      focusInputAtEnd?.(completedCommand);
     },
     [setText, focusInputAtEnd],
   );

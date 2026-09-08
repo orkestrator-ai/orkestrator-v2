@@ -198,13 +198,12 @@ describe("multi review preparation prompt", () => {
 
     expect(prompt).toContain("Prepare the existing change for Multi Review");
     expect(prompt).toContain("Do not push, merge, rebase, reset, switch branches");
-    // Preparation shares the reviewer's channel discipline: prose while it
-    // works, one JSON object at the end.
-    expect(prompt).toContain("The enforced schema applies to your final response only");
-    expect(prompt).toContain("Never send a JSON object or array as an interim update");
-    expect(prompt).toContain(
-      "a message that begins with `{` or `[` is folded away as machine output",
-    );
-    expect(prompt).toContain("make the final assistant response the only JSON object");
+    // Preparation shares the reviewer's channel discipline: visible provider
+    // commentary while it works, one authoritative JSON object at the end.
+    expect(prompt).toContain("may apply the enforced schema to commentary");
+    expect(prompt).toContain("`commentary`, `summary`, `notes`, or `limitations` field");
+    expect(prompt).toContain("provider-labelled field as progress");
+    expect(prompt).toContain("Do not use the final-response channel for progress");
+    expect(prompt).toContain("make the final assistant response the one authoritative JSON object");
   });
 });

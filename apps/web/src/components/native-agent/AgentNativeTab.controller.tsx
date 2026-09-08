@@ -416,7 +416,7 @@ export function SharedNativeAgentController({
     commands: projection?.slashCommands ?? [],
     text: draft.text,
     setText: (text) => updateDraft(sessionKey, { text }),
-    focusInputAtEnd: () => inputRef.current?.focusAtEnd(),
+    focusInputAtEnd: (expectedValue) => inputRef.current?.focusAtEnd(expectedValue),
   });
   const backendOwnsStartupPrompt =
     tabId === "startup-agent" &&

@@ -30,6 +30,7 @@ import {
 } from "../history/rollout.js";
 import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output";
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
+import { agentMessageDisplayText } from "./agent-message.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
@@ -178,6 +179,7 @@ function suppressStructuredOutputDraft(
   return (
     turn.expectsStructuredOutput &&
     item.type === "agent_message" &&
+    item.phase !== "commentary" &&
     item.id !== finalItemId &&
     isMachineOutput(state, accumulator, item)
   );
@@ -518,11 +520,11 @@ export async function renderTurn(
     turn,
     options.segment,
   );
-  // app-server's output schema is turn-scoped, but it can still surface
-  // schema-shaped agent messages between tool calls. They are drafts, not
-  // separate results. Keep them out of the transcript until the turn settles,
-  // then reveal only the same last agent message that structured-output parsing
-  // reads as authoritative.
+  // app-server's output schema is turn-scoped, so both commentary and draft
+  // final answers can be schema-shaped. Provider-labelled commentary is made
+  // readable by `agentMessageDisplayText`; keep only unlabelled/final drafts out
+  // of the transcript until the turn settles, then reveal the authoritative
+  // final item read by structured-output parsing.
   const structuredOutputItemId = terminalStructuredOutputItemId(turn);
 
   // Reconcile the authoritative item set without rebuilding its order around
@@ -633,7 +635,8 @@ export async function renderTurn(
           structuredOutputItemId,
         ),
     )
-    .at(-1)?.text;
+    .map(agentMessageDisplayText)
+    .at(-1);
 
   return {
     parts,

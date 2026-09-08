@@ -29,6 +29,7 @@ import {
   type ToolState,
 } from "../messages/types.js";
 import { rawApplyPatchParts } from "../messages/apply-patch.js";
+import { visibleCommentaryText } from "../messages/agent-message.js";
 import { extractAttachmentTags } from "../messages/attachment-tags.js";
 import { stripCoordinatorContext } from "@orkestrator/protocol/coordinator";
 import {
@@ -1089,7 +1090,8 @@ export async function hydrateMessagesFromPersistedSession(
       structuredTurns.has(indexedTurnId) &&
       record.type === "response_item" &&
       record.payload?.type === "message" &&
-      record.payload.role === "assistant"
+      record.payload.role === "assistant" &&
+      record.payload.phase !== "commentary"
     ) {
       finalAssistantRecordByTurn.set(indexedTurnId, recordIndex);
     }
@@ -1211,17 +1213,20 @@ export async function hydrateMessagesFromPersistedSession(
     const { text, attachments } = persisted;
 
     if (role === "assistant") {
+      const commentary = payload.phase === "commentary";
       const acceptedStructuredTurn = currentTurnId ? structuredTurns.get(currentTurnId) : undefined;
       if (
         acceptedStructuredTurn !== undefined &&
+        !commentary &&
         isWithheldMachineOutput(text) &&
         !(acceptedStructuredTurn && finalAssistantRecordByTurn.get(currentTurnId!) === recordIndex)
       ) {
         continue;
       }
+      const displayText = commentary ? visibleCommentaryText(text) : text;
       const assistantMessage = ensureAssistantMessage();
-      assistantMessage.content = text;
-      assistantMessage.parts.push({ type: "text", content: text });
+      assistantMessage.content = displayText;
+      assistantMessage.parts.push({ type: "text", content: displayText });
       continue;
     }
 

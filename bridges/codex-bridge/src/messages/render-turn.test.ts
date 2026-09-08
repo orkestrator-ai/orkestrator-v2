@@ -1256,6 +1256,12 @@ describe("renderTurn", () => {
       text: '{"validation":null,"filesLeftUncommitted":null,"limitations":["working"]}',
     });
     accumulator.onItemCompleted({
+      id: "schema-commentary",
+      type: "agent_message",
+      phase: "commentary",
+      text: '{"validation":[],"uncommittedFiles":[],"limitations":["Running the focused tests."]}',
+    });
+    accumulator.onItemCompleted({
       id: "command",
       type: "command_execution",
       command: "git status --short",
@@ -1277,9 +1283,10 @@ describe("renderTurn", () => {
 
     expect(active.parts.map((part) => part.content)).toEqual([
       "Checking the working tree.",
+      "Running the focused tests.",
       "git status --short",
     ]);
-    expect(active.content).toBe("Checking the working tree.");
+    expect(active.content).toBe("Running the focused tests.");
 
     const finalPayload =
       '{"validation":"bun run check","filesLeftUncommitted":[],"limitations":[]}';
@@ -1299,6 +1306,7 @@ describe("renderTurn", () => {
 
     expect(completed.parts.map((part) => part.content)).toEqual([
       "Checking the working tree.",
+      "Running the focused tests.",
       "git status --short",
       finalPayload,
     ]);

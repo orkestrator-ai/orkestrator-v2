@@ -1,3 +1,4 @@
+import { controlReviewValidation } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
@@ -25,6 +26,17 @@ export function registerReviewWorkflowCommands(
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot } = dependencies;
+  for (const action of ["start", "status", "cancel"] as const) {
+    register(`${action}_review_validation`, ({ environmentId, run }, context) =>
+      controlReviewValidation(
+        asNonBlankString(environmentId, "environmentId"),
+        run,
+        action,
+        context,
+      ),
+    );
+  }
+
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage
       .getLoopedReviewWorkflow(asString(workflowId, "workflowId"))

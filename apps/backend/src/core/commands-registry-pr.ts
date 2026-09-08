@@ -1,5 +1,8 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
+import {
+  isReviewPackageReference,
+  parseReviewValidationPlan,
+} from "@orkestrator/protocol/review-workflow";
 import {
   isAgentBridgeKind,
   isStructuredCommandError,
@@ -69,6 +72,8 @@ export function registerPullRequestCommands(
         "targetBranch",
         "preparation",
         "additionalLimitations",
+        "expectedHead",
+        "validationPlan",
       ],
       "generate_looped_review_package",
     );
@@ -105,6 +110,12 @@ export function registerPullRequestCommands(
       context,
       {
         additionalLimitations: trustedAdditionalLimitations,
+        ...(args.validationPlan === undefined
+          ? {}
+          : { validationPlan: parseReviewValidationPlan(args.validationPlan) }),
+        ...(args.expectedHead === undefined
+          ? {}
+          : { expectedHead: asString(args.expectedHead, "expectedHead") }),
       },
     );
   });

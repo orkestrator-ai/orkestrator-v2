@@ -553,6 +553,8 @@ export async function createCommandFixtures() {
         deletePaneLayout: mock(async () => undefined),
         getKanbanTasks: mock(async () => []),
         listBuildPipelines: mock(async () => []),
+        listAllBuildPipelines: mock(async () => []),
+        listMultiReviewWorkflows: mock(async () => []),
         updateKanbanTask: mock(async () => undefined),
         addKanbanComment: mock(async () => undefined),
         getProject: mock(async (projectId: string) => {

@@ -20,6 +20,21 @@ function fakeProcess() {
 }
 
 describe("fatal rejection guard", () => {
+  test("serialized workers can install the guard without module dependencies", () => {
+    const install = new Function(
+      `return (${installFatalRejectionGuard.toString()})`,
+    )() as typeof installFatalRejectionGuard;
+    const target = fakeProcess();
+    const warnings: string[] = [];
+    install({
+      label: "[worker]",
+      force: true,
+      onProcess: target,
+      warn: (message) => warnings.push(message),
+    });
+    target.listeners[0]!(new Error("fixture"));
+    expect(warnings[0]).toContain("[worker] Unhandled promise rejection (continuing): fixture");
+  });
   test("reports an Error by name, message and stack", () => {
     const target = fakeProcess();
     const warnings: string[] = [];

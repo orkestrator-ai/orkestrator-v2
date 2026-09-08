@@ -443,6 +443,16 @@ export abstract class BuildPipelineServiceBase {
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
       const previous = resumablePhase(pipeline.phase);
       if (!previous) return;
+      if (
+        pipeline.validationRun &&
+        ["planned", "running"].includes(pipeline.validationRun.status)
+      ) {
+        pipeline.validationRun = await this.invoke("cancel_review_validation", {
+          environmentId: pipeline.environmentId,
+          run: pipeline.validationRun,
+        });
+      }
+
       pipeline.pausedFromPhase = previous;
       pipeline.phase = "paused";
       // The warning says the stage "is still running"; a paused build has
@@ -488,6 +498,7 @@ export abstract class BuildPipelineServiceBase {
         }
         return;
       }
+      if (candidate.validationRun && !candidate.reviewPackage) return;
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase);
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
@@ -559,6 +570,12 @@ export abstract class BuildPipelineServiceBase {
           (candidate.phase === "paused" && candidate.pausedFromPhase === "reviewing"))
       ) {
         rejection = new Error("Messages cannot be sent during a multi-model review");
+        return;
+      }
+      if (candidate.validationRun && !candidate.reviewPackage) {
+        rejection = new Error(
+          "Validation is running against a fixed snapshot. Pause or cancel preparation before changing the work.",
+        );
         return;
       }
       const queue = candidate.pendingUserMessages ?? [];
@@ -698,6 +715,16 @@ export abstract class BuildPipelineServiceBase {
   async cancel(pipelineId: string): Promise<BuildPipeline> {
     let abortErrors: unknown[] = [];
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
+      if (
+        pipeline.validationRun &&
+        ["planned", "running"].includes(pipeline.validationRun.status)
+      ) {
+        pipeline.validationRun = await this.invoke("cancel_review_validation", {
+          environmentId: pipeline.environmentId,
+          run: pipeline.validationRun,
+        });
+      }
+
       if (pipeline.reviewFanout) {
         abortErrors = await this.abandonReviewFanout(pipeline, "idle");
       } else {

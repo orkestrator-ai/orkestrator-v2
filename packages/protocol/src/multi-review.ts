@@ -1,3 +1,4 @@
+import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import type { AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { getReviewInstructionValidationError } from "./review-prompt.js";
@@ -210,6 +211,8 @@ export interface MultiReviewWorkflow {
   /** Per-step timing and token consumption, kept once the shared session moves on. */
   stepRuntimes?: MultiReviewStepRuntimes;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
+  /** Backend projection of the environment-owned validation job. */
+  validationRun?: ReviewValidationRun;
   /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
   reviewPackage?: ReviewPackageReference;
   /** Set when the worktree changed before all reports could be consolidated. */
@@ -585,6 +588,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "phase",
       "reviewWorktreeSnapshot",
       "reviewPackage",
+      "validationRun",
       "reviewSnapshotStale",
       "consolidatedReport",
       "fixResult",
@@ -630,6 +634,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.stepRuntimes !== undefined && !isStepRuntimes(value.stepRuntimes)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
+    (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
     (value.reviewPackage !== undefined &&
       (!isReviewPackageReference(value.reviewPackage) ||
         value.reviewPackage.targetBranch !== value.targetBranch)) ||

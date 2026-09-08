@@ -37,27 +37,9 @@ export interface FatalRejectionGuardOptions {
   onProcess?: RejectionEventTarget;
   /**
    * Install even under the test runner. Only the guard's own tests set this;
-   * see `shouldInstall` for why every other suite wants the default.
+   * see the installation check for why every other suite wants the default.
    */
   force?: boolean;
-}
-
-function describe(reason: unknown): string {
-  if (reason instanceof Error) {
-    // DOMException and friends carry the useful identity in `name`, and an
-    // abort's message ("The operation was aborted.") says nothing on its own.
-    const name = reason.name && reason.name !== "Error" ? `${reason.name}: ` : "";
-    const stack = reason.stack ? `\n${reason.stack}` : "";
-    return `${name}${reason.message}${stack}`;
-  }
-  if (typeof reason === "object" && reason !== null) {
-    try {
-      return JSON.stringify(reason);
-    } catch {
-      return Object.prototype.toString.call(reason);
-    }
-  }
-  return String(reason);
 }
 
 /**
@@ -65,19 +47,31 @@ function describe(reason: unknown): string {
  * keeping: suites import the bridge entrypoints directly, so installing the
  * guard there would silently downgrade a real defect to a log line nobody
  * reads. Production entrypoints are unaffected.
- */
-function shouldInstall(force: boolean | undefined): boolean {
-  return force === true || process.env.NODE_ENV !== "test";
-}
-
-/**
+ *
  * Survive unhandled rejections instead of exiting, reporting each one.
  *
  * Returns a stop function so tests can uninstall the listener; production
  * callers install it for the life of the process and ignore the result.
  */
 export function installFatalRejectionGuard(options: FatalRejectionGuardOptions): () => void {
-  if (!shouldInstall(options.force)) return () => {};
+  // Keep this function self-contained: environment-side validation workers
+  // serialize it to install the same guard without repository dependencies.
+  if (options.force !== true && process.env.NODE_ENV === "test") return () => {};
+  function describe(reason: unknown): string {
+    if (reason instanceof Error) {
+      const name = reason.name && reason.name !== "Error" ? `${reason.name}: ` : "";
+      const stack = reason.stack ? `\n${reason.stack}` : "";
+      return `${name}${reason.message}${stack}`;
+    }
+    if (typeof reason === "object" && reason !== null) {
+      try {
+        return JSON.stringify(reason);
+      } catch {
+        return Object.prototype.toString.call(reason);
+      }
+    }
+    return String(reason);
+  }
   const warn = options.warn ?? ((message: string) => console.error(message));
   // `process.on` is overloaded per event name, so a union of it and the seam
   // narrows the event parameter to `never`. The cast keeps the seam honest

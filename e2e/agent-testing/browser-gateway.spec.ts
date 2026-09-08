@@ -1,3 +1,7 @@
+import {
+  newReviewValidationRun,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -306,6 +310,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1",
     "opt-in live review against the isolated fixture",
   );
+  test.setTimeout(180_000);
   const status = await profileStatus();
   expect(status.status).toBe("ready");
   const invoke = await authenticatedInvoke(page, status);
@@ -359,10 +364,37 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     );
     expect(retried.workflow.id).toBe(launched.workflow.id);
     expect(retried.ui.tabId).toBe(launched.ui.tabId);
+    await expect
+      .poll(
+        async () => {
+          const saved = await invoke<{ snapshot: MultiReviewWorkflow }>(
+            "get_multi_review_workflow",
+            { workflowId: launched.workflow.id },
+          );
+          if (saved.snapshot.phase === "failed")
+            throw new Error(saved.snapshot.error ?? "Preparation failed");
+          return saved.snapshot.validationRun?.status;
+        },
+        { timeout: 90_000 },
+      )
+      .toBeDefined();
+    await expect(page.getByRole("region", { name: "Review validation" })).toBeVisible();
     // Leave the previous row before crossing the sidebar's hover-detail card.
     await page.mouse.move(1100, 20);
     await page.getByText(other!.name, { exact: true }).first().click({ timeout: 10_000 });
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toHaveCount(0);
+    await expect
+      .poll(
+        async () => {
+          const saved = await invoke<{ snapshot: MultiReviewWorkflow }>(
+            "get_multi_review_workflow",
+            { workflowId: launched.workflow.id },
+          );
+          return saved.snapshot.validationRun?.status;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("completed");
     await invoke("cancel_multi_review", { workflowId: launched.workflow.id });
     await expect
       .poll(
@@ -558,5 +590,100 @@ test("Docker fixture ships a Playwright browser that launches for both container
     expect(launch.error, `${user}: ${launch.stderr}`).toBeUndefined();
     expect(launch.status, `${user}: ${launch.stderr}`).toBe(0);
     expect(launch.stdout).toContain("chromium launch verified");
+  }
+});
+
+test("review validation runs through the real backend while its environment is inactive", async ({
+  page,
+}) => {
+  const status = await profileStatus();
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  const environments: Environment[] = [];
+  let run: ReviewValidationRun | undefined;
+  try {
+    for (const name of ["validation-active", "validation-other"]) {
+      const environment = await invoke<Environment>("create_environment", {
+        projectId: fixture.id,
+        name: `${name}-${Date.now()}`,
+        environmentType: "local",
+        networkAccessMode: "restricted",
+      });
+      environments.push(environment);
+      await invoke("start_environment", { environmentId: environment.id });
+    }
+    const [target, other] = environments;
+    await page.goto(status.browserUrl!);
+    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await page.getByText(target!.name, { exact: true }).first().click();
+    const snapshot = await invoke<{ head: string; paths: string[] }>(
+      "get_environment_uncommitted_paths",
+      { environmentId: target!.id },
+    );
+    expect(snapshot.paths).toEqual([]);
+    run = newReviewValidationRun(`review-validation-browser-${Date.now()}`, {
+      headRef: snapshot.head,
+      limitations: [],
+      commands: [
+        {
+          id: "first",
+          command: "sleep 2; printf validated",
+          cwd: ".",
+          dependsOn: [],
+          resources: [],
+          weight: 1,
+          timeoutMs: 10000,
+        },
+        {
+          id: "second",
+          command: "printf independent",
+          cwd: ".",
+          dependsOn: [],
+          resources: [],
+          weight: 1,
+          timeoutMs: 10000,
+        },
+      ],
+    });
+    run = await invoke<ReviewValidationRun>("start_review_validation", {
+      environmentId: target!.id,
+      run,
+    });
+    await page.mouse.move(1100, 20);
+    await page.getByText(other!.name, { exact: true }).first().click();
+    await expect
+      .poll(
+        async () => {
+          run = await invoke<ReviewValidationRun>("status_review_validation", {
+            environmentId: target!.id,
+            run,
+          });
+          return run.status;
+        },
+        { timeout: 15000 },
+      )
+      .toBe("completed");
+    expect(run.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+    const completed = run;
+    await page.reload();
+    await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
+    await page.getByText(target!.name, { exact: true }).first().click();
+    const restored = await invoke<ReviewValidationRun>("status_review_validation", {
+      environmentId: target!.id,
+      run,
+    });
+    expect(restored).toEqual(completed);
+    expect(restored.results.every((result) => result.stdoutSha256?.length === 64)).toBe(true);
+  } finally {
+    if (run)
+      await invoke("cancel_review_validation", { environmentId: environments[0]!.id, run }).catch(
+        () => undefined,
+      );
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
   }
 });

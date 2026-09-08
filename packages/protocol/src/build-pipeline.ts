@@ -1,3 +1,4 @@
+import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
@@ -437,6 +438,7 @@ export type CompletionCommentStatus = "posting" | "posted" | "failed";
 export type PipelineFailureKind = "prompt-dispatch" | "stage-transition" | "interactive-request";
 
 export interface PipelineFailureContext {
+  validationPlan?: boolean;
   phase: ResumableBuildPhase;
   kind: PipelineFailureKind;
   sessionId?: string;
@@ -464,6 +466,8 @@ export interface PipelineReconnectAttempt extends PipelineFailureContext {
 }
 
 export interface PipelinePromptAttempt {
+  /** Persist the preparation contract so a restart dispatches the same schema. */
+  validationPlan?: boolean;
   id: string;
   sessionId: string;
   requestId: string;
@@ -510,7 +514,9 @@ export interface BuildPipeline {
   verificationResult?: "pass" | "fail";
   verificationFeedback?: string;
   structuredReview?: StructuredReviewReport;
-  /** Immutable Git evidence prepared by the build model for this iteration's reviewers. */
+  /** Backend projection of this iteration's environment-owned validation. */
+  validationRun?: ReviewValidationRun;
+  /** Immutable Git evidence shared by this iteration's reviewers. */
   reviewPackage?: PersistedReviewPackage;
   structuredReviewRequestId?: string;
   pausedFromPhase?: ResumableBuildPhase;
@@ -1020,7 +1026,8 @@ function isFailureContext(value: unknown): value is PipelineFailureContext {
     isOptionalString(value.prompt) &&
     (value.useTaskImages === undefined || typeof value.useTaskImages === "boolean") &&
     isOptionalNonBlankString(value.requestId) &&
-    (value.structuredReview === undefined || typeof value.structuredReview === "boolean")
+    (value.structuredReview === undefined || typeof value.structuredReview === "boolean") &&
+    (value.validationPlan === undefined || typeof value.validationPlan === "boolean")
   );
 }
 
@@ -1043,6 +1050,7 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
     typeof value.prompt === "string" &&
     typeof value.useTaskImages === "boolean" &&
     (value.structuredReview === undefined || typeof value.structuredReview === "boolean") &&
+    (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
     isIsoDate(value.startedAt)
   );
 }
@@ -1093,6 +1101,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       value.verificationResult !== "fail") ||
     !isOptionalString(value.verificationFeedback) ||
     (value.structuredReview !== undefined && !isStructuredReviewReport(value.structuredReview)) ||
+    (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
     (value.reviewPackage !== undefined && !isPersistedReviewPackage(value.reviewPackage)) ||
     !isOptionalNonBlankString(value.structuredReviewRequestId) ||
     (value.pausedFromPhase !== undefined &&

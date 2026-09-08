@@ -136,6 +136,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       );
     }
     delete pipeline.reviewPackage;
+    delete pipeline.validationRun;
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
   }

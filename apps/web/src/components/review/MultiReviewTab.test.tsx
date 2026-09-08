@@ -1696,7 +1696,9 @@ test("renders backend-owned package preparation after remount with cancel availa
       hydrateWorkflow={async () => workflow}
     />,
   );
-  expect(screen.getByText("The review preparation model is preparing the package")).toBeTruthy();
+  expect(
+    screen.getByText("Discovering validation, running checks, and preparing shared evidence"),
+  ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true);
   view.unmount();
@@ -1707,7 +1709,9 @@ test("renders backend-owned package preparation after remount with cancel availa
       hydrateWorkflow={async () => workflow}
     />,
   );
-  expect(screen.getByText("The review preparation model is preparing the package")).toBeTruthy();
+  expect(
+    screen.getByText("Discovering validation, running checks, and preparing shared evidence"),
+  ).toBeTruthy();
 });
 
 describe("MultiReviewTab pipeline step cards", () => {

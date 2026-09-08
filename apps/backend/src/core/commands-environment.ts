@@ -1,3 +1,4 @@
+import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import {
   fs,
   os,
@@ -1295,6 +1296,7 @@ export async function stopEnvironmentOnce(
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  await stopEnvironmentReviewValidation(environmentId, context);
   // Discovery runs inside the environment, so its cached result stops being
   // meaningful the moment the environment does.
   invalidateDiscovery(environment.id);

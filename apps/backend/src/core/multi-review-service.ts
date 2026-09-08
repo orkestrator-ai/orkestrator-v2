@@ -1,3 +1,13 @@
+import {
+  newReviewValidationRun,
+  parseReviewValidationPlan,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
+import {
+  reviewValidationDiscoveryPrompt,
+  REVIEW_VALIDATION_PLAN_SCHEMA,
+} from "./review-validation-prompts.js";
+import { validationPreparation } from "./review-validation-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
@@ -37,14 +47,12 @@ import {
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import {
-  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   parseReviewPreparationResult,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   parseFixResult,
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import {
-  createMultiReviewPreparationPrompt,
   createPackagedMultiReviewerPrompt,
   createMultiReviewConsolidationPrompt,
 } from "./multi-review-prompts.js";
@@ -649,6 +657,7 @@ export class MultiReviewService {
         if (replacement) workflow.reviewWorktreeSnapshot = replacement;
         workflow.phase = "preparing";
         delete workflow.reviewPackage;
+        delete workflow.validationRun;
         delete workflow.stepRuntimes;
         delete workflow.reviewSnapshotStale;
         clearReviewSession(workflow);
@@ -669,6 +678,13 @@ export class MultiReviewService {
           reviewModel(workflow),
           reviewSession(workflow)?.providerSessionId,
         );
+        if (workflow.validationRun) {
+          await this.invoke("cancel_review_validation", {
+            environmentId: workflow.environmentId,
+            run: workflow.validationRun,
+          });
+          delete workflow.validationRun;
+        }
         workflow.phase = "preparing";
         delete workflow.stepRuntimes;
         clearReviewSession(workflow);
@@ -1024,6 +1040,15 @@ export class MultiReviewService {
             targets.map((target) => [`${target.selection.agent}:${target.sessionId}`, target]),
           ).values(),
         ];
+        if (
+          workflow.validationRun &&
+          ["planned", "running"].includes(workflow.validationRun.status)
+        ) {
+          workflow.validationRun = await this.invoke("cancel_review_validation", {
+            environmentId: workflow.environmentId,
+            run: workflow.validationRun,
+          });
+        }
         const shutdowns = await Promise.allSettled(
           uniqueTargets.map(async ({ selection, sessionId }) => {
             const provider = await this.provider(workflow, selection);
@@ -1422,6 +1447,20 @@ export class MultiReviewService {
 
   private async advanceCancellation(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const waiting: string[] = [];
+    if (workflow.validationRun && ["planned", "running"].includes(workflow.validationRun.status)) {
+      try {
+        workflow.validationRun = await this.invoke<ReviewValidationRun>(
+          "cancel_review_validation",
+          {
+            environmentId: workflow.environmentId,
+            run: workflow.validationRun,
+          },
+        );
+      } catch {
+        waiting.push("validation commands have not stopped");
+      }
+    }
+
     for (const reviewer of workflow.reviewers) {
       if (reviewer.status !== "running" || !reviewer.providerSessionId) continue;
       const result = await this.abortSession(workflow, token, reviewer.providerSessionId, reviewer);
@@ -1775,7 +1814,51 @@ export class MultiReviewService {
     return this.options.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS;
   }
 
+  private async advanceValidation(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    let run = workflow.validationRun!;
+    if (run.status === "planned" || run.status === "running") {
+      run = await this.invoke<ReviewValidationRun>(
+        run.status === "planned" ? "start_review_validation" : "status_review_validation",
+        {
+          environmentId: workflow.environmentId,
+          run,
+        },
+      );
+      await this.assertFence(workflow.id, token);
+      workflow.validationRun = run;
+      await this.save(workflow, token);
+      if (run.status === "planned" || run.status === "running") return;
+    }
+    const preparation = validationPreparation(run);
+    const sealingStarted = Date.now();
+    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+      environmentId: workflow.environmentId,
+      packageId: run.id,
+      round: 1,
+      targetBranch: workflow.targetBranch,
+      preparation,
+      expectedHead: run.plan.headRef,
+      validationPlan: run.plan,
+    });
+    await this.assertFence(workflow.id, token);
+    run.sealingDurationMs = Date.now() - sealingStarted;
+    workflow.reviewPackage = parseReviewPackageReference(generated, {
+      id: run.id,
+      round: 1,
+      targetBranch: workflow.targetBranch,
+    });
+    workflow.phase = "reviewing";
+    settleStepRuntime(workflow, "prepare");
+    delete workflow.activeRequest;
+    delete workflow.reviewSnapshotStale;
+    await this.save(workflow, token);
+  }
+
   private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    if (workflow.phase === "preparing" && workflow.validationRun) {
+      await this.advanceValidation(workflow, token);
+      return;
+    }
     const preparing = workflow.phase === "preparing";
     const coordinating = preparing || workflow.phase === "consolidating";
     const separateReviewSession = coordinating && workflow.reviewModel !== undefined;
@@ -1878,10 +1961,7 @@ export class MultiReviewService {
       let prompt = request.schemaRepairPrompt;
       if (!prompt) {
         if (request.kind === "prepare") {
-          prompt = createMultiReviewPreparationPrompt({
-            packageId: this.reviewPackageId(workflow),
-            targetBranch: workflow.targetBranch,
-          });
+          prompt = reviewValidationDiscoveryPrompt(workflow.targetBranch);
         } else if (request.kind === "consolidate") {
           const reviewSnapshot = workflow.reviewPackage
             ? undefined
@@ -1908,7 +1988,7 @@ export class MultiReviewService {
           requestId: request.requestId,
           schema:
             request.kind === "prepare"
-              ? REVIEW_PREPARATION_RESULT_JSON_SCHEMA
+              ? REVIEW_VALIDATION_PLAN_SCHEMA
               : request.kind === "consolidate"
                 ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
                 : REVIEW_FIX_RESULT_JSON_SCHEMA,
@@ -2010,6 +2090,36 @@ export class MultiReviewService {
         result.error.code !== "malformed_output"
       )
         throw new Error(result.error.message);
+      if (
+        result.ok &&
+        result.value &&
+        typeof result.value === "object" &&
+        "commands" in result.value
+      ) {
+        let plan;
+        try {
+          plan = parseReviewValidationPlan(result.value);
+        } catch (error) {
+          await this.prepareFixSessionSchemaRepair(
+            workflow,
+            token,
+            request,
+            session,
+            new FixResultValidationError(errorMessage(error)),
+          );
+          return;
+        }
+        workflow.validationRun = newReviewValidationRun(`review-validation-${randomUUID()}`, plan);
+        workflow.validationRun.discoveryDurationMs = Math.max(
+          0,
+          Date.now() - Date.parse(session.startedAt),
+        );
+        session.status = "idle";
+        session.completedAt = nowIso();
+        delete session.stalledSince;
+        await this.save(workflow, token);
+        return;
+      }
       let preparation: ReturnType<typeof parseReviewPreparationResult>;
       try {
         if (!result.ok) throw new Error(result.error.message);
@@ -2141,12 +2251,12 @@ export class MultiReviewService {
       MAX_SCHEMA_REPAIR_ATTEMPTS,
       request.kind === "prepare"
         ? {
-            schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-            resultLabel: "review package preparation",
-            workLabel: "preparation work",
-            stageLabel: "preparation stage",
+            schema: REVIEW_VALIDATION_PLAN_SCHEMA,
+            resultLabel: "validation discovery plan",
+            workLabel: "discovery work",
+            stageLabel: "discovery stage",
             preserveInstruction:
-              "Do not rerun validation, create another commit, or modify artifacts. Correct only the preparation metadata using the evidence already collected.",
+              "Do not run validation, create another commit, or modify artifacts. Correct only the command plan using the current repository requirements already discovered. The backend executes the commands.",
           }
         : request.kind === "fix"
           ? {

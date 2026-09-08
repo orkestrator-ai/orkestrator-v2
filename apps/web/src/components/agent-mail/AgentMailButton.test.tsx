@@ -714,6 +714,7 @@ describe("AgentMailButton", () => {
 
     expect(await screen.findByText("Focused mailbox row")).toBeTruthy();
     expect(screen.queryByText("Other mailbox row") === null).toBe(true);
+    expect(screen.getByText("From You → To Claude 1 · Agent")).toBeTruthy();
     expect(screen.getByText("Claude 1 · Agent")).toBeTruthy();
   });
 
@@ -741,6 +742,7 @@ describe("AgentMailButton", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sent" }));
     expect(await screen.findByText("To Claude 2 · Peer")).toBeTruthy();
+    expect(screen.getByText("From Claude 1 · Agent → To Claude 2 · Peer")).toBeTruthy();
   });
 
   test("explains a recipient compose draft in the sender status line", async () => {

@@ -121,7 +121,8 @@ mock.module("@cursor/sdk", () => ({
   },
 }));
 
-const { workingDirectory } = await import("./config.js");
+const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
+  await import("./config.js");
 const {
   applyComposerPatch,
   detachAgent,
@@ -473,6 +474,79 @@ describe("resumeSession", () => {
       toolOutput: "# Split\n\nDo it.",
     });
     expect(assistant?.parts[0]).not.toMatchObject({ toolArgs: { plan: expect.anything() } });
+  });
+
+  test("historic createPlan variants are marked consistently with the renderer", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              steps: ["CreatePlan", "create_plan"].map((type) => ({
+                type: "toolCall",
+                message: {
+                  type,
+                  args: { plan: `# ${type}\n\nDo it.` },
+                  result: { status: "success", value: {} },
+                },
+              })),
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    expect(assistant).toMatchObject({ planReview: true });
+    expect(
+      assistant?.parts.map((part) => part.type === "tool-invocation" && part.toolName),
+    ).toEqual(["CreatePlan", "create_plan"]);
+  });
+
+  test("historic createPlan metadata stays inside the configured byte bounds", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              steps: [
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "createPlan",
+                    args: { name: "n".repeat(MAX_TOOL_TITLE_BYTES * 2), plan: "# Plan" },
+                    result: { status: "success", value: {} },
+                  },
+                },
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "createPlan",
+                    args: { plan: `# ${"h".repeat(MAX_TOOL_TITLE_BYTES * 2)}` },
+                    result: { status: "success", value: {} },
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    const plans = assistant?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+    expect(plans).toHaveLength(2);
+    expect(
+      plans.every((plan) => Buffer.byteLength(plan.toolTitle ?? "") <= MAX_TOOL_TITLE_BYTES),
+    ).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(plans[0]!.toolArgs))).toBeLessThanOrEqual(
+      MAX_TOOL_ARGUMENT_BYTES,
+    );
+    expect(plans[1]!.toolArgs).toBeUndefined();
   });
 
   test("settles replayed sub-agents rather than showing them as running", async () => {

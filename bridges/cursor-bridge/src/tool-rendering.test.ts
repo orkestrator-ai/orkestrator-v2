@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_OUTPUT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { readTodos, renderToolCall } from "./tool-rendering.js";
 
 describe("renderToolCall", () => {
@@ -163,6 +164,32 @@ describe("renderToolCall", () => {
     expect(rendered.toolTitle).toBe("Review package");
     expect(rendered.toolArgs).toBeUndefined();
     expect(rendered.toolOutput).toBe("## Review package\n\nSteps.");
+  });
+
+  test("createPlan bounds a provider-supplied name before retaining it", () => {
+    const rendered = renderToolCall({
+      type: "createPlan",
+      args: { name: "n".repeat(MAX_TOOL_TITLE_BYTES * 2), plan: "# Plan" },
+    });
+
+    expect(Buffer.byteLength(rendered.toolTitle ?? "")).toBeLessThanOrEqual(MAX_TOOL_TITLE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(rendered.toolArgs))).toBeLessThanOrEqual(
+      MAX_TOOL_ARGUMENT_BYTES,
+    );
+    expect(rendered.toolArgs?.name).toBe(rendered.toolTitle);
+  });
+
+  test("createPlan bounds a heading-derived title and its markdown output", () => {
+    const rendered = renderToolCall({
+      type: "createPlan",
+      args: {
+        plan: `# ${"h".repeat(MAX_TOOL_OUTPUT_BYTES * 2)}`,
+      },
+    });
+
+    expect(Buffer.byteLength(rendered.toolTitle ?? "")).toBeLessThanOrEqual(MAX_TOOL_TITLE_BYTES);
+    expect(Buffer.byteLength(rendered.toolOutput ?? "")).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_BYTES);
+    expect(rendered.toolArgs).toBeUndefined();
   });
 
   test("an unknown tool degrades to a plain card instead of throwing", () => {

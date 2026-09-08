@@ -39,11 +39,15 @@ describe("extractPlanMarkdown", () => {
   });
 
   test("unwraps a legacy JSON dump in toolOutput", () => {
-    expect(extractPlanMarkdown(undefined, '{"plan":"# Nested\\n\\nbody"}')).toBe("# Nested\n\nbody");
+    expect(extractPlanMarkdown(undefined, '{"plan":"# Nested\\n\\nbody"}')).toBe(
+      "# Nested\n\nbody",
+    );
   });
 
   test("returns raw markdown output when it is not a plan envelope", () => {
-    expect(extractPlanMarkdown(undefined, "# Ready\n\nDo the work.")).toBe("# Ready\n\nDo the work.");
+    expect(extractPlanMarkdown(undefined, "# Ready\n\nDo the work.")).toBe(
+      "# Ready\n\nDo the work.",
+    );
   });
 
   test("returns empty when nothing is present", () => {

@@ -59,9 +59,11 @@ export function PlanToolPart({
             components={markdownComponents}
             className="text-sm prose-invert prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2"
           />
+        ) : toolError ? null : toolState === "pending" ? (
+          <p className="text-xs text-muted-foreground">Writing plan…</p>
         ) : deferredDetails ? (
           <p className="text-xs text-muted-foreground">Loading plan…</p>
-        ) : toolError ? null : (
+        ) : (
           <p className="text-xs text-muted-foreground">No plan content.</p>
         )}
         {toolError && (

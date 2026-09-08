@@ -6203,7 +6203,9 @@ describe("AgentNativeTab", () => {
             },
           ],
         });
-        render(<AgentNativeTab tabId={`tab-plan-${platform}`} data={identity(platform)} isActive />);
+        render(
+          <AgentNativeTab tabId={`tab-plan-${platform}`} data={identity(platform)} isActive />,
+        );
 
         expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
         expect(screen.getByRole("button", { name: "Switch To Build" })).toBeTruthy();
@@ -6241,7 +6243,7 @@ describe("AgentNativeTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
       await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Approve Plan" })).toBeNull(),
+        expect(screen.queryByRole("button", { name: "Approve Plan" }) === null).toBe(true),
       );
       expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
     });
@@ -6273,6 +6275,39 @@ describe("AgentNativeTab", () => {
         prompt: "The plan is approved. Exit plan mode and implement it.",
         mode: "build",
       });
+    });
+
+    test("reports a rejected Cursor plan implementation after switching to build", async () => {
+      mockToastError.mockClear();
+      dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+        outcome: "rejected" as const,
+        requestId: input.requestId,
+        error: "Cursor rejected the implementation prompt",
+      }));
+      seedProjection({
+        composer: { selectedModeId: "plan" },
+        messages: [
+          {
+            id: "assistant-plan-rejected",
+            role: "assistant",
+            content: "Ready",
+            planReview: true,
+            parts: [],
+            createdAt: "2026-09-08T10:00:00.000Z",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId="tab-cursor-rejected" data={identity("cursor")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Cursor rejected the implementation prompt"),
+      );
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "build" },
+      });
+      expect(screen.queryByRole("button", { name: "Approve Plan" }) === null).toBe(true);
     });
   });
 });

@@ -671,10 +671,15 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
   }
   if (parts.length > 0) {
     const planReview = parts.some(
-      (part) => part.type === "tool-invocation" && part.toolName === "createPlan",
+      (part) => part.type === "tool-invocation" && isCreatePlanToolName(part.toolName),
     );
     pushMessage(state, "assistant", content, parts, messageId, { planReview });
   }
+}
+
+function isCreatePlanToolName(toolName: string | undefined): boolean {
+  const normalized = toolName?.trim().toLowerCase();
+  return normalized === "createplan" || normalized === "create_plan";
 }
 
 function appendHistoricShellTurn(state: SessionState, body: Record<string, unknown>): void {

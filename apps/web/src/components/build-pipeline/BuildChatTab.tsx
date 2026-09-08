@@ -1,3 +1,4 @@
+import { ReviewValidationStatus } from "../review/ReviewValidationStatus";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -722,6 +723,11 @@ export function BuildChatTab({
         </div>
       )}
       <BuildCompletionStatus pipeline={pipeline} />
+      {pipeline.validationRun && (
+        <div className="max-h-64 overflow-auto px-4 py-2">
+          <ReviewValidationStatus run={pipeline.validationRun} />
+        </div>
+      )}
 
       {reviewReportHint && (
         <button

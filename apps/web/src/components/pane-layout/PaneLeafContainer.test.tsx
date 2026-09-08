@@ -801,7 +801,9 @@ describe("PaneLeafContainer", () => {
       await screen.findByText("1 message waiting · delivers when this agent is idle"),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss agent mail notice" }));
-    expect(screen.queryByText("1 message waiting · delivers when this agent is idle")).toBeNull();
+    expect(
+      screen.queryByText("1 message waiting · delivers when this agent is idle") === null,
+    ).toBe(true);
 
     view.rerender(
       <PaneLeafContainer
@@ -844,7 +846,7 @@ describe("PaneLeafContainer", () => {
       );
 
       expect(await screen.findByTestId("codex-tab")).toBeTruthy();
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("alert") === null).toBe(true);
     } finally {
       console.error = originalError;
       nativeAgentTabFailureEnvironment = null;

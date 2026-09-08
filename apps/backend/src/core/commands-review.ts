@@ -1,3 +1,4 @@
+import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
 import {
   fs,
   path,
@@ -16,6 +17,7 @@ import {
   REVIEW_PACKAGE_FORMAT,
   type ReviewPackage,
   type ReviewPackageReference,
+  type ReviewValidationPlan,
 } from "@orkestrator/protocol/review-workflow";
 import {
   deletingLocalServerEnvironments,
@@ -172,6 +174,8 @@ export type ReviewPreparationValidation = {
   stderrPath: string | null;
   durationMs: number;
   limitation: string | null;
+  stdoutSha256?: string;
+  stderrSha256?: string;
 };
 
 export type ReviewPreparationFileNote = {
@@ -251,10 +255,28 @@ export function parseReviewPreparationValidation(
     const entry = asRecord(candidate, `validation[${index}]`);
     assertOnlyKeys(
       entry,
-      ["command", "status", "exitCode", "stdoutPath", "stderrPath", "durationMs", "limitation"],
+      [
+        "command",
+        "status",
+        "exitCode",
+        "stdoutPath",
+        "stderrPath",
+        "durationMs",
+        "limitation",
+        "stdoutSha256",
+        "stderrSha256",
+      ],
       `validation[${index}]`,
     );
     const command = asString(entry.command, `validation[${index}].command`);
+    for (const key of ["stdoutSha256", "stderrSha256"] as const) {
+      if (
+        entry[key] !== undefined &&
+        (typeof entry[key] !== "string" || !/^[a-f0-9]{64}$/.test(entry[key]))
+      )
+        throw new Error("Invalid validation artifact hash");
+    }
+
     if (command.trim().length === 0) {
       throw new Error(`Expected validation[${index}].command to be non-empty`);
     }
@@ -291,11 +313,19 @@ export function parseReviewPreparationValidation(
       };
     }
 
-    if (!Number.isInteger(entry.exitCode)) {
-      throw new Error(`Expected validation[${index}].exitCode to be an integer`);
+    if (
+      !Number.isInteger(entry.exitCode) &&
+      !(status === "failed" && entry.exitCode === null && limitation)
+    ) {
+      throw new Error(
+        `Expected validation[${index}].exitCode to be an integer or a documented abnormal termination`,
+      );
     }
-    const exitCode = entry.exitCode as number;
-    if ((status === "passed" && exitCode !== 0) || (status === "failed" && exitCode === 0)) {
+    const exitCode = entry.exitCode as number | null;
+    if (
+      (status === "passed" && exitCode !== 0) ||
+      (status === "failed" && exitCode === 0 && !limitation)
+    ) {
       throw new Error(`Validation[${index}] status does not match its exit code`);
     }
     const artifactDirectory = reviewArtifactDirectory(packageId);
@@ -326,6 +356,8 @@ export function parseReviewPreparationValidation(
       stderrPath,
       durationMs: durationMs as number,
       limitation: limitation as string | null,
+      ...(entry.stdoutSha256 === undefined ? {} : { stdoutSha256: entry.stdoutSha256 as string }),
+      ...(entry.stderrSha256 === undefined ? {} : { stderrSha256: entry.stderrSha256 as string }),
     };
   });
 }
@@ -565,7 +597,7 @@ for p in "$@"; do
   printf 'file\t%s\t%s\t%s\n' "$(realpath -- "$p")" "$(wc -c < "$p")" "$p"
 done`;
 
-async function ensureReviewPackageIsGitExcluded(
+export async function ensureReviewPackageIsGitExcluded(
   environment: Environment,
   runner: EnvironmentCommandRunner,
   filePath: string,
@@ -698,6 +730,8 @@ export async function verifyEnvironmentReviewPackage(
     if (sha256 !== reference.sha256) {
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
+    const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
+    await verifyValidationArtifacts(environment, runner, pkg.validation);
     return { valid: true };
   } catch (error) {
     return {
@@ -799,6 +833,8 @@ export async function generateLoopedReviewPackage(
   context: CommandContext,
   options: {
     additionalLimitations?: string[];
+    expectedHead?: string;
+    validationPlan?: ReviewValidationPlan;
   } = {},
 ): Promise<ReviewPackageReference> {
   const environment = await context.storage.getEnvironment(environmentId);
@@ -811,6 +847,8 @@ export async function generateLoopedReviewPackage(
     runner("git", ["rev-parse", "--verify", `${baseName}^{commit}`], 30_000),
   ]);
   const headRef = headOutput.trim();
+  if (options.expectedHead !== undefined && headRef !== options.expectedHead)
+    throw new Error("Repository HEAD changed after validation; prepare a new review snapshot");
   const baseRef = baseOutput.trim();
   if (!/^[a-f0-9]{40}$/i.test(headRef) || !/^[a-f0-9]{40}$/i.test(baseRef)) {
     throw new Error("Git did not resolve full review package commit SHAs");
@@ -860,6 +898,7 @@ export async function generateLoopedReviewPackage(
     );
   }
 
+  await verifyValidationArtifacts(environment, runner, validation);
   const hydratedValidation = validation.map((entry) => {
     // The preparation agent reports `limitation: null` for a command that ran
     // without one, but the persisted contract is `limitation?: string` and its
@@ -888,6 +927,8 @@ export async function generateLoopedReviewPackage(
       stderrPath: entry.stderrPath!,
       stdoutBytes: artifactSizes.get(entry.stdoutPath!) ?? 0,
       stderrBytes: artifactSizes.get(entry.stderrPath!) ?? 0,
+      ...(entry.stdoutSha256 === undefined ? {} : { stdoutSha256: entry.stdoutSha256 }),
+      ...(entry.stderrSha256 === undefined ? {} : { stderrSha256: entry.stderrSha256 }),
       durationMs: entry.durationMs,
       ...limitation,
     };
@@ -918,6 +959,7 @@ export async function generateLoopedReviewPackage(
     diffCommand,
     changedFiles,
     validation: hydratedValidation,
+    ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
     uncommittedFiles: [...uncommittedFiles].sort((left, right) =>
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),

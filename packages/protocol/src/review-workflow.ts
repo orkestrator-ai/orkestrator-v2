@@ -1,3 +1,4 @@
+import { isReviewValidationPlan, type ReviewValidationPlan } from "./review-validation.js";
 /**
  * Shared body for code review prompts.
  *
@@ -119,6 +120,8 @@ export interface ReviewPackageCommandResult {
   stderrPath: string | null;
   stdoutBytes: number;
   stderrBytes: number;
+  stdoutSha256?: string;
+  stderrSha256?: string;
   durationMs: number;
   limitation?: string;
 }
@@ -185,6 +188,7 @@ export interface ReviewPackage {
   diffCommand: string;
   changedFiles: ReviewPackageFile[];
   validation: ReviewPackageCommandResult[];
+  validationPlan?: ReviewValidationPlan;
   uncommittedFiles: Array<{ path: string; reason: string }>;
   limitations: string[];
   context?: ReviewPackageContext;
@@ -687,7 +691,10 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
     !isPackageIdentity(value, round) ||
     !isBoundedNonEmptyString(value.diffCommand, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
     !Array.isArray(value.changedFiles) ||
-    !Array.isArray(value.validation)
+    !Array.isArray(value.validation) ||
+    (value.validationPlan !== undefined &&
+      (!isReviewValidationPlan(value.validationPlan) ||
+        value.validationPlan.headRef !== value.headRef))
   )
     return false;
   if (
@@ -713,6 +720,10 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
         !isNonNegativeInteger(entry.durationMs) ||
         !isNonNegativeInteger(entry.stdoutBytes) ||
         !isNonNegativeInteger(entry.stderrBytes) ||
+        (entry.stdoutSha256 !== undefined &&
+          (typeof entry.stdoutSha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.stdoutSha256))) ||
+        (entry.stderrSha256 !== undefined &&
+          (typeof entry.stderrSha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.stderrSha256))) ||
         !isOptionalString(entry.limitation)
       )
         return false;
@@ -1540,3 +1551,4 @@ Review coverage for behavior changed or affected by the diff:
 
 ${outputSection}`;
 }
+export * from "./review-validation.js";

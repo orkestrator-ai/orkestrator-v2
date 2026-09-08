@@ -1,3 +1,5 @@
+import { usesReviewFanout } from "@orkestrator/protocol/build-pipeline";
+import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
 import { createHash } from "node:crypto";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
@@ -212,7 +214,9 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string, targetBranch
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     "Build this feature completely. Do not ask questions; make your best judgment for ambiguous requirements.",
-    reviewPackagePreparationPrompt(pipeline, targetBranch),
+    usesReviewFanout(pipeline) || pipeline.reviewPreparation
+      ? IMPLEMENTATION_VALIDATION_HANDOFF
+      : reviewPackagePreparationPrompt(pipeline, targetBranch),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -543,7 +547,9 @@ export function fixPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
-    reviewPackagePreparationPrompt(pipeline, targetBranch),
+    usesReviewFanout(pipeline) || pipeline.reviewPreparation
+      ? IMPLEMENTATION_VALIDATION_HANDOFF
+      : reviewPackagePreparationPrompt(pipeline, targetBranch),
   ]
     .filter(Boolean)
     .join("\n\n");

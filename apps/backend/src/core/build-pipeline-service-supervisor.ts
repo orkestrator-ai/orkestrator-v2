@@ -1,3 +1,13 @@
+import {
+  newReviewValidationRun,
+  parseReviewValidationPlan,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
+import {
+  reviewValidationDiscoveryPrompt,
+  REVIEW_VALIDATION_PLAN_SCHEMA,
+} from "./review-validation-prompts.js";
+import { validationPreparation } from "./review-validation-service.js";
 import { randomUUID } from "node:crypto";
 import type {
   BuildPipeline,
@@ -310,6 +320,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         return;
       }
       await this.advanceReviewFanout(pipeline);
+      return;
+    }
+
+    if (
+      pipeline.validationRun &&
+      !pipeline.reviewPackage &&
+      (pipeline.phase === "fixing" || pipeline.phase === "building")
+    ) {
+      if (pipeline.reviewRetryRequested || pipeline.validationRun.status === "cancelled") {
+        delete pipeline.reviewRetryRequested;
+        await this.startReviewPackagePreparation(pipeline);
+        return;
+      }
+      await this.advanceValidation(pipeline);
       return;
     }
 
@@ -642,6 +666,19 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
+    if (result.value && typeof result.value === "object" && "commands" in result.value) {
+      pipeline.validationRun = newReviewValidationRun(
+        `review-validation-${randomUUID()}`,
+        parseReviewValidationPlan(result.value),
+      );
+      pipeline.validationRun.discoveryDurationMs = Math.max(
+        0,
+        Date.now() - Date.parse(session.turnStartedAt ?? session.startedAt),
+      );
+      session.structuredResultStatus = "accepted";
+      await this.save(pipeline, pipeline.backendRevision);
+      return;
+    }
     const preparation = parseReviewPreparationResult(result.value);
     const packageId = buildPipelineReviewPackageId(pipeline);
     const round = pipeline.iteration + 1;
@@ -661,6 +698,44 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       targetBranch,
     });
     session.structuredResultStatus = "accepted";
+    await this.startStage(pipeline, "review", "reviewing");
+  }
+
+  private async advanceValidation(pipeline: BuildPipeline): Promise<void> {
+    let run = pipeline.validationRun!;
+    if (run.status === "planned" || run.status === "running") {
+      run = await this.invoke<ReviewValidationRun>(
+        run.status === "planned" ? "start_review_validation" : "status_review_validation",
+        {
+          environmentId: pipeline.environmentId,
+          run,
+        },
+      );
+      pipeline.validationRun = run;
+      await this.save(pipeline, pipeline.backendRevision);
+      if (run.status === "planned" || run.status === "running") return;
+    }
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const targetBranch = repository.prBaseBranch || "main";
+    const round = pipeline.iteration + 1;
+    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+    const sealingStarted = Date.now();
+    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+      environmentId: pipeline.environmentId,
+      packageId: run.id,
+      round,
+      targetBranch,
+      preparation: validationPreparation(run),
+      expectedHead: run.plan.headRef,
+      validationPlan: run.plan,
+      additionalLimitations: buildPipelineReviewPackageContext(pipeline, notes).limitations,
+    });
+    run.sealingDurationMs = Date.now() - sealingStarted;
+    pipeline.reviewPackage = parseReviewPackageReference(generated, {
+      id: run.id,
+      round,
+      targetBranch,
+    });
     await this.startStage(pipeline, "review", "reviewing");
   }
 
@@ -834,11 +909,18 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
+    if (pipeline.validationRun) {
+      await this.invoke("cancel_review_validation", {
+        environmentId: pipeline.environmentId,
+        run: pipeline.validationRun,
+      });
+      delete pipeline.validationRun;
+    }
     delete pipeline.reviewPackage;
     await this.startStage(pipeline, "fix", "fixing", {
-      prompt: reviewPackagePreparationPrompt(pipeline, targetBranch),
+      prompt: reviewValidationDiscoveryPrompt(targetBranch),
       images: [],
-      schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+      schema: REVIEW_VALIDATION_PLAN_SCHEMA,
       label: "Package Preparation Session",
       settings: pipeline.reviewPreparation
         ? {
@@ -1002,6 +1084,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         prompt,
         useTaskImages: images.length > 0,
         structuredReview: schema !== undefined,
+        validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
         startedAt: promptStartedAt,
       };
       pipeline.activePromptContext = {
@@ -1012,6 +1095,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         useTaskImages: images.length > 0,
         requestId,
         structuredReview: schema !== undefined,
+        validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
       };
       if (phase === "reviewing") {
         pipeline.structuredReviewRequestId = requestId;
@@ -1057,7 +1141,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (!attempt) return;
     const schema = attempt.structuredReview
       ? attempt.phase === "building" || attempt.phase === "fixing"
-        ? REVIEW_PREPARATION_RESULT_JSON_SCHEMA
+        ? attempt.validationPlan === true
+          ? REVIEW_VALIDATION_PLAN_SCHEMA
+          : REVIEW_PREPARATION_RESULT_JSON_SCHEMA
         : attempt.phase === "reviewing"
           ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
           : attempt.phase === "verifying"
@@ -1137,7 +1223,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (phase === "build") {
       return {
         prompt: buildPrompt(pipeline, notes, target),
-        schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        schema:
+          usesReviewFanout(pipeline) || pipeline.reviewPreparation
+            ? undefined
+            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
     }
@@ -1194,7 +1283,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           pipeline.verificationFeedback ?? "The verification did not pass.",
           target,
         ),
-        schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        schema:
+          usesReviewFanout(pipeline) || pipeline.reviewPreparation
+            ? undefined
+            : REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
     }

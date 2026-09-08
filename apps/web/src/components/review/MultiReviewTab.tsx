@@ -1,3 +1,4 @@
+import { ReviewValidationStatus } from "./ReviewValidationStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -76,7 +77,7 @@ interface MultiReviewTabProps {
 
 function phaseCopy(phase: MultiReviewPhase): string {
   const labels = {
-    preparing: "The review preparation model is preparing the package",
+    preparing: "Discovering validation, running checks, and preparing shared evidence",
     reviewing: "Independent read-only reviews are running",
     consolidating: "The review preparation model is consolidating findings",
     ready: "Consolidated report ready",
@@ -903,6 +904,7 @@ function MultiReviewOverviewTab({
             canOpen={canOpenReviewStep(packageStatus)}
             onOpen={() => presentReviewSession(workflow)}
           />
+          {workflow.validationRun && <ReviewValidationStatus run={workflow.validationRun} />}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>

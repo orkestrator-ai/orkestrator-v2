@@ -395,7 +395,7 @@ export const PACKAGED_REVIEW_WORKING_RULES = `### How to work
 
 - The package names the reviewed range and the exact \`diffCommand\` that produces it. Run that command yourself to read the diff.
 - Read any file you need. Use \`git show <headRef>:<path>\` when the worktree may have moved past the reviewed commit.
-- Validation already ran once for this round. Each \`validation\` entry gives the command, its exit code, and the artifact files holding its exact stdout and stderr. Read those files instead of rerunning the command. Do not rerun the full test suite, typecheck, or build; a single targeted test is acceptable when a finding genuinely depends on it.
+- Validation already ran once for this round. Start with each \`validation\` entry's status, exit code, duration, and limitations. Passing commands need no log ingestion. For failures, search the referenced stdout/stderr artifacts and read bounded relevant ranges; never dump entire large logs into context. These are the captured command bytes; honor any incomplete-output limitation. Read evidence instead of rerunning the command. Do not rerun the full test suite, typecheck, or build; a single targeted test is acceptable when a finding genuinely depends on it.
 - Do not modify, create, or delete files, and do not commit, stash, reset, fetch, or switch branches. Report what you find instead of fixing it.
 - Do not ask questions or wait for input. Record anything you could not verify as a limitation.`;
 

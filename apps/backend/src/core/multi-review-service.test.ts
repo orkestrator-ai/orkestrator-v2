@@ -1,3 +1,4 @@
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 import { randomUUID } from "node:crypto";
 import { captureReviewWorktreeSnapshot } from "./review-fanout.js";
 import {
@@ -267,7 +268,10 @@ class Provider implements BuildPipelineProvider {
     if (!this.returnStructured) return null;
     const sent = this.sends.get(requestId)!;
     const isConsolidation = this.consolidationSessions.has(sessionId);
-    if (sent.options.schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA)
+    if (
+      sent.options.schema === REVIEW_PREPARATION_RESULT_JSON_SCHEMA ||
+      sent.options.schema === REVIEW_VALIDATION_PLAN_SCHEMA
+    )
       return { ok: true, provider: "claude", requestId, value: TEST_REVIEW_PREPARATION as T };
     if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
       if (this.fixStructuredFailure) {
@@ -4700,7 +4704,7 @@ test("Multi Review prepares and consolidates with its review model before openin
         mode: "build",
       });
       expect([...provider.sends.values()][0]?.options.schema).toEqual(
-        REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        REVIEW_VALIDATION_PLAN_SCHEMA,
       );
       expect(commands.some((entry) => entry.command === "generate_looped_review_package")).toBe(
         false,
@@ -5057,7 +5061,7 @@ test("preparation metadata repairs are bounded and preserve already collected ev
         async () => (await snapshot(started.id))?.activeRequest?.schemaRepairAttempts === 1,
       );
       const repairing = (await snapshot(started.id))!;
-      expect(repairing.activeRequest?.schemaRepairPrompt).toContain("Do not rerun validation");
+      expect(repairing.activeRequest?.schemaRepairPrompt).toContain("Do not run validation");
       expect(repairing.activeRequest?.kind).toBe("prepare");
       expect(repairing.reviewPackage).toBeUndefined();
       invalid = false;

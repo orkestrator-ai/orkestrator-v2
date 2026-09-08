@@ -1,3 +1,4 @@
+import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import {
   existsSync,
   path,
@@ -1414,6 +1415,7 @@ export async function deleteEnvironment(
         lifecycleOperation: "deleting",
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
+      await stopEnvironmentReviewValidation(environmentId, context);
       cleanupTerminalSessionsForEnvironment(environmentId);
       await deleteTerminalHistories({
         dataDir: storage.getDataDir(),

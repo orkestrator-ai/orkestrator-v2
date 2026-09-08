@@ -6,6 +6,7 @@ import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
+import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
@@ -332,12 +333,14 @@ export function TextPart({
   content,
   showCopy = true,
   truncateUserPrompt = false,
+  promptPresentation,
   renderJsonPayload = true,
   expansionKey,
 }: {
   content: string;
   showCopy?: boolean;
   truncateUserPrompt?: boolean;
+  promptPresentation?: UserPromptPresentationKind;
   /**
    * Fold a block that is nothing but JSON into a structured view. Off for the
    * user's own messages, which are shown back as written.
@@ -347,14 +350,14 @@ export function TextPart({
   expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const promptPresentation = useMemo(
+  const presentedPrompt = useMemo(
     () =>
       truncateUserPrompt
-        ? userPromptPresentation(content)
+        ? userPromptPresentation(content, promptPresentation)
         : { displayText: content, evidencePayload: null },
-    [content, truncateUserPrompt],
+    [content, promptPresentation, truncateUserPrompt],
   );
-  const displayContent = promptPresentation.displayText;
+  const displayContent = presentedPrompt.displayText;
   const lineCount = useMemo(() => displayContent.split(/\r\n|\r|\n/).length, [displayContent]);
   const shouldTruncate = truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
   const jsonPayload = useMemo(
@@ -414,10 +417,10 @@ export function TextPart({
           {isExpanded ? "show less" : "show more"}
         </button>
       ) : null}
-      {promptPresentation.evidencePayload ? (
+      {presentedPrompt.evidencePayload ? (
         <div className="pt-2">
           <JsonPayloadPart
-            payload={promptPresentation.evidencePayload}
+            payload={presentedPrompt.evidencePayload}
             expansionKey={`${expansionKey}/prompt-evidence`}
           />
         </div>

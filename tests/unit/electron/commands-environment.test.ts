@@ -1,4 +1,9 @@
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -407,6 +412,15 @@ exit 1
    * "this backend says there are none" apart from "this backend cannot say".
    */
   test("always reports whether stripped attachment bodies exist", () => {
+    const delegation = createCoordinatorDelegatedPrompt(
+      {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+      },
+      "Implement the delegated task.",
+    );
     const withAttachments = createEnvironment({
       initialPromptAttachments: [
         {
@@ -415,11 +429,16 @@ exit 1
           base64Data: "cHJpdmF0ZQ==",
         },
       ],
+      initialPromptPresentation: {
+        kind: COORDINATOR_DELEGATION_PRESENTATION,
+        frame: delegation.frame,
+      },
     });
     expect(toClientEnvironment(withAttachments)).toMatchObject({
       hasInitialPromptAttachments: true,
     });
     expect(toClientEnvironment(withAttachments)).not.toHaveProperty("initialPromptAttachments");
+    expect(toClientEnvironment(withAttachments)).not.toHaveProperty("initialPromptPresentation");
 
     expect(toClientEnvironment(createEnvironment({})).hasInitialPromptAttachments).toBe(false);
     expect(

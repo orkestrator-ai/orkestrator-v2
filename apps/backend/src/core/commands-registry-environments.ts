@@ -584,6 +584,7 @@ export function registerEnvironmentCommands(
           updates.initialReasoningEffort = undefined;
           updates.initialConversationMode = undefined;
           updates.initialPromptAttachments = undefined;
+          updates.initialPromptPresentation = undefined;
         }
       }
       if (pendingAgentLaunch !== false && initialAgentPlatform !== undefined) {

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  COORDINATOR_DELEGATION_FRAME_OPEN,
+  COORDINATOR_DELEGATION_OMISSION_TEXT,
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  createCoordinatorDelegatedPrompt,
+  type UserPromptPresentationKind,
+} from "@orkestrator/protocol/review-evidence-frames";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { ERROR_MESSAGE_PREFIX } from "@/lib/opencode-client";
@@ -24,6 +32,7 @@ function makeMessage(
     content: string;
     createdAt: string;
     modelId: string;
+    promptPresentation: UserPromptPresentationKind;
   }>,
 ) {
   return {
@@ -33,6 +42,9 @@ function makeMessage(
     createdAt: overrides?.createdAt ?? "2026-03-21T10:00:00.000Z",
     parts,
     ...(overrides?.modelId !== undefined ? { modelId: overrides.modelId } : {}),
+    ...(overrides?.promptPresentation !== undefined
+      ? { promptPresentation: overrides.promptPresentation }
+      : {}),
   };
 }
 
@@ -759,15 +771,27 @@ describe("NativeMessage task list rendering", () => {
     mockWriteText.mockImplementation(async () => {});
     const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
     const visibleSource = `${contract.promptPrefix} Backend context follows.\n\n${contract.openMarker}\n[{"summary":"Hidden copy evidence"}]\n${contract.closeMarker}\n\n${contract.continuationPrefix}"main".`;
-    const source = `<orkestrator-coordinator-delegation>\nProject: project-1\nCoordinator: coordinator-1\nConversation: conversation-1\nThis is a server-attested same-project worker delegation.\n</orkestrator-coordinator-delegation>\n\n${visibleSource}`;
+    const source = createCoordinatorDelegatedPrompt(
+      {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+      },
+      visibleSource,
+    ).source;
     const message = makeMessage([{ type: "text", content: source }], {
       role: "user",
       id: "user-filtered-copy",
+      promptPresentation: COORDINATOR_DELEGATION_PRESENTATION,
     });
 
     render(<NativeMessage message={message} />);
 
     expect(document.body.textContent).toContain(contract.omissionText);
+    expect(document.body.textContent).toContain(COORDINATOR_DELEGATION_OMISSION_TEXT);
+    expect(document.body.textContent).not.toContain(COORDINATOR_DELEGATION_FRAME_OPEN);
+    expect(document.body.textContent).not.toContain("project-1");
     expect(document.body.textContent).not.toContain("Hidden copy evidence");
     const prompt = screen.getByText(contract.omissionText);
     fireEvent.pointerDown(prompt, {

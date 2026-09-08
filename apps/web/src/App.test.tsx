@@ -1,6 +1,6 @@
 import { createSessionKey } from "@/lib/utils";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
@@ -63,6 +63,7 @@ const mockCreateEnvironment = mock(async () => makeEnvironment("created", "proje
 const mockUpdateEnvironment = mock(() => {});
 const mockUseEnvironmentLifecycleService = mock(() => {});
 const mockExit = mock(async () => {});
+const mockRestart = mock(async () => {});
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
@@ -360,6 +361,7 @@ mock.module("lucide-react", () => ({
 
 mock.module("@/lib/native/process", () => ({
   exit: mockExit,
+  restart: mockRestart,
 }));
 
 import App, { DOCKER_AVAILABILITY_POLL_INTERVAL_MS } from "./App";
@@ -474,6 +476,7 @@ function resetAppMocks() {
   mockUseEnvironmentLifecycleService.mockClear();
   projectLauncherProps = null;
   mockExit.mockClear();
+  mockRestart.mockClear();
   mockCheckDocker.mockClear();
   mockCheckDocker.mockImplementation(async () => true);
   mockSyncAllEnvironmentsWithDocker.mockClear();
@@ -1974,6 +1977,62 @@ describe("App startup checks and global events", () => {
         }),
       );
     });
+  });
+
+  test("rehydrates and displays a persistent Local backend outage with restart", async () => {
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+    const originalOrkestrator = window.orkestrator;
+    const desktopEventCallbacks = new Map<string, (payload: unknown) => void>();
+    window.orkestrator = {
+      isolatedViewState: true,
+      invoke: mock(async () => undefined) as never,
+      listen: (event, callback) => {
+        desktopEventCallbacks.set(event, callback as (payload: unknown) => void);
+        return () => desktopEventCallbacks.delete(event);
+      },
+      clipboard: {
+        readText: async () => "",
+        writeText: async () => undefined,
+        readImage: async () => null,
+        writeImage: async () => undefined,
+      },
+      dialog: { open: async () => null },
+      connections: {
+        list: async () => ({
+          activeConnectionId: "local",
+          localAvailable: false,
+          connections: [
+            {
+              id: "local",
+              name: "Local",
+              address: null,
+              kind: "local",
+              active: true,
+              requiresToken: false,
+            },
+          ],
+        }),
+      } as NonNullable<Window["orkestrator"]>["connections"],
+      process: { exit: async () => undefined, restart: async () => undefined },
+      window: { startDragging: async () => undefined, setZoomFactor: async () => false },
+    };
+
+    try {
+      render(<App />);
+
+      expect(await screen.findByText(/Local backend stopped/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Restart Orkestrator" }));
+      await waitFor(() => expect(mockRestart).toHaveBeenCalledTimes(1));
+
+      act(() => {
+        desktopEventCallbacks.get("local-backend-unavailable")?.({
+          message: "backend child exited",
+        });
+      });
+      expect(screen.getByText(/backend child exited/)).toBeTruthy();
+    } finally {
+      window.orkestrator = originalOrkestrator;
+    }
   });
 
   test("switches from the CSS fallback to native page zoom and clears the fallback", async () => {

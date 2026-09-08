@@ -2,6 +2,7 @@ import type { MenuItemConstructorOptions } from "electron";
 
 export type ApplicationMenuActions = {
   productName: string;
+  newWindow(): void;
   closeTab(): void;
   zoom(direction: "in" | "out" | "reset"): void;
 };
@@ -26,6 +27,12 @@ export function createApplicationMenuTemplate(
     {
       label: "File",
       submenu: [
+        {
+          label: "New Window",
+          accelerator: "CmdOrCtrl+N",
+          click: actions.newWindow,
+        },
+        { type: "separator" },
         {
           label: "Close Tab",
           accelerator: "Command+W",

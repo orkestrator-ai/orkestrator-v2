@@ -584,6 +584,70 @@ describe("PersistentTerminal", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.orkestrator;
+  });
+
+  it("publishes geometry for a visible non-focused split pane in the focused window", async () => {
+    const originalHasFocus = document.hasFocus;
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+    try {
+      render(
+        <PersistentTerminal
+          terminalData={createTerminalData()}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused={false}
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+
+      await waitFor(() => expect(resizeMock).toHaveBeenCalledWith(80, 24));
+    } finally {
+      Object.defineProperty(document, "hasFocus", {
+        configurable: true,
+        value: originalHasFocus,
+      });
+    }
+  });
+
+  it("suppresses every regular-terminal geometry path in a background window", async () => {
+    const originalHasFocus = document.hasFocus;
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
+    window.orkestrator = { isolatedViewState: true } as Window["orkestrator"];
+    const terminalData = createTerminalData();
+    try {
+      render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused={false}
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+
+      await waitFor(() => expect(terminalData.fitAddon.fit).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+      expect(resizeMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(document, "hasFocus", {
+        configurable: true,
+        value: originalHasFocus,
+      });
+    }
   });
 
   it("does not force a redraw when opening a fresh terminal already visible", async () => {

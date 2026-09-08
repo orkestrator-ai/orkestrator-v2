@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { mockToastError, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -39,6 +39,7 @@ function installConnections(
     updateToken: (connectionId: string, token: string) => Promise<ConnectionList>;
     use: (connectionId: string) => Promise<ConnectionList>;
     forget: (connectionId: string) => Promise<ConnectionList>;
+    openWindow: (connectionId: string) => Promise<void>;
   }> = {},
 ) {
   const list = mock(overrides.list ?? (async () => connectionList));
@@ -55,6 +56,7 @@ function installConnections(
         ),
       })),
   );
+  const openWindow = mock(overrides.openWindow ?? (async () => undefined));
   window.orkestrator = {
     invoke: mock(async () => undefined) as unknown as NonNullable<Window["orkestrator"]>["invoke"],
     listen: mock(() => () => undefined),
@@ -65,11 +67,11 @@ function installConnections(
       writeImage: mock(async () => undefined),
     },
     dialog: { open: mock(async () => null) },
-    connections: { list, probe, connect, updateToken, use, forget },
+    connections: { list, probe, connect, updateToken, use, forget, openWindow },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { list, probe, connect, updateToken, use, forget };
+  return { list, probe, connect, updateToken, use, forget, openWindow };
 }
 
 afterEach(() => {
@@ -80,6 +82,29 @@ afterEach(() => {
 });
 
 describe("ConnectionsSettings", () => {
+  test("updates an open settings view from another window's catalogue broadcast", async () => {
+    let desktopListener: ((payload: ConnectionList) => void) | undefined;
+    installConnections();
+    window.orkestrator!.listen = mock((event, callback) => {
+      if (event === "desktop-connections-changed") {
+        desktopListener = callback as (payload: ConnectionList) => void;
+      }
+      return () => undefined;
+    });
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    act(() => {
+      desktopListener?.({
+        ...initialList,
+        connections: [initialList.connections[0]!],
+      });
+    });
+
+    await waitFor(() => expect(screen.queryByText("desk.tailnet.ts.net") === null).toBe(true));
+    expect(screen.getByText("0 remote connections")).toBeTruthy();
+  });
+
   test("shows local and remote servers with secure token status", async () => {
     installConnections();
     render(<ConnectionsSettings />);
@@ -116,6 +141,17 @@ describe("ConnectionsSettings", () => {
         token: "gateway-token-123456",
       }),
     );
+  });
+
+  test("opens a saved connection in a new window without switching this one", async () => {
+    const api = installConnections();
+    render(<ConnectionsSettings />);
+    await screen.findByText("desk.tailnet.ts.net");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open desk.tailnet.ts.net in new window" }));
+
+    await waitFor(() => expect(api.openWindow).toHaveBeenCalledWith("remote-1"));
+    expect(api.use).not.toHaveBeenCalled();
   });
 
   test("replaces a saved token without switching connections", async () => {

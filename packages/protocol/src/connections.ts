@@ -16,6 +16,8 @@ export interface ConnectionList {
   activeConnectionId: string;
   connections: ConnectionSummary[];
   credentialStorage?: "secure" | "session-only";
+  /** Whether the desktop-owned Local backend can currently accept work. */
+  localAvailable?: boolean;
 }
 
 export interface ConnectToRemoteInput {
@@ -112,6 +114,10 @@ export function parseConnectionList(value: unknown): ConnectionList {
   ) {
     throw new Error("Expected credentialStorage to be secure or session-only.");
   }
+  const localAvailable = root.localAvailable;
+  if (localAvailable !== undefined && typeof localAvailable !== "boolean") {
+    throw new Error("Expected localAvailable to be a boolean.");
+  }
   const connections = root.connections.map((value, index): ConnectionSummary => {
     const connection = asRecord(value, `connections[${index}]`);
     const kind = connection.kind;
@@ -145,5 +151,6 @@ export function parseConnectionList(value: unknown): ConnectionList {
     activeConnectionId,
     connections,
     ...(credentialStorage === undefined ? {} : { credentialStorage }),
+    ...(localAvailable === undefined ? {} : { localAvailable }),
   };
 }

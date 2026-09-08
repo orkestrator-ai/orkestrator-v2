@@ -115,13 +115,23 @@ describe("Electron packaging configuration", () => {
     expect(desktopMain).toContain("onUnexpectedClose: () => app.quit()");
     expect(desktopMain).toContain("await toolchainProgress.close()");
     expect(desktopMain).toContain('alwaysQuit: runtimeFlavor === "agent-test"');
-    expect(desktopMain.indexOf("mainWindow = createdWindow;")).toBeLessThan(
+    expect(desktopMain).toContain("const windowContexts = new Map<number, DesktopWindowContext>()");
+    expect(desktopMain.indexOf("windowContexts.set(webContentsId")).toBeLessThan(
       desktopMain.indexOf("windowAllClosedQuit.markMainWindowCreated();"),
     );
     expect(desktopMain).toContain("initializeBrowserPreviews");
-    expect(desktopMain).toContain("browserPreviewManager = browserPreviewRuntime.manager");
-    expect(desktopMain).toContain("browserPreviews: browserPreviewManager ?? undefined");
-    expect(desktopMain).toContain("registerBrowserPreviewWindowCleanup");
+    expect(desktopMain).toContain("browserPreviewManager: browserPreviewRuntime.manager");
+    expect(desktopMain).toContain("getBrowserPreviews: (event)");
+    expect(desktopMain).toContain(
+      "windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll()",
+    );
+    expect(desktopMain).toContain("browserPreviewPartitionForWindow(context.slot, connectionId)");
+    expect(desktopMain.indexOf("registerIpc();")).toBeLessThan(
+      desktopMain.indexOf("windowRequestGate.markReady()"),
+    );
+    expect(desktopMain.indexOf("windowRequestGate.markReady()")).toBeLessThan(
+      desktopMain.indexOf("await createWindow();"),
+    );
     expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
   });
 

@@ -91,6 +91,7 @@ describe("preload API factory", () => {
   test("routes backend commands through the invoke IPC channel", async () => {
     const { ipc, invoke } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);
+    expect(api.isolatedViewState).toBe(true);
 
     await expect(api.invoke("get_projects")).resolves.toEqual({
       channel: "orkestrator:invoke",
@@ -196,9 +197,17 @@ describe("preload API factory", () => {
       channel: "orkestrator:connections:forget",
       args: ["remote-1"],
     });
+    await expect(api.connections.openWindow("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:open-window",
+      args: ["remote-1"],
+    });
     await expect(api.process.exit(7)).resolves.toEqual({
       channel: "orkestrator:process:exit",
       args: [7],
+    });
+    await expect(api.process.restart()).resolves.toEqual({
+      channel: "orkestrator:process:restart",
+      args: [],
     });
     await expect(api.window.startDragging()).resolves.toEqual({
       channel: "orkestrator:window:start-dragging",

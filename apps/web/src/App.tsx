@@ -5,7 +5,7 @@ import {
 } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@/lib/native/events";
-import { exit } from "@/lib/native/process";
+import { exit, restart } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
@@ -66,6 +66,8 @@ import type {
   DockerAvailability,
   DockerUnavailableReason,
 } from "@orkestrator/protocol/docker-availability";
+import type { ConnectionList } from "@orkestrator/protocol/connections";
+import { subscribeToConnections } from "@/lib/connections";
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 
@@ -263,6 +265,44 @@ function App() {
   const [availableAiCli, setAvailableAiCli] = useState<string | null>(null);
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
+  const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    const connectionsApi = window.orkestrator?.connections;
+    if (!connectionsApi) return;
+    let active = true;
+    const applyConnectionList = (list: ConnectionList) => {
+      if (!active) return;
+      setLocalBackendUnavailableMessage(
+        list.activeConnectionId === "local" && list.localAvailable === false
+          ? "The Local backend stopped. Restart Orkestrator to recover local work."
+          : null,
+      );
+    };
+    void connectionsApi
+      .list()
+      .then(applyConnectionList)
+      .catch(() => undefined);
+    const unsubscribeConnections = subscribeToConnections(applyConnectionList);
+    const unsubscribeUnavailable = window.orkestrator?.listen<{ message?: string }>(
+      "local-backend-unavailable",
+      (payload) => {
+        if (!active) return;
+        setLocalBackendUnavailableMessage(
+          payload.message
+            ? `The Local backend stopped: ${payload.message}`
+            : "The Local backend stopped. Restart Orkestrator to recover local work.",
+        );
+      },
+    );
+    return () => {
+      active = false;
+      unsubscribeConnections();
+      unsubscribeUnavailable?.();
+    };
+  }, []);
 
   const selectedEnvironment = selectedEnvironmentId
     ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
@@ -759,6 +799,28 @@ function App() {
       <TerminalProvider>
         <DockerAvailabilityProvider available={dockerAvailable === true}>
           <AppShell>
+            {localBackendUnavailableMessage && (
+              <div
+                role="alert"
+                className="fixed inset-x-4 top-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-red-500/40 bg-red-950/95 px-4 py-3 text-sm text-red-100 shadow-xl"
+              >
+                <span>{localBackendUnavailableMessage}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void restart().catch((error) => {
+                      toast.error("Could not restart Orkestrator", {
+                        description: error instanceof Error ? error.message : String(error),
+                      });
+                    });
+                  }}
+                >
+                  Restart Orkestrator
+                </Button>
+              </div>
+            )}
             {selectedEnvironment ? (
               <div className="relative h-full bg-background">
                 <div className="absolute inset-0 z-10 bg-background">

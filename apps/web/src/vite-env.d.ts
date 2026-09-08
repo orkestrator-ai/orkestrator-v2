@@ -14,6 +14,8 @@ interface Window {
     baseUrl?: string;
   };
   orkestrator?: {
+    /** Electron windows keep focus and renderer storage independent. */
+    isolatedViewState?: true;
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;
     /** Browser gateway only: resolves once the event's filtered stream is live. */
@@ -62,9 +64,13 @@ interface Window {
       forget(
         connectionId: string,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      /** Electron only: opens a saved connection without switching this renderer. */
+      openWindow?(connectionId: string): Promise<void>;
     };
     process: {
       exit(code?: number): Promise<void>;
+      /** Electron only: relaunches the application to recover owned services. */
+      restart?(): Promise<void>;
     };
     window: {
       startDragging(): Promise<void>;

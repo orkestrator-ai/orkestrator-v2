@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GitFileChange, FileNode } from "@/lib/backend";
+import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 
 export type FilesPanelTab = "changes" | "all-files";
 
@@ -77,7 +78,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       setTargetBranch: (branch) => set({ targetBranch: branch }),
     }),
     {
-      name: "files-panel-storage",
+      name: desktopConnectionStorageKey("files-panel-storage"),
       partialize: (state) => ({
         panelWidth: state.panelWidth,
         expandedFolders: state.expandedFolders,

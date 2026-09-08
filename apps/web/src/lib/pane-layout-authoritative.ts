@@ -12,6 +12,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { LEGACY_PANE_LAYOUT_VERSION, type PersistedPaneLayout } from "@/types/paneLayout";
+import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-selection-storage";
 
 /**
  * The one way a backend-owned pane snapshot becomes renderer state.
@@ -142,8 +143,9 @@ export async function hydratePaneLayoutDependencies(root: unknown): Promise<void
 
 /**
  * Validates a backend snapshot against this client's environment and stores,
- * then preserves only renderer-local connection fields. Pane and tab selection
- * come from the backend snapshot so reconnecting clients share the last focus.
+ * then preserves renderer-local fields. Electron windows keep pane and tab
+ * selection in their isolated renderer partition; browser clients continue to
+ * adopt the backend selection.
  *
  * Returns null when the snapshot cannot be trusted for this client: the
  * environment is gone, its container generation moved on, or the record itself
@@ -171,6 +173,14 @@ export function reconcileAuthoritativePaneLayout(
     hasMultiReview: (workflowId) => useMultiReviewStore.getState().workflows.has(workflowId),
   });
   if (!restored) return null;
+
+  if (window.orkestrator?.isolatedViewState) {
+    return applyStoredPaneSelection(
+      preserveClientPaneSelection(restored, current),
+      environmentId,
+      readWindowPaneSelection(environmentId),
+    );
+  }
 
   // V1 stored canonical first-pane/first-tab placeholders, not real focus.
   // Until its migration write succeeds, keep this renderer's selection while

@@ -33,8 +33,13 @@ export function claimSingleInstanceLock(app: SingleInstanceApp): boolean {
 export function registerSecondInstanceFocus(
   app: Pick<Electron.App, "on">,
   getWindow: () => FocusableWindow | null,
+  createWindow?: () => void,
 ): void {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, commandLine: string[] = []) => {
+    if (createWindow && commandLine.includes("--new-window")) {
+      createWindow();
+      return;
+    }
     const window = getWindow();
     // Startup may not have created the window yet, or it may have been closed
     // on a platform where that does not quit the app.

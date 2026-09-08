@@ -22,6 +22,7 @@ import {
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
 import { MobileTerminalKeyBar } from "@/components/terminal/MobileTerminalKeyBar";
+import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
 
 const INTERACTIVE_RECOVERY_MAX_ATTEMPTS = 2;
 
@@ -48,6 +49,7 @@ export function ClaudeTmuxInteractiveTerminal({
   // effect has to depend on isMobile. Crossing the breakpoint must not tear
   // down a live attachment or steal focus from an already-active terminal.
   const isMobileRef = useRef(isMobile);
+  const isActiveRef = useRef(isActive);
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -59,6 +61,10 @@ export function ClaudeTmuxInteractiveTerminal({
   useEffect(() => {
     isMobileRef.current = isMobile;
   }, [isMobile]);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ??
@@ -171,14 +177,14 @@ export function ClaudeTmuxInteractiveTerminal({
       }
       const sessionId = sessionIdRef.current;
       if (sessionId) {
-        void resizeInteractiveTerminal(sessionId, terminal.cols, terminal.rows).catch(
-          (resizeError) => {
-            console.error(
-              "[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:",
-              resizeError,
-            );
-          },
-        );
+        void publishTerminalGeometryIfOwned(
+          isActiveRef.current,
+          terminal.cols,
+          terminal.rows,
+          (cols, rows) => resizeInteractiveTerminal(sessionId, cols, rows),
+        ).catch((resizeError) => {
+          console.error("[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:", resizeError);
+        });
       }
     };
 
@@ -216,6 +222,7 @@ export function ClaudeTmuxInteractiveTerminal({
 
     const resizeObserver = new ResizeObserver(() => fit());
     resizeObserver.observe(host);
+    window.addEventListener("focus", fit);
 
     let cancelled = false;
     let createdSessionId: string | null = null;
@@ -327,6 +334,7 @@ export function ClaudeTmuxInteractiveTerminal({
       setConnected(false);
       dataDisposable.dispose();
       resizeObserver.disconnect();
+      window.removeEventListener("focus", fit);
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -350,6 +358,14 @@ export function ClaudeTmuxInteractiveTerminal({
         fitAddon.fit();
       } catch {
         return;
+      }
+      const sessionId = sessionIdRef.current;
+      if (sessionId) {
+        void publishTerminalGeometryIfOwned(true, terminal.cols, terminal.rows, (cols, rows) =>
+          resizeInteractiveTerminal(sessionId, cols, rows),
+        ).catch((resizeError) => {
+          console.error("[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:", resizeError);
+        });
       }
       if (!isMobileRef.current) {
         terminal.focus();

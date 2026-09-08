@@ -7,6 +7,7 @@ import {
   HardDrive,
   KeyRound,
   Loader2,
+  PanelsTopLeft,
   Plus,
   RadioTower,
   RefreshCw,
@@ -36,7 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
-import { publishConnections } from "@/lib/connections";
+import { publishConnections, subscribeToConnections } from "@/lib/connections";
 import { cn } from "@/lib/utils";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
@@ -87,6 +88,8 @@ export function ConnectionsSettings() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => subscribeToConnections(setConnections), []);
 
   const remoteCount = useMemo(
     () => connections?.connections.filter((connection) => connection.kind === "remote").length ?? 0,
@@ -187,6 +190,18 @@ export function ConnectionsSettings() {
     } catch (error) {
       setBusyId(null);
       toast.error("Could not remove connection", { description: errorMessage(error) });
+    }
+  };
+
+  const handleOpenWindow = async (connection: ConnectionSummary) => {
+    if (!api?.openWindow) return;
+    setBusyId(connection.id);
+    try {
+      await api.openWindow(connection.id);
+      setBusyId(null);
+    } catch (error) {
+      setBusyId(null);
+      toast.error("Could not open a new window", { description: errorMessage(error) });
     }
   };
 
@@ -304,6 +319,26 @@ export function ConnectionsSettings() {
                   </div>
 
                   <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-zinc-400 hover:text-zinc-100"
+                      onClick={() => void handleOpenWindow(connection)}
+                      disabled={
+                        busyId !== null ||
+                        connection.requiresToken ||
+                        typeof api.openWindow !== "function"
+                      }
+                      aria-label={`Open ${connection.name} in new window`}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <PanelsTopLeft className="h-3.5 w-3.5" />
+                      )}
+                      New window
+                    </Button>
                     {!connection.active && (
                       <Button
                         type="button"

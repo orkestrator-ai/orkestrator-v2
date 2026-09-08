@@ -14,6 +14,7 @@ const CLIPBOARD_WRITE_PERMISSION = "clipboard-sanitized-write";
 
 export interface InitializeBrowserPreviewsOptions {
   fromPartition: (partition: string) => Session;
+  partition?: string;
   WebContentsViewCtor: BrowserPreviewManagerOptions["WebContentsViewCtor"];
   menu: BrowserPreviewManagerOptions["menu"];
   getWindow: () => BrowserWindow | null;
@@ -50,6 +51,7 @@ export function createBrowserPreviewAddressFocusHandler({
 
 export function initializeBrowserPreviews({
   fromPartition,
+  partition = BROWSER_PREVIEW_PARTITION,
   WebContentsViewCtor,
   menu,
   getWindow,
@@ -60,7 +62,7 @@ export function initializeBrowserPreviews({
   focusAddressBar,
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
-  const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
+  const browserSession = fromPartition(partition);
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor,
     browserSession,

@@ -1806,18 +1806,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         },
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,
-        // Claude's thinking and context choices are settings-backed defaults
-        // fixed for the lifetime of a session. Remove them at the authoritative
-        // projection boundary so every renderer sees the same control surface;
-        // other provider parameters, including future Claude parameters, stay.
+        // Claude's thinking/context choices are settings-backed session
+        // defaults, while Cursor's retired variant is a pre-combined parameter
+        // cross product. Remove only those provider-specific duplicates at the
+        // authoritative boundary so every renderer sees the same controls.
         composerControls: nativeComposerControls(
           composer,
           snapshot.status === "running" || blocked,
           capabilities,
         ).filter(
           (control) =>
-            input.agent !== "claude" ||
-            (control.id !== "parameter:thinking" && control.id !== "parameter:context1m"),
+            (input.agent !== "claude" ||
+              (control.id !== "parameter:thinking" && control.id !== "parameter:context1m")) &&
+            (input.agent !== "cursor" || control.id !== "parameter:variant"),
         ),
         composer,
         ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),

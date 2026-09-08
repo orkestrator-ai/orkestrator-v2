@@ -986,10 +986,10 @@ describe("NativeAgentService", () => {
   });
 
   test.each([
-    ["claude", ["parameter:audit"]],
+    ["claude", ["parameter:audit", "parameter:variant"]],
     ["cursor", ["parameter:thinking", "parameter:context1m", "parameter:audit"]],
   ] as const)(
-    "projects settings-backed parameter controls for %s at the backend boundary",
+    "filters only provider-specific parameter controls for %s at the backend boundary",
     async (agent, expectedParameterControls) => {
       const stub = createProviderStub(agent, {
         interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
@@ -1025,6 +1025,14 @@ describe("NativeAgentService", () => {
                 kind: "toggle",
                 defaultValue: false,
                 scope: "session",
+              },
+              {
+                id: "variant",
+                label: "Variant",
+                kind: "select",
+                options: [{ id: "provider-default", label: "Provider default" }],
+                defaultValue: "provider-default",
+                scope: "turn",
               },
             ],
           },

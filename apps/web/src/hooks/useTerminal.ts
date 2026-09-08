@@ -969,13 +969,27 @@ export function useTerminal({
   // session restarts, while output keeps streaming so the terminal still looks
   // alive. Reconnecting is the only recovery, so the failure toast offers it.
   //
-  // `connect` refuses while a connection is already established, so a reconnect
-  // has to drop the current attachment first even when the renderer still
-  // believes it is connected — that stale belief is the usual reason to ask.
+  // `connect` refuses while a renderer-owned connection is already established,
+  // so that session has to restart. Attach-only sessions are backend-owned,
+  // however, and an explicit detach would destroy their retained history. The
+  // renderer may also retain a dead attach-only id after an unsuccessful attach,
+  // even though there is no live renderer attachment to release.
   const reconnect = useCallback(async () => {
-    await disconnect();
+    if (isConnectedRef.current && !attachExistingOnly) {
+      await disconnect();
+    } else {
+      connectGenerationRef.current += 1;
+      isConnectingRef.current = false;
+      cleanupEventListener();
+      sessionIdRef.current = null;
+      setSessionId(null);
+      setBootstrapped(false);
+      setIsConnected(false);
+      setIsConnecting(false);
+      setError(null);
+    }
     await connect();
-  }, [connect, disconnect]);
+  }, [attachExistingOnly, connect, disconnect, cleanupEventListener]);
   const reconnectRef = useRef<() => void>(() => {});
   useEffect(() => {
     reconnectRef.current = () => void reconnect();
@@ -1029,6 +1043,10 @@ export function useTerminal({
     async (data: string) => {
       const currentSessionId = sessionIdRef.current;
       if (!currentSessionId) {
+        // Xterm accepts input as soon as it mounts, before the asynchronous
+        // create/attach path has published a session id. That normal type-ahead
+        // remains undelivered, but it is not evidence of a dead shell.
+        if (isConnectingRef.current) return;
         // Not an error state the user can see anywhere else: the terminal keeps
         // rendering whatever was replayed into it, so without this it just
         // stops accepting input for no stated reason.

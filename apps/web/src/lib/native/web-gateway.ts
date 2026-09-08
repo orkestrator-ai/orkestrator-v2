@@ -989,7 +989,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const terminalInputBatcher = new TerminalHttpInputBatcher(
     async (request, signal) => {
-      await invokeImmediately(
+      const result = await invokeImmediately<unknown>(
         request.command,
         {
           sessionId: request.sessionId,
@@ -997,6 +997,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         },
         signal,
       );
+      // The HTTP batcher fans one backend write out to every original input
+      // waiter. Rejecting the batch is how an in-band refusal reaches all of
+      // those callers without weakening the ordering and backpressure rules.
+      if (
+        result &&
+        typeof result === "object" &&
+        (result as { delivered?: unknown }).delivered === false
+      ) {
+        throw new Error("Terminal session is not running");
+      }
     },
     options.terminalInputBatchDelayMs ?? TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
     options.terminalInputMaxBatchBytes ?? TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
@@ -1239,7 +1249,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         terminalInputAcks.delete(key);
       }
     });
-    return acknowledged.then(() => undefined as T);
+    return acknowledged.then(() => ({ delivered: true }) as T);
   };
 
   const api = {
@@ -1276,7 +1286,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         // barrier, before it has entered the batcher itself.
         if (terminalInputDisposedReason) throw terminalInputDisposedReason;
         await terminalInputBatcher.enqueue(terminalInput);
-        return undefined as T;
+        // A successful batched send is an explicit delivery verdict. The
+        // rejected case above carries `delivered:false` to the hook as an error.
+        return { delivered: true } as T;
       }
       const queue = terminalInputQueue(command, args);
       if (queue) return invokeWithTerminalOrdering<T>(command, args, queue);

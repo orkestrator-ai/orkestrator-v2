@@ -211,6 +211,14 @@ const getSessionsByEnvironmentMock = mock(async (_environmentId: string): Promis
 
 const loadSessionBufferMock = mock(async (_sessionId: string): Promise<string | null> => null);
 
+const getTerminalOutputSnapshotMock = mock(async (_sessionId: string) => ({
+  mode: "full" as const,
+  output: "",
+  revision: 0,
+  generation: 1,
+  truncated: false,
+}));
+
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
     ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -367,6 +375,7 @@ mock.module("@/lib/backend", () => ({
   awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
   getSessionsByEnvironment: getSessionsByEnvironmentMock,
   loadSessionBuffer: loadSessionBufferMock,
+  getTerminalOutputSnapshot: getTerminalOutputSnapshotMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
@@ -534,6 +543,14 @@ describe("TerminalContainer", () => {
     getSessionsByEnvironmentMock.mockResolvedValue([]);
     loadSessionBufferMock.mockReset();
     loadSessionBufferMock.mockResolvedValue(null);
+    getTerminalOutputSnapshotMock.mockReset();
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      mode: "full",
+      output: "",
+      revision: 0,
+      generation: 1,
+      truncated: false,
+    });
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
@@ -1811,7 +1828,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("keeps a completed setup transcript after its PTY exits", async () => {
+  test("preserves backend output and converts a completed setup tab into a terminal", async () => {
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",
@@ -1822,17 +1839,25 @@ describe("TerminalContainer", () => {
       terminalRunning: false,
       hasOutput: true,
     });
+    getTerminalOutputSnapshotMock.mockResolvedValue({
+      mode: "full",
+      output: "cloning repository...\r\nsetup complete\r\n",
+      revision: 2,
+      generation: 1,
+      truncated: false,
+    });
 
     restoreBackendSetupTabLayout();
 
     await waitFor(() => {
-      expect(
-        useTerminalSessionStore
-          .getState()
-          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
-      ).toBe("env-hidden:setup");
+      expect(getTerminalOutputSnapshotMock).toHaveBeenCalledWith("env-hidden:setup");
+      expect(setupTabIds()).toEqual([]);
     });
-    expect(setupTabIds()).toEqual(["default"]);
+    expect(
+      useTerminalSessionStore
+        .getState()
+        .sessions.get(createSessionKey(null, "default", "env-hidden")),
+    ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
   });
 
   test("keeps a completed setup tab when an older backend does not report hasOutput", async () => {
@@ -1861,11 +1886,11 @@ describe("TerminalContainer", () => {
     expect(setupTabIds()).toEqual(["default"]);
   });
 
-  test("keeps a setup tab this renderer can still replay after the backend frees its buffer", async () => {
+  test("converts a setup tab after preserving renderer-local replay", async () => {
     // The backend drops a retained setup buffer minutes after the PTY exits, so
     // `hasOutput` goes false while PersistentTerminal can still paint the
-    // transcript from `serializedBuffer`. Retiring the tab would run
-    // cleanupTerminalTab and take that buffer with it.
+    // transcript from `serializedBuffer`. Demotion must keep that buffer while
+    // removing the dead setup-session id.
     useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
       sessionId: "env-hidden:setup",
       serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
@@ -1887,13 +1912,13 @@ describe("TerminalContainer", () => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
     await waitFor(() => {
-      expect(setupTabIds()).toEqual(["default"]);
+      expect(setupTabIds()).toEqual([]);
     });
     expect(
       useTerminalSessionStore
         .getState()
-        .sessions.get(createSessionKey(null, "default", "env-hidden"))?.serializedBuffer,
-    ).toBe("cloning repository...\r\nsetup complete\r\n");
+        .sessions.get(createSessionKey(null, "default", "env-hidden")),
+    ).toEqual({ serializedBuffer: "cloning repository...\r\nsetup complete\r\n" });
   });
 
   test("waits for durable setup history to hydrate before retiring a cold setup tab", async () => {
@@ -1952,8 +1977,8 @@ describe("TerminalContainer", () => {
         persistentSessionId: "persisted-setup",
         serializedBuffer: "cold setup history\r\n",
       });
+      expect(setupTabIds()).toEqual([]);
     });
-    expect(setupTabIds()).toEqual(["default"]);
   });
 
   test("keeps a setup tab when durable history cannot be checked", async () => {
@@ -1993,7 +2018,7 @@ describe("TerminalContainer", () => {
     expect(setupTabIds()).toEqual(["default"]);
   });
 
-  test("keeps a replayable setup tab when the backend has forgotten the session entirely", async () => {
+  test("converts a replayable setup tab when the backend has forgotten the session", async () => {
     // A restarted backend can lose the session record for an environment whose
     // `setupSessionId` was never persisted. That is not evidence the transcript
     // this renderer already holds is worthless.
@@ -2009,8 +2034,13 @@ describe("TerminalContainer", () => {
       expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
     await waitFor(() => {
-      expect(setupTabIds()).toEqual(["default"]);
+      expect(setupTabIds()).toEqual([]);
     });
+    expect(
+      useTerminalSessionStore
+        .getState()
+        .sessions.get(createSessionKey(null, "default", "env-hidden")),
+    ).toEqual({ serializedBuffer: "setup complete\r\n" });
   });
 
   test("re-dispatches a post-setup recheck that the in-flight guard turned away", async () => {

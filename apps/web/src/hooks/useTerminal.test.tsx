@@ -1316,6 +1316,29 @@ describe("useTerminal reconnect behavior", () => {
     );
   });
 
+  it("does not explicitly detach a dead attach-only session when reconnecting", async () => {
+    getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: false });
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "env-1:setup",
+        persistSession: true,
+        attachExistingOnly: true,
+        replayOutputBuffer: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+      await result.current.reconnect();
+    });
+
+    expect(detachTerminalMock).not.toHaveBeenCalled();
+    expect(getTerminalSessionMock).toHaveBeenCalledTimes(2);
+    expect(result.current.isConnected).toBe(false);
+    expect(result.current.error).toBe("Backend terminal session is not running");
+  });
+
   it("replays and deduplicates output for the replacement session on the reconnect fallback", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: true });
     let replacementOutputHandler:
@@ -2284,6 +2307,47 @@ describe("useTerminal reconnect behavior", () => {
       description: "This terminal is not connected to a running shell.",
       action: { label: "Reconnect", onClick: expect.any(Function) },
     });
+  });
+
+  it("does not report normal type-ahead while a terminal connection is pending", async () => {
+    let resolveCreate:
+      | ((value: { sessionId: string; created: boolean; bootstrapped: boolean }) => void)
+      | undefined;
+    createTerminalSessionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        terminalKey: "tab-1",
+        persistSession: true,
+      }),
+    );
+
+    let connection: Promise<void> | undefined;
+    await act(async () => {
+      connection = result.current.connect();
+      await Promise.resolve();
+    });
+    expect(result.current.isConnecting).toBe(true);
+
+    await act(async () => {
+      await result.current.write("typed early");
+    });
+    expect(toastErrorMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveCreate?.({
+        sessionId: "session-after-type-ahead",
+        created: true,
+        bootstrapped: false,
+      });
+      await connection;
+    });
+    expect(result.current.isConnected).toBe(true);
   });
 
   it("reports input the backend refused in band without throwing", async () => {

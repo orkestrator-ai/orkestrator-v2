@@ -240,6 +240,7 @@ export function PersistentTerminal({
   const clearTabInitialAgentOptions = usePaneLayoutStore(
     (state) => state.clearTabInitialAgentOptions,
   );
+  const retireSetupTabMarker = usePaneLayoutStore((state) => state.retireSetupTabMarker);
   const previousContainerIdRef = useRef<string>(containerId);
   // Initialize with current paneId so first mount doesn't trigger false paneChanged
   const previousPaneIdRef = useRef<string>(paneId);
@@ -1996,8 +1997,42 @@ export function PersistentTerminal({
     setDisconnectedNoticeVisible(false);
     connectionAttemptCountRef.current = 0;
     connectionAttemptInFlightRef.current = null;
+    if (isBackendManagedSetupTab) {
+      const key = createSessionKey(containerId ?? null, tabId, environmentId);
+      const terminalStore = useTerminalSessionStore.getState();
+      const existing = terminalStore.sessions.get(key);
+      const { sessionId: _deadSetupSession, ...preserved } = existing ?? {};
+      let preservedBuffer = existing?.serializedBuffer;
+      if (!preservedBuffer) {
+        try {
+          preservedBuffer = serializeLegacyTerminalBuffer(
+            terminalData.serializeAddon.serialize.bind(terminalData.serializeAddon),
+            terminal.options.scrollback,
+          );
+        } catch (error) {
+          console.warn("[setup-terminal] failed to preserve terminal before conversion", error);
+        }
+      }
+      terminalStore.setSession(key, {
+        ...preserved,
+        ...(preservedBuffer ? { serializedBuffer: preservedBuffer } : {}),
+      });
+      if (retireSetupTabMarker(tabId, environmentId)) {
+        terminal.focus();
+        return;
+      }
+    }
     void reconnect().finally(() => terminal.focus());
-  }, [reconnect, terminal]);
+  }, [
+    containerId,
+    environmentId,
+    isBackendManagedSetupTab,
+    reconnect,
+    retireSetupTabMarker,
+    tabId,
+    terminal,
+    terminalData.serializeAddon,
+  ]);
   const handleDismissDisconnectedNotice = useCallback(() => {
     setDisconnectedNoticeDismissed(true);
     // Same reason the warning banner hands focus back: the button unmounts with

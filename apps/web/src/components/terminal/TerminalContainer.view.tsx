@@ -295,13 +295,20 @@ export function TerminalContainer({
    */
   const retireDeadSetupTab = useCallback(
     (tabId: string) => {
+      const key = setupSessionKeyForTab(tabId);
+      const terminalStore = useTerminalSessionStore.getState();
+      const existing = terminalStore.sessions.get(key);
+      if (existing?.sessionId === `${environmentId}:setup`) {
+        const { sessionId: _deadSetupSession, ...preserved } = existing;
+        terminalStore.setSession(key, preserved);
+      }
       if (!retireSetupTabMarker(tabId, environmentId)) return;
       console.info("[setup-terminal] retired setup marker for a tab with no live PTY", {
         environmentId,
         tabId,
       });
     },
-    [environmentId, retireSetupTabMarker],
+    [environmentId, retireSetupTabMarker, setupSessionKeyForTab],
   );
 
   const bindBackendSetupSession = useCallback(
@@ -414,23 +421,40 @@ export function TerminalContainer({
           setupSessionUnavailableTabsRef.current.add(tabId);
           return false;
         }
-        // A completed setup record can outlive both its PTY and its bounded
-        // transcript. It is useful while either still exists, but otherwise it
-        // is only a dead attach-only target: xterm opens, no shell can receive
-        // input, and there are no bytes to replay. Older backends do not report
-        // `hasOutput`, so retain their session conservatively during rolling
-        // upgrades rather than discarding setup history we cannot prove empty.
-        // The durable renderer transcript is the other half of that proof: the
-        // backend drops a retained setup buffer minutes after the PTY exits,
-        // including before a cold renderer has loaded its saved history.
-        if (
-          !setupSession.running &&
-          !setupSession.terminalRunning &&
-          setupSession.hasOutput === false
-        ) {
-          const replayableTranscript = await loadReplayableSetupTranscript(tabId);
+        // A completed setup record can outlive its PTY. Preserve whichever
+        // authoritative transcript source still exists, then demote the tab so
+        // it can create a shell of its own. Older backends do not report
+        // `hasOutput`, so retain their attach-only session conservatively during
+        // rolling upgrades rather than discarding history we cannot prove safe.
+        if (!setupSession.running && !setupSession.terminalRunning) {
+          let replayableTranscript = await loadReplayableSetupTranscript(tabId);
+          if (!replayableTranscript && setupSession.hasOutput === true) {
+            const snapshot = await backend.getTerminalOutputSnapshot(setupSession.sessionId);
+            if (snapshot.output) {
+              replayableTranscript = { buffer: snapshot.output, persistentSessionId: undefined };
+            }
+          }
           if (setupSessionBindLifecycleGenerationRef.current !== lifecycleGeneration) {
             return false;
+          }
+          // An older backend gives no safe signal about whether an empty read is
+          // authoritative. Keep the setup target until it can be upgraded or a
+          // durable transcript appears.
+          if (setupSession.hasOutput === undefined && !replayableTranscript) {
+            lookupSettled = true;
+            setupSessionBindAttemptsRef.current.delete(tabId);
+            setupSessionUnavailableTabsRef.current.delete(tabId);
+            terminalStore.setSession(key, {
+              ...existing,
+              sessionId: setupSession.sessionId,
+            });
+            return true;
+          }
+          // `hasOutput: true` is authoritative evidence that history exists.
+          // An empty snapshot is therefore a failed/inconsistent read, not
+          // permission to retire the only tab that can still recover it.
+          if (setupSession.hasOutput === true && !replayableTranscript) {
+            throw new Error("Backend reported setup output but returned an empty snapshot");
           }
           lookupSettled = true;
           setupSessionBindAttemptsRef.current.delete(tabId);
@@ -438,7 +462,6 @@ export function TerminalContainer({
             setupSessionUnavailableTabsRef.current.add(tabId);
             return false;
           }
-          const terminalStore = useTerminalSessionStore.getState();
           const current = terminalStore.sessions.get(key);
           terminalStore.setSession(key, {
             ...current,

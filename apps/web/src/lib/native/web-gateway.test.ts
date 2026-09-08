@@ -806,7 +806,11 @@ describe("web gateway browser API", () => {
         data,
       }),
     );
-    await Promise.all(writes);
+    await expect(Promise.all(writes)).resolves.toEqual([
+      { delivered: true },
+      { delivered: true },
+      { delivered: true },
+    ]);
 
     expect(invokes).toEqual([
       {
@@ -814,6 +818,29 @@ describe("web gateway browser API", () => {
         args: { sessionId: "session-1", data: "hi\r" },
       },
     ]);
+  });
+
+  test("rejects every batched HTTP input waiter when the backend refuses delivery", async () => {
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({ result: { delivered: false } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    const writes = [
+      ...["n", "o", "\r"].map((data) =>
+        api.invoke("terminal_write", { sessionId: "dead-http", data }),
+      ),
+      api.invoke("local_terminal_write", { sessionId: "dead-local-http", data: "pwd\r" }),
+    ];
+    const results = await Promise.allSettled(writes);
+
+    expect(results).toHaveLength(4);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      expect(String(result.status === "rejected" ? result.reason : "")).toContain(
+        "Terminal session is not running",
+      );
+    }
   });
 
   test("batches local-terminal input and keeps malformed invokes on the immediate path", async () => {
@@ -1096,7 +1123,7 @@ describe("web gateway browser API", () => {
     await api.invoke("start_terminal_session", { sessionId: "restart" });
     await expect(
       api.invoke("terminal_write", { sessionId: "restart", data: "fresh\r" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ delivered: true });
   });
 
   test("disposing a replaced gateway aborts in-flight and queued terminal input", async () => {
@@ -1697,7 +1724,11 @@ describe("web gateway browser API", () => {
         }),
       );
     }
-    await Promise.all(writes);
+    await expect(Promise.all(writes)).resolves.toEqual([
+      { delivered: true },
+      { delivered: true },
+      { delivered: true },
+    ]);
     stop();
   });
 

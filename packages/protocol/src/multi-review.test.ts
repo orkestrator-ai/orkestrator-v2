@@ -8,6 +8,7 @@ import {
   isMultiReviewWorkflow,
   isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
+  isLaunchMultiReviewActionInput,
 } from "./multi-review";
 import type { StructuredReviewReport } from "./structured-review";
 
@@ -41,6 +42,25 @@ const report: StructuredReviewReport = {
 };
 
 describe("multi review protocol", () => {
+  test("complete launch validates bounded caller identity and exact dialog selections", () => {
+    const input = {
+      environmentId: "env",
+      requestId: "click",
+      reviewers: [{ agent: "codex", model: "default" }],
+      fixModel: { agent: "claude", model: "default" },
+    };
+    expect(isLaunchMultiReviewActionInput(input)).toBe(true);
+    for (const override of [
+      { requestId: " " },
+      { requestId: "x".repeat(257) },
+      { reviewers: [] },
+      { fixModel: { agent: "invalid", model: "default" } },
+      { projectId: "forged" },
+      { targetBranch: "--upload-pack=bad" },
+      { scope: {} },
+    ])
+      expect(isLaunchMultiReviewActionInput({ ...input, ...override })).toBe(false);
+  });
   test("accepts one-to-many reviewer selections and rejects unbounded input", () => {
     const input = {
       environmentId: "env-1",

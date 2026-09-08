@@ -130,7 +130,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     expect.objectContaining({
       tabId: "multi-review-fix:multi-1:launch-1",
       providerSessionId: "provider-custom",
-      activate: false,
+      activate: true,
       isReviewTab: true,
     }),
   );

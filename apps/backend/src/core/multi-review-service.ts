@@ -325,7 +325,10 @@ export class MultiReviewService {
     };
   }
 
-  async start(input: StartMultiReviewInput): Promise<MultiReviewWorkflow> {
+  async start(
+    input: StartMultiReviewInput,
+    reservedWorkflowId?: string,
+  ): Promise<MultiReviewWorkflow> {
     if (!isStartMultiReviewInput(input)) throw new Error("Invalid multi review start request");
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (
@@ -340,7 +343,8 @@ export class MultiReviewService {
     const workflow: MultiReviewWorkflow = {
       version: MULTI_REVIEW_WORKFLOW_VERSION,
       controller: "backend",
-      id: randomUUID(),
+      // Complete actions reserve this identity durably before any launch I/O.
+      id: reservedWorkflowId ?? randomUUID(),
       environmentId: input.environmentId,
       projectId: input.projectId,
       targetBranch: input.targetBranch,
@@ -388,6 +392,9 @@ export class MultiReviewService {
           void this.advanceNow(workflow.id);
           return workflow;
         }
+        // The durable handoff already ran. A transport retry must not send a
+        // second fix turn or report a successful handoff as a validation error.
+        if (workflow.phase === "interactive") return workflow;
         if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
           throw new Error("The consolidated review is not ready to address");
         }

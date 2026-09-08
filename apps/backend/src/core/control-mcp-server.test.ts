@@ -10,7 +10,7 @@ import {
 
 type RpcBody = {
   result?: {
-    tools?: Array<{ name: string; annotations?: Record<string, boolean> }>;
+    tools?: Array<{ name: string; description?: string; annotations?: Record<string, boolean> }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
   };
@@ -224,6 +224,64 @@ describe("Orkestrator control MCP server", () => {
       name: "list_projects",
       arguments: {},
     });
+    const metadata = await rpc(credential.url, credential.token, "tools/list");
+    const definitions = metadata.body.result!.tools!;
+    expect(definitions.find((tool) => tool.name === "launch_multi_review")?.description).toContain(
+      "Preferred complete Multi Review button action",
+    );
+    expect(definitions.find((tool) => tool.name === "start_multi_review")?.description).toContain(
+      "does NOT create/select a root tab",
+    );
+    for (const name of [
+      "launch_multi_review",
+      "open_multi_review",
+      "open_multi_review_fix",
+      "address_multi_review",
+    ])
+      expect(definitions.find((tool) => tool.name === name)?.annotations?.idempotentHint).toBe(
+        true,
+      );
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "partial",
+      reused: false,
+      workflow: {
+        id: "review-action",
+        projectId: "project-1",
+        environmentId: "env-1",
+        phase: "cancelling",
+        controllerFence: "must-not-cross-mcp",
+      },
+      ui: { status: "unavailable" },
+      recovery: "Cancellation is in progress; reopen the saved review.",
+    }));
+    const button = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: {
+        requestId: "launch-review",
+        environmentId: "env-1",
+        reviewers: [{ agent: "codex", model: "default" }],
+        fixModel: { agent: "claude", model: "default" },
+      },
+    });
+    expect(button.body.result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        outcome: "partial",
+        ui: { status: "unavailable" },
+        workflow: { id: "review-action" },
+      },
+    });
+    expect(JSON.stringify(button.body)).not.toContain("must-not-cross-mcp");
+    expect(
+      invocations.find((entry) => entry.command === "launch_coordinator_multi_review_action")?.args,
+    ).toMatchObject({
+      scope: {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+      },
+      input: { requestId: "launch-review", environmentId: "env-1" },
+    });
     expect(listed.body.result?.structuredContent).toMatchObject({
       total: 1,
       projects: [{ id: "project-1" }],
@@ -341,7 +399,12 @@ describe("Orkestrator control MCP server", () => {
     overrides.set("get_multi_review_workflow", () => reviewEnvelope);
     overrides.set("pause_build_pipeline", () => buildEnvelope);
     overrides.set("cancel_multi_review", () => reviewEnvelope);
-    overrides.set("address_multi_review", () => reviewEnvelope);
+    overrides.set("address_coordinator_multi_review_action", () => ({
+      workflow: reviewEnvelope.snapshot,
+      outcome: "pending",
+      reused: true,
+      ui: { status: "opened", tabId: "root-review" },
+    }));
     const credential = server.issueCoordinatorCredential({
       role: "coordinator",
       projectId: "project-1",
@@ -588,6 +651,7 @@ describe("Orkestrator control MCP server", () => {
       status: "accepted",
     });
     expect(invocations.find(({ command }) => command === "launch_control_job")?.args).toEqual({
+      activateTab: true,
       requestId: "external-job-1",
       environmentId: "env-1",
       agent: "codex",

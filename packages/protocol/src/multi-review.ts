@@ -213,6 +213,56 @@ export interface StartMultiReviewInput {
   fixModel: MultiReviewModelSelection;
 }
 
+/** Complete environment button action. Selections are the launch dialog's exact rows. */
+export interface LaunchMultiReviewActionInput {
+  requestId: string;
+  environmentId: string;
+  reviewers: MultiReviewModelSelection[];
+  fixModel: MultiReviewModelSelection;
+  /** Omitted values use the repository base branch and global review instruction. */
+  targetBranch?: string;
+  reviewInstruction?: string;
+}
+
+export interface MultiReviewActionResult {
+  workflow: MultiReviewWorkflow;
+  outcome: "opened" | "partial" | "pending";
+  reused: boolean;
+  ui: {
+    status: "opened" | "unavailable";
+    tabId?: string;
+    paneId?: string;
+    layoutRevision?: number;
+  };
+  /** A saved workflow is retained whenever presentation or cancellation fails. */
+  recovery?: string;
+}
+
+export function isLaunchMultiReviewActionInput(
+  value: unknown,
+): value is LaunchMultiReviewActionInput {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, [
+      "requestId",
+      "environmentId",
+      "reviewers",
+      "fixModel",
+      "targetBranch",
+      "reviewInstruction",
+    ]) &&
+    nonBlank(value.requestId, 256) &&
+    isStartMultiReviewInput({
+      environmentId: value.environmentId,
+      projectId: "validated-by-caller",
+      targetBranch: value.targetBranch ?? "main",
+      reviewInstruction: value.reviewInstruction,
+      reviewers: value.reviewers,
+      fixModel: value.fixModel,
+    })
+  );
+}
+
 export interface StartMultiReviewCustomFixInput {
   workflowId: string;
   fixModel: MultiReviewModelSelection;

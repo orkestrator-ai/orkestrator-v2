@@ -36,6 +36,7 @@ import * as backend from "@/lib/backend";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
+import { hydratePaneLayoutDependencies } from "@/lib/pane-layout-authoritative";
 import {
   createPersistedPaneLayoutInput,
   flushPaneLayoutNow,
@@ -721,8 +722,12 @@ export function TerminalContainer({
     if (setupPhase === "pending") return;
 
     // Check if we need to initialize (no tabs yet for THIS environment)
-    const currentTabs = currentEnvState
-      ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs)
+    // An authoritative event can land after render but before this passive
+    // effect. Default seeding must inspect the current store, not that render's
+    // empty snapshot, or it can steal focus from a just-published action tab.
+    const latestPaneState = usePaneLayoutStore.getState().environments.get(environmentId);
+    const currentTabs = latestPaneState
+      ? getAllLeaves(latestPaneState.root).flatMap((leaf) => leaf.tabs)
       : [];
     // A build tab is inserted by the pipeline supervisor as soon as the backend
     // returns, which is before this environment is running and therefore always
@@ -744,7 +749,20 @@ export function TerminalContainer({
           backend.getPaneLayout(environmentId),
           hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
           hydrateMultiReviewWorkflowsForEnvironment(environmentId),
-        ]).then(([layoutResult, workflowResult, multiReviewResult]) => {
+        ]).then(async ([layoutResult, workflowResult, multiReviewResult]) => {
+          // These independent snapshots need not describe the same instant.
+          // A launch between the list read and the layout read must not make
+          // reconciliation discard its new tab and seed a competing terminal.
+          let dependenciesUnknown = false;
+          if (layoutResult.status === "fulfilled" && layoutResult.value) {
+            try {
+              await hydratePaneLayoutDependencies(layoutResult.value.root);
+            } catch {
+              // A failed read is not evidence of deletion. The tab's own view
+              // can retry; retaining it also preserves authoritative focus.
+              dependenciesUnknown = true;
+            }
+          }
           const paneStore = usePaneLayoutStore.getState();
           if (paneStore.hydration.get(environmentId) !== "pending") return;
 
@@ -796,14 +814,16 @@ export function TerminalContainer({
             isLocal: latestEnvironment.environmentType === "local",
             worktreePath: latestEnvironment.worktreePath,
             hasBuildPipeline: (pipelineId) =>
-              useBuildPipelineStore.getState().pipelines.has(pipelineId),
+              dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
             hasLoopedReview: (workflowId) =>
               // A failed workflow-list request means existence is unknown,
               // not that every persisted review was deleted. Preserve those
               // tabs so their own read-through view can retry hydration.
+              dependenciesUnknown ||
               workflowResult.status === "rejected" ||
               useLoopedReviewStore.getState().workflows.has(workflowId),
             hasMultiReview: (workflowId) =>
+              dependenciesUnknown ||
               multiReviewResult.status === "rejected" ||
               useMultiReviewStore.getState().workflows.has(workflowId),
           });

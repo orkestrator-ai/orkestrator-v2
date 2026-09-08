@@ -17,6 +17,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 
 import { readStoredPaneSelection } from "@/lib/pane-selection-storage";
 
@@ -254,6 +255,12 @@ const getPaneLayoutMock = mock(
 );
 
 const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
+const listMultiReviewWorkflowsMock = mock<typeof realBackend.listMultiReviewWorkflows>(
+  async () => [],
+);
+const getMultiReviewWorkflowMock = mock<typeof realBackend.getMultiReviewWorkflow>(
+  async () => null,
+);
 
 const listLoopedReviewWorkflowsMock = mock(
   async (_environmentId: string) =>
@@ -372,8 +379,11 @@ mock.module("@/lib/backend", () => ({
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
+  getBuildPipelineConditional: mock(async () => null),
   deletePaneLayout: deletePaneLayoutMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
+  listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
+  getMultiReviewWorkflow: getMultiReviewWorkflowMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
   writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
@@ -562,6 +572,11 @@ describe("TerminalContainer", () => {
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
+    listMultiReviewWorkflowsMock.mockReset();
+    listMultiReviewWorkflowsMock.mockResolvedValue([]);
+    getMultiReviewWorkflowMock.mockReset();
+    getMultiReviewWorkflowMock.mockResolvedValue(null);
+    useMultiReviewStore.setState({ workflows: new Map() });
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
     localStorage.clear();
@@ -1031,6 +1046,81 @@ describe("TerminalContainer", () => {
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
   });
+
+  test.each([false, true])(
+    "restores a review launched after the workflow list snapshot (read failure: %s)",
+    async (readFails) => {
+      const timestamp = "2026-01-01T00:00:00.000Z";
+      const entry = {
+        version: 1,
+        id: "late-review",
+        environmentId: "env-hidden",
+        revision: 1,
+        updatedAt: timestamp,
+        snapshot: {
+          version: 1,
+          controller: "backend",
+          id: "late-review",
+          backendRevision: 1,
+          environmentId: "env-hidden",
+          projectId: "project-1",
+          targetBranch: "main",
+          phase: "cancelled",
+          reviewers: [{ id: "reviewer", agent: "codex", model: "default", status: "cancelled" }],
+          fixModel: { agent: "codex", model: "default" },
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      };
+      if (readFails)
+        getMultiReviewWorkflowMock.mockRejectedValue(new Error("temporarily unavailable"));
+      else getMultiReviewWorkflowMock.mockResolvedValue(entry);
+      getPaneLayoutMock.mockResolvedValue({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-hidden",
+        containerId: "container-hidden",
+        revision: 1,
+        updatedAt: timestamp,
+        activePaneId: "review-pane",
+        root: {
+          kind: "leaf",
+          id: "review-pane",
+          activeTabId: "multi-review:late-review",
+          tabs: [
+            {
+              id: "multi-review:late-review",
+              type: "multi-review",
+              multiReviewTabData: {
+                workflowId: "late-review",
+                environmentId: "env-hidden",
+                isLocal: false,
+              },
+            },
+          ],
+        },
+      });
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => {
+        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+        expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.root).toMatchObject({
+          activeTabId: "multi-review:late-review",
+          tabs: [{ id: "multi-review:late-review" }],
+        });
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(1);
+      expect(getMultiReviewWorkflowMock).toHaveBeenCalledWith("late-review");
+      expect(deletePaneLayoutMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("discards restored panes when the container stops, so the caller must not pass daemon state", async () => {
     getPaneLayoutMock.mockResolvedValue({

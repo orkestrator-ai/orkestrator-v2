@@ -2,6 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type {
+  MultiReviewActionResult,
+  MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 
@@ -289,6 +293,111 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
       () => undefined,
     );
     for (const environment of [sender, recipient]) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+  }
+});
+
+test("coordinator Multi Review action reconciles a mounted renderer and survives inactive cancellation and reload", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1",
+    "opt-in live review against the isolated fixture",
+  );
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  );
+  expect(fixture).toBeTruthy();
+  const coordinator = await invoke<{
+    workspace: { id: string; conversations: Array<{ id: string }> };
+  }>("ensure_project_coordinator", { projectId: fixture!.id });
+  const scope = {
+    projectId: fixture!.id,
+    coordinatorId: coordinator.workspace.id,
+    conversationId: coordinator.workspace.conversations[0]!.id,
+  };
+  const environments: Environment[] = [];
+  try {
+    for (const name of ["review-action", "review-inactive"]) {
+      const environment = await invoke<Environment>("create_environment", {
+        projectId: fixture!.id,
+        name: `${name}-${Date.now()}`,
+        environmentType: "local",
+        networkAccessMode: "restricted",
+      });
+      environments.push(environment);
+      await invoke("start_environment", { environmentId: environment.id });
+    }
+    const [target, other] = environments;
+    await page.goto(status.browserUrl!);
+    const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+    await expect(expand).toBeVisible({ timeout: 30_000 });
+    await expand.click();
+    await page.getByText(target!.name, { exact: true }).first().click();
+    const input = {
+      requestId: `browser-review-${target!.id}`,
+      environmentId: target!.id,
+      reviewers: [{ agent: "codex", model: "default" }],
+      fixModel: { agent: "codex", model: "default" },
+    };
+    const launched = await invoke<MultiReviewActionResult>(
+      "launch_coordinator_multi_review_action",
+      { scope, input },
+    );
+    expect(launched.outcome).toBe("opened");
+    await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    const retried = await invoke<MultiReviewActionResult>(
+      "launch_coordinator_multi_review_action",
+      { scope, input },
+    );
+    expect(retried.workflow.id).toBe(launched.workflow.id);
+    expect(retried.ui.tabId).toBe(launched.ui.tabId);
+    // Leave the previous row before crossing the sidebar's hover-detail card.
+    await page.mouse.move(1100, 20);
+    await page.getByText(other!.name, { exact: true }).first().click({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toHaveCount(0);
+    await invoke("cancel_multi_review", { workflowId: launched.workflow.id });
+    await expect
+      .poll(
+        async () => {
+          const saved = await invoke<{ snapshot: MultiReviewWorkflow }>(
+            "get_multi_review_workflow",
+            { workflowId: launched.workflow.id },
+          );
+          return saved.snapshot.phase;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe("cancelled");
+    await page.mouse.move(1100, 20);
+    await page.getByText(target!.name, { exact: true }).first().click({ timeout: 10_000 });
+    await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+    await page.reload();
+    const expandAgain = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
+    await expect(expandAgain).toBeVisible({ timeout: 30_000 });
+    await expandAgain.click();
+    await page.getByText(target!.name, { exact: true }).first().click();
+    await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+    const opened = await invoke<MultiReviewActionResult>("open_coordinator_multi_review", {
+      scope,
+      workflowId: launched.workflow.id,
+    });
+    expect(opened.ui.tabId).toBe(launched.ui.tabId);
+  } finally {
+    for (const environment of environments) {
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }

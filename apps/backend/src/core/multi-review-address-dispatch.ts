@@ -184,7 +184,7 @@ export async function dispatchMultiReviewAddressPrompt(
     agent: selection.agent,
     title: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
-    activate: false,
+    activate: true,
   };
   let providerSessionId: string;
   if (customFix) {

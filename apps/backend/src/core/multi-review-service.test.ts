@@ -720,7 +720,8 @@ test("MultiReviewService resumes an interrupted address dispatch through the sup
         );
       });
       expect(dispatches).toBe(2);
-      await expect(service.address(started.id)).rejects.toThrow("not ready to address");
+      await expect(service.address(started.id)).resolves.toMatchObject({ phase: "interactive" });
+      expect(dispatches).toBe(2);
 
       // Both terminal operations release their short-lived controller claims.
       const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);

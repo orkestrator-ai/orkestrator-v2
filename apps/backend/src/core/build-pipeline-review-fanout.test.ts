@@ -362,6 +362,37 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("uses a configured preparation model before a single-reviewer stage", async () => {
+    await withPipeline(async ({ service, read, providers }) => {
+      const started = await service.start({
+        ...startInput([{ agent: "claude", model: "opus" }]),
+        reviewPreparation: {
+          agent: "codex",
+          model: "review-coordinator",
+          reasoningEffort: "medium",
+        },
+      });
+
+      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.reviewers).toBeUndefined();
+      expect(providers.get("codex")!.created).toContainEqual(
+        expect.objectContaining({
+          phase: "fix",
+          label: "Package Preparation Session",
+          options: expect.objectContaining({
+            model: "review-coordinator",
+            effort: "medium",
+          }),
+        }),
+      );
+      expect(providers.get("claude")!.created).toContainEqual(
+        expect.objectContaining({ phase: "review" }),
+      );
+    });
+  });
+
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
     await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       const started = await service.start(
@@ -423,6 +454,72 @@ describe("build pipeline multi-model review", () => {
       // Provenance is derived by the backend from the cited source IDs, never
       // taken from what the consolidation model claimed.
       expect(addressing.structuredReview?.issues[0]?.reviewModels).toEqual(["claude/opus"]);
+    });
+  });
+
+  test("uses the review preparation model for package creation and consolidation, not fixing", async () => {
+    await withPipeline(async ({ service, read, providers }) => {
+      const started = await service.start({
+        ...startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+        reviewPreparation: {
+          agent: "codex",
+          model: "review-coordinator",
+          reasoningEffort: "medium",
+        },
+        steps: {
+          address: { agent: "opencode", model: "fixer", reasoningEffort: "high" },
+        },
+      });
+
+      const addressing = await advanceUntil(service, read, started.id, "addressing");
+      expect(addressing.error ?? addressing.phase).toBe("addressing");
+      for (
+        let attempt = 0;
+        attempt < 3 && providers.get("opencode")!.created.length === 0;
+        attempt += 1
+      ) {
+        await service.advanceNow(started.id);
+      }
+
+      const coordinator = providers.get("codex")!;
+      expect(coordinator.created).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "fix",
+            label: "Package Preparation Session",
+            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+          }),
+          expect.objectContaining({
+            phase: "review",
+            label: "Review · Consolidation",
+            options: expect.objectContaining({ model: "review-coordinator", effort: "medium" }),
+          }),
+        ]),
+      );
+      expect(
+        coordinator.sent
+          .filter(
+            (entry) =>
+              entry.prompt.includes("review package") ||
+              entry.prompt.includes("<multi-review-reports-json>"),
+          )
+          .every((entry) => entry.model === "review-coordinator"),
+      ).toBe(true);
+
+      const fixer = providers.get("opencode")!;
+      expect(fixer.created).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "address",
+            options: expect.objectContaining({ model: "fixer", effort: "high" }),
+          }),
+        ]),
+      );
+      expect(fixer.created.some((entry) => entry.label.includes("Preparation"))).toBe(false);
+      expect(fixer.created.some((entry) => entry.label.includes("Consolidation"))).toBe(false);
     });
   });
 

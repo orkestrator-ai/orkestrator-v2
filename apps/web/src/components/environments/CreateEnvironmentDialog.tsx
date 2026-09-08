@@ -575,6 +575,11 @@ export function CreateEnvironmentDialog({
         },
         review: resolvedActionDefault(agentTiers, "review", enabledAgentPlatforms),
         review2: resolvedActionDefault(agentTiers, "review2", enabledAgentPlatforms),
+        reviewPreparation: resolvedActionDefault(
+          agentTiers,
+          "reviewPreparation",
+          enabledAgentPlatforms,
+        ),
         address: resolvedActionDefault(agentTiers, "fixReviewIssues", enabledAgentPlatforms),
         pr: resolvedActionDefault(agentTiers, "pr", enabledAgentPlatforms),
         resolve: resolvedActionDefault(agentTiers, "resolve", enabledAgentPlatforms),

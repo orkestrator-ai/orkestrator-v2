@@ -67,6 +67,7 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "claude", model: "opus" },
         { agent: "claude", model: "opus" },
       ],
+      reviewModel: { agent: "claude", model: "opus" },
       fixModel: { agent: "claude", model: "opus" },
     });
   });
@@ -90,8 +91,9 @@ describe("MultiReviewLaunchDialog", () => {
     expect(scrollRegion.className).toContain("overflow-y-auto");
     expect(scrollRegion.contains(screen.getByLabelText("Reviewer 3 model"))).toBe(true);
     expect(
-      scrollRegion.contains(screen.getByLabelText("Preparation, consolidation & fix model model")),
+      scrollRegion.contains(screen.getByLabelText("Preparation & consolidation model model")),
     ).toBe(true);
+    expect(scrollRegion.contains(screen.getByLabelText("Fix model model"))).toBe(true);
     expect(
       scrollRegion.contains(screen.getByRole("button", { name: "Start 3-model review" })),
     ).toBe(false);
@@ -147,7 +149,8 @@ describe("MultiReviewLaunchDialog", () => {
     for (const name of [
       "Reviewer 1 model",
       "Reviewer 2 model",
-      "Preparation, consolidation & fix model model",
+      "Preparation & consolidation model model",
+      "Fix model model",
     ]) {
       expect(screen.getByLabelText(name).closest("fieldset")?.disabled).toBe(true);
     }
@@ -197,11 +200,12 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "cursor", model: "grok-4.6" },
       ],
+      reviewModel: { agent: "claude", model: "opus" },
       fixModel: { agent: "claude", model: "opus" },
     });
   });
 
-  test("seeds reviewer 2 and the fix model from their independent defaults", () => {
+  test("seeds reviewer 2, review preparation, and fix from independent defaults", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
     render(
       <MultiReviewLaunchDialog
@@ -215,6 +219,11 @@ describe("MultiReviewLaunchDialog", () => {
           defaultAgent: "codex",
           preferredModels: { codex: "gpt-5.6" },
           preferredReasoningEfforts: { codex: "medium" },
+        }}
+        reviewModelDefaults={{
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.5" },
+          preferredReasoningEfforts: { codex: "low" },
         }}
         fixModelDefaults={{
           defaultAgent: "opencode",
@@ -230,6 +239,7 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "claude", model: "opus", reasoningEffort: "high" },
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
       ],
+      reviewModel: { agent: "codex", model: "gpt-5.5", reasoningEffort: "low" },
       fixModel: { agent: "opencode", model: "provider/model" },
     });
   });
@@ -372,7 +382,7 @@ describe("MultiReviewLaunchDialog", () => {
     );
 
     chooseFavorite("Reviewer 2", /GPT-5\.6/);
-    chooseFavorite("Preparation, consolidation & fix model", /GPT-5\.6/);
+    chooseFavorite("Fix model", /GPT-5\.6/);
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
@@ -380,6 +390,7 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "claude", model: "opus" },
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
       ],
+      reviewModel: { agent: "claude", model: "opus" },
       fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "low" },
     });
   });
@@ -440,12 +451,7 @@ describe("MultiReviewLaunchDialog", () => {
     });
   });
 
-  /**
-   * The consolidation row runs the deduplication turn and stays attached as the
-   * interactive fix session, so a favourite from another provider strands the
-   * whole workflow there — not just one reviewer's report — if the row keeps its
-   * old agent.
-   */
+  /** The coordinator row owns both package preparation and consolidation. */
   test("adopts the platform of a favourite chosen for the consolidation row", () => {
     setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
@@ -460,7 +466,7 @@ describe("MultiReviewLaunchDialog", () => {
       />,
     );
 
-    chooseFavorite("Preparation, consolidation & fix model", /GPT-5\.6/);
+    chooseFavorite("Preparation & consolidation model", /GPT-5\.6/);
 
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     expect(onConfirm.mock.calls[0]?.[0]).toEqual({
@@ -468,7 +474,8 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "claude", model: "opus" },
         { agent: "claude", model: "opus" },
       ],
-      fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+      reviewModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+      fixModel: { agent: "claude", model: "opus" },
     });
   });
 
@@ -503,6 +510,7 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "claude", model: "opus" },
       ],
+      reviewModel: { agent: "claude", model: "opus" },
       fixModel: { agent: "claude", model: "opus" },
     });
   });

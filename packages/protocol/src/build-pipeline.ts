@@ -277,6 +277,9 @@ export interface PipelineSession {
    * before per-step harnesses existed, which fall back to `agentType`.
    */
   agent?: BuildPipelineAgent;
+  /** Exact prompt-level selection, retained so ambiguous dispatch can retry faithfully. */
+  model?: string;
+  reasoningEffort?: string;
   /** Persisted interaction authority for backend-owned workflow sessions. */
   origin?: import("./agent-interactions.js").AgentInteractionOrigin;
   interactionPolicy?: import("./agent-interactions.js").AgentInteractionPolicy;
@@ -488,6 +491,8 @@ export interface BuildPipeline {
   steps?: BuildStepConfigs;
   /** Resolved at start. See {@link pipelineReviewerConfigs}. */
   reviewers?: BuildStepConfig[];
+  /** One model used to prepare the immutable review package and consolidate fan-out reports. */
+  reviewPreparation?: BuildStepConfig;
   /** Kept until the environment exists, then no longer consulted. */
   environmentOptions?: BuildPipelineEnvironmentOptions;
   /**
@@ -567,6 +572,8 @@ export interface StartBuildPipelineInput {
    * one-reviewer stage; more than one runs the shared reviewer fan-out.
    */
   reviewers?: BuildStepConfig[];
+  /** Preparation/consolidation model for a multi-reviewer stage. */
+  reviewPreparation?: BuildStepConfig;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
   source?: BuildPipelineSource;
@@ -813,6 +820,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
   return (
     SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
+    (value.model === undefined || isNonBlankString(value.model)) &&
+    (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||
       (value.origin === "build-pipeline" &&
         isAgentInteractionPolicy(value.interactionPolicy) &&
@@ -1111,6 +1120,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
+    (value.reviewPreparation !== undefined && !isBuildStepConfig(value.reviewPreparation)) ||
     (value.environmentOptions !== undefined &&
       !isBuildPipelineEnvironmentOptions(value.environmentOptions)) ||
     (value.reviewFanout !== undefined && !isReviewFanoutState(value.reviewFanout)) ||
@@ -1187,6 +1197,7 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
     AGENTS.has(value.agentType as BuildPipelineAgent) &&
     (value.steps === undefined || isBuildStepConfigs(value.steps)) &&
     (value.reviewers === undefined || isBuildStepConfigList(value.reviewers)) &&
+    (value.reviewPreparation === undefined || isBuildStepConfig(value.reviewPreparation)) &&
     (value.environmentOptions === undefined ||
       isBuildPipelineEnvironmentOptions(value.environmentOptions)) &&
     isTaskSnapshot(value.taskSnapshot) &&

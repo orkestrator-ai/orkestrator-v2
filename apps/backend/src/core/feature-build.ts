@@ -96,6 +96,7 @@ export async function createFeatureBuild(
     agentType: input.agentType,
     ...(input.steps ? { steps: withVerifyFromAddress(input.steps) } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
+    ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
     taskTitle: task.title,
     // The snapshot is what every stage prompt quotes. It is taken here rather
     // than read back later so the build works from the ticket as submitted,

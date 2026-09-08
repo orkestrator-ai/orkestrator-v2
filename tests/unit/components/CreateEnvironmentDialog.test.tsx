@@ -4490,6 +4490,9 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
 
     expect(screen.getByLabelText("Build agent, model and reasoning")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Review preparation & consolidation agent, model and reasoning"),
+    ).toBeTruthy();
     expect(screen.getByLabelText("Address issues agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Pull request agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Resolve conflicts agent, model and reasoning")).toBeTruthy();
@@ -4506,6 +4509,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
         .map((picker) => picker.getAttribute("aria-label")),
     ).toEqual([
       "Build agent, model and reasoning",
+      "Review preparation & consolidation agent, model and reasoning",
       "Review 1 agent, model and reasoning",
       "Review 2 agent, model and reasoning",
       "Address issues agent, model and reasoning",

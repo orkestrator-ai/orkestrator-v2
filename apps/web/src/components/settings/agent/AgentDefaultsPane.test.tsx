@@ -255,6 +255,37 @@ describe("AgentDefaultsPane create-script defaults", () => {
       view.unmount();
     }
   });
+
+  test("shows and persists the review preparation and consolidation default separately", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    expect(
+      screen.getByRole("combobox", {
+        name: "Review preparation & consolidation default agent, model and reasoning",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-reviewPreparation choose Codex A" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "action-default-reviewPreparation choose high reasoning",
+      }),
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        actionDefaults: expect.objectContaining({
+          reviewPreparation: {
+            platform: "codex",
+            model: "codex-a",
+            reasoningEffort: "high",
+          },
+        }),
+      }),
+    );
+  });
 });
 
 describe("AgentDefaultsPane speed defaults", () => {

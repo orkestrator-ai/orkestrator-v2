@@ -360,6 +360,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // keeps the previous behaviour of following Review rather than silently
   // switching to the environment's generic agent.
   const review2LaunchDefaults = configuredLaunchDialogDefaultsFor("review2");
+  const reviewPreparationLaunchDefaults = configuredLaunchDialogDefaultsFor("reviewPreparation");
   const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
@@ -401,6 +402,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     multiReviewLaunchPending,
     multiReviewReviewerDefaults,
     reviewLaunchDefaults,
+    reviewPreparationLaunchDefaults,
     reviewModelCatalog,
     selectedEnvironmentId,
     setupRunning,
@@ -415,6 +417,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     multiReviewLaunchPending,
     multiReviewReviewerDefaults,
     reviewLaunchDefaults,
+    reviewPreparationLaunchDefaults,
     reviewModelCatalog,
     selectedEnvironmentId,
     setupRunning,
@@ -457,6 +460,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           preferredModels: state.reviewLaunchDefaults.preferredModels,
           preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
           reviewerDefaults: state.multiReviewReviewerDefaults,
+          reviewModelDefaults: state.reviewPreparationLaunchDefaults,
           fixModelDefaults: state.fixReviewIssuesLaunchDefaults,
         }),
       );
@@ -849,6 +853,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                             preferredReasoningEfforts:
                               reviewLaunchDefaults.preferredReasoningEfforts,
                             reviewerDefaults: multiReviewReviewerDefaults,
+                            reviewModelDefaults: reviewPreparationLaunchDefaults,
                             fixModelDefaults: fixReviewIssuesLaunchDefaults,
                           }),
                         );
@@ -1425,6 +1430,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         reviewerDefaults={multiReviewReviewerDefaults}
+        reviewModelDefaults={reviewPreparationLaunchDefaults}
         fixModelDefaults={fixReviewIssuesLaunchDefaults}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}

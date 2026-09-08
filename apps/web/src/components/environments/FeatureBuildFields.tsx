@@ -66,7 +66,7 @@ const BUILD_INTENTS: Array<{
  * absent because it runs on the address model — see `FeatureBuildModelState`.
  */
 const SINGLE_STEPS: Array<{
-  key: "build" | "address" | "pr" | "resolve";
+  key: "build" | "reviewPreparation" | "address" | "pr" | "resolve";
   title: string;
   description: string;
   icon: React.ReactNode;
@@ -76,6 +76,12 @@ const SINGLE_STEPS: Array<{
     title: "Build",
     description: "Implements the ticket.",
     icon: <Hammer className="size-4" />,
+  },
+  {
+    key: "reviewPreparation",
+    title: "Review preparation & consolidation",
+    description: "Prepares the shared review package, then consolidates reviewer findings.",
+    icon: <ScanSearch className="size-4" />,
   },
   {
     key: "address",
@@ -327,7 +333,7 @@ function FeatureBuildModelPickers({
 
   return (
     <div role="group" aria-label="Feature build model customization" className="space-y-3">
-      {stepRows[0]}
+      {stepRows.slice(0, 2)}
 
       <div className="space-y-2 rounded-lg border border-border/70 bg-zinc-950/20 p-3">
         <div className="flex items-start justify-between gap-3">
@@ -336,7 +342,7 @@ function FeatureBuildModelPickers({
             <div>
               <div className="text-sm font-medium">Review</div>
               <div className="text-xs text-muted-foreground">
-                Each reviewer reads the diff independently; the address model merges their reports.
+                Each reviewer reads the shared package independently.
               </div>
             </div>
           </div>
@@ -399,7 +405,7 @@ function FeatureBuildModelPickers({
         ))}
       </div>
 
-      {stepRows.slice(1)}
+      {stepRows.slice(2)}
     </div>
   );
 }

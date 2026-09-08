@@ -1501,6 +1501,7 @@ async function createControlMcp(
           targetBranch: z.string().trim().min(1).max(500),
           reviewInstruction: z.string().max(100_000).optional(),
           reviewers: z.array(agentSelectionSchema).min(1).max(32),
+          reviewModel: agentSelectionSchema.optional(),
           fixModel: agentSelectionSchema,
         }),
         annotations: {

@@ -49,6 +49,7 @@ export interface FeatureBuildReviewerRow extends FeatureBuildStepSelection {
 export interface FeatureBuildModelState {
   build: FeatureBuildStepSelection;
   reviewers: FeatureBuildReviewerRow[];
+  reviewPreparation: FeatureBuildStepSelection;
   address: FeatureBuildStepSelection;
   pr: FeatureBuildStepSelection;
   resolve: FeatureBuildStepSelection;
@@ -111,6 +112,7 @@ export function defaultFeatureBuildModels(options: {
   build: ConfiguredStepDefault;
   review: ConfiguredStepDefault;
   review2: ConfiguredStepDefault;
+  reviewPreparation?: ConfiguredStepDefault;
   address: ConfiguredStepDefault;
   pr: ConfiguredStepDefault;
   resolve: ConfiguredStepDefault;
@@ -122,6 +124,10 @@ export function defaultFeatureBuildModels(options: {
       featureBuildReviewerRow(options.review, catalog),
       featureBuildReviewerRow(options.review2, catalog),
     ],
+    reviewPreparation: resolveFeatureBuildStep(
+      options.reviewPreparation ?? options.address,
+      catalog,
+    ),
     address: resolveFeatureBuildStep(options.address, catalog),
     pr: resolveFeatureBuildStep(options.pr, catalog),
     resolve: resolveFeatureBuildStep(options.resolve, catalog),
@@ -155,6 +161,7 @@ function reviewerConfigs(models: FeatureBuildModelState): BuildStepConfig[] {
 export function featureBuildStepConfigs(models: FeatureBuildModelState): {
   steps: BuildStepConfigs;
   reviewers: BuildStepConfig[];
+  reviewPreparation: BuildStepConfig;
 } {
   const reviewers = reviewerConfigs(models);
   return {
@@ -166,6 +173,7 @@ export function featureBuildStepConfigs(models: FeatureBuildModelState): {
       "resolve-conflicts": stepConfig(models.resolve),
     },
     reviewers,
+    reviewPreparation: stepConfig(models.reviewPreparation),
   };
 }
 
@@ -207,6 +215,7 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
     // Review configuration is always explicit so the backend can distinguish
     // the default fan-out from the legacy single-review pipeline.
     reviewers: configured.reviewers,
+    reviewPreparation: configured.reviewPreparation,
     ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
     requestId: input.requestId,
   };

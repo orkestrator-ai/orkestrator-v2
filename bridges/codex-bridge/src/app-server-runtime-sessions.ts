@@ -926,15 +926,26 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   async getRuntimeHealth(sessionId: string): Promise<unknown | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
-    // A known session without a materialized thread sees engine-global notices
-    // only. `undefined` is reserved for the engine-wide operator snapshot.
-    return this.options.engine.getRuntimeHealth(session.threadId ?? null);
+    // Runtime metadata is a no-touch read: it must not resume every durable
+    // thread merely because the backend refreshes a projection. App-server only
+    // accepts thread-scoped MCP inventory requests for a thread loaded in the
+    // current generation, so a lazy/restored or idle-detached session uses the
+    // engine-global inventory until another route attaches it.
+    return this.options.engine.getRuntimeHealth(this.loadedThreadId(sessionId));
   }
 
   async listMcpServers(sessionId: string): Promise<unknown | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
-    return this.options.engine.listMcpServers(session.threadId ?? null);
+    return this.options.engine.listMcpServers(this.loadedThreadId(sessionId));
+  }
+
+  /** A thread id app-server can currently use without re-attaching the session. */
+  private loadedThreadId(sessionId: string): string | null {
+    const context = this.registry.getThreadForSession(sessionId);
+    if (!context || context.unsubscribed) return null;
+    if (context.engineGeneration !== this.options.engine.info().generation) return null;
+    return context.threadId;
   }
 
   async performMcpAction(

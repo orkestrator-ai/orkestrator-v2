@@ -18,6 +18,7 @@ import {
   FolderPlus,
   GitPullRequest,
   RotateCcw,
+  ScanSearch,
   Upload,
   Wrench,
 } from "lucide-react";
@@ -80,9 +81,14 @@ const ACTION_DEFINITIONS: Record<
     description: "Used as the second review model in Multi Review.",
     icon: <Eye className="h-4 w-4" />,
   },
+  reviewPreparation: {
+    label: "Review preparation & consolidation",
+    description: "Prepares the shared review package and consolidates Multi Review findings.",
+    icon: <ScanSearch className="h-4 w-4" />,
+  },
   fixReviewIssues: {
     label: "Fix review issues",
-    description: "Used as the consolidation and fix model in Multi Review.",
+    description: "Addresses the consolidated findings after Multi Review.",
     icon: <Wrench className="h-4 w-4" />,
   },
   pr: {

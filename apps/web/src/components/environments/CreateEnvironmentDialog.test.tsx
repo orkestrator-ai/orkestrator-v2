@@ -150,6 +150,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     // The first step row, the reviewer rows, and the step rows rendered after
     // the reviewer block are three separate render paths in FeatureBuildFields.
     expect(labels).toContain("Build agent, model and reasoning");
+    expect(labels).toContain("Review preparation & consolidation agent, model and reasoning");
     expect(labels).toContain("Review 1 agent, model and reasoning");
     expect(labels).toContain("Review 2 agent, model and reasoning");
     expect(labels).toContain("Resolve conflicts agent, model and reasoning");

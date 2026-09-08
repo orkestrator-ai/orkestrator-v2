@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -15,10 +16,12 @@ const report = {
 describe("multiReviewCustomFixPrompt", () => {
   test("keeps generic Address all independent of the Multi Review handoff", () => {
     expect(ADDRESS_ALL_REVIEW_PROMPT).toBe(
-      "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+      `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
     );
     expect(ADDRESS_ALL_REVIEW_PROMPT).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(MULTI_REVIEW_ADDRESS_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("Do not invoke EnterPlanMode");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("make the necessary edits");
   });
 
   test("retires both structured-output and read-only review-stage constraints", () => {
@@ -43,6 +46,7 @@ describe("multiReviewCustomFixPrompt", () => {
     expect(prompt.indexOf(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)).toBeGreaterThan(
       prompt.indexOf("</structured-review-findings-json>"),
     );
+    expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 
   test("escapes marker-shaped strings inside untrusted evidence", () => {

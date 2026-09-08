@@ -331,6 +331,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { ROOT_TERMINAL_USER } from "@/constants/terminal";
 
 const { PersistentTerminal } = await import("./PersistentTerminal");
@@ -4733,7 +4734,7 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("shows Address all for launched review tabs and writes the shared prompt", async () => {
+  it("shows Address all and writes the complete shared prompt as one terminal line", async () => {
     useTerminalBootstrapped = true;
     useTerminalSessionStore.setState({
       sessions: new Map([["container-1:tab-1", { sessionId: "session-1" }]]),
@@ -4759,10 +4760,13 @@ describe("PersistentTerminal", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Address all" }));
 
+    const terminalAddressPrompt = ADDRESS_ALL_REVIEW_PROMPT.replace(/[\r\n]+/g, " ").trim();
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith(ADDRESS_ALL_REVIEW_PROMPT);
+      expect(writeMock).toHaveBeenCalledWith(terminalAddressPrompt);
       expect(writeMock).toHaveBeenCalledWith("\r");
     });
+    expect(terminalAddressPrompt).toContain(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
+    expect(terminalAddressPrompt).not.toMatch(/[\r\n]/);
   });
 
   it("flattens multiline compose text before writing it to Claude Code", async () => {

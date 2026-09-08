@@ -1,6 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   multiReviewCustomFixPrompt,
@@ -54,6 +55,80 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
       mode: "build",
     }),
   );
+  expect(ensureSession).not.toHaveBeenCalled();
+});
+
+test("dispatchMultiReviewAddressPrompt creates a fix session separate from review coordination", async () => {
+  const adoptSession = mock(async () => undefined as never);
+  const ensureSession = mock(async () => ({ providerSessionId: "provider-fix-new" }) as never);
+  const dispatchIntent = mock(async () => ({
+    outcome: "accepted" as const,
+    requestId: "multi-review-address:multi-1",
+  }));
+  const separate = {
+    ...workflow,
+    reviewModel: { agent: "claude", model: "review-coordinator" },
+    reviewSession: {
+      agent: "claude",
+      model: "review-coordinator",
+      sessionKey: "multi-review:multi-1:review",
+      providerSessionId: "provider-review",
+      requestIds: ["prepare-1", "consolidate-1"],
+      status: "idle",
+      startedAt: new Date(0).toISOString(),
+    },
+    consolidatedReport: {
+      issues: [{ title: "Separate-session finding" }],
+      testCoverageGaps: [{ untestedBehavior: "Separate-session coverage" }],
+    } as MultiReviewWorkflow["consolidatedReport"],
+    fixSession: undefined,
+  } as MultiReviewWorkflow;
+
+  const dispatched = await dispatchMultiReviewAddressPrompt(
+    { adoptSession, ensureSession, dispatchIntent },
+    separate,
+  );
+
+  expect(adoptSession).not.toHaveBeenCalled();
+  expect(ensureSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agent: "codex",
+      model: "gpt-5.6",
+      logicalSessionKey: "multi-review:multi-1:interactive",
+      sessionMode: "build",
+    }),
+  );
+  expect(dispatched.fixSession).toMatchObject({
+    providerSessionId: "provider-fix-new",
+    model: "gpt-5.6",
+  });
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: expect.stringContaining("Separate-session finding"),
+    }),
+  );
+  expect(separate.reviewSession?.providerSessionId).toBe("provider-review");
+});
+
+test("dispatchMultiReviewAddressPrompt rejects a separate fix session without a report", async () => {
+  const ensureSession = mock(async () => ({ providerSessionId: "unexpected" }) as never);
+  await expect(
+    dispatchMultiReviewAddressPrompt(
+      {
+        adoptSession: mock(async () => undefined as never),
+        ensureSession,
+        dispatchIntent: mock(async () => ({
+          outcome: "accepted" as const,
+          requestId: "unexpected",
+        })),
+      },
+      {
+        ...workflow,
+        reviewModel: { agent: "claude", model: "review-coordinator" },
+        fixSession: undefined,
+      },
+    ),
+  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressStateError);
   expect(ensureSession).not.toHaveBeenCalled();
 });
 
@@ -142,6 +217,11 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     expect.objectContaining({
       requestId: "multi-review-address:multi-1:launch-1",
       prompt: multiReviewCustomFixPrompt(custom.consolidatedReport!, custom.customFixInstruction!),
+    }),
+  );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: expect.stringContaining(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
     }),
   );
   expect(events).toEqual(["dispatch", "publish"]);
@@ -247,7 +327,7 @@ test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provi
 test("recoverMissingMultiReviewFixSession adopts and seeds the replacement before returning it", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
-  const dispatchIntent = mock(async (input: { requestId: string }) => ({
+  const dispatchIntent = mock(async (input: { prompt: string; requestId: string }) => ({
     outcome: "accepted" as const,
     requestId: input.requestId,
   }));
@@ -296,6 +376,9 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
       prompt: `${addressPrompt(recoverable.consolidatedReport!)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
       mode: "build",
     }),
+  );
+  expect(dispatchIntent.mock.calls[0]?.[0].prompt).toEndWith(
+    MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   );
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({

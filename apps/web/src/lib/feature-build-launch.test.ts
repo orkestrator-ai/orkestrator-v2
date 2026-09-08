@@ -29,6 +29,7 @@ function models(): FeatureBuildModelState {
     build: { agent: "claude", model: "opus", reasoningEffort: "max" },
     review: { agent: "claude", model: "sonnet", reasoningEffort: "high" },
     review2: { agent: "codex", model: "gpt-5.6" },
+    reviewPreparation: { agent: "claude", model: "opus", reasoningEffort: "max" },
     address: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     pr: { agent: "claude", model: "sonnet" },
     resolve: { agent: "claude", model: "opus" },
@@ -82,6 +83,19 @@ describe("defaultFeatureBuildModels", () => {
       reasoningEffort: "max",
     });
   });
+
+  test("keeps review preparation independent from the address model", () => {
+    expect(models().reviewPreparation).toMatchObject({
+      agent: "claude",
+      model: "opus",
+      reasoningEffort: "max",
+    });
+    expect(models().address).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+    });
+  });
 });
 
 describe("featureBuildStepConfigs", () => {
@@ -94,6 +108,20 @@ describe("featureBuildStepConfigs", () => {
 
   test("does not send a verify step; the backend runs it on the address model", () => {
     expect(featureBuildStepConfigs(models()).steps.verify).toBeUndefined();
+  });
+
+  test("sends review preparation separately from the fix steps", () => {
+    const configured = featureBuildStepConfigs(models());
+    expect(configured.reviewPreparation).toEqual({
+      agent: "claude",
+      model: "opus",
+      reasoningEffort: "max",
+    });
+    expect(configured.steps.address).toEqual({
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+    });
   });
 
   test("maps resolve to the pipeline's conflict step", () => {
@@ -159,6 +187,11 @@ describe("featureBuildRequest", () => {
   test("sends every resolved default when the models panel is closed", () => {
     const request = featureBuildRequest(base);
     expect(request.steps).toEqual(featureBuildStepConfigs(base.models).steps);
+    expect(request.reviewPreparation).toEqual({
+      agent: "claude",
+      model: "opus",
+      reasoningEffort: "max",
+    });
     expect(request.reviewers).toEqual([
       { agent: "claude", model: "sonnet", reasoningEffort: "high" },
       { agent: "codex", model: "gpt-5.6" },

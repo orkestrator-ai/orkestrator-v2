@@ -91,6 +91,25 @@ describe("create feature build input", () => {
     expect(isCreateFeatureBuildInput({ ...input, reviewers: [] })).toBe(false);
   });
 
+  test("validates a separate review preparation and consolidation model", () => {
+    expect(
+      isCreateFeatureBuildInput({
+        ...input,
+        reviewPreparation: {
+          agent: "codex",
+          model: "gpt-5.6",
+          reasoningEffort: "high",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isCreateFeatureBuildInput({
+        ...input,
+        reviewPreparation: { agent: "unknown", model: "gpt-5.6" },
+      }),
+    ).toBe(false);
+  });
+
   test("accepts feature images and rejects malformed image entries", () => {
     expect(
       isCreateFeatureBuildInput({

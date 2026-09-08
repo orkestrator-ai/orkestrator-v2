@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
 import {
   LOOPED_REVIEW_MAX_CONTEXT_BYTES,
   LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -355,6 +358,7 @@ describe("build pipeline prompts", () => {
     // Automated pipeline fix turns still receive their enforced result schema;
     // only the manual Multi Review handoff supersedes prior JSON contracts.
     expect(prompt).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 
   test("structuredReportRepairPrompt lists every error and states the attempt budget", () => {

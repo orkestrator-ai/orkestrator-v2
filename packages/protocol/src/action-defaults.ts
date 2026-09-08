@@ -13,6 +13,7 @@ export const ACTION_DEFAULT_KEYS = Object.freeze([
   "createScript",
   "review",
   "review2",
+  "reviewPreparation",
   "fixReviewIssues",
   "pr",
   "resolve",

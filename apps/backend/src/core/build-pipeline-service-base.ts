@@ -32,6 +32,7 @@ import {
   sessionAgent,
   pipelineAgents,
   normalizeReviewers,
+  normalizeReviewPreparation,
   normalizeSteps,
   sessionPhaseFor,
   resumePromptFor,
@@ -277,6 +278,7 @@ export abstract class BuildPipelineServiceBase {
     }
     const steps = normalizeSteps(input.steps);
     const reviewers = normalizeReviewers(input.reviewers);
+    const reviewPreparation = normalizeReviewPreparation(input.reviewPreparation);
     const pipeline: BuildPipeline = {
       id: randomUUID(),
       taskId: input.taskId,
@@ -291,6 +293,7 @@ export abstract class BuildPipelineServiceBase {
       agentType: steps?.build?.agent ?? input.agentType,
       ...(steps ? { steps } : {}),
       ...(reviewers ? { reviewers } : {}),
+      ...(reviewPreparation ? { reviewPreparation } : {}),
       ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
       phase: existingEnvironment ? "starting-environment" : "creating-environment",
       sessions: [],

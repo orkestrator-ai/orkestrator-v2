@@ -10,7 +10,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { LEGACY_PANE_LAYOUT_VERSION, type PersistedPaneLayout } from "@/types/paneLayout";
 import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-selection-storage";
 
@@ -30,6 +30,78 @@ import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-se
  * driving unbounded recursion.
  */
 const MAX_DEPENDENCY_SCAN_DEPTH = 10;
+const MAX_PENDING_TAB_ACTIVATIONS = 64;
+
+// Backend-owned jobs publish their tabs through pane-layout reconciliation.
+// Electron windows intentionally preserve their own selection while adopting
+// that shared structure, so an action initiated in this renderer needs a
+// renderer-local handoff to focus its resulting tab. Keep only the latest
+// request per environment: a later foreground action supersedes an earlier one.
+const pendingTabActivations = new Map<string, string>();
+
+function activateTabInState(
+  state: EnvironmentPaneState,
+  tabId: string,
+): EnvironmentPaneState | null {
+  const visit = (node: EnvironmentPaneState["root"]): string | null => {
+    if (node.kind === "leaf") {
+      return node.tabs.some((tab) => tab.id === tabId) ? node.id : null;
+    }
+    return visit(node.children[0]) ?? visit(node.children[1]);
+  };
+  const paneId = visit(state.root);
+  if (!paneId) return null;
+
+  const select = (node: EnvironmentPaneState["root"]): EnvironmentPaneState["root"] => {
+    if (node.kind === "leaf") {
+      return node.id === paneId ? { ...node, activeTabId: tabId } : node;
+    }
+    return {
+      ...node,
+      children: [select(node.children[0]), select(node.children[1])],
+    };
+  };
+  return { ...state, root: select(state.root), activePaneId: paneId };
+}
+
+/**
+ * Focus a backend-created tab in the Electron window that launched it.
+ *
+ * If the resource announcement is still in flight, reconciliation consumes
+ * the pending request when the exact tab arrives. Browser clients already use
+ * the backend's shared selection and need no renderer-local override.
+ */
+export function requestPaneTabActivation(environmentId: string, tabId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+
+  const store = usePaneLayoutStore.getState();
+  const pane = store.findPaneWithTab(tabId, environmentId);
+  if (pane) {
+    pendingTabActivations.delete(environmentId);
+    store.setActiveTab(pane.id, tabId, environmentId);
+    return;
+  }
+
+  pendingTabActivations.delete(environmentId);
+  pendingTabActivations.set(environmentId, tabId);
+  while (pendingTabActivations.size > MAX_PENDING_TAB_ACTIVATIONS) {
+    const oldestEnvironmentId = pendingTabActivations.keys().next().value;
+    if (typeof oldestEnvironmentId !== "string") break;
+    pendingTabActivations.delete(oldestEnvironmentId);
+  }
+}
+
+function applyPendingTabActivation(
+  environmentId: string,
+  state: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const tabId = pendingTabActivations.get(environmentId);
+  if (!tabId) return state;
+  const activated = activateTabInState(state, tabId);
+  if (!activated) return state;
+  pendingTabActivations.delete(environmentId);
+  return activated;
+}
 
 export function collectPaneDependencyIds(root: unknown): {
   pipelineIds: Set<string>;
@@ -175,11 +247,12 @@ export function reconcileAuthoritativePaneLayout(
   if (!restored) return null;
 
   if (window.orkestrator?.isolatedViewState) {
-    return applyStoredPaneSelection(
+    const selected = applyStoredPaneSelection(
       preserveClientPaneSelection(restored, current),
       environmentId,
       readWindowPaneSelection(environmentId),
     );
+    return applyPendingTabActivation(environmentId, selected);
   }
 
   // V1 stored canonical first-pane/first-tab placeholders, not real focus.

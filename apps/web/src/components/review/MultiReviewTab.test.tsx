@@ -22,6 +22,7 @@ import {
   multiReviewStepRuntimeSummary,
   fixStep,
   multiReviewFixSessionTabOptions,
+  multiReviewReviewSessionTabOptions,
   reviewPackageGenerationStep,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
@@ -1648,7 +1649,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         />,
       );
 
-      expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
+      expect(screen.getByRole("status").textContent).toContain(
+        phase === "consolidating"
+          ? "Review preparation model appears stalled"
+          : "Fix model appears stalled",
+      );
       expect(screen.getByRole("status").textContent).toContain("Cancel now");
       expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
       view.unmount();
@@ -1691,7 +1696,7 @@ test("renders backend-owned package preparation after remount with cancel availa
       hydrateWorkflow={async () => workflow}
     />,
   );
-  expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
+  expect(screen.getByText("The review preparation model is preparing the package")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true);
   view.unmount();
@@ -1702,7 +1707,7 @@ test("renders backend-owned package preparation after remount with cancel availa
       hydrateWorkflow={async () => workflow}
     />,
   );
-  expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
+  expect(screen.getByText("The review preparation model is preparing the package")).toBeTruthy();
 });
 
 describe("MultiReviewTab pipeline step cards", () => {
@@ -1765,7 +1770,91 @@ describe("MultiReviewTab pipeline step cards", () => {
     });
   });
 
-  test("stays disabled until the fix model has opened a provider session", () => {
+  test("opens preparation and consolidation separately from the fix tab", () => {
+    const legacy = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...legacy,
+      phase: "fixing",
+      reviewModel: { agent: "claude", model: "opus", reasoningEffort: "high" },
+      reviewSessionKey: "multi-review:multi-1:review",
+      reviewSession: {
+        agent: "claude",
+        model: "opus",
+        reasoningEffort: "high",
+        sessionKey: "multi-review:multi-1:review",
+        providerSessionId: "provider-review-coordinator",
+        requestIds: ["prepare-1", "consolidate-1"],
+        status: "idle",
+        startedAt: "2026-08-14T00:00:00.000Z",
+        completedAt: "2026-08-14T00:04:00.000Z",
+      },
+      fixSession: { ...legacy.fixSession!, status: "running", completedAt: undefined },
+      activeRequest: {
+        kind: "fix",
+        requestId: "fix-1",
+        state: "sent",
+        createdAt: "2026-08-14T00:05:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open review package generation session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open consolidation session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open fix model session" }));
+
+    // Both coordinator cards resolve to the same dedicated tab identity, while
+    // Fix uses another tab backed by its own provider session.
+    expect(createTab).toHaveBeenCalledTimes(3);
+    expect(createTab.mock.calls[0]?.[0]).toBe("claude");
+    expect(createTab.mock.calls[0]?.[1]).toMatchObject({
+      tabId: "multi-review-review:multi-1",
+      displayTitle: "Review preparation & consolidation",
+      resumeSessionId: "provider-review-coordinator",
+    });
+    expect(createTab.mock.calls[1]?.[1]).toMatchObject({
+      tabId: "multi-review-review:multi-1",
+      resumeSessionId: "provider-review-coordinator",
+    });
+    expect(createTab.mock.calls[2]?.[0]).toBe("codex");
+    expect(createTab.mock.calls[2]?.[1]).toMatchObject({
+      tabId: "multi-review-fix:multi-1",
+      displayTitle: "Fix",
+      resumeSessionId: "provider-fix",
+    });
+  });
+
+  test("keeps legacy preparation and fix tabs on the shared provider session", () => {
+    const legacy = readyWorkflow();
+
+    expect(multiReviewReviewSessionTabOptions(legacy)).toMatchObject({
+      tabId: "multi-review-review:multi-1",
+      resumeSessionId: "provider-fix",
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "plan",
+    });
+    expect(multiReviewFixSessionTabOptions(legacy)).toMatchObject({
+      tabId: "multi-review-fix:multi-1",
+      resumeSessionId: "provider-fix",
+      initialAgentModel: "gpt-5.6",
+      initialReasoningEffort: "high",
+      initialConversationMode: "build",
+    });
+  });
+
+  test("stays disabled until the review model has opened a provider session", () => {
     const workflow = preparingWorkflow();
     delete workflow.fixSession;
     useMultiReviewStore.getState().replaceWorkflow(workflow);

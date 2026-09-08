@@ -998,6 +998,6 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       origin: session.origin,
       interactionPolicy: session.interactionPolicy,
     });
-    return { key, session, provider };
+    return { key, session, provider, transient: false as const };
   }
 }

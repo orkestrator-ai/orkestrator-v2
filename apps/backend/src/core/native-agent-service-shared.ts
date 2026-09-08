@@ -181,6 +181,15 @@ export interface AdoptNativeAgentSessionInput extends EnsureNativeAgentSessionIn
   controls?: NativeAgentControlUpdate;
 }
 
+/**
+ * A provider session that should be projected without becoming a durable
+ * native-tab session. Backend workflows already own these sessions; inspection
+ * must not enroll them in the native-agent reconciler.
+ */
+export interface InspectNativeAgentSessionInput extends AdoptNativeAgentSessionInput {
+  refreshUsage?: boolean;
+}
+
 export interface NativeAgentProjectionInput {
   environmentId: string;
   agent: BuildPipelineAgent;

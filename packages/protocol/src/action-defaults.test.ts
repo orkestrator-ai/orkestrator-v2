@@ -18,12 +18,18 @@ describe("normalizeActionDefaults", () => {
         createScript: { platform: "claude", model: " sonnet ", reasoningEffort: " high " },
         review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
         review2: { platform: "claude", model: " opus " },
+        reviewPreparation: { platform: "codex", model: " gpt-5.6 ", reasoningEffort: " medium " },
         fixReviewIssues: { platform: "codex", model: " gpt-5.6 " },
       }),
     ).toEqual({
       createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
       review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review2: { platform: "claude", model: "opus" },
+      reviewPreparation: {
+        platform: "codex",
+        model: "gpt-5.6",
+        reasoningEffort: "medium",
+      },
       fixReviewIssues: { platform: "codex", model: "gpt-5.6" },
     });
   });

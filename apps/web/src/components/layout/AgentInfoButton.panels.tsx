@@ -150,13 +150,59 @@ const RESET_DATE_TIME_FORMAT_OPTIONS = {
 } satisfies Intl.DateTimeFormatOptions;
 
 const WEEK_MINUTES = 7 * 24 * 60;
+const DAY_MINUTES = 24 * 60;
 const MINUTE_MS = 60_000;
 
-function isWeeklyRateLimit(limit: AgentRateLimitWindow): boolean {
-  return (
-    limit.windowMinutes === WEEK_MINUTES ||
-    (limit.windowMinutes === undefined && /\bweekly\b/i.test(limit.label))
-  );
+const SPELLED_HOURS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+/**
+ * The period a limit covers, read from its name.
+ *
+ * A compatibility fallback only. Providers that report a duration are believed;
+ * this exists because several name the period without measuring it — Claude's
+ * structured usage calls its windows "Weekly" and "Five Hour", Codex's
+ * retained account rows arrive as "Weekly limit" and "5-hour limit" — and a
+ * window whose length is known by name can still be placed in time.
+ */
+export function labelWindowMinutes(label: string): number | null {
+  if (/\bweek(ly)?\b/i.test(label)) return WEEK_MINUTES;
+  if (/\bdaily\b/i.test(label)) return DAY_MINUTES;
+  const numericHours = label.match(/\b(\d+)\s*(?:-\s*)?h(?:ours?|r)?\b/i);
+  if (numericHours) {
+    const hours = Number(numericHours[1]);
+    if (Number.isFinite(hours) && hours > 0) return hours * 60;
+  }
+  const spelledHours = label.match(/\b([a-z]+)[\s-]+hours?\b/i);
+  const spelled = spelledHours ? SPELLED_HOURS[spelledHours[1]!.toLowerCase()] : undefined;
+  return spelled === undefined ? null : spelled * 60;
+}
+
+/** Anything that occupies a bounded quota period, however the provider named it. */
+export interface TimedWindow {
+  label: string;
+  resetsAt?: string;
+  windowMinutes?: number;
+}
+
+export function windowDurationMinutes(window: TimedWindow): number | null {
+  const reported = window.windowMinutes;
+  if (reported !== undefined) {
+    return Number.isFinite(reported) && reported > 0 ? reported : null;
+  }
+  return labelWindowMinutes(window.label);
 }
 
 export function formatResetDateTime(value: string, locales?: Intl.LocalesArgument): string | null {
@@ -166,15 +212,16 @@ export function formatResetDateTime(value: string, locales?: Intl.LocalesArgumen
 }
 
 /**
- * Locate the current time within a weekly rate-limit period.
+ * Locate the current time within a limit period.
  *
- * Window duration is authoritative when the provider supplies it. Claude's
- * structured usage response currently names weekly windows without including
- * their duration, so its explicit "Weekly" labels use the known seven-day
- * period as a compatibility fallback.
+ * Every provider's windows are placed on the same terms: the reset instant is
+ * the end of the period and the duration measures back from it, so a bar's
+ * fill can be read against how much of the period has actually elapsed. A
+ * window whose length neither the provider nor its name gives up is left
+ * unmarked rather than guessed at.
  */
-export function weeklyWindowPosition(limit: AgentRateLimitWindow, nowMs: number): number | null {
-  const durationMinutes = isWeeklyRateLimit(limit) ? WEEK_MINUTES : null;
+export function limitWindowPosition(limit: TimedWindow, nowMs: number): number | null {
+  const durationMinutes = windowDurationMinutes(limit);
   if (durationMinutes === null || !limit.resetsAt) return null;
 
   const resetMs = new Date(limit.resetsAt).getTime();
@@ -777,14 +824,33 @@ function DailyTokenChart({ points }: { points: DailyTokenPoint[] }) {
   );
 }
 
-function AccountUsageSection({ account }: { account: NativeAgentAccountUsageWindow[] }) {
-  const { windows, daily } = splitAccountUsage(account);
-  return (
-    <>
-      {windows.length > 0 ? <AccountWindowsSection windows={windows} /> : null}
-      {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
-    </>
-  );
+/**
+ * One row of the account section, whatever the provider called it.
+ *
+ * Rate limits, quota windows and credit balances arrive on three different
+ * payload shapes — Claude reports `rateLimits`, the provider-neutral
+ * projection reports `account` windows, Codex reports both plus a separate
+ * credit snapshot — and used to be drawn three different ways. They are all
+ * the same thing to a reader: a named period, how much of it is spent, and
+ * when it starts again. Normalising to one row type is what lets a single
+ * component draw them identically for every provider.
+ */
+interface AccountRow {
+  key: string;
+  label: string;
+  /**
+   * A limit reported without a percentage is a window the provider says
+   * exists but has not measured, which reads as "Available". A plain quota
+   * window without one is just a set of counters and claims nothing.
+   */
+  kind: "limit" | "window" | "credits";
+  usedPercent?: number;
+  resetsAt?: string;
+  windowMinutes?: number;
+  tokens?: number;
+  spendUsd?: number;
+  limitUsd?: number;
+  credit?: string;
 }
 
 function creditSnapshotValue(credits: NonNullable<ContextUsageSnapshot["credits"]>): string {
@@ -793,112 +859,258 @@ function creditSnapshotValue(credits: NonNullable<ContextUsageSnapshot["credits"
   return credits.hasCredits ? "Available" : "Unavailable";
 }
 
-/**
- * Codex reports its account limits through both the compatibility rate-limit
- * fields and provider-neutral account windows. Build one authoritative set for
- * presentation so the same quota and balance are not repeated later in the
- * pane. The freshly read rate-limit snapshot wins over retained account rows.
- */
-function codexAccountUsage(
-  account: NativeAgentAccountUsageWindow[] | undefined,
-  rateLimits: AgentRateLimitWindow[] | undefined,
-  credits: ContextUsageSnapshot["credits"],
-): NativeAgentAccountUsageWindow[] {
-  const retained = account ?? [];
-  const otherWindows = retained.filter(
-    (entry) =>
-      entry.window !== "primary" && entry.window !== "secondary" && entry.window !== "credits",
+function accountWindowCredit(window: NativeAgentAccountUsageWindow): string | undefined {
+  return (
+    window.creditBalance ??
+    (window.creditsRemaining !== undefined ? String(window.creditsRemaining) : undefined)
   );
-  const limitWindows = rateLimits?.length
-    ? rateLimits.map((limit, index) => ({
-        window: `codex-limit:${index}`,
-        label: limit.label,
-        ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
-        ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
-      }))
-    : retained.filter((entry) => entry.window === "primary" || entry.window === "secondary");
-  const retainedCredits = retained.find((entry) => entry.window === "credits");
-  const creditWindow = credits
-    ? {
-        window: "credits",
-        label: "Credits",
-        creditBalance: creditSnapshotValue(credits),
-      }
-    : retainedCredits;
-  return [...limitWindows, ...(creditWindow ? [creditWindow] : []), ...otherWindows];
 }
 
-function AccountWindowsSection({ windows }: { windows: NativeAgentAccountUsageWindow[] }) {
+function hasNonCreditWindowFacts(window: NativeAgentAccountUsageWindow): boolean {
   return (
-    <section className="space-y-2" aria-label="Account usage">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-        Account
-      </div>
-      {windows.map((window) => {
-        const resetLabel = window.resetsAt ? formatResetDateTime(window.resetsAt) : null;
-        const creditValue =
-          window.creditBalance ??
-          (window.creditsRemaining !== undefined ? String(window.creditsRemaining) : undefined);
-        const isCreditOnly =
-          creditValue !== undefined &&
-          window.tokens === undefined &&
-          window.usedPercent === undefined &&
-          window.spendUsd === undefined &&
-          window.limitUsd === undefined &&
-          resetLabel === null;
-        const hasMetrics =
-          window.tokens !== undefined ||
-          window.spendUsd !== undefined ||
-          window.limitUsd !== undefined ||
-          (!isCreditOnly && creditValue !== undefined);
+    window.usedPercent !== undefined ||
+    window.resetsAt !== undefined ||
+    window.tokens !== undefined ||
+    window.spendUsd !== undefined ||
+    window.limitUsd !== undefined
+  );
+}
 
-        return (
-          <div key={window.window} className="rounded-lg border border-border/60 px-3 py-2.5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 truncate text-xs font-medium text-foreground">
-                {window.label ?? window.window}
-              </div>
-              {isCreditOnly ? (
-                <div className="shrink-0 font-mono text-sm tabular-nums text-foreground">
-                  {creditValue}
-                </div>
-              ) : resetLabel ? (
-                <div
-                  className="shrink-0 text-[10px] text-muted-foreground"
-                  title={new Date(window.resetsAt!).toLocaleString()}
-                >
-                  Resets {resetLabel}
-                </div>
-              ) : null}
-            </div>
-            {window.usedPercent !== undefined ? (
-              <div className="mt-2">
-                <div className="mb-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                  {window.usedPercent.toFixed(window.usedPercent >= 10 ? 0 : 1)}% used
-                </div>
-                <Progress value={window.usedPercent} aria-label={`${window.usedPercent}% used`} />
-              </div>
-            ) : null}
-            {hasMetrics ? (
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {window.tokens !== undefined ? (
-                  <Metric label="Tokens" value={formatTokenCount(window.tokens)} />
-                ) : null}
-                {window.spendUsd !== undefined ? (
-                  <Metric label="Spend" value={formatUsd(window.spendUsd)} />
-                ) : null}
-                {window.limitUsd !== undefined ? (
-                  <Metric label="Limit" value={formatUsd(window.limitUsd)} />
-                ) : null}
-                {!isCreditOnly && creditValue !== undefined ? (
-                  <Metric label="Credits" value={creditValue} />
-                ) : null}
-              </div>
-            ) : null}
+/**
+ * Window ids a freshly read rate limit supersedes.
+ *
+ * A provider that reports the same quota twice — Codex retains `primary` and
+ * `secondary` account rows while also answering a live rate-limit read — would
+ * otherwise show it twice, at two different ages. The live read wins.
+ */
+const SUPERSEDED_WINDOW_IDS = new Set(["primary", "secondary"]);
+
+function normalizeLabel(label: string): string {
+  return label.trim().toLowerCase();
+}
+
+/**
+ * Everything account-scoped, from every provider, as one ordered list.
+ *
+ * Limits lead because they are the figure a user opens this panel for; the
+ * remaining quota windows follow, and the credit balance closes. A window that
+ * names the same period as a limit is folded into that limit's row rather than
+ * repeated beneath it, so a provider reporting spend alongside a percentage
+ * reads as one window with two facts about it.
+ */
+function buildAccountRows({
+  account,
+  rateLimits,
+  credits,
+}: {
+  account: NativeAgentAccountUsageWindow[] | undefined;
+  rateLimits: AgentRateLimitWindow[] | undefined;
+  credits: ContextUsageSnapshot["credits"];
+}): { rows: AccountRow[]; daily: DailyTokenPoint[] } {
+  const { windows, daily } = splitAccountUsage(account ?? []);
+  const hasLimits = (rateLimits?.length ?? 0) > 0;
+
+  const limitRows: AccountRow[] = (rateLimits ?? []).map((limit, index) => ({
+    key: `limit:${index}:${limit.label}`,
+    label: limit.label,
+    kind: "limit" as const,
+    ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
+    ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+    ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
+  }));
+  const limitsByLabel = new Map(limitRows.map((row) => [normalizeLabel(row.label), row]));
+
+  const windowRows: AccountRow[] = [];
+  let creditWindow: NativeAgentAccountUsageWindow | undefined;
+  let creditValueEmbedded = false;
+  for (const window of windows) {
+    if (window.window === "credits") {
+      creditWindow ??= window;
+      if (!hasNonCreditWindowFacts(window)) continue;
+    }
+    if (hasLimits && SUPERSEDED_WINDOW_IDS.has(window.window)) continue;
+    const label = window.label ?? window.window;
+    const merged = limitsByLabel.get(normalizeLabel(label));
+    const windowCredit =
+      window.window === "credits" && credits
+        ? creditSnapshotValue(credits)
+        : accountWindowCredit(window);
+    const facts = {
+      ...(window.tokens !== undefined ? { tokens: window.tokens } : {}),
+      ...(window.spendUsd !== undefined ? { spendUsd: window.spendUsd } : {}),
+      ...(window.limitUsd !== undefined ? { limitUsd: window.limitUsd } : {}),
+      ...(windowCredit !== undefined ? { credit: windowCredit } : {}),
+    };
+    if (merged) {
+      Object.assign(merged, facts, {
+        usedPercent: merged.usedPercent ?? window.usedPercent,
+        resetsAt: merged.resetsAt ?? window.resetsAt,
+      });
+      if (window.window === "credits" && windowCredit !== undefined) {
+        creditValueEmbedded = true;
+      }
+      continue;
+    }
+    windowRows.push({
+      key: window.window,
+      label,
+      kind: "window",
+      ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
+      ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
+      ...facts,
+    });
+    if (window.window === "credits" && windowCredit !== undefined) creditValueEmbedded = true;
+  }
+
+  const creditValue = credits
+    ? creditSnapshotValue(credits)
+    : creditWindow
+      ? accountWindowCredit(creditWindow)
+      : undefined;
+  const creditRow: AccountRow[] =
+    creditValue === undefined || creditValueEmbedded
+      ? []
+      : [
+          {
+            key: "credits",
+            label: creditWindow?.label ?? "Credits",
+            kind: "credits",
+            credit: creditValue,
+          },
+        ];
+
+  return { rows: [...limitRows, ...windowRows, ...creditRow], daily };
+}
+
+function formattedUsedPercent(usedPercent: number): string {
+  return `${usedPercent.toFixed(usedPercent >= 10 ? 0 : 1)}% used`;
+}
+
+function isCreditOnlyRow(row: AccountRow): boolean {
+  return (
+    row.credit !== undefined &&
+    row.usedPercent === undefined &&
+    row.resetsAt === undefined &&
+    row.tokens === undefined &&
+    row.spendUsd === undefined &&
+    row.limitUsd === undefined
+  );
+}
+
+/** The reading on the right of a row: a balance, a percentage, or nothing claimed. */
+function accountRowValue(row: AccountRow): string | undefined {
+  if (isCreditOnlyRow(row)) return row.credit;
+  if (row.usedPercent !== undefined) return formattedUsedPercent(row.usedPercent);
+  return row.kind === "limit" ? "Available" : undefined;
+}
+
+function AccountRowView({ row, nowMs }: { row: AccountRow; nowMs: number }) {
+  const resetLabel = row.resetsAt ? formatResetDateTime(row.resetsAt) : null;
+  const position = limitWindowPosition(row, nowMs);
+  const value = accountRowValue(row);
+  const metrics = [
+    ...(row.tokens !== undefined ? [{ label: "Tokens", value: formatTokenCount(row.tokens) }] : []),
+    ...(row.spendUsd !== undefined ? [{ label: "Spend", value: formatUsd(row.spendUsd) }] : []),
+    ...(row.limitUsd !== undefined ? [{ label: "Limit", value: formatUsd(row.limitUsd) }] : []),
+    ...(row.credit !== undefined && !isCreditOnlyRow(row)
+      ? [{ label: "Credits", value: row.credit }]
+      : []),
+  ];
+
+  return (
+    <div>
+      <div className="mb-1.5 flex justify-between gap-3 text-xs">
+        <span className="min-w-0 truncate text-foreground">{row.label}</span>
+        {value !== undefined ? (
+          <span className="shrink-0 font-mono tabular-nums text-muted-foreground">{value}</span>
+        ) : null}
+      </div>
+      {row.usedPercent !== undefined ? (
+        <div className="relative">
+          {/*
+           * The label reports the provider's figure verbatim; the bar is
+           * clamped. `Progress` positions its indicator with
+           * `translateX(-(100 - value)%)`, so an over-quota percentage
+           * pushes the fill out of the clipped track and an account past
+           * its allowance would read as an empty bar.
+           */}
+          <Progress
+            value={Math.min(100, Math.max(0, row.usedPercent))}
+            className="h-1"
+            aria-label={`${row.label}: ${formattedUsedPercent(row.usedPercent)}`}
+          />
+          {position !== null ? (
+            <span
+              className="pointer-events-none absolute -inset-y-1 z-10 w-px bg-red-500 shadow-[0_0_2px_rgba(239,68,68,0.8)]"
+              style={{ left: `${position}%`, transform: "translateX(-50%)" }}
+              role="img"
+              aria-label={`Current point in the ${row.label} period: ${position.toFixed(0)}%`}
+              title={`Current point in the ${row.label} period: ${position.toFixed(0)}%`}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {resetLabel ? (
+        <div
+          className="mt-1 text-right text-[10px] text-muted-foreground"
+          title={new Date(row.resetsAt!).toLocaleString()}
+        >
+          Resets {resetLabel}
+        </div>
+      ) : null}
+      {metrics.length > 0 ? (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {metrics.map((metric) => (
+            <Metric key={metric.label} label={metric.label} value={metric.value} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The account's standing, drawn the same way for every provider.
+ *
+ * The clock ticks only while some row can actually be placed in its period:
+ * an account whose windows carry no duration has nothing to advance, and
+ * re-rendering the panel every minute to move nothing is waste. Usage
+ * percentages deliberately stay out of the effect key so a fresh reading does
+ * not restart the interval.
+ */
+function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyTokenPoint[] }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const timedKey = JSON.stringify(
+    rows
+      .filter((row) => row.resetsAt !== undefined && windowDurationMinutes(row) !== null)
+      .map((row) => [row.label, row.resetsAt ?? null, row.windowMinutes ?? null]),
+  );
+
+  useEffect(() => {
+    if (timedKey === "[]") return;
+
+    const updateClock = () => setNowMs(Date.now());
+    updateClock();
+    const interval = window.setInterval(updateClock, MINUTE_MS);
+    return () => window.clearInterval(interval);
+  }, [timedKey]);
+
+  if (rows.length === 0 && daily.length === 0) return null;
+
+  return (
+    <div className="space-y-3 border-t border-border/60 pt-4">
+      {rows.length > 0 ? (
+        <section className="space-y-3" aria-label="Account usage">
+          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+            Account
           </div>
-        );
-      })}
-    </section>
+          {rows.map((row) => (
+            <AccountRowView key={row.key} row={row} nowMs={nowMs} />
+          ))}
+        </section>
+      ) : null}
+      {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
+    </div>
   );
 }
 
@@ -953,16 +1165,29 @@ export function UsagePanel({
 }: {
   usage: AgentInfoUsageSnapshot | undefined;
   modelId: string | undefined;
-  /** Claude reports these independently of context occupancy. */
+  /**
+   * The provider's own limit read, when it has one that outranks whatever the
+   * usage snapshot carries. An empty array is authoritative: it means the
+   * provider answered and reported no limits, which retires stale ones.
+   */
   rateLimits?: AgentRateLimitWindow[];
 }) {
   const displayedRateLimits = rateLimits ?? usage?.rateLimits;
+  const { rows: accountRows, daily: dailyTokens } = buildAccountRows({
+    account: usage?.account,
+    rateLimits: displayedRateLimits,
+    credits: usage?.credits,
+  });
+  const account =
+    accountRows.length > 0 || dailyTokens.length > 0 ? (
+      <AccountSection rows={accountRows} daily={dailyTokens} />
+    ) : null;
 
   if (!usage) {
-    if (displayedRateLimits && displayedRateLimits.length > 0) {
+    if (account) {
       return (
         <div className="space-y-4">
-          <RateLimitsSection rateLimits={displayedRateLimits} />
+          {account}
           <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
             <span className="truncate">{modelId ?? "Model unavailable"}</span>
             <span className="shrink-0">Provider reported</span>
@@ -978,13 +1203,6 @@ export function UsagePanel({
   }
 
   const used = Math.max(0, usage.usedTokens);
-  const isCodex = usage.source === "codex";
-  const displayedAccount = isCodex
-    ? codexAccountUsage(usage.account, displayedRateLimits, usage.credits)
-    : (usage.account ?? []);
-  const creditsRenderedInAccount =
-    isCodex && displayedAccount.some((entry) => entry.window === "credits");
-  const limitsRenderedInAccount = isCodex && Boolean(displayedRateLimits?.length);
   const contextWindow =
     usage.totalTokens !== undefined &&
     Number.isFinite(usage.totalTokens) &&
@@ -999,7 +1217,6 @@ export function UsagePanel({
 
   return (
     <div className="space-y-4">
-      {displayedAccount.length ? <AccountUsageSection account={displayedAccount} /> : null}
       {contextWindow ? (
         <div>
           <div className="mb-2 flex items-end justify-between gap-3">
@@ -1055,100 +1272,21 @@ export function UsagePanel({
             detail="tool permissions"
           />
         ) : null}
-        {usage.credits !== undefined && !creditsRenderedInAccount ? (
-          <Metric
-            label="Credits"
-            value={
-              usage.credits.unlimited
-                ? "Unlimited"
-                : (usage.credits.balance ??
-                  (usage.credits.hasCredits ? "Available" : "Unavailable"))
-            }
-          />
-        ) : null}
       </div>
 
-      {usage.turns?.length ? <TurnUsageSection turns={usage.turns} /> : null}
+      {/*
+       * Account standing sits below the session's own counters: the context
+       * window is what the user is spending right now, the account is the
+       * ceiling it is spent against.
+       */}
+      {account}
 
-      {displayedRateLimits && displayedRateLimits.length > 0 && !limitsRenderedInAccount ? (
-        <RateLimitsSection rateLimits={displayedRateLimits} />
-      ) : null}
+      {usage.turns?.length ? <TurnUsageSection turns={usage.turns} /> : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
         <span className="truncate">{usage.modelId ?? modelId ?? "Model unavailable"}</span>
         <span className="shrink-0">{usage.estimated ? "Estimated" : "Provider reported"}</span>
       </div>
-    </div>
-  );
-}
-
-export function RateLimitsSection({ rateLimits }: { rateLimits: AgentRateLimitWindow[] }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const weeklyClockKey = JSON.stringify(
-    rateLimits
-      .filter(isWeeklyRateLimit)
-      .map((limit) => [limit.label, limit.resetsAt ?? null, limit.windowMinutes ?? null]),
-  );
-
-  useEffect(() => {
-    if (weeklyClockKey === "[]") return;
-
-    const updateClock = () => setNowMs(Date.now());
-    updateClock();
-    const interval = window.setInterval(updateClock, MINUTE_MS);
-    return () => window.clearInterval(interval);
-  }, [weeklyClockKey]);
-
-  return (
-    <div className="space-y-3 border-t border-border/60 pt-4">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-        Limits
-      </div>
-      {rateLimits.map((limit) => {
-        const resetLabel = limit.resetsAt ? formatResetDateTime(limit.resetsAt) : null;
-        const weekPosition = weeklyWindowPosition(limit, nowMs);
-        return (
-          <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
-            <div className="mb-1.5 flex justify-between gap-3 text-xs">
-              <span className="text-foreground">{limit.label}</span>
-              <span className="font-mono tabular-nums text-muted-foreground">
-                {limit.usedPercent === undefined
-                  ? "Available"
-                  : `${limit.usedPercent.toFixed(0)}% used`}
-              </span>
-            </div>
-            {limit.usedPercent !== undefined ? (
-              <div className="relative">
-                {/*
-                 * The label reports the provider's figure verbatim; the bar is
-                 * clamped. `Progress` positions its indicator with
-                 * `translateX(-(100 - value)%)`, so an over-quota percentage
-                 * pushes the fill out of the clipped track and an account past
-                 * its allowance would read as an empty bar.
-                 */}
-                <Progress value={Math.min(100, Math.max(0, limit.usedPercent))} className="h-1" />
-                {weekPosition !== null ? (
-                  <span
-                    className="pointer-events-none absolute -inset-y-1 z-10 w-px bg-red-500 shadow-[0_0_2px_rgba(239,68,68,0.8)]"
-                    style={{
-                      left: `${weekPosition}%`,
-                      transform: "translateX(-50%)",
-                    }}
-                    role="img"
-                    aria-label={`Current point in weekly period: ${weekPosition.toFixed(0)}%`}
-                    title={`Current point in weekly period: ${weekPosition.toFixed(0)}%`}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {resetLabel ? (
-              <div className="mt-1 text-right text-[10px] text-muted-foreground">
-                Resets {resetLabel}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
     </div>
   );
 }

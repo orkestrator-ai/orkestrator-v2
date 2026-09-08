@@ -1331,6 +1331,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   protected refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
+    resolvedSession?: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+      transient: true;
+    },
   ): Promise<NativeAgentSessionProjection | null> {
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -1342,7 +1348,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const operation = (async () => {
       if (previousRefresh) await previousRefresh.catch(() => undefined);
       const epoch = this.projectionEpochs.get(key) ?? 0;
-      return this.refreshProjectionOnce(input, force, key, epoch);
+      return this.refreshProjectionOnce(input, force, key, epoch, resolvedSession);
     })();
     this.projectionRefreshes.set(key, operation);
     return operation.finally(() => {
@@ -1358,6 +1364,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     force: boolean,
     key: string,
     epoch: number,
+    resolvedSession?: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+      transient: true;
+    },
   ): Promise<NativeAgentSessionProjection | null> {
     const previous = this.projectionCache.get(key);
     const messageLimit = this.resolveMessageLimit(input.messageLimit, previous?.input.messageLimit);
@@ -1366,8 +1378,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       return previous.projection;
     }
     let generation = previous?.generation ?? `unresolved:${input.agent}`;
+    let transient = resolvedSession?.transient ?? false;
     try {
-      const resolved = await this.resolveProjectionSession(input);
+      const resolved = resolvedSession ?? (await this.resolveProjectionSession(input));
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
           this.projectionCache.delete(key);
@@ -1388,6 +1401,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         }
         return null;
       }
+      transient = resolved.transient;
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
       generation = this.providerConnections.get(providerCacheKey) ?? `in-process:${input.agent}`;
       const advertisedCapabilities = nativeCapabilities(input.agent);
@@ -1526,7 +1540,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 revision: 0,
                 generation,
               };
-        return this.commitProjection(key, windowed, projection, generation, epoch);
+        return this.commitProjection(key, windowed, projection, generation, epoch, !transient);
       }
       // The session answered, so this key's run of missing reads is over. Left
       // set, a later transient miss would inherit a spent deadline and report a
@@ -1643,6 +1657,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         projectionTitle &&
         (!snapshotTitle || placeholderTitle) &&
         resolved.provider.setSessionTitle &&
+        !resolved.transient &&
         this.pushedSessionTitles.get(sessionKey) !== projectionTitle
       ) {
         this.pushedSessionTitles.set(sessionKey, projectionTitle);
@@ -1675,7 +1690,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           snapshot.messagesComplete !== false && !normalized.window.truncated,
         );
       }
-      if (input.agent === "codex") {
+      if (input.agent === "codex" && !resolved.transient) {
         const attentionItemIds = renderedTranscript.messages.flatMap((message) => {
           const record = message as { parts?: unknown };
           if (!Array.isArray(record.parts)) return [];
@@ -1711,7 +1726,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // reliably revisited, so it is where the provider gets asked whether the
       // prompt landed after all. A record that outlived the backend generation
       // that created it is settled here instead of waiting for the user.
-      if (resolved.session.pendingDispatch) {
+      if (!resolved.transient && resolved.session.pendingDispatch) {
         this.scheduleAmbiguousDispatchSettle(
           input,
           key,
@@ -1719,7 +1734,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           resolved.provider,
         );
       }
-      if (resolved.session.pendingSteer) {
+      if (!resolved.transient && resolved.session.pendingSteer) {
         this.scheduleAmbiguousSteerSettle(
           input,
           key,
@@ -1913,7 +1928,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         cursor:
           snapshot.providerRevision === undefined ? undefined : String(snapshot.providerRevision),
       };
-      return this.commitProjection(key, windowed, projection, generation, epoch);
+      return this.commitProjection(key, windowed, projection, generation, epoch, !transient);
     } catch (error) {
       return this.commitProjection(
         key,
@@ -1926,6 +1941,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ),
         generation,
         epoch,
+        !transient,
       );
     }
   }
@@ -2010,6 +2026,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     candidate: NativeAgentSessionProjection,
     generation: string,
     epoch: number,
+    announce = true,
   ): NativeAgentSessionProjection {
     if ((this.projectionEpochs.get(key) ?? 0) !== epoch) {
       /*
@@ -2072,10 +2089,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       fingerprint,
       generation,
     });
-    this.storage.announceNativeAgentSessionProjection(input.environmentId, {
-      agent: input.agent,
-      logicalSessionKey: input.logicalSessionKey,
-    });
+    if (announce) {
+      this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+      });
+    }
     return projection;
   }
 }

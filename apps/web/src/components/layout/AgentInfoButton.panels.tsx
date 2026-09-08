@@ -866,6 +866,16 @@ function accountWindowCredit(window: NativeAgentAccountUsageWindow): string | un
   );
 }
 
+function hasNonCreditWindowFacts(window: NativeAgentAccountUsageWindow): boolean {
+  return (
+    window.usedPercent !== undefined ||
+    window.resetsAt !== undefined ||
+    window.tokens !== undefined ||
+    window.spendUsd !== undefined ||
+    window.limitUsd !== undefined
+  );
+}
+
 /**
  * Window ids a freshly read rate limit supersedes.
  *
@@ -912,27 +922,35 @@ function buildAccountRows({
 
   const windowRows: AccountRow[] = [];
   let creditWindow: NativeAgentAccountUsageWindow | undefined;
+  let creditValueEmbedded = false;
   for (const window of windows) {
     if (window.window === "credits") {
       creditWindow ??= window;
-      continue;
+      if (!hasNonCreditWindowFacts(window)) continue;
     }
     if (hasLimits && SUPERSEDED_WINDOW_IDS.has(window.window)) continue;
     const label = window.label ?? window.window;
     const merged = limitsByLabel.get(normalizeLabel(label));
+    const windowCredit =
+      window.window === "credits" && credits
+        ? creditSnapshotValue(credits)
+        : accountWindowCredit(window);
     const facts = {
       ...(window.tokens !== undefined ? { tokens: window.tokens } : {}),
       ...(window.spendUsd !== undefined ? { spendUsd: window.spendUsd } : {}),
       ...(window.limitUsd !== undefined ? { limitUsd: window.limitUsd } : {}),
+      ...(windowCredit !== undefined ? { credit: windowCredit } : {}),
     };
     if (merged) {
       Object.assign(merged, facts, {
         usedPercent: merged.usedPercent ?? window.usedPercent,
         resetsAt: merged.resetsAt ?? window.resetsAt,
       });
+      if (window.window === "credits" && windowCredit !== undefined) {
+        creditValueEmbedded = true;
+      }
       continue;
     }
-    const windowCredit = accountWindowCredit(window);
     windowRows.push({
       key: window.window,
       label,
@@ -940,8 +958,8 @@ function buildAccountRows({
       ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
       ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
       ...facts,
-      ...(windowCredit !== undefined ? { credit: windowCredit } : {}),
     });
+    if (window.window === "credits" && windowCredit !== undefined) creditValueEmbedded = true;
   }
 
   const creditValue = credits
@@ -950,7 +968,7 @@ function buildAccountRows({
       ? accountWindowCredit(creditWindow)
       : undefined;
   const creditRow: AccountRow[] =
-    creditValue === undefined
+    creditValue === undefined || creditValueEmbedded
       ? []
       : [
           {
@@ -964,12 +982,25 @@ function buildAccountRows({
   return { rows: [...limitRows, ...windowRows, ...creditRow], daily };
 }
 
+function formattedUsedPercent(usedPercent: number): string {
+  return `${usedPercent.toFixed(usedPercent >= 10 ? 0 : 1)}% used`;
+}
+
+function isCreditOnlyRow(row: AccountRow): boolean {
+  return (
+    row.credit !== undefined &&
+    row.usedPercent === undefined &&
+    row.resetsAt === undefined &&
+    row.tokens === undefined &&
+    row.spendUsd === undefined &&
+    row.limitUsd === undefined
+  );
+}
+
 /** The reading on the right of a row: a balance, a percentage, or nothing claimed. */
 function accountRowValue(row: AccountRow): string | undefined {
-  if (row.credit !== undefined) return row.credit;
-  if (row.usedPercent !== undefined) {
-    return `${row.usedPercent.toFixed(row.usedPercent >= 10 ? 0 : 1)}% used`;
-  }
+  if (isCreditOnlyRow(row)) return row.credit;
+  if (row.usedPercent !== undefined) return formattedUsedPercent(row.usedPercent);
   return row.kind === "limit" ? "Available" : undefined;
 }
 
@@ -981,6 +1012,9 @@ function AccountRowView({ row, nowMs }: { row: AccountRow; nowMs: number }) {
     ...(row.tokens !== undefined ? [{ label: "Tokens", value: formatTokenCount(row.tokens) }] : []),
     ...(row.spendUsd !== undefined ? [{ label: "Spend", value: formatUsd(row.spendUsd) }] : []),
     ...(row.limitUsd !== undefined ? [{ label: "Limit", value: formatUsd(row.limitUsd) }] : []),
+    ...(row.credit !== undefined && !isCreditOnlyRow(row)
+      ? [{ label: "Credits", value: row.credit }]
+      : []),
   ];
 
   return (
@@ -1000,7 +1034,11 @@ function AccountRowView({ row, nowMs }: { row: AccountRow; nowMs: number }) {
            * pushes the fill out of the clipped track and an account past
            * its allowance would read as an empty bar.
            */}
-          <Progress value={Math.min(100, Math.max(0, row.usedPercent))} className="h-1" />
+          <Progress
+            value={Math.min(100, Math.max(0, row.usedPercent))}
+            className="h-1"
+            aria-label={`${row.label}: ${formattedUsedPercent(row.usedPercent)}`}
+          />
           {position !== null ? (
             <span
               className="pointer-events-none absolute -inset-y-1 z-10 w-px bg-red-500 shadow-[0_0_2px_rgba(239,68,68,0.8)]"

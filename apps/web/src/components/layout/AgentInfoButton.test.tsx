@@ -1786,6 +1786,104 @@ describe("AgentInfoButton usage panel", () => {
     expect(within(account).getByText(expected)).toBeTruthy();
   });
 
+  test("preserves every fact on a mixed credits window", () => {
+    const resetsAt = "2026-09-14T10:12:23.000Z";
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            credits: { balance: "$12.34" },
+            account: [
+              {
+                window: "credits",
+                label: "Credit allowance",
+                creditBalance: "$9.99",
+                usedPercent: 42.4,
+                resetsAt,
+                tokens: 1_200,
+                spendUsd: 1.25,
+                limitUsd: 5,
+              },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByText("Credit allowance")).toBeTruthy();
+    expect(within(account).getByText("42% used")).toBeTruthy();
+    expect(
+      within(account).getByRole("progressbar", { name: "Credit allowance: 42% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText(`Resets ${formatResetDateTime(resetsAt)}`)).toBeTruthy();
+    expect(within(account).getByText("1.2k")).toBeTruthy();
+    expect(within(account).getByText("$1.25")).toBeTruthy();
+    expect(within(account).getByText("$5.00")).toBeTruthy();
+    expect(within(account).getByText("$12.34")).toBeTruthy();
+    expect(within(account).queryByText("$9.99")).toBe(null);
+  });
+
+  test("merges complementary account facts into one matching limit row", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [{ label: "Weekly quota", usedPercent: 25 }],
+            account: [
+              {
+                window: "weekly",
+                label: "Weekly quota",
+                tokens: 1_200,
+                spendUsd: 1.25,
+                limitUsd: 5,
+                creditsRemaining: 4,
+              },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getAllByText("Weekly quota")).toHaveLength(1);
+    expect(
+      within(account).getByRole("progressbar", { name: "Weekly quota: 25% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText("1.2k")).toBeTruthy();
+    expect(within(account).getByText("$1.25")).toBeTruthy();
+    expect(within(account).getByText("$5.00")).toBeTruthy();
+    expect(within(account).getByText("4")).toBeTruthy();
+  });
+
+  test("names each account progress bar with its window and displayed percentage", () => {
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [
+              { label: "5h window", usedPercent: 9.4 },
+              { label: "Weekly", usedPercent: 42 },
+            ],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByRole("progressbar", { name: "5h window: 9.4% used" })).toBeTruthy();
+    expect(within(account).getByRole("progressbar", { name: "Weekly: 42% used" })).toBeTruthy();
+  });
+
   test("renders rate limits, including a window with no percentage and a reset time", () => {
     const resetValue = "2026-07-27T09:00:00.000Z";
     useClaudeStore.setState({

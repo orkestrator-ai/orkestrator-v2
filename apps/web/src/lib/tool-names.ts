@@ -16,6 +16,8 @@ export const EDIT_TOOL_NAMES = new Set([
 const TOOL_DISPLAY_NAMES = new Map<string, string>([
   ["bash", "run_command"],
   ["todowrite", "todo_write"],
+  ["createplan", "Plan"],
+  ["create_plan", "Plan"],
 ]);
 
 function formatToolDisplayLabel(label: string): string {

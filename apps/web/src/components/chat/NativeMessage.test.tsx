@@ -1272,6 +1272,75 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByText("deferred command output")).toBeTruthy();
   });
 
+  test("loads a deferred createPlan body eagerly without expanding the row", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "# Deferred plan\n\nImplement the bounded loader.",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Plan",
+            toolName: "createPlan",
+            toolState: "success",
+            detailRef: "detail-plan-eager",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-plan-eager"));
+    expect(await screen.findByRole("heading", { name: "Deferred plan" })).toBeTruthy();
+    expect(screen.getByText("Implement the bounded loader.")).toBeTruthy();
+  });
+
+  test("shows a deferred createPlan error without a stale loading message", async () => {
+    const loadToolDetails = mock(async () => {
+      throw new Error("Native agent tool details are no longer available");
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Plan",
+            toolName: "createPlan",
+            toolState: "failure",
+            detailRef: "detail-plan-missing",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    expect(
+      await screen.findByText("Native agent tool details are no longer available"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Loading plan…") === null).toBe(true);
+  });
+
+  test("labels a pending createPlan that has not produced content yet", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Plan",
+            toolName: "createPlan",
+            toolState: "pending",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("writing...")).toBeTruthy();
+    expect(screen.getByText("Writing plan…")).toBeTruthy();
+    expect(screen.queryByText("No plan content.") === null).toBe(true);
+  });
+
   test("keeps a deferred row collapsed without parking placeholder prose in it", () => {
     render(
       <NativeMessage
@@ -3605,6 +3674,44 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("1/2 complete");
     expect(container.textContent).toContain("success");
     expect(container.textContent).not.toContain("Unknown tool");
+  });
+
+  test("routes createPlan to a markdown plan card instead of raw JSON", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "Plan",
+        toolName: "createPlan",
+        toolTitle: "Split discovery",
+        toolState: "success",
+        toolOutput: "# Split discovery\n\nDo the **work**.",
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Split discovery");
+    expect(container.textContent).toContain("work");
+    expect(container.textContent).not.toContain('{"plan"');
+    expect(container.querySelector("pre")?.textContent ?? "").not.toContain("# Split discovery");
+  });
+
+  test("unwraps a legacy createPlan JSON dump into markdown", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "Plan",
+        toolName: "createPlan",
+        toolState: "success",
+        toolArgs: { plan: "# Legacy\n\nRecovered body." },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Legacy");
+    expect(container.textContent).toContain("Recovered body.");
+    expect(container.textContent).not.toContain("\\n");
   });
 
   test("does not route ACP tool kind plan to TodoToolPart", () => {

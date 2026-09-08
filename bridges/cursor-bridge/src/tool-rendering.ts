@@ -13,7 +13,12 @@
  */
 import type { ToolCall } from "@cursor/sdk";
 import type { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
-import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_DIFF_BYTES, MAX_TOOL_OUTPUT_BYTES } from "./config.js";
+import {
+  MAX_TOOL_ARGUMENT_BYTES,
+  MAX_TOOL_DIFF_BYTES,
+  MAX_TOOL_OUTPUT_BYTES,
+  MAX_TOOL_TITLE_BYTES,
+} from "./config.js";
 import { boundText } from "./transcript.js";
 import {
   isObject,
@@ -337,9 +342,25 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
 
 function renderCreatePlan(rendered: RenderedToolCall, args: JsonObject, _result: ToolResult): void {
   const plan = readRawText(args.plan) ?? "";
-  rendered.toolTitle = "Plan";
-  rendered.toolArgs = compact({ plan: boundText(plan, MAX_TOOL_ARGUMENT_BYTES) });
-  rendered.toolOutput = boundText(plan, MAX_TOOL_OUTPUT_BYTES);
+  const boundedPlan = boundText(plan, MAX_TOOL_OUTPUT_BYTES);
+  const name = boundTextOrUndefined(readString(args.name), MAX_TOOL_TITLE_BYTES);
+  rendered.toolTitle = boundText(
+    name ?? firstMarkdownHeading(boundedPlan) ?? "Plan",
+    MAX_TOOL_TITLE_BYTES,
+  );
+  // The generic tool card JSON.stringifies `toolArgs`, so the markdown body
+  // lives only in `toolOutput`. A short name is the one argument worth
+  // keeping for the collapsed row.
+  const retainedArgs = compact({ name });
+  rendered.toolArgs = retainedArgs ? boundArgs(retainedArgs) : undefined;
+  rendered.toolOutput = boundedPlan;
+}
+
+/** First ATX heading, used as the card title when the tool omitted `name`. */
+function firstMarkdownHeading(plan: string): string | undefined {
+  const match = /^#{1,6}\s+(.+)$/m.exec(plan);
+  const heading = match?.[1]?.trim();
+  return heading ? heading : undefined;
 }
 
 function renderUpdateTodos(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {

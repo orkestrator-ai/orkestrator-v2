@@ -1,5 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import {
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -45,8 +46,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt:
-        "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+      prompt: `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -215,6 +215,11 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
       prompt: expect.stringContaining("Fix the reported regression"),
     }),
   );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: expect.stringContaining(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
+    }),
+  );
   expect(events).toEqual(["dispatch", "publish"]);
   expect(session).toMatchObject({
     tabId: "multi-review-fix:multi-1:launch-1",
@@ -318,7 +323,7 @@ test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provi
 test("recoverMissingMultiReviewFixSession adopts and seeds the replacement before returning it", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
-  const dispatchIntent = mock(async (input: { requestId: string }) => ({
+  const dispatchIntent = mock(async (input: { prompt: string; requestId: string }) => ({
     outcome: "accepted" as const,
     requestId: input.requestId,
   }));
@@ -367,6 +372,9 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
       prompt: expect.stringContaining("Lost-session regression"),
       mode: "build",
     }),
+  );
+  expect(dispatchIntent.mock.calls[0]?.[0].prompt).toEndWith(
+    MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   );
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({

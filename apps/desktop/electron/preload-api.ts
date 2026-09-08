@@ -88,6 +88,12 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
+    shell: {
+      openExternal(url: string): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:shell:open-external", url);
+      },
+    },
+
     webClient: {
       getStatus(): Promise<WebClientStatus> {
         return ipcRenderer.invoke("orkestrator:web-client:get-status");

@@ -58,6 +58,9 @@ function createHarness(
   const dialogApi = {
     showOpenDialog: mock(async () => ({ canceled: false, filePaths: ["/tmp/a", "/tmp/b"] })),
   };
+  const shellApi = {
+    openExternal: mock(async () => undefined),
+  };
   const webClientStatus = {
     enabled: true,
     running: true,
@@ -128,6 +131,7 @@ function createHarness(
     },
     clipboardApi,
     dialogApi: dialogApi as never,
+    shellApi,
     appApi,
     nativeImageApi: nativeImage,
     getWebClientStatus,
@@ -183,6 +187,7 @@ function createHarness(
     nativeImage,
     appApi,
     dialogApi,
+    shellApi,
     getWebClientStatus,
     setWebClientEnabled,
     resetWebClientServe,
@@ -228,6 +233,9 @@ describe("main IPC registration", () => {
       dataUrl: "data:image/png;base64,def",
     });
 
+    await harness.invoke("orkestrator:shell:open-external", "https://example.com/docs");
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith("https://example.com/docs");
+
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
     await harness.invoke("orkestrator:process:restart");
@@ -269,6 +277,14 @@ describe("main IPC registration", () => {
     );
   });
 
+  test("accepts HTTP loopback URLs for the external browser", async () => {
+    const harness = createHarness();
+
+    await harness.invoke("orkestrator:shell:open-external", "http://localhost:34121/");
+
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith("http://localhost:34121/");
+  });
+
   test("validates web client toggle values", async () => {
     const harness = createHarness();
 
@@ -278,6 +294,17 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:web-client:set-token", 42)).rejects.toThrow(
       "Expected token to be a string",
     );
+  });
+
+  test("rejects non-web URLs before opening them externally", async () => {
+    const harness = createHarness();
+
+    for (const url of ["javascript:alert(1)", "file:///tmp/private", "not a URL", null, 42]) {
+      await expect(harness.invoke("orkestrator:shell:open-external", url)).rejects.toThrow(
+        "Expected an HTTP(S) browser URL",
+      );
+    }
+    expect(harness.shellApi.openExternal).not.toHaveBeenCalled();
   });
 
   test("validates zoom factors and reports a missing main window", async () => {

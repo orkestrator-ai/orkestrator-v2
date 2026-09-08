@@ -41,6 +41,10 @@ interface Window {
         defaultPath?: string;
       }): Promise<string | string[] | null>;
     };
+    /** Electron only: opens web URLs with the client operating system. */
+    shell?: {
+      openExternal(url: string): Promise<void>;
+    };
     webClient?: {
       getStatus(): Promise<import("./types/webClient").WebClientStatus>;
       setEnabled(enabled: boolean): Promise<import("./types/webClient").WebClientStatus>;

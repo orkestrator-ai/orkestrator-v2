@@ -3,11 +3,13 @@ import {
   AlertCircle,
   CheckCircle2,
   GitBranch,
+  Hourglass,
   Loader2,
   LockKeyhole,
   Pause,
   Play,
   Plus,
+  MessagesSquare,
   RefreshCw,
   RotateCcw,
   X,
@@ -23,6 +25,8 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { AgentNativeTab } from "@/components/native-agent";
+import { TAB_ICON_CLASS, TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -34,6 +38,8 @@ import {
 import * as backend from "@/lib/backend";
 import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 
 interface CoordinatorPanelProps {
@@ -200,6 +206,37 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selected = conversations.find(
     (item) => item.id === snapshot?.workspace.selectedConversationId,
   );
+  const environments = useEnvironmentStore((state) => state.environments);
+  /*
+   * Workers this coordinator is still owed an answer by.
+   *
+   * Derived from the snapshot's durable associations rather than anything this
+   * component observed, so it is correct on a fresh mount, after a reload, and
+   * after the page was closed for an hour — the coordinator keeps waiting while
+   * nobody is looking at it.
+   *
+   * Associations are project-wide, so the selected conversation identity is a
+   * load-bearing filter rather than presentation state.
+   */
+  const awaitingWorkers = useMemo(() => {
+    if (!snapshot || !selected) return [];
+    return snapshot.workflows.flatMap((association) => {
+      if (
+        association.coordinatorId !== snapshot.workspace.id ||
+        association.conversationId !== selected.id ||
+        association.delegation?.state !== "running"
+      )
+        return [];
+      const environment = environments.find((item) => item.id === association.resourceId);
+      return [
+        {
+          id: association.id,
+          environmentId: association.resourceId,
+          label: environment?.name ?? association.resourceId,
+        },
+      ];
+    });
+  }, [snapshot, selected, environments]);
   // Scoped to the conversation that produced it, so switching tabs during
   // assignment cannot replay one conversation's first prompt into another.
   const launchForSelected =
@@ -241,9 +278,24 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const blocked = git?.repositoryOperationBlockedReason ?? null;
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
   const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
+  const contextNoticeSessionIdentity = snapshot
+    ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
+    : undefined;
+  const contextNoticeOccurrenceId = newestContextEvent
+    ? `repository-context\u0000${newestContextEvent.revision}`
+    : undefined;
+  const contextNoticeDismissed = useNativeNoticeDismissalStore((state) =>
+    contextNoticeSessionIdentity && contextNoticeOccurrenceId
+      ? (state.sessions
+          .find((session) => session.sessionIdentity === contextNoticeSessionIdentity)
+          ?.occurrenceIds.includes(contextNoticeOccurrenceId) ?? false)
+      : false,
+  );
+  const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
   const latestContextEvent =
     newestContextEvent &&
-    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision
+    (selected?.repositoryContextRevisionAcknowledged ?? 0) < newestContextEvent.revision &&
+    !contextNoticeDismissed
       ? newestContextEvent
       : undefined;
 
@@ -351,6 +403,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           >
             Context r{snapshot.workspace.repositoryContextRevision}
           </span>
+          {awaitingWorkers.length > 0 ? (
+            <span
+              className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
+              title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
+                .map((worker) => worker.label)
+                .join("\n")}`}
+            >
+              <Hourglass className="size-3" />
+              Waiting on {awaitingWorkers.length}{" "}
+              {awaitingWorkers.length === 1 ? "worker" : "workers"}
+            </span>
+          ) : null}
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}
@@ -431,20 +495,40 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ) : null}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2 py-1.5">
+      {/* Coordinator conversations are tabs, so they use the same tab chrome as
+          the pane tab strip rather than a look of their own. */}
+      <div className={cn(TAB_STRIP_CLASS, "shrink-0 pr-2")}>
         {conversations.map((item) => (
-          <div
+          <TabShell
             key={item.id}
-            className={cn(
-              "flex items-center rounded-md",
-              selected?.id === item.id
-                ? "bg-elevated text-foreground"
-                : "text-muted-foreground hover:bg-elevated/60",
-            )}
+            isActive={selected?.id === item.id}
+            className="cursor-pointer"
+            onClick={() => {
+              setError(null);
+              void backend
+                .selectCoordinatorConversation(projectId, item.id)
+                .then(setSnapshot)
+                .catch((cause) =>
+                  setError(
+                    cause instanceof Error ? cause.message : "Could not select conversation",
+                  ),
+                );
+            }}
+            closeLabel={`Close ${item.title}`}
+            onClose={() => {
+              setOperation("conversation");
+              void backend
+                .closeCoordinatorConversation(projectId, item.id)
+                .then(setSnapshot)
+                .catch((cause) =>
+                  setError(cause instanceof Error ? cause.message : "Could not close conversation"),
+                )
+                .finally(() => setOperation(null));
+            }}
           >
             <button
               type="button"
-              className="flex max-w-44 items-center gap-1.5 px-3 py-1.5 text-xs"
+              className="flex max-w-44 items-center gap-1.5"
               // The badge is part of what identifies the tab, so it belongs in
               // the accessible name rather than being read as loose text after it.
               aria-label={
@@ -452,50 +536,27 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
                   : `${item.title}, no agent chosen yet`
               }
-              onClick={() => {
-                setError(null);
-                void backend
-                  .selectCoordinatorConversation(projectId, item.id)
-                  .then(setSnapshot)
-                  .catch((cause) =>
-                    setError(
-                      cause instanceof Error ? cause.message : "Could not select conversation",
-                    ),
-                  );
-              }}
             >
-              <span className="truncate">{item.title}</span>
               {/* Which agent a conversation belongs to is fixed at its first
                   prompt and cannot be changed afterwards, so the tab strip is
-                  where that has to be legible. */}
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {item.agent ? AGENT_PLATFORM_LABELS[item.agent] : "Choose agent"}
-              </span>
+                  where that has to be legible: the brand mark once assigned,
+                  and an explicit prompt while it is not. */}
+              {item.agent ? (
+                <AgentPlatformIcon platform={item.agent} accent className={TAB_ICON_CLASS} />
+              ) : (
+                <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
+              )}
+              <span className="truncate">{item.title}</span>
+              {item.agent ? null : (
+                <span className="shrink-0 text-[10px] text-muted-foreground">Choose agent</span>
+              )}
             </button>
-            <button
-              type="button"
-              className="mr-1 rounded p-1 hover:bg-background/60"
-              aria-label={`Close ${item.title}`}
-              onClick={() => {
-                setOperation("conversation");
-                void backend
-                  .closeCoordinatorConversation(projectId, item.id)
-                  .then(setSnapshot)
-                  .catch((cause) =>
-                    setError(
-                      cause instanceof Error ? cause.message : "Could not close conversation",
-                    ),
-                  )
-                  .finally(() => setOperation(null));
-              }}
-            >
-              <X className="size-3" />
-            </button>
-          </div>
+          </TabShell>
         ))}
         <Button
           size="sm"
           variant="ghost"
+          className="ml-1 shrink-0"
           disabled={operation !== null}
           onClick={() => {
             setOperation("conversation");
@@ -515,6 +576,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         <Button
           size="sm"
           variant="ghost"
+          className="shrink-0"
           disabled={operation !== null}
           onClick={() => {
             setOperation("conversation");
@@ -541,11 +603,29 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       </div>
 
       {latestContextEvent ? (
-        <div className="shrink-0 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200">
-          Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
-          <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code> (context
-          r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn receives the
-          new context.
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-3 border-b border-blue-400/20 bg-blue-400/5 px-3 py-1.5 text-xs text-blue-200"
+        >
+          <span className="min-w-0 flex-1">
+            Repository context changed to {latestContextEvent.branch ?? "detached HEAD"} at{" "}
+            <code>{latestContextEvent.headCommit?.slice(0, 12) ?? "an unborn commit"}</code>{" "}
+            (context r{latestContextEvent.revision}). Earlier analysis may be stale; the next turn
+            receives the new context.
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss repository context notice"
+            title="Dismiss notice"
+            className="shrink-0 cursor-pointer rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
+            onClick={() => {
+              if (contextNoticeSessionIdentity && contextNoticeOccurrenceId) {
+                dismissNotice(contextNoticeSessionIdentity, contextNoticeOccurrenceId);
+              }
+            }}
+          >
+            <X aria-hidden="true" className="size-3.5" />
+          </button>
         </div>
       ) : null}
 

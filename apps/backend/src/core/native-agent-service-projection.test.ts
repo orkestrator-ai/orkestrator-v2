@@ -7,6 +7,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 import { UNAPPLIED_NETWORK_RESTRICTION_NOTE } from "./native-agent-execution-policy.js";
 
@@ -198,6 +203,58 @@ describe("NativeAgentService", () => {
           "provider-session",
           "Implement durable session titles",
         );
+      },
+    );
+  });
+
+  test("marks only the backend-authenticated initial delegation echo", async () => {
+    const delegation = createCoordinatorDelegatedPrompt(
+      {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+      },
+      "Implement it.",
+    );
+    const userMessage = (id: string) => ({
+      id,
+      role: "user" as const,
+      content: delegation.source,
+      parts: [{ type: "text", content: delegation.source }],
+      createdAt: "2026-09-07T10:00:00.000Z",
+    });
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [userMessage("user-1"), userMessage("user-2")],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-delegation-presentation-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-delegated",
+          initialPromptPresentation: {
+            kind: COORDINATOR_DELEGATION_PRESENTATION,
+            frame: delegation.frame,
+          },
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+
+        expect(projection?.messages).toEqual([
+          expect.objectContaining({
+            id: "user-1",
+            promptPresentation: COORDINATOR_DELEGATION_PRESENTATION,
+          }),
+          expect.not.objectContaining({ promptPresentation: expect.anything() }),
+        ]);
       },
     );
   });

@@ -20,6 +20,7 @@ import {
   resolveComposeDraftDiscardConflict,
 } from "@/lib/compose-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
+import { TAB_STRIP_CLASS } from "./TabShell";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -350,7 +351,7 @@ export function DraggableTabBar({
           // The rule below the row is the same declaration the action bar uses
           // above it, so the tab strip is bounded by one hairline on each side
           // rather than two that only look alike.
-          "flex min-h-[40px] items-center gap-0.5 overflow-x-auto border-b border-border/80 bg-background [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:min-h-[32px]",
+          TAB_STRIP_CLASS,
           isDropTarget && "bg-primary/10",
         )}
       >

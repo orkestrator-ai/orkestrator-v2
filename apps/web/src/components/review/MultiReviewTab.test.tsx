@@ -19,6 +19,7 @@ import {
   consolidationStep,
   fixSessionRuntimeStep,
   fixSessionRuntimeSummary,
+  multiReviewStepRuntimeSummary,
   fixStep,
   multiReviewFixSessionTabOptions,
   reviewPackageGenerationStep,
@@ -2199,6 +2200,162 @@ describe("MultiReviewTab pipeline step cards", () => {
       name: "Open review package generation session",
     });
     expect(preparation.querySelector(".text-amber-500") === null).toBe(true);
+  });
+
+  test("reports each step's own runtime and token count", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      stepRuntimes: {
+        prepare: {
+          startedAt: "2026-08-14T00:00:00.000Z",
+          completedAt: "2026-08-14T00:01:20.000Z",
+          tokenCount: 40_000,
+        },
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+      },
+    };
+    const now = Date.parse("2026-08-14T00:20:00.000Z");
+
+    // Every settled step keeps its own numbers, whichever one holds the session.
+    expect(multiReviewStepRuntimeSummary(workflow, "package", false, now)).toBe(
+      "1m 20s · 40k tokens",
+    );
+    expect(multiReviewStepRuntimeSummary(workflow, "consolidation", false, now)).toBe(
+      "2m 45s · 25k tokens",
+    );
+    expect(multiReviewStepRuntimeSummary(workflow, "fix", false, now)).toBeNull();
+  });
+
+  test("counts a running step's runtime up from its own dispatch", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "consolidating",
+      consolidatedReport: undefined,
+      stepRuntimes: {
+        prepare: {
+          startedAt: "2026-08-14T00:00:00.000Z",
+          completedAt: "2026-08-14T00:01:20.000Z",
+          tokenCount: 40_000,
+        },
+        consolidate: { startedAt: "2026-08-14T00:05:00.000Z" },
+      },
+    };
+    const now = Date.parse("2026-08-14T00:06:10.000Z");
+
+    expect(multiReviewStepRuntimeSummary(workflow, "consolidation", true, now)).toBe(
+      "1m 10s · Tokens pending",
+    );
+    expect(multiReviewStepRuntimeSummary(workflow, "package", false, now)).toBe(
+      "1m 20s · 40k tokens",
+    );
+  });
+
+  test("shows the interactive fix turn from its durable runtime record", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      stepRuntimes: {
+        prepare: {
+          startedAt: "2026-08-14T00:00:00.000Z",
+          completedAt: "2026-08-14T00:01:20.000Z",
+          tokenCount: 40_000,
+        },
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+        fix: { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 65_000 },
+      },
+    };
+    const now = Date.parse("2026-08-14T00:11:10.000Z");
+
+    expect(multiReviewStepRuntimeSummary(workflow, "fix", true, now)).toBe(
+      "1m 10s · Tokens pending",
+    );
+  });
+
+  test("a settled runtime wins over a stale running card state", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      stepRuntimes: {
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+      },
+    };
+
+    expect(
+      multiReviewStepRuntimeSummary(
+        workflow,
+        "consolidation",
+        true,
+        Date.parse("2026-08-14T00:20:00.000Z"),
+      ),
+    ).toBe("2m 45s · 25k tokens");
+  });
+
+  test("falls back to the shared session clock for workflows without step records", () => {
+    const ready = readyWorkflow();
+    const now = Date.parse("2026-08-14T00:02:05.000Z");
+
+    expect(multiReviewStepRuntimeSummary(ready, "consolidation", false, now)).toBe(
+      fixSessionRuntimeSummary(ready.fixSession!, now),
+    );
+    expect(multiReviewStepRuntimeSummary(ready, "package", false, now)).toBeNull();
+    // Once a workflow records steps, one that has not run yet stays blank
+    // rather than borrowing the clock of the step holding the session.
+    expect(
+      multiReviewStepRuntimeSummary(
+        { ...ready, stepRuntimes: { prepare: { startedAt: "2026-08-14T00:00:00.000Z" } } },
+        "consolidation",
+        false,
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  test("shows preparation and consolidation timings on their own cards", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      stepRuntimes: {
+        prepare: {
+          startedAt: "2026-08-14T00:00:00.000Z",
+          completedAt: "2026-08-14T00:01:20.000Z",
+          tokenCount: 40_000,
+        },
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.getByLabelText("Review package generation runtime").textContent).toBe(
+      "1m 20s · 40k tokens",
+    );
+    expect(screen.getByLabelText("Consolidation runtime").textContent).toBe("2m 45s · 25k tokens");
   });
 
   test("formats fix session runtime for live and settled sessions", () => {

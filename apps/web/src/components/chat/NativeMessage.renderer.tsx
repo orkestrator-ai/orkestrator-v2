@@ -129,6 +129,7 @@ export function MessagePart({
   part,
   showTextCopy = true,
   truncateUserPrompt = false,
+  promptPresentation,
   renderJsonPayload = true,
   containerId,
   eagerImagePreview = false,
@@ -139,6 +140,7 @@ export function MessagePart({
   part: NativeMessagePart;
   showTextCopy?: boolean;
   truncateUserPrompt?: boolean;
+  promptPresentation?: import("@/lib/chat/native-message-types").NativeMessage["promptPresentation"];
   renderJsonPayload?: boolean;
   containerId?: string;
   eagerImagePreview?: boolean;
@@ -184,6 +186,7 @@ export function MessagePart({
           content={part.content}
           showCopy={showTextCopy}
           truncateUserPrompt={truncateUserPrompt}
+          promptPresentation={promptPresentation}
           renderJsonPayload={renderJsonPayload}
           expansionKey={`${partKey}/json`}
         />

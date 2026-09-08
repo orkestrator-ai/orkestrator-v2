@@ -36,6 +36,25 @@ const READ_ONLY_TOOLS = Object.freeze([
 ]);
 
 /**
+ * Tools whose purpose is to make a turn last longer.
+ *
+ * The allowlist above already excludes them, so this is not what stops them —
+ * it is what explains them. A coordinator reaching for `Monitor` or
+ * `ScheduleWakeup` has misunderstood the delegation contract, and an
+ * unexplained "tool not available" invites it to try the next one on the list
+ * rather than to finish its turn. Named separately so the refusal can say why.
+ */
+const WAITING_TOOLS: ReadonlySet<string> = new Set([
+  "Monitor",
+  "ScheduleWakeup",
+  "CronCreate",
+  "CronList",
+  "CronDelete",
+  "SendMessage",
+  "TaskOutput",
+]);
+
+/**
  * Commands whose whole purpose is to read.
  *
  * An allowlist rather than a denylist of dangerous verbs: a denylist has to
@@ -434,6 +453,11 @@ export function createCoordinatorReadOnlyHook(policy: NativeAgentExecutionPolicy
     if (deniedTools.has(toolName)) {
       return deny(
         `Coordinator is read-only, so ${toolName} is not available. Delegate file changes to a worker environment.`,
+      );
+    }
+    if (WAITING_TOOLS.has(toolName)) {
+      return deny(
+        `Coordinator turns do not wait, so ${toolName} is not available. Delegated work reports back by waking this conversation with a message when it finishes; end your turn instead.`,
       );
     }
     if (toolName.startsWith("mcp__")) {

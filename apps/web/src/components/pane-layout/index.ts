@@ -5,3 +5,4 @@ export { PaneLeafContainer } from "./PaneLeafContainer";
 export { DraggableTabBar } from "./DraggableTabBar";
 export { DraggableTab } from "./DraggableTab";
 export { DropZoneOverlay } from "./DropZoneOverlay";
+export { TabShell, TAB_STRIP_CLASS, TAB_ICON_CLASS } from "./TabShell";

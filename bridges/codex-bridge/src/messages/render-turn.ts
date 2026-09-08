@@ -28,6 +28,7 @@ import {
   createSharedTranscriptMetaLoader,
   resolvePersistedChildThreadIds,
 } from "../history/rollout.js";
+import { isWithheldMachineOutput } from "@orkestrator/protocol/structured-output";
 import { BaselineMap, beginTurn, touchBaseline } from "./diff-budget.js";
 import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
@@ -50,6 +51,11 @@ export interface TurnRenderState {
    * every older text/tool/diff object in the turn.
    */
   completedItemParts: Map<string, { source: EngineItem | null; parts: NormalizedPart[] }>;
+  /** Machine-output classification cached by the accumulator mutation version. */
+  machineOutputByItem: Map<
+    string,
+    { source: EngineItem | null; version: number; withheld: boolean }
+  >;
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
   /** Positive, ambiguous, and absent child-path lookups retained for this turn. */
@@ -78,6 +84,7 @@ export function createTurnRenderState(): TurnRenderState {
   return {
     timelineOrder: [],
     completedItemParts: new Map(),
+    machineOutputByItem: new Map(),
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
     subagentPathIds: new Map(),
@@ -107,6 +114,7 @@ export function beginTurnRenderState(previous: TurnRenderState | undefined): Tur
 export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
   state.completedItemParts.clear();
+  state.machineOutputByItem.clear();
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
   state.subagentPathIds.clear();
@@ -131,6 +139,48 @@ function touchCachedPartBaselines(
 function joinReasoning(summary: string[], content: string[]): string {
   const source = summary.some(hasVisibleText) ? summary : content;
   return source.filter(hasVisibleText).join("\n\n");
+}
+
+function terminalStructuredOutputItemId(turn: TurnAccumulator): string | undefined {
+  if (!turn.expectsStructuredOutput || turn.phase !== "completed") return undefined;
+  // Keep this selection identical to parseCodexStructuredOutput: the last
+  // authoritative agent item wins even when its text is empty. Falling back to
+  // an earlier non-empty item would promote a draft after parsing rejected the
+  // actual final record.
+  return turn
+    .ordered()
+    .filter((entry) => entry.item?.type === "agent_message")
+    .at(-1)?.id;
+}
+
+function isMachineOutput(
+  state: TurnRenderState,
+  accumulator: ItemAccumulator | undefined,
+  item: EngineItem,
+): boolean {
+  if (item.type !== "agent_message") return false;
+  const version = accumulator?.version ?? -1;
+  const source = accumulator?.item ?? null;
+  const cached = state.machineOutputByItem.get(item.id);
+  if (cached?.version === version && cached.source === source) return cached.withheld;
+  const withheld = isWithheldMachineOutput(item.text);
+  state.machineOutputByItem.set(item.id, { source, version, withheld });
+  return withheld;
+}
+
+function suppressStructuredOutputDraft(
+  turn: TurnAccumulator,
+  state: TurnRenderState,
+  accumulator: ItemAccumulator | undefined,
+  item: EngineItem,
+  finalItemId: string | undefined,
+): boolean {
+  return (
+    turn.expectsStructuredOutput &&
+    item.type === "agent_message" &&
+    item.id !== finalItemId &&
+    isMachineOutput(state, accumulator, item)
+  );
 }
 
 /**
@@ -468,6 +518,12 @@ export async function renderTurn(
     turn,
     options.segment,
   );
+  // app-server's output schema is turn-scoped, but it can still surface
+  // schema-shaped agent messages between tool calls. They are drafts, not
+  // separate results. Keep them out of the transcript until the turn settles,
+  // then reveal only the same last agent message that structured-output parsing
+  // reads as authoritative.
+  const structuredOutputItemId = terminalStructuredOutputItemId(turn);
 
   // Reconcile the authoritative item set without rebuilding its order around
   // the sub-agent entries. New parent items belong at the end of the timeline;
@@ -475,6 +531,11 @@ export async function renderTurn(
   // from `[...itemKeys, ...existingSubagentKeys]` on every render would instead
   // pin even completed agents below every parent message that followed them.
   const currentItemKeys = new Set(itemKeys);
+  for (const itemId of options.state.machineOutputByItem.keys()) {
+    if (!currentItemKeys.has(`${CODEX_TIMELINE_ITEM_PREFIX}${itemId}`)) {
+      options.state.machineOutputByItem.delete(itemId);
+    }
+  }
   const timelineOrder = options.state.timelineOrder.filter(
     (key) => key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
   );
@@ -506,13 +567,20 @@ export async function renderTurn(
         const itemId = key.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
         const accumulator = accumulatorsByKey.get(itemId);
         const cached = options.state.completedItemParts.get(itemId);
+        const suppressDraft = suppressStructuredOutputDraft(
+          turn,
+          options.state,
+          accumulator,
+          item,
+          structuredOutputItemId,
+        );
         if (accumulator?.completed && cached?.source === accumulator.item) {
           // `itemToParts` touches a file's baseline while rendering its diff.
           // A completed-item cache hit skips that function, so without the
           // equivalent touch here an actively re-rendered file looks cold to
           // the LRU and can be evicted ahead of truly unused baselines.
           touchCachedPartBaselines(cached.parts, options.cwd, options.state.fileChange.baselines);
-          parts.push(...cached.parts);
+          if (!suppressDraft) parts.push(...cached.parts);
         } else {
           const itemParts = await itemToParts(item, options.cwd, options.state.fileChange);
           const createdAt =
@@ -530,7 +598,7 @@ export async function renderTurn(
           } else {
             options.state.completedItemParts.delete(itemId);
           }
-          parts.push(...stampedParts);
+          if (!suppressDraft) parts.push(...stampedParts);
           // A live progress line for a still-running item, in the same message
           // as the row it describes so the backend projection can fold it on.
           // Only for uncompleted items: the accumulator clears `progress` when
@@ -555,7 +623,15 @@ export async function renderTurn(
   const finalText = items
     .filter(
       (item): item is Extract<EngineItem, { type: "agent_message" }> =>
-        item.type === "agent_message" && item.text.length > 0,
+        item.type === "agent_message" &&
+        item.text.length > 0 &&
+        !suppressStructuredOutputDraft(
+          turn,
+          options.state,
+          accumulatorsByKey.get(item.id),
+          item,
+          structuredOutputItemId,
+        ),
     )
     .at(-1)?.text;
 

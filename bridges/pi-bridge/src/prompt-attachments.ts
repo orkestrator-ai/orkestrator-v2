@@ -1,11 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import {
-  convertToPng,
-  detectSupportedImageMimeTypeFromFile,
-  resizeImage,
-} from "@earendil-works/pi-coding-agent";
+import { convertToPng, detectSupportedImageMimeTypeFromFile, resizeImage } from "./pi-sdk.js";
 
 /**
  * Prompt attachments for Pi.

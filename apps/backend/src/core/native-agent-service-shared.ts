@@ -70,6 +70,7 @@ import type {
   PersistedNativeAgentPendingSteer,
 } from "./models.js";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
+import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import type { StorageService } from "./storage.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
@@ -140,6 +141,8 @@ export interface EnsureNativeAgentSessionInput {
   executionPolicy?: "coordinator-read-only";
   /** Backend-computed policy. Caller values are replaced at the trust boundary. */
   policy?: NativeAgentExecutionPolicy;
+  /** Backend-authenticated presentation metadata for the session's initial prompt. */
+  initialPromptPresentation?: TrustedUserPromptPresentation;
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
@@ -293,6 +296,25 @@ export interface NativeAgentActivityTransition {
   providerSessionId: string;
   previousState?: AgentActivityState;
   state: AgentActivityState;
+  /**
+   * The session's addressable identity.
+   *
+   * `sessionKey` is a hash and cannot be taken apart, so a consumer that needs
+   * the prompt-queue key or the mailbox tab — both derived from these two —
+   * would otherwise have to read the session back out of storage on an edge it
+   * was just handed.
+   */
+  agent?: BuildPipelineAgent;
+  logicalSessionKey?: string;
+  /**
+   * Which runtime the session belongs to.
+   *
+   * A coordinator runtime has no `Environment` row, so a consumer that reaches
+   * for one — the PR probe, the environment activity aggregate — has to know
+   * not to. Absent means environment, so existing consumers keep their
+   * behaviour without a migration.
+   */
+  owner?: "environment" | "coordinator";
 }
 
 /**

@@ -7,6 +7,7 @@
  */
 
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 
 export interface NativeToolDiffMetadata {
   filePath?: string;
@@ -296,4 +297,6 @@ export interface NativeMessage {
   turnId?: string;
   /** Typed Codex plan-review marker used by the shared presentation slot. */
   planReview?: boolean;
+  /** Backend-authenticated display treatment for this user message. */
+  promptPresentation?: UserPromptPresentationKind;
 }

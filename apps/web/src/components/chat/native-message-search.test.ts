@@ -2,6 +2,12 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { marked } from "marked";
 import { getNativeMessageSearchText, markdownToAgentSearchText } from "./native-message-search";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import {
+  COORDINATOR_DELEGATION_OMISSION_TEXT,
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 describe("markdownToAgentSearchText", () => {
   test("returns the visible text across fragmented inline Markdown", () => {
@@ -37,6 +43,33 @@ describe("markdownToAgentSearchText", () => {
 });
 
 describe("getNativeMessageSearchText", () => {
+  test("indexes the trusted delegated prompt without its hidden metadata", () => {
+    const source = createCoordinatorDelegatedPrompt(
+      {
+        projectId: "hidden-project",
+        coordinatorId: "hidden-coordinator",
+        conversationId: "hidden-conversation",
+        instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+      },
+      "Implement the visible feature.",
+    ).source;
+    const message: NativeMessage = {
+      id: "user-delegated",
+      role: "user",
+      content: source,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [{ type: "text", content: source }],
+      promptPresentation: COORDINATOR_DELEGATION_PRESENTATION,
+    };
+
+    const text = getNativeMessageSearchText(message);
+
+    expect(text).toContain(COORDINATOR_DELEGATION_OMISSION_TEXT);
+    expect(text).toContain("Implement the visible feature.");
+    expect(text).not.toContain("hidden-project");
+    expect(text).not.toContain("hidden-coordinator");
+  });
+
   test("searches only rendered text parts and strips their Markdown", () => {
     const message: NativeMessage = {
       id: "assistant-1",

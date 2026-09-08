@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
+  COORDINATOR_DELEGATION_OMISSION_TEXT,
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
+  createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
@@ -39,6 +44,39 @@ const report = {
 } as StructuredReviewReport;
 
 describe("backend prompt display contract", () => {
+  test("filters both coordinator delegation producer variants only with trusted provenance", () => {
+    const prompt = "Implement the requested behavior.";
+    const variants = [
+      createCoordinatorDelegatedPrompt(
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+        },
+        prompt,
+      ),
+      createCoordinatorDelegatedPrompt(
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          baseBranch: "main",
+          baseCommit: "0123456789abcdef0123456789abcdef01234567",
+          instruction: COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+        },
+        prompt,
+      ),
+    ];
+
+    for (const variant of variants) {
+      expect(userPromptDisplayText(variant.source)).toBe(variant.source);
+      expect(userPromptDisplayText(variant.source, COORDINATOR_DELEGATION_PRESENTATION)).toBe(
+        `${COORDINATOR_DELEGATION_OMISSION_TEXT}\n\n${prompt}`,
+      );
+    }
+  });
+
   test("filters the exact Multi Review consolidation prompt", () => {
     const source = createMultiReviewConsolidationPrompt({
       reports: [{ reviewerId: "reviewer-1", agent: "codex", model: "gpt", report }],

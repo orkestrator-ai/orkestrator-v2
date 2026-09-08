@@ -7,6 +7,11 @@ import {
   readControlMcpDescriptor,
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
+import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 type RpcBody = {
   result?: {
@@ -318,6 +323,34 @@ describe("Orkestrator control MCP server", () => {
     expect(environments.body.result?.structuredContent).toMatchObject({
       total: 1,
       environments: [{ id: "env-project-1", projectId: "project-1" }],
+    });
+
+    overrides.set("get_environment", () => ({ id: "env-project-1", projectId: "project-1" }));
+    overrides.set("launch_control_job", () => ({
+      jobId: "job-1",
+      environmentId: "env-project-1",
+      tabId: "agent-job-1",
+      status: "accepted",
+    }));
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "coordinator-job-1",
+        environmentId: "env-project-1",
+        agent: "codex",
+        prompt: "Implement the delegated task.",
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    const launchArgs = invocations.find(
+      ({ command, args }) =>
+        command === "launch_control_job" && args.requestId === "coordinator-job-1",
+    )?.args;
+    const parsedDelegation = parseCoordinatorDelegatedPrompt(String(launchArgs?.prompt));
+    expect(parsedDelegation?.source).toBe("Implement the delegated task.");
+    expect(launchArgs && coordinatorDelegationPresentationFrom(launchArgs)).toEqual({
+      kind: COORDINATOR_DELEGATION_PRESENTATION,
+      frame: parsedDelegation?.frame,
     });
 
     const denied = await rpc(credential.url, credential.token, "tools/call", {
@@ -1155,5 +1188,227 @@ describe("Orkestrator control MCP server", () => {
     expect(await oversized.json()).toMatchObject({
       error: "Control MCP request body is too large",
     });
+  });
+  test("coordinator delegation tools promise a wake and refuse a poll loop", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    overrides.set("get_project_git_status", () => ({
+      branch: "main",
+      headCommit: "a".repeat(40),
+      trackedChanges: 0,
+      untrackedChanges: 0,
+    }));
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-worker", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: true,
+    }));
+    const opened: Array<Record<string, unknown>> = [];
+    overrides.set("open_coordinator_delegation", (args) => {
+      opened.push(args);
+      return { opened: true };
+    });
+    let mailbox: Record<string, unknown> = {
+      messages: [{ id: "message-1", placement: "injected" }],
+      total: 1,
+    };
+    overrides.set("get_agent_mail_mailbox", () => mailbox);
+
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments", "jobs", "mail"],
+    });
+
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-1",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Fix the failing test.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    // The tool answers the question the model is about to ask anyway.
+    expect(launched.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+      delivery: "async",
+      nextStep: "Finish your turn now. Do not poll.",
+    });
+    const read = async () =>
+      rpc(credential.url, credential.token, "tools/call", {
+        name: "read_messages",
+        arguments: {
+          environmentId: "coordinator:coordinator-1:conversation-1",
+          tabId: "coordinator-tab",
+        },
+      });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const page = await read();
+      expect(page.body.result?.structuredContent).toMatchObject({ total: 1 });
+    }
+    // Fourth identical answer still carries the authorized page while warning
+    // the coordinator that it is polling.
+    const refused = await read();
+    expect(refused.body.result?.structuredContent).toMatchObject({
+      total: 1,
+      messages: [{ id: "message-1" }],
+      repeatedRead: true,
+    });
+
+    const differentlyFiltered = await rpc(credential.url, credential.token, "tools/call", {
+      name: "read_messages",
+      arguments: {
+        environmentId: "coordinator:coordinator-1:conversation-1",
+        tabId: "coordinator-tab",
+        unreadOnly: true,
+      },
+    });
+    expect(differentlyFiltered.body.result?.structuredContent).not.toHaveProperty("repeatedRead");
+
+    // Real new mail clears the guard immediately; the budget never hides it.
+    mailbox = {
+      messages: [
+        { id: "message-1", placement: "injected" },
+        { id: "message-2", placement: "pending-inject" },
+      ],
+      total: 2,
+    };
+    const afterNewMail = await read();
+    expect(afterNewMail.body.result?.structuredContent).toMatchObject({ total: 2 });
+
+    overrides.set("send_coordinator_agent_mail", () => ({
+      id: "stored-message",
+      requestId: "stored-message",
+      placement: "stored",
+      coordinatorDelegationOpened: false,
+    }));
+    const stored = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "stored-message",
+        toEnvironmentId: "env-1",
+        toTabId: "plain-tab",
+        body: "This cannot enter a worker turn.",
+      },
+    });
+    expect(stored.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("send_coordinator_agent_mail", () => ({
+      id: "bounced-message",
+      requestId: "bounced-message",
+      placement: "bounced",
+      coordinatorDelegationOpened: false,
+    }));
+    const bounced = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "bounced-message",
+        toEnvironmentId: "env-1",
+        toTabId: "muted-tab",
+        body: "This recipient is muted.",
+      },
+    });
+    expect(bounced.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("open_coordinator_delegation", (args) => {
+      opened.push(args);
+      throw new Error("storage unavailable");
+    });
+    const jobWithoutWake = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "job-without-wake",
+        environmentId: "env-1",
+        agent: "codex",
+        prompt: "Do the work.",
+      },
+    });
+    expect(jobWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
+    expect(opened.at(-1)).toMatchObject({
+      environmentId: "env-1",
+      tabId: "agent-job-job-1",
+      requestId: "job-without-wake",
+    });
+
+    overrides.set("launch_control_job", () => ({
+      jobId: "job-without-tab",
+      environmentId: "env-1",
+      status: "accepted",
+    }));
+    const jobWithoutTab = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "job-without-tab",
+        environmentId: "env-1",
+        agent: "codex",
+        prompt: "Do the work.",
+      },
+    });
+    expect(jobWithoutTab.body.result?.structuredContent).not.toHaveProperty("delivery");
+
+    overrides.set("assert_coordinator_delegation_available", () => {
+      throw new Error("That worker tab already has an outstanding coordinator delegation");
+    });
+    overrides.set("get_pane_layout", () => ({
+      activePaneId: "pane",
+      root: {
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "native-1",
+        tabs: [
+          {
+            id: "native-1",
+            type: "agent-native",
+            nativeAgentData: { platform: "codex" },
+          },
+        ],
+      },
+    }));
+    const dispatchesBeforeConflict = invocations.filter(
+      ({ command }) => command === "dispatch_native_agent_intent",
+    ).length;
+    const conflictingPrompt = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_prompt_to_tab",
+      arguments: {
+        requestId: "conflicting-prompt",
+        environmentId: "env-1",
+        tabId: "native-1",
+        prompt: "Do not dispatch this.",
+      },
+    });
+    expect(conflictingPrompt.body.result?.isError).toBe(true);
+    expect(
+      invocations.filter(({ command }) => command === "dispatch_native_agent_intent"),
+    ).toHaveLength(dispatchesBeforeConflict);
+
+    overrides.set("launch_coordinator_environment", () => ({
+      environment: { id: "env-no-wake", projectId: "project-1", status: "running" },
+      coordinatorDelegationOpened: false,
+    }));
+    const launchWithoutWake = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "launch-without-wake",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Do the work.",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+      },
+    });
+    expect(launchWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
   });
 });

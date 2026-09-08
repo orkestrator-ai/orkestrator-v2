@@ -129,11 +129,11 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.261
-ARG CODEX_CLI_VERSION=0.153.3
-ARG OPENCODE_CLI_VERSION=1.18.28
+ARG CLAUDE_CLI_VERSION=2.1.263
+ARG CODEX_CLI_VERSION=0.153.4
+ARG OPENCODE_CLI_VERSION=1.18.29
 ARG GROK_BUILD_VERSION=1.0.13
-ARG PI_CLI_VERSION=0.85.0
+ARG PI_CLI_VERSION=0.85.1
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -169,8 +169,8 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # apps/desktop/electron/toolchain-manifest.ts for the same version.
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) PI_ARCH=x64; PI_SHA=a7e7c65f1dc528d2e17e7d946ad2b61df0e2b0f9952faee77807c2484b464d6e ;; \
-    arm64) PI_ARCH=arm64; PI_SHA=821750e0ac6bf6e10c35b93ddab88a44f2d0ef8411af9ea4e8ffe620f62130df ;; \
+    amd64) PI_ARCH=x64; PI_SHA=494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=042d20ae885ee4f3b102815f3280b962c377b2e9fb44de4037908cc530eae4d4 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \

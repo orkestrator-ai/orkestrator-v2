@@ -29,6 +29,7 @@ import {
 } from "./rollout.js";
 import { persistSessionTitle } from "../session-titles.js";
 import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
+import type { StructuredOutputTurnRecord } from "@orkestrator/protocol/structured-output";
 
 const temporaryDirectories: string[] = [];
 
@@ -58,6 +59,7 @@ async function hydrateRollout(
   lines: unknown[],
   /** Overridable so a rollout carrying no `cwd` can be told apart from one that does. */
   processCwd = "/workspace",
+  structuredOutputTurns?: readonly StructuredOutputTurnRecord[],
 ): Promise<Awaited<ReturnType<typeof hydrateMessagesFromPersistedSession>>> {
   const path = await temporaryRollout(threadId, lines);
   const previousHome = process.env.CODEX_HOME;
@@ -65,7 +67,7 @@ async function hydrateRollout(
   process.env.CODEX_HOME = dirname(dirname(path));
   process.env.CWD = processCwd;
   try {
-    return await hydrateMessagesFromPersistedSession(threadId);
+    return await hydrateMessagesFromPersistedSession(threadId, { structuredOutputTurns });
   } finally {
     if (previousHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousHome;
@@ -1210,6 +1212,47 @@ describe("rollout public helpers (continued)", () => {
       if (previousCwd === undefined) delete process.env.CWD;
       else process.env.CWD = previousCwd;
     }
+  });
+
+  test("rehydrates the same structured-output visibility as the live renderer", async () => {
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    const hydrated = await hydrateRollout(
+      "thread-structured-history",
+      [
+        sessionMeta("thread-structured-history"),
+        { type: "turn_context", payload: { turn_id: "accepted", cwd: "/workspace" } },
+        message("user", "accepted prompt"),
+        message("assistant", '{"draft":true}'),
+        message("assistant", '{"final":true}'),
+        { type: "turn_context", payload: { turn_id: "failed", cwd: "/workspace" } },
+        message("user", "failed prompt"),
+        message("assistant", '{"draft":"incomplete"'),
+        { type: "turn_context", payload: { turn_id: "ordinary", cwd: "/workspace" } },
+        message("user", "ordinary prompt"),
+        message("assistant", '{"ordinary":true}'),
+      ],
+      "/workspace",
+      [
+        { turnId: "accepted", accepted: true },
+        { turnId: "failed", accepted: false },
+      ],
+    );
+
+    expect(
+      hydrated.messages
+        .filter((entry) => entry.role === "assistant")
+        .map((entry) => [entry.turnId, entry.content, entry.parts.map((part) => part.content)]),
+    ).toEqual([
+      ["accepted", '{"final":true}', ['{"final":true}']],
+      ["ordinary", '{"ordinary":true}', ['{"ordinary":true}']],
+    ]);
   });
 
   /**

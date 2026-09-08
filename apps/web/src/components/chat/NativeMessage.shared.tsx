@@ -197,6 +197,7 @@ export interface NativeMessagePartRendererProps {
   partKey: string;
   showTextCopy?: boolean;
   truncateUserPrompt?: boolean;
+  promptPresentation?: NativeMessageType["promptPresentation"];
   renderJsonPayload?: boolean;
   containerId?: string;
   eagerImagePreview?: boolean;

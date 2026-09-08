@@ -14,6 +14,7 @@ import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -76,6 +77,7 @@ mock.module("@dnd-kit/utilities", () => ({
 }));
 
 const { DraggableTab } = await import("./DraggableTab");
+const { AgentMailButton } = await import("../agent-mail/AgentMailButton");
 
 afterAll(() => {
   mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
@@ -902,7 +904,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: "Close Terminal 1" }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
     // handleClose stops propagation so the tab is not also selected.
@@ -1013,8 +1015,51 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(messageAction).toBeTruthy();
     expect(screen.getByText("Inbox settings…")).toBeTruthy();
     fireEvent.click(messageAction);
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    fireEvent.click(screen.getByText("Inbox settings…"));
     window.removeEventListener("orkestrator:open-agent-mail", recordOpenEvent);
-    expect(openEvents).toEqual([{ environmentId: "env-1", tabId: "tab-claude", mode: "compose" }]);
+    expect(openEvents).toEqual([
+      { environmentId: "env-1", tabId: "tab-claude", mode: "compose" },
+      { environmentId: "env-1", tabId: "tab-claude", mode: "settings" },
+    ]);
+  });
+
+  test("opens the global composer from the tab context menu", async () => {
+    const config = structuredClone(useConfigStore.getInitialState().config);
+    config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
+    useConfigStore.setState({ config });
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({
+        revision: 0,
+        directory: [],
+        mailboxes: [],
+        summary: { revision: 0, mailboxes: [] },
+      })),
+    });
+    const tab: TabInfo = {
+      id: "tab-claude",
+      type: "agent-native",
+      nativeAgentData: { platform: "claude", environmentId: "env-1" },
+    };
+    render(
+      <>
+        <AgentMailButton />
+        <DraggableTab
+          tab={tab}
+          paneId="pane-1"
+          index={0}
+          isActive={false}
+          canClose
+          onSelect={() => {}}
+        />
+      </>,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    fireEvent.click(screen.getByText("Message this tab…"));
+
+    expect(await screen.findByPlaceholderText("Markdown message")).toBeTruthy();
   });
 
   test("hides the file tooltip again on mouse leave", async () => {

@@ -115,6 +115,24 @@ function getDockerfileArg(argName: string): string {
   return match[1];
 }
 
+function getDockerfileArchitectureDigest(
+  digestVariable: string,
+  architecture: "arm64" | "x64",
+): string {
+  const dockerArchitecture = architecture === "x64" ? "amd64" : "arm64";
+  const dockerfile = dockerfileInstructions();
+  const match = dockerfile.match(
+    new RegExp(
+      `^\\s*${dockerArchitecture}\\).*\\b${digestVariable}=([a-f0-9]{64})(?:\\s|;|$)`,
+      "m",
+    ),
+  );
+  if (!match) {
+    throw new Error(`Expected ${digestVariable} for ${dockerArchitecture} in docker/Dockerfile`);
+  }
+  return match[1];
+}
+
 function getShellVar(scriptRel: string, varName: string): string {
   const script = read(scriptRel);
   const match = script.match(new RegExp(`^${varName}="([^"]+)"`, "m"));
@@ -317,7 +335,6 @@ describe("every shipped agent, uniformly", () => {
           // checks it with `sha256sum`, so these digests are a second copy.
           // Both have to be the same literal or a container and a local
           // worktree are running different builds of the same agent.
-          const dockerfile = read("docker/Dockerfile");
           for (const architecture of ["arm64", "x64"] as const) {
             const artifact = PINNED_TOOLCHAIN_ARTIFACTS.find(
               (candidate) =>
@@ -327,10 +344,9 @@ describe("every shipped agent, uniformly", () => {
             );
             expect(artifact, `no linux/${architecture} artifact for ${agent}`).toBeDefined();
             expect(
-              dockerfile.includes(artifact!.archive.sha256),
-              `docker/Dockerfile does not pin the manifest's linux/${architecture} ` +
-                `${agent} digest ${artifact!.archive.sha256}`,
-            ).toBe(true);
+              getDockerfileArchitectureDigest(`${agent.toUpperCase()}_SHA`, architecture),
+              `docker/Dockerfile assigns the wrong digest to linux/${architecture} for ${agent}`,
+            ).toBe(artifact!.archive.sha256);
           }
         });
       }
@@ -647,6 +663,39 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
       expect(artifact.archive.entryPath).toBe("opencode");
     }
+  });
+
+  test("OpenCode: the SDK pin, patch registration, patch file and lockfile stay aligned", () => {
+    const webVersion = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
+    const backendVersion = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
+    expect(backendVersion).toBe(webVersion);
+
+    const expectedKey = `@opencode-ai/sdk@${webVersion}`;
+    const expectedPatch = `patches/@opencode-ai%2Fsdk@${webVersion}.patch`;
+    const rootPackage = JSON.parse(read("package.json")) as {
+      patchedDependencies?: Record<string, string>;
+    };
+    const rootPatchKeys = Object.keys(rootPackage.patchedDependencies ?? {}).filter((key) =>
+      key.startsWith("@opencode-ai/sdk@"),
+    );
+    expect(rootPatchKeys).toEqual([expectedKey]);
+    expect(rootPackage.patchedDependencies?.[expectedKey]).toBe(expectedPatch);
+    expect(existsSync(join(repoRoot, expectedPatch))).toBe(true);
+
+    const patchFiles = readdirSync(join(repoRoot, "patches")).filter((file) =>
+      file.startsWith("@opencode-ai%2Fsdk@"),
+    );
+    expect(patchFiles).toEqual([expectedPatch.slice("patches/".length)]);
+
+    const lock = JSON.parse(read("bun.lock").replace(/,(\s*[}\]])/g, "$1")) as {
+      patchedDependencies?: Record<string, string>;
+    };
+    const lockPatchKeys = Object.keys(lock.patchedDependencies ?? {}).filter((key) =>
+      key.startsWith("@opencode-ai/sdk@"),
+    );
+    expect(lockPatchKeys).toEqual([expectedKey]);
+    expect(lock.patchedDependencies?.[expectedKey]).toBe(expectedPatch);
+    expect(lockfileResolvedVersion("bun.lock", "@opencode-ai/sdk")).toBe(webVersion);
   });
 
   test("Claude: every managed artifact URL is the pinned npm tarball for its platform", () => {

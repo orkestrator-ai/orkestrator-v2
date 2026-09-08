@@ -41,6 +41,12 @@ import {
 import { StorageService } from "./storage.js";
 
 import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+
+import {
   OPENCODE_INCOMPLETE_TURN_CONTINUATION,
   openCodeIncompleteTurnRequestId,
 } from "./opencode-turn-recovery.js";
@@ -1159,6 +1165,9 @@ describe("NativeAgentService", () => {
             providerSessionId: "provider-1",
             previousState: undefined,
             state: "working",
+            owner: "environment",
+            agent: "codex",
+            logicalSessionKey: "tab-1",
           },
           {
             environmentId: "env-1",
@@ -1166,6 +1175,9 @@ describe("NativeAgentService", () => {
             providerSessionId: "provider-1",
             previousState: "working",
             state: "waiting",
+            owner: "environment",
+            agent: "codex",
+            logicalSessionKey: "tab-1",
           },
         ]);
       },
@@ -3452,5 +3464,142 @@ describe("NativeAgentService", () => {
         await fs.rm(dataDir, { recursive: true, force: true });
       }
     });
+  });
+  test("observes a coordinator session's turn ending without inventing an environment", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", { activity: async () => activityState });
+    const transitions: Array<
+      Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0]
+    > = [];
+
+    await withService(
+      {
+        prefix: "orkestrator-native-coordinator-activity-",
+        provider: async () => provider,
+        onActivityTransition: (event) => {
+          transitions.push(event);
+        },
+      },
+      async ({ storage, service }) => {
+        const checkout = await fs.mkdtemp(path.join(tmpdir(), "ork-coordinator-checkout-"));
+        try {
+          const project = await storage.addProject({
+            id: "project-1",
+            name: "Project",
+            gitUrl: "https://example.invalid/project.git",
+            localPath: checkout,
+            addedAt: new Date(0).toISOString(),
+            order: 0,
+          });
+          const now = new Date(0).toISOString();
+          await storage.mutateCoordinatorWorkspace(project.id, () => ({
+            version: COORDINATOR_WORKSPACE_VERSION,
+            id: "coordinator-1",
+            projectId: project.id,
+            executionPolicy: COORDINATOR_EXECUTION_POLICY,
+            lifecycleState: "ready",
+            conversations: [
+              {
+                id: "conversation-1",
+                tabId: "coordinator-tab",
+                logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+                agent: "codex",
+                title: "Coordinator",
+                createdAt: now,
+                mailboxIncarnationId: "incarnation-1",
+              },
+            ],
+            selectedConversationId: "conversation-1",
+            repositoryContextRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+          }));
+
+          const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+          const key = nativeAgentSessionStorageKey(
+            runtimeId,
+            "codex",
+            "coordinator-coordinator-1:conversation-1",
+          );
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: runtimeId,
+            agent: "codex",
+            logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+            providerSessionId: "provider-1",
+          });
+
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("working");
+
+          activityState = "idle";
+          await service.reconcileAgentActivity();
+
+          /*
+           * The whole point of Phase 0: a coordinator reads `idle` like any
+           * other session. Before this, the sweep dropped the session because
+           * its id is not an environment, the observation was deleted, and the
+           * answer was permanently `unknown` — so no turn-end edge ever fired
+           * and worker mail fell back to a probe-and-backoff path.
+           */
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("idle");
+          expect(
+            transitions.map(({ owner, previousState, state }) => ({
+              owner,
+              previousState,
+              state,
+            })),
+          ).toEqual([
+            { owner: "coordinator", previousState: undefined, state: "working" },
+            { owner: "coordinator", previousState: "working", state: "idle" },
+          ]);
+          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            lifecycleState: "paused",
+          }));
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("unknown");
+
+          await storage.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+            ...workspace!,
+            lifecycleState: "ready",
+            conversations: workspace!.conversations.map((conversation) => ({
+              ...conversation,
+              closedAt: new Date().toISOString(),
+            })),
+          }));
+          await service.reconcileAgentActivity();
+          expect(
+            service.sessionActivitySnapshot(
+              runtimeId,
+              "codex",
+              "coordinator-coordinator-1:conversation-1",
+            ),
+          ).toBe("unknown");
+          // No environment row was fabricated for it along the way.
+          expect((await storage.loadEnvironments()).map(({ id }) => id)).not.toContain(runtimeId);
+        } finally {
+          await fs.rm(checkout, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });

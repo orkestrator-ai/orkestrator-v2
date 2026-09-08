@@ -203,3 +203,27 @@ launch are likewise not exposed coordinator controls. New APIs for those buttons
 are deferred to their own authority and idempotency designs; this change does
 not add speculative surfaces. Repository checkout mutation controls remain
 unavailable to coordinators.
+
+## Delegation is asynchronous
+
+A coordinator turn ends when it has delegated. It does not wait for the worker,
+so the composer stays open and the next thing you type runs as the next turn —
+before any worker mail, which is held behind a queued prompt on purpose.
+
+Each launch, job, or message to a worker opens one **delegation**, and each
+delegation wakes the conversation exactly once, when that worker's turn ends.
+Nothing the worker does in between reaches the coordinator: progress mail is
+stored and readable, but held, and released together with the final report so
+one delegation produces one turn rather than one per message. A worker that
+finishes without reporting still wakes its coordinator, with a notice saying so.
+A worker blocked on an approval or a question has not finished — that needs a
+person. The toolbar keeps showing that the selected conversation is waiting on
+the worker without inferring tab-level attention from an environment-wide
+status.
+
+Because a coordinator is woken rather than waiting, it has no reason to poll.
+Repeatedly reading an unchanged mailbox returns the page with the delegation
+contract attached, and the platforms hold the same line at the tool
+level: Claude's read-only shell has no `sleep`, `watch` or `timeout`, and its
+scheduling and monitoring tools are refused with an explanation rather than a
+bare denial.

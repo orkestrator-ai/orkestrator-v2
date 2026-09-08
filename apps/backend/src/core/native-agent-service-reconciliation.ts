@@ -126,6 +126,11 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServicePrompt } from "./native-agent-service-prompt.ts";
 import {
+  coordinatorIdFromRuntimeId,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import { coordinatorRuntimeEnvironment } from "./coordinator-runtime.js";
+import {
   buildInitialPromptWithAttachmentReferences,
   type SavedInitialPromptAttachment,
 } from "@orkestrator/protocol/initial-prompt-attachments";
@@ -152,6 +157,54 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const environmentsById = new Map(
       environments.map((environment) => [environment.id, environment]),
     );
+    /*
+     * Coordinator runtimes have no environment row, so they used to fall out of
+     * this scan entirely: the group builder below skips any session whose id is
+     * not an environment, and the cleanup pass at the end then deleted the
+     * `working` observation dispatch had just written. A coordinator's activity
+     * was therefore permanently `unknown` — it never read `idle`, so nothing
+     * could react to its turn ending and mail delivery fell through to the
+     * cold-tab path with a provider probe and a backoff per attempt.
+     *
+     * Resolving them here puts a coordinator on exactly the same footing as an
+     * environment session for observation purposes. The environment-only side
+     * effects — the activity aggregate, session-completion bookkeeping, the PR
+     * probe — stay gated on the `owner` this records.
+     *
+     * Deliberately one pass over the coordinator store rather than one resolve
+     * per runtime id: this runs every two seconds, and that store is read
+     * uncached, so a per-id resolve would re-read and re-parse it once per
+     * conversation per tick. Nothing is read at all when no coordinator session
+     * exists, which is the common case.
+     */
+    const coordinatorEnvironmentIds = new Set<string>();
+    const coordinatorRuntimeIds = new Set(
+      sessions
+        .map((session) => session.environmentId)
+        .filter((id) => !environmentsById.has(id) && coordinatorIdFromRuntimeId(id)),
+    );
+    if (coordinatorRuntimeIds.size > 0) {
+      const projects = new Map<string, Awaited<ReturnType<StorageService["getProject"]>>>();
+      for (const workspace of await this.storage.listCoordinatorWorkspaces()) {
+        if (workspace.lifecycleState !== "ready") continue;
+        if (!projects.has(workspace.projectId)) {
+          projects.set(workspace.projectId, await this.storage.getProject(workspace.projectId));
+        }
+        const project = projects.get(workspace.projectId);
+        if (!project?.localPath) continue;
+        for (const conversation of workspace.conversations) {
+          if (conversation.closedAt || !conversation.agent) continue;
+          const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
+          if (!coordinatorRuntimeIds.has(runtimeId)) continue;
+          environmentsById.set(
+            runtimeId,
+            coordinatorRuntimeEnvironment(runtimeId, { workspace, project }),
+          );
+          coordinatorEnvironmentIds.add(runtimeId);
+        }
+      }
+    }
+    if (this.stopped) return;
     const sessionsByEnvironment = new Map<string, PersistedNativeAgentSession[]>();
     for (const session of sessions) {
       if (!environmentsById.has(session.environmentId)) continue;
@@ -191,6 +244,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         const [groupKey, group] = entry;
         const first = group[0]!;
         const environment = environmentsById.get(first.environmentId)!;
+        const sessionOwner = coordinatorEnvironmentIds.has(first.environmentId)
+          ? ("coordinator" as const)
+          : ("environment" as const);
         // A group whose last read failed stays untouched until its backoff
         // expires. Its environment is still withheld from the commit below:
         // publishing an aggregate built from a group we deliberately skipped
@@ -211,6 +267,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 session,
                 "idle",
                 Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+                sessionOwner,
               )
             )
               completionCandidates.add(session.environmentId);
@@ -231,6 +288,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                   session,
                   "idle",
                   Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+                  sessionOwner,
                 )
               )
                 completionCandidates.add(session.environmentId);
@@ -308,6 +366,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 session,
                 activity,
                 Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+                sessionOwner,
               )
             )
               completionCandidates.add(session.environmentId);
@@ -398,6 +457,13 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     session: PersistedNativeAgentSession,
     state: AgentActivityState,
     countUnknownIdleAsCompletion: boolean,
+    /**
+     * A coordinator runtime is observed like any session but owns none of the
+     * environment bookkeeping: there is no row to record a completion against
+     * and no aggregate to publish. Its transition is still reported, which is
+     * what wakes held worker mail.
+     */
+    owner: "environment" | "coordinator" = "environment",
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const previous =
@@ -414,7 +480,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     // Persist the exact session edge before advancing the in-memory observation.
     // If storage fails, the provider group backs off and the next scan still
     // sees `previous === "working"`, so the durable completion is retried.
-    if (durableAttentionEdge) {
+    if (durableAttentionEdge && owner === "environment") {
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.now()).toISOString(),
@@ -431,6 +497,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         providerSessionId: session.providerSessionId,
         previousState: previous,
         state,
+        owner,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
       });
     }
     /*
@@ -451,15 +520,17 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       }
       this.scheduleOpenCodeIncompleteTurnRecovery(session);
     }
-    const sources = activityByEnvironment.get(session.environmentId) ?? {};
-    sources[session.key] = {
-      state,
-      // Only the state matters for this in-memory aggregate. A real timestamp
-      // is supplied once per committed environment.
-      updatedAt: "1970-01-01T00:00:00.000Z",
-    };
-    activityByEnvironment.set(session.environmentId, sources);
-    return completed;
+    if (owner === "environment") {
+      const sources = activityByEnvironment.get(session.environmentId) ?? {};
+      sources[session.key] = {
+        state,
+        // Only the state matters for this in-memory aggregate. A real timestamp
+        // is supplied once per committed environment.
+        updatedAt: "1970-01-01T00:00:00.000Z",
+      };
+      activityByEnvironment.set(session.environmentId, sources);
+    }
+    return completed && owner === "environment";
   }
 
   /** Deliver pending completion notifications with the same bound as status IO. */
@@ -769,6 +840,29 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         )
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
     );
+  }
+
+  /**
+   * Drain one session's queue now, named by the session's own identity.
+   *
+   * The turn-end edge already knows which session became free; waiting for the
+   * next two-second sweep to rediscover that is latency for nothing. A session
+   * with no queue costs one storage read, and the drain coalesces with any
+   * pass already running.
+   */
+  async drainPromptQueueForSession(input: {
+    agent?: BuildPipelineAgent;
+    logicalSessionKey?: string;
+  }): Promise<void> {
+    if (this.stopped) return;
+    const { agent, logicalSessionKey } = input;
+    if (!agent || !nonBlank(logicalSessionKey)) return;
+    if (!BUILD_PIPELINE_AGENTS.includes(agent)) return;
+    const queueKey = `${agent}\0${logicalSessionKey}`;
+    const queue = await this.storage.getPromptQueue(queueKey);
+    if (!queue || queue.dispatchError) return;
+    if (queue.inFlight === undefined && queue.messages.length === 0) return;
+    await this.drainPromptQueue(queueKey);
   }
 
   protected async drainPromptQueues(): Promise<void> {
@@ -1217,6 +1311,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           initialReasoningEffort: undefined,
           initialConversationMode: undefined,
           initialPromptAttachments: undefined,
+          initialPromptPresentation: undefined,
           startupAgentSession: undefined,
         });
         this.launchRetryAt.delete(environment.id);
@@ -1300,6 +1395,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
         requestId: `initial-prompt:${environment.id}:startup-agent`,
         images,
+        ...(environment.initialPromptPresentation
+          ? { initialPromptPresentation: environment.initialPromptPresentation }
+          : {}),
       };
       const session =
         prompt || images.length > 0 || files.length > 0
@@ -1350,6 +1448,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         initialReasoningEffort: undefined,
         initialConversationMode: undefined,
         initialPromptAttachments: undefined,
+        initialPromptPresentation: undefined,
         // Once the durable pane carries the provider session id, the snapshot
         // has no remaining reader and must reach a terminal state. Leaving it
         // set is not inert: every renderer keeps polling this environment for
@@ -1390,6 +1489,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               initialReasoningEffort: undefined,
               initialConversationMode: undefined,
               initialPromptAttachments: undefined,
+              initialPromptPresentation: undefined,
             }
           : {}),
         startupAgentSession: {

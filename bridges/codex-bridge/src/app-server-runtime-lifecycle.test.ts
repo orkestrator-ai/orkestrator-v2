@@ -104,6 +104,66 @@ describe("session lifecycle", () => {
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(true);
   });
 
+  test("restores structured transcript visibility from the durable ledger after restart", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-structured-restored",
+        threadId: "thread-structured-restored",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Restored structured turn",
+        titleSource: "explicit",
+        structuredOutputTurns: [{ turnId: "turn-structured", accepted: true }],
+      }),
+    );
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    writeFileSync(
+      join(sessionsDir, "thread-structured-restored.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-structured-restored",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        { type: "turn_context", payload: { turn_id: "turn-structured", cwd: "/tmp/ws" } },
+        message("user", "review"),
+        message("assistant", '{"draft":1}'),
+        message("assistant", '{"draft":2}'),
+        message("assistant", '{"final":true}'),
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
+    );
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-structured-restored") }),
+    });
+    const messages = await h.runtime.getMessages("session-structured-restored");
+
+    expect(
+      messages
+        ?.flatMap((entry) => entry.parts)
+        .filter((part) => part.type === "text")
+        .map((part) => part.content),
+    ).toEqual(["review", '{"final":true}']);
+    expect(
+      h.runtime.getRegistry().getSession("session-structured-restored")?.structuredOutputTurns,
+    ).toEqual([{ turnId: "turn-structured", accepted: true }]);
+  });
+
   test("resume without a thread id is rejected rather than creating a session", async () => {
     const h = await harness();
     expect(await h.runtime.resumeSession({ threadId: "   ", mode: "build" })).toBeNull();
@@ -1170,6 +1230,7 @@ describe("session lifecycle", () => {
       ok: true,
       requestId: "structured-1",
     });
+    expect(persisted?.structuredOutputTurns).toEqual([{ turnId: "turn-1", accepted: true }]);
   });
 
   test("recovers a schema-constrained response wrapped in thinking or commentary", async () => {
@@ -1336,6 +1397,78 @@ describe("session lifecycle", () => {
       status: "error",
       phase: "failed",
     });
+  });
+
+  test.each(["failed", "interrupted"] as const)(
+    "does not publish a JSON draft when a structured turn is %s",
+    async (status) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, {
+        prompt: "review",
+        requestId: `structured-${status}`,
+        attachments: [],
+        outputSchema: { type: "object" },
+      });
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "draft",
+          type: "agentMessage",
+          text: '{"authoritative":false}',
+        },
+      });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status },
+      });
+      await h.drain();
+
+      const assistant = (await h.runtime.getMessages(sessionId))?.find(
+        (message) => message.role === "assistant",
+      );
+      expect(assistant?.content).toBe("");
+      expect(assistant?.parts).toEqual([]);
+      expect(h.runtime.getRegistry().getSession(sessionId)?.structuredOutputTurns).toEqual([
+        { turnId: "turn-1", accepted: false },
+      ]);
+    },
+  );
+
+  test("does not promote an earlier draft when the final structured item is empty", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-empty-final",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    for (const item of [
+      { id: "draft", type: "agentMessage", text: '{"authoritative":false}' },
+      { id: "empty-final", type: "agentMessage", text: "" },
+    ]) {
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item,
+      });
+    }
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: { ok: false, error: { code: "malformed_output" } },
+    });
+    const assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
+    expect(assistant?.content).toBe("");
+    expect(assistant?.parts.map((part) => part.content)).toEqual([""]);
   });
 
   test("maps Codex structured-output retry exhaustion to the shared failure code", async () => {
@@ -2626,6 +2759,45 @@ describe("crash recovery", () => {
     expect(methods.lastIndexOf("thread/resume")).toBeLessThan(methods.indexOf("turn/start"));
   });
 
+  test("a failed active-turn rebind finalizes without exposing a structured draft", async () => {
+    const h = await harness({
+      "thread/resume": () => {
+        const error = new Error("temporary structured resume failure");
+        (error as { rpcCode?: number }).rpcCode = -32603;
+        throw error;
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-before-crash",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "draft", type: "agentMessage", text: '{"authoritative":false}' },
+    });
+    await h.drain();
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: expect.stringContaining("temporary structured resume failure"),
+    });
+    const assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
+    expect(assistant?.content).toBe("");
+    expect(assistant?.parts).toEqual([]);
+    expect(h.runtime.getRegistry().getThread("thread-1")?.activeTurn).toBeNull();
+  });
+
   test("a prompt waits for generation recovery before dispatching on the refreshed handle", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -2941,6 +3113,79 @@ describe("idle detach and transparent re-attach", () => {
     expect(h.child().requests.some((r) => r.method === "thread/unsubscribe")).toBe(true);
     expect(h.runtime.getRegistry().listThreads()).toHaveLength(0);
     expect(h.runtime.getStorageStats()).toMatchObject({ threads: 0, detachedThreads: 1 });
+  });
+
+  test("structured transcript visibility survives idle detach and rollout rehydration", async () => {
+    let clock = 1_000_000;
+    const h = await harness({}, { now: () => clock, threadIdleMs: 1_000, sweepIntervalMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-detach",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    for (const [id, text] of [
+      ["draft-1", '{"draft":1}'],
+      ["draft-2", '{"draft":2}'],
+      ["final", '{"final":true}'],
+    ] as const) {
+      h.child().notify("item/completed", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id, type: "agentMessage", text },
+      });
+    }
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const liveText = (await h.runtime.getMessages(sessionId))
+      ?.flatMap((message) => message.parts)
+      .filter((part) => part.type === "text")
+      .map((part) => part.content);
+    expect(liveText).toEqual(["review", '{"final":true}']);
+
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role,
+        content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+      },
+    });
+    writeFileSync(
+      join(sessionsDir, "thread-1.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-1",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/tmp/ws" } },
+        message("user", "review"),
+        message("assistant", '{"draft":1}'),
+        message("assistant", '{"draft":2}'),
+        message("assistant", '{"final":true}'),
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
+    );
+
+    clock += 60_000;
+    expect(await h.runtime.sweepIdle()).toMatchObject({ detached: 1 });
+    const rehydratedText = (await h.runtime.getMessages(sessionId))
+      ?.flatMap((entry) => entry.parts)
+      .filter((part) => part.type === "text")
+      .map((part) => part.content);
+    expect(rehydratedText).toEqual(liveText);
   });
 
   test("a thread with a live turn is never detached, however idle it looks", async () => {

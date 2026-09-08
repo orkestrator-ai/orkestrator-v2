@@ -77,6 +77,18 @@ describe("Claude coordinator read-only policy", () => {
     }
   });
 
+  test("waiting tools are refused with the reason, not just refused", async () => {
+    for (const tool of ["Monitor", "ScheduleWakeup", "CronCreate", "CronList", "CronDelete"]) {
+      const decision = await decide(tool, {});
+      expect(decision?.permissionDecision).toBe("deny");
+      // The allowlist would refuse these anyway. What matters is that the model
+      // is told why, so it ends its turn instead of trying the next tool that
+      // might let it wait.
+      expect(decision?.permissionDecisionReason).toContain("do not wait");
+      expect(decision?.permissionDecisionReason).toContain("end your turn");
+    }
+  });
+
   test("read tools pass through untouched", async () => {
     for (const tool of ["Read", "Glob", "Grep", "TodoWrite"]) {
       expect(await decide(tool, {})).toBeUndefined();

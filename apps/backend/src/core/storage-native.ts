@@ -1,5 +1,8 @@
 import * as shared from "./storage-shared.js";
-import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
+import type {
+  CoordinatorWorkflowAssociation,
+  CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
   MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
@@ -159,6 +162,19 @@ export abstract class StorageNative extends StorageReviews {
     throw new Error("Coordinator storage is unavailable in this storage layer");
   }
 
+  /**
+   * Delegations the mail layer must consult before it schedules an injection.
+   *
+   * Declared here rather than only on the composed service because the mail
+   * store sits below the coordinator store in the storage chain and still has
+   * to answer "is this worker's coordinator waiting on it right now?". Empty is
+   * the honest answer for a layer with no coordinator store: no delegation is
+   * open, so nothing is held.
+   */
+  async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return [];
+  }
+
   private announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     deleted = false,
@@ -298,7 +314,13 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
+          | "origin"
+          | "interactionPolicy"
+          | "controls"
+          | "owner"
+          | "executionPolicy"
+          | "policy"
+          | "initialPromptPresentation"
         >
       >,
     createProviderSession: () => Promise<string>,
@@ -334,12 +356,26 @@ export abstract class StorageNative extends StorageReviews {
         ) {
           throw new Error("Native agent session key collision");
         }
-        if (!existing.owner && input.owner) {
+        if (
+          existing.initialPromptPresentation &&
+          input.initialPromptPresentation &&
+          JSON.stringify(existing.initialPromptPresentation) !==
+            JSON.stringify(input.initialPromptPresentation)
+        ) {
+          throw new Error("Native agent initial prompt presentation cannot change");
+        }
+        if (
+          (!existing.owner && input.owner) ||
+          (!existing.initialPromptPresentation && input.initialPromptPresentation)
+        ) {
           const migratedOwner = {
             ...existing,
-            owner: input.owner,
+            ...(input.owner ? { owner: input.owner } : {}),
             ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
             ...(input.policy ? { policy: input.policy } : {}),
+            ...(input.initialPromptPresentation
+              ? { initialPromptPresentation: input.initialPromptPresentation }
+              : {}),
             updatedAt: nowIso(),
           };
           sessions[input.key] = migratedOwner;
@@ -382,7 +418,13 @@ export abstract class StorageNative extends StorageReviews {
       Partial<
         Pick<
           PersistedNativeAgentSession,
-          "origin" | "interactionPolicy" | "controls" | "owner" | "executionPolicy" | "policy"
+          | "origin"
+          | "interactionPolicy"
+          | "controls"
+          | "owner"
+          | "executionPolicy"
+          | "policy"
+          | "initialPromptPresentation"
         >
       > & {
         expectedProviderSessionId?: string;
@@ -435,11 +477,22 @@ export abstract class StorageNative extends StorageReviews {
           const ownerChanged = !existing.owner && Boolean(input.owner);
           const policyChanged = !existing.executionPolicy && Boolean(input.executionPolicy);
           const normalizedPolicyChanged = !existing.policy && Boolean(input.policy);
+          const promptPresentationChanged =
+            !existing.initialPromptPresentation && Boolean(input.initialPromptPresentation);
+          if (
+            existing.initialPromptPresentation &&
+            input.initialPromptPresentation &&
+            JSON.stringify(existing.initialPromptPresentation) !==
+              JSON.stringify(input.initialPromptPresentation)
+          ) {
+            throw new Error("Native agent initial prompt presentation cannot change");
+          }
           if (
             (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) ||
             ownerChanged ||
             policyChanged ||
-            normalizedPolicyChanged
+            normalizedPolicyChanged ||
+            promptPresentationChanged
           ) {
             const updated: PersistedNativeAgentSession = {
               ...existing,
@@ -447,6 +500,9 @@ export abstract class StorageNative extends StorageReviews {
               ...(input.owner ? { owner: input.owner } : {}),
               ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
               ...(input.policy ? { policy: input.policy } : {}),
+              ...(input.initialPromptPresentation
+                ? { initialPromptPresentation: input.initialPromptPresentation }
+                : {}),
               updatedAt: nowIso(),
             };
             sessions[input.key] = updated;
@@ -486,6 +542,8 @@ export abstract class StorageNative extends StorageReviews {
                       : {}),
                   }
                 : existing.controls,
+              initialPromptPresentation:
+                input.initialPromptPresentation ?? existing.initialPromptPresentation,
             }
           : interactionMetadata),
         version: NATIVE_AGENT_SESSION_VERSION,

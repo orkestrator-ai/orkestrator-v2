@@ -7,6 +7,12 @@ import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
 import { terminalProcesses, terminalSessionConfigs } from "./commands-runtime-state.js";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
+import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 describe("launch_control_job command", () => {
   test("reads and rotates the persistent control MCP credential through backend commands", async () => {
@@ -77,15 +83,41 @@ describe("launch_control_job command", () => {
     if (!command) throw new Error("launch_control_job was not registered");
 
     try {
-      const input = {
-        requestId: "external-request-1",
-        environmentId: "env-1",
-        agent: "codex",
-        title: "Independent job",
-        prompt: "Fix the failing tests.",
-      };
+      const delegation = createCoordinatorDelegatedPrompt(
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+        },
+        "Fix the failing tests.",
+      );
+      const initialPromptPresentation = {
+        kind: COORDINATOR_DELEGATION_PRESENTATION,
+        frame: delegation.frame,
+      } as const;
+      const input = withCoordinatorDelegationPresentation(
+        {
+          requestId: "external-request-1",
+          environmentId: "env-1",
+          agent: "codex",
+          title: "Independent job",
+          prompt: delegation.source,
+        },
+        initialPromptPresentation,
+      );
       const first = (await command(input, context)) as Record<string, unknown>;
       const second = (await command(input, context)) as Record<string, unknown>;
+      await command(
+        {
+          requestId: "untrusted-request-2",
+          environmentId: "env-1",
+          agent: "codex",
+          prompt: delegation.source,
+          initialPromptPresentation,
+        },
+        context,
+      );
 
       expect(first).toMatchObject({
         environmentId: "env-1",
@@ -99,17 +131,21 @@ describe("launch_control_job command", () => {
         agent: "codex",
         logicalSessionKey: `env-env-1:${String(first.tabId)}`,
         sessionMode: "build",
+        initialPromptPresentation,
       });
       expect(dispatched[0]).toMatchObject({
         environmentId: "env-1",
         agent: "codex",
         logicalSessionKey: `env-env-1:${String(first.tabId)}`,
         requestId: "external-request-1",
-        prompt: "Fix the failing tests.",
+        prompt: delegation.source,
+        initialPromptPresentation,
         mode: "build",
       });
+      expect(ensured[2]).not.toHaveProperty("initialPromptPresentation");
+      expect(dispatched[2]).not.toHaveProperty("initialPromptPresentation");
       const layout = await storage.getPaneLayout("env-1");
-      expect(JSON.stringify(layout?.root).match(/"id":"agent-job-/g)).toHaveLength(1);
+      expect(JSON.stringify(layout?.root).match(/"id":"agent-job-/g)).toHaveLength(2);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

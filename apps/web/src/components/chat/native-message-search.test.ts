@@ -70,6 +70,38 @@ describe("getNativeMessageSearchText", () => {
     expect(text).not.toContain("hidden-coordinator");
   });
 
+  test("indexes the visible excerpt and comment of a transcript reference", () => {
+    const message: NativeMessage = {
+      id: "user-reference",
+      role: "user",
+      content: "Check this",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [
+        { type: "text", content: "Check this" },
+        {
+          type: "transcript-reference",
+          content: "Quoted output",
+          reference: 1,
+          comment: "User note",
+        },
+      ],
+    };
+
+    expect(getNativeMessageSearchText(message)).toBe("Check this\n\nQuoted output\n\nUser note");
+  });
+
+  test("indexes a reference-only prompt without inventing a comment source", () => {
+    const message: NativeMessage = {
+      id: "user-reference-only",
+      role: "user",
+      content: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [{ type: "transcript-reference", content: "Only quoted output", reference: 1 }],
+    };
+
+    expect(getNativeMessageSearchText(message)).toBe("Only quoted output");
+  });
+
   test("searches only rendered text parts and strips their Markdown", () => {
     const message: NativeMessage = {
       id: "assistant-1",

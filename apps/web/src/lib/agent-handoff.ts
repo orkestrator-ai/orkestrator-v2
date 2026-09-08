@@ -144,6 +144,7 @@ const OPTIONAL_PART_STRING_FIELDS = [
   "toolError",
   "subagentName",
   "subagentRole",
+  "comment",
 ] as const;
 
 function hasValidOptionalPartStrings(value: Record<string, unknown>): boolean {
@@ -167,6 +168,7 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     typeof value.content !== "string" ||
     ![
       "text",
+      "transcript-reference",
       "async-question",
       "thinking",
       "file",
@@ -181,6 +183,13 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     !hasValidToolDiff(value.toolDiff)
   ) {
     return false;
+  }
+  if (value.type === "transcript-reference") {
+    return (
+      typeof value.reference === "number" &&
+      Number.isSafeInteger(value.reference) &&
+      value.reference > 0
+    );
   }
   if (value.type === "async-question") {
     const asyncQuestion = value.asyncQuestion;
@@ -696,6 +705,12 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
   }
   if (part.type === "text" || part.type === "async-question") {
     return part.content.trim() ? [`${indent}${part.content.trim()}`] : [];
+  }
+  if (part.type === "transcript-reference") {
+    const lines = [`${indent}[REFERENCE ${part.reference}]`];
+    if (part.content.trim()) lines.push(`${indent}${part.content.trim()}`);
+    if (part.comment?.trim()) lines.push(`${indent}comment: ${part.comment.trim()}`);
+    return lines;
   }
   if (part.type === "file") {
     return [`${indent}[FILE] ${part.content || part.fileUrl || "attachment"}`];

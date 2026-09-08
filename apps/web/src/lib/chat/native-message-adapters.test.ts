@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
+import { buildPromptWithTranscriptAnnotations } from "./transcript-annotations";
 import {
   applyClaudeBackgroundTaskStates,
   coalesceAdjacentToolMessages,
@@ -2033,6 +2034,116 @@ describe("native message adapters", () => {
         filename: "layout&notes.png",
       },
     ]);
+  });
+
+  test("renders transcript annotations as structured reference parts for every native agent", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("Can you confirm this?", [
+      {
+        id: "reference-1",
+        text: "The trigger is configured in europe-west2.",
+        comment: "Check it",
+      },
+      { id: "reference-2", text: "Run the deployment", comment: "" },
+    ]);
+    const message: NativeMessage = {
+      id: "native-annotated-prompt",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T14:00:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    const normalized = normalizeNativeMessage(message);
+
+    expect(normalized.content).toBe("Can you confirm this?");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Can you confirm this?" },
+      {
+        type: "transcript-reference",
+        content: "The trigger is configured in europe-west2.",
+        reference: 1,
+        comment: "Check it",
+      },
+      {
+        type: "transcript-reference",
+        content: "Run the deployment",
+        reference: 2,
+      },
+    ]);
+  });
+
+  test("normalizes an annotation-only prompt without losing its reference", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("", [
+      { id: "reference-1", text: "Only quoted context", comment: "Explain this" },
+    ]);
+
+    expect(
+      normalizeNativeMessage({
+        id: "native-reference-only",
+        role: "user",
+        content: rawContent,
+        createdAt: "2026-09-08T14:00:00.000Z",
+        parts: [{ type: "text", content: rawContent }],
+      }),
+    ).toMatchObject({
+      content: "",
+      parts: [
+        {
+          type: "transcript-reference",
+          content: "Only quoted context",
+          reference: 1,
+          comment: "Explain this",
+        },
+      ],
+    });
+  });
+
+  test("renders Claude transcript annotations as structured reference parts", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("Explain", [
+      { id: "reference-1", text: "Quoted Claude output", comment: "Why?" },
+    ]);
+    const normalized = normalizeClaudeMessage({
+      id: "claude-annotated-prompt",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T14:00:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    });
+
+    expect(normalized.content).toBe("Explain");
+    expect(normalized.parts).toEqual([
+      { type: "text", content: "Explain" },
+      {
+        type: "transcript-reference",
+        content: "Quoted Claude output",
+        reference: 1,
+        comment: "Why?",
+      },
+    ]);
+  });
+
+  test("keeps attachments and transcript references as distinct prompt objects", () => {
+    const promptWithAttachment = [
+      "Compare these",
+      '<attached-files><attachment type="image" path="/workspace/shot.png" filename="shot.png" /></attached-files>',
+    ].join("\n");
+    const rawContent = buildPromptWithTranscriptAnnotations(promptWithAttachment, [
+      { id: "reference-1", text: "Earlier answer", comment: "Compare against this" },
+    ]);
+    const normalized = normalizeNativeMessage({
+      id: "native-attachment-and-reference",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T14:00:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    });
+
+    expect(normalized.parts.map((part) => part.type)).toEqual([
+      "text",
+      "file",
+      "transcript-reference",
+    ]);
+    expect(normalized.content).toBe("Compare these");
   });
 
   test("deduplicates a structured file part and preserves the XML filename", () => {

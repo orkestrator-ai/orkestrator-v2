@@ -87,8 +87,17 @@ export const NativeMessage = memo(function NativeMessage({
   const showAssistantFooter = !isUser && !isSystem && !isError && hasContent;
   const userCopyContent = isUser
     ? message.parts
-        .filter((part) => part.type === "text" || part.type === "async-question")
-        .map((part) => part.content)
+        .flatMap((part) => {
+          if (part.type === "text" || part.type === "async-question") return [part.content];
+          if (part.type !== "transcript-reference") return [];
+          return [
+            [
+              `Reference ${part.reference}`,
+              part.content,
+              ...(part.comment ? ["Your comment", part.comment] : []),
+            ].join("\n"),
+          ];
+        })
         .join("\n\n")
         .trim() || message.content
     : "";

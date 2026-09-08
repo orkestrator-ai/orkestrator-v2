@@ -128,6 +128,83 @@ describe("NativeMessage asynchronous questions", () => {
   });
 });
 
+describe("NativeMessage transcript references", () => {
+  afterEach(cleanup);
+
+  test("renders quoted text and the user's comment in a separate reference card", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [
+            { type: "text", content: "Can you confirm this?" },
+            {
+              type: "transcript-reference",
+              content: "The trigger is configured in europe-west2.",
+              reference: 1,
+              comment: "Check whether it exists.",
+            },
+          ],
+          { role: "user", content: "Can you confirm this?" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    const card = screen.getByTestId("transcript-reference-part");
+    expect(card.textContent).toContain("Reference 1");
+    expect(card.textContent).toContain("The trigger is configured in europe-west2.");
+    expect(card.textContent).toContain("Your comment");
+    expect(card.textContent).toContain("Check whether it exists.");
+    expect(card.textContent).not.toContain("orkestrator_transcript_annotations");
+  });
+
+  test("omits the comment section and exposes one search root when no comment exists", () => {
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "transcript-reference", content: "Quoted output", reference: 1 }],
+          { role: "user", content: "" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    const card = screen.getByTestId("transcript-reference-part");
+    expect(card.textContent).toContain("Quoted output");
+    expect(screen.queryByText("Your comment") === null).toBe(true);
+    expect(card.querySelectorAll('[data-agent-chat-search-content="true"]')).toHaveLength(1);
+  });
+
+  test("copies the excerpt and comment from a reference-only prompt", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [
+            {
+              type: "transcript-reference",
+              content: "Quoted output",
+              reference: 1,
+              comment: "User note",
+            },
+          ],
+          { role: "user", content: "" },
+        )}
+        assistantLabel="Codex"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+
+    await waitFor(() =>
+      expect(mockWriteText).toHaveBeenCalledWith(
+        "Reference 1\nQuoted output\nYour comment\nUser note",
+      ),
+    );
+  });
+});
+
 describe("NativeMessage assistant attribution", () => {
   test("shows the backend-confirmed model instead of the static provider label", () => {
     render(

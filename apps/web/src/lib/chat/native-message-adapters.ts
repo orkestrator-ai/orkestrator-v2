@@ -17,6 +17,7 @@ import {
 import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
+import { parsePromptTranscriptReferences } from "./transcript-annotations";
 
 interface AttachmentTag {
   type: string;
@@ -96,6 +97,26 @@ export function parseNativeAttachmentsFromContent(content: string): {
   return { cleanContent, attachments };
 }
 
+function parseNativeUserContent(content: string): {
+  cleanContent: string;
+  parts: NativeMessagePart[];
+} {
+  const parsedReferences = parsePromptTranscriptReferences(content);
+  const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
+  return {
+    cleanContent: parsedAttachments.cleanContent,
+    parts: [
+      ...parsedAttachments.attachments,
+      ...parsedReferences.references.map((reference) => ({
+        type: "transcript-reference" as const,
+        content: reference.selectedText,
+        reference: reference.reference,
+        ...(reference.userComment ? { comment: reference.userComment } : {}),
+      })),
+    ],
+  };
+}
+
 /**
  * True for a tool whose call launches a subagent.
  *
@@ -120,6 +141,7 @@ function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPa
 export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart | null {
   switch (part.type) {
     case "text":
+    case "transcript-reference":
     case "async-question":
     case "thinking":
     case "file":
@@ -171,7 +193,12 @@ function groupTaskParts(
       continue;
     }
 
-    if (part.type === "text" || part.type === "async-question" || part.type === "file") {
+    if (
+      part.type === "text" ||
+      part.type === "transcript-reference" ||
+      part.type === "async-question" ||
+      part.type === "file"
+    ) {
       currentTask = null;
       result.push(part);
       continue;
@@ -462,36 +489,36 @@ function fileAttachmentIdentity(part: NativeFilePart): string {
   return parseLocalFilePathFromUrl(part.content) ?? part.content;
 }
 
-function normalizeNativeUserAttachments(message: NativeMessage): NativeMessage {
+function normalizeNativeUserPresentation(message: NativeMessage): NativeMessage {
   if (message.role !== "user") return message;
 
-  const parsedContent = parseNativeAttachmentsFromContent(message.content);
-  let parsedAttachmentPart = false;
+  const parsedContent = parseNativeUserContent(message.content);
+  let parsedPresentationPart = false;
   const parsedParts = message.parts.flatMap((part): NativeMessagePart[] => {
     if (part.type !== "text") return [part];
 
-    const parsed = parseNativeAttachmentsFromContent(part.content);
+    const parsed = parseNativeUserContent(part.content);
     if (parsed.cleanContent === part.content) return [part];
 
-    parsedAttachmentPart = true;
+    parsedPresentationPart = true;
     return [
       ...(parsed.cleanContent ? [{ ...part, content: parsed.cleanContent }] : []),
-      ...parsed.attachments,
+      ...parsed.parts,
     ];
   });
 
-  const contentHasAttachments = parsedContent.cleanContent !== message.content;
-  if (!parsedAttachmentPart && !contentHasAttachments) return message;
+  const contentHasPresentationObjects = parsedContent.cleanContent !== message.content;
+  if (!parsedPresentationPart && !contentHasPresentationObjects) return message;
 
   let nextParts = parsedParts;
-  if (!parsedAttachmentPart) {
+  if (!parsedPresentationPart) {
     const hasTextPart = nextParts.some((part) => part.type === "text");
     nextParts = [
       ...(!hasTextPart && parsedContent.cleanContent
         ? [{ type: "text" as const, content: parsedContent.cleanContent }]
         : []),
       ...nextParts,
-      ...parsedContent.attachments,
+      ...parsedContent.parts,
     ];
   }
 
@@ -536,12 +563,12 @@ export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
   const cached = normalizedNativeMessageCache.get(message);
   if (cached) return cached;
 
-  const messageWithAttachments = normalizeNativeUserAttachments(message);
+  const messageWithPresentation = normalizeNativeUserPresentation(message);
   const dedupedParts = dropEmptyThinkingParts(
-    dedupeStreamedNativeParts(messageWithAttachments.parts),
+    dedupeStreamedNativeParts(messageWithPresentation.parts),
   );
   const normalized: NativeMessage = {
-    ...messageWithAttachments,
+    ...messageWithPresentation,
     parts: groupNativeAgentActivity(
       groupNativeToolActivity(groupNativeSubagentTaskParts(dedupedParts)),
     ),
@@ -696,16 +723,16 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
 }
 
 function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
-  const { cleanContent, attachments } =
+  const { cleanContent, parts: presentationParts } =
     message.role === "user"
-      ? parseNativeAttachmentsFromContent(message.content)
-      : { cleanContent: message.content, attachments: [] };
+      ? parseNativeUserContent(message.content)
+      : { cleanContent: message.content, parts: [] };
 
   const rawParts =
     message.role === "user"
       ? [
           ...(cleanContent ? [{ type: "text" as const, content: cleanContent }] : []),
-          ...attachments,
+          ...presentationParts,
         ]
       : message.parts
           .map(normalizeClaudePart)
@@ -1251,7 +1278,12 @@ function latestPartCreatedAt(parts: readonly NativeMessagePart[]): string | unde
 }
 
 function isTextSectionPart(part: NativeMessagePart): boolean {
-  return part.type === "text" || part.type === "async-question" || part.type === "file";
+  return (
+    part.type === "text" ||
+    part.type === "transcript-reference" ||
+    part.type === "async-question" ||
+    part.type === "file"
+  );
 }
 
 /**

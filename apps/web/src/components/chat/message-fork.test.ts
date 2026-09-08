@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import {
   buildMessageForkActionKinds,
   buildMessageForkPlan,
@@ -8,7 +10,9 @@ import {
   findNextForkMessage,
   findPreviousForkMessage,
   forkAttachmentNotice,
+  getForkPromptDraft,
   getForkPromptText,
+  reconcileForkPromptDraft,
   type MessageForkBoundary,
 } from "./message-fork";
 
@@ -270,6 +274,40 @@ describe("message fork boundaries", () => {
       ),
     ).toBe("only content");
   });
+
+  test("restores normalized transcript references as structured draft annotations", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("Check this", [
+      { id: "reference-1", text: "Quoted answer", comment: "Verify it" },
+    ]);
+    const normalized = normalizeNativeMessage(
+      message("annotated-user", "user", rawContent, {
+        parts: [{ type: "text", content: rawContent }],
+      }),
+    );
+
+    expect(getForkPromptDraft(normalized)).toEqual({
+      text: "Check this",
+      annotations: [{ id: "fork-reference-1", text: "Quoted answer", comment: "Verify it" }],
+    });
+    expect(
+      reconcileForkPromptDraft(
+        { draftText: "Check this", draftAnnotations: getForkPromptDraft(normalized).annotations },
+        rawContent,
+      ),
+    ).toEqual({
+      text: "Check this",
+      annotations: [{ id: "fork-reference-1", text: "Quoted answer", comment: "Verify it" }],
+    });
+    expect(
+      reconcileForkPromptDraft(
+        { draftText: "Check this", draftAnnotations: getForkPromptDraft(normalized).annotations },
+        "Provider-selected prompt",
+      ),
+    ).toEqual({
+      text: "Provider-selected prompt",
+      annotations: [{ id: "fork-reference-1", text: "Quoted answer", comment: "Verify it" }],
+    });
+  });
 });
 
 describe("fork attachment accounting", () => {
@@ -313,12 +351,44 @@ describe("message fork plan", () => {
       kind: "prompt",
       boundary: { type: "message", messageId: "user-1" },
       draftText: "Add pagination",
+      draftAnnotations: [],
       droppedAttachmentCount: 1,
     });
     expect(plan.get("assistant-1")).toEqual({
       kind: "response",
       boundary: { type: "message", messageId: "assistant-1" },
       draftText: "",
+      draftAnnotations: [],
+      droppedAttachmentCount: 0,
+    });
+  });
+
+  test("carries transcript references into a prompt fork plan", () => {
+    const annotated = withParts(
+      "user-annotated",
+      "user",
+      [
+        { type: "text", content: "Check this" },
+        {
+          type: "transcript-reference",
+          content: "Quoted answer",
+          reference: 1,
+          comment: "Verify it",
+        },
+      ],
+      "Check this",
+    );
+
+    const plan = buildMessageForkPlan([annotated], {
+      responseInProgress: false,
+      ...acceptAll,
+    });
+
+    expect(plan.get("user-annotated")).toEqual({
+      kind: "prompt",
+      boundary: { type: "message", messageId: "user-annotated" },
+      draftText: "Check this",
+      draftAnnotations: [{ id: "fork-reference-1", text: "Quoted answer", comment: "Verify it" }],
       droppedAttachmentCount: 0,
     });
   });

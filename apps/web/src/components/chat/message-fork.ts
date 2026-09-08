@@ -1,6 +1,14 @@
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import { messageHasVisibleContent } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import {
+  MAX_TRANSCRIPT_ANNOTATIONS,
+  normalizeTranscriptAnnotationComment,
+  normalizeTranscriptAnnotationText,
+  parsePromptTranscriptReferences,
+  type PromptTranscriptReference,
+  type TranscriptAnnotation,
+} from "@/lib/chat/transcript-annotations";
 
 export type MessageForkKind = "prompt" | "response";
 
@@ -36,6 +44,8 @@ export interface MessageForkPlanEntry {
   boundary: MessageForkBoundary;
   /** Prompt forks only: text restored into the fork's composer. Otherwise `""`. */
   draftText: string;
+  /** Prompt forks only: transcript references restored into the fork's composer. */
+  draftAnnotations: TranscriptAnnotation[];
   /**
    * Prompt forks only: file parts the restored draft cannot carry.
    *
@@ -123,10 +133,12 @@ export function buildMessageForkPlan(
         : options.resolveResponseBoundary(message, messages);
     if (!boundary) continue;
 
+    const draft = kind === "prompt" ? getForkPromptDraft(message) : null;
     plan.set(message.id, {
       kind,
       boundary,
-      draftText: kind === "prompt" ? getForkPromptText(message) : "",
+      draftText: draft?.text ?? "",
+      draftAnnotations: draft?.annotations ?? [],
       droppedAttachmentCount: kind === "prompt" ? countForkPromptAttachments(message) : 0,
     });
   }
@@ -135,11 +147,63 @@ export function buildMessageForkPlan(
 }
 
 export function getForkPromptText(message: NativeMessage): string {
+  return getForkPromptDraft(message).text;
+}
+
+function referencesToForkAnnotations(
+  references: readonly PromptTranscriptReference[],
+): TranscriptAnnotation[] {
+  return references
+    .slice(0, MAX_TRANSCRIPT_ANNOTATIONS)
+    .map((reference, index) => ({
+      id: `fork-reference-${index + 1}`,
+      text: normalizeTranscriptAnnotationText(reference.selectedText),
+      comment: normalizeTranscriptAnnotationComment(reference.userComment ?? ""),
+    }))
+    .filter((annotation) => annotation.text.length > 0);
+}
+
+export function getForkPromptDraft(message: NativeMessage): {
+  text: string;
+  annotations: TranscriptAnnotation[];
+} {
   const text = message.parts
     .filter((part) => part.type === "text")
     .map((part) => part.content)
     .join("\n\n");
-  return text || message.content;
+  const references = message.parts
+    .filter((part) => part.type === "transcript-reference")
+    .map((part) => ({
+      reference: part.reference,
+      selectedText: part.content,
+      userComment: part.comment ?? null,
+    }));
+  return {
+    text: text || message.content,
+    annotations: referencesToForkAnnotations(references),
+  };
+}
+
+/**
+ * A provider may return the removed prompt as editable text. Recover an
+ * annotation envelope when it does, while retaining the planned structured
+ * references when the provider returns only the clean text.
+ */
+export function reconcileForkPromptDraft(
+  planned: Pick<MessageForkPlanEntry, "draftText" | "draftAnnotations">,
+  providerDraft?: string,
+): { text: string; annotations: TranscriptAnnotation[] } {
+  if (providerDraft === undefined) {
+    return { text: planned.draftText, annotations: planned.draftAnnotations };
+  }
+  const parsed = parsePromptTranscriptReferences(providerDraft);
+  return {
+    text: parsed.cleanPrompt,
+    annotations:
+      parsed.references.length > 0
+        ? referencesToForkAnnotations(parsed.references)
+        : planned.draftAnnotations,
+  };
 }
 
 /**

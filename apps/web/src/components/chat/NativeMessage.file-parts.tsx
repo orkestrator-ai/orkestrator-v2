@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { FileText, Image as ImageIcon, X } from "lucide-react";
+import { FileText, Image as ImageIcon, Quote, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
@@ -17,6 +17,7 @@ import {
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
 import { markdownComponents, USER_PROMPT_COLLAPSED_LINE_COUNT } from "./NativeMessage.shared";
+import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 
 function ImagePreviewOverlay({
   imageSrc,
@@ -325,6 +326,41 @@ export function FilePart({
         <ImagePreviewOverlay imageSrc={imageSrc} filename={displayName} onClose={closePreview} />
       )}
     </>
+  );
+}
+
+/** A quoted transcript excerpt attached to a user prompt. */
+export function TranscriptReferencePart({
+  part,
+}: {
+  part: Extract<NativeMessagePart, { type: "transcript-reference" }>;
+}) {
+  return (
+    <div
+      data-testid="transcript-reference-part"
+      className="my-2 overflow-hidden rounded-md border border-border/70 bg-muted/30"
+    >
+      <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-2 text-xs font-medium text-muted-foreground">
+        <Quote className="size-3.5" aria-hidden="true" />
+        <span>Reference {part.reference}</span>
+      </div>
+      <blockquote
+        data-agent-chat-search-content="true"
+        className="max-h-56 overflow-y-auto border-l-2 border-primary/30 px-3 py-2 text-sm text-foreground/90"
+      >
+        <MessageMarkdown content={part.content} components={markdownComponents} />
+      </blockquote>
+      {part.comment ? (
+        <div className="border-t border-border/60 px-3 py-2 text-sm">
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Your comment
+          </div>
+          <div data-agent-chat-search-content="true">
+            <MessageMarkdown content={part.comment} components={markdownComponents} />
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

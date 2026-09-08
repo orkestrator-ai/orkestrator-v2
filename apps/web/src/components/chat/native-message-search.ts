@@ -124,8 +124,17 @@ export function markdownToAgentSearchText(markdown: string): string {
 
 function textPartSources(parts: readonly NativeMessagePart[]): string[] {
   return parts
-    .filter((part) => part.type === "text" || part.type === "async-question")
-    .map((part) => part.content);
+    .filter(
+      (part) =>
+        part.type === "text" ||
+        part.type === "transcript-reference" ||
+        part.type === "async-question",
+    )
+    .flatMap((part) =>
+      part.type === "transcript-reference" && part.comment
+        ? [part.content, part.comment]
+        : [part.content],
+    );
 }
 
 /**

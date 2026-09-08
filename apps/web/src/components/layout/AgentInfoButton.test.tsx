@@ -6,6 +6,8 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -258,6 +260,20 @@ function cursorTab(overrides: Partial<TabInfo> = {}): TabInfo {
   } as TabInfo;
 }
 
+function buildTab(overrides: Partial<TabInfo> = {}): TabInfo {
+  return {
+    id: "build-tab",
+    type: "claude-build",
+    buildTabData: {
+      environmentId: ENVIRONMENT_ID,
+      pipelineId: "pipeline-1",
+      taskId: "task-1",
+      isLocal: true,
+    },
+    ...overrides,
+  } as TabInfo;
+}
+
 function usage(overrides: Partial<ContextUsageSnapshot> = {}): ContextUsageSnapshot {
   return {
     usedTokens: 25_000,
@@ -267,6 +283,42 @@ function usage(overrides: Partial<ContextUsageSnapshot> = {}): ContextUsageSnaps
     source: "claude",
     updatedAt: "2026-07-26T12:00:00.000Z",
     ...overrides,
+  };
+}
+
+function buildStageProjection(
+  platform: "claude" | "codex" | "opencode",
+  sessionId: string,
+): NativeAgentSessionProjection {
+  return {
+    platform,
+    environmentId: ENVIRONMENT_ID,
+    sessionId,
+    connection: "connected",
+    turn: { phase: "running" },
+    messages: [
+      {
+        id: "build-user-message",
+        role: "user",
+        content: "Build the feature",
+        parts: [{ type: "text", content: "Build the feature" }],
+        createdAt: "2026-09-08T10:00:00.000Z",
+      },
+    ],
+    interactions: [],
+    composerControls: [],
+    composer: {
+      models: [],
+      fastModeEnabled: false,
+      fastModeAvailable: false,
+      modes: [],
+      executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+      includeLocalSettings: false,
+      promptSuggestionsEnabled: false,
+    },
+    capabilities: nativeAgentCapabilities(platform),
+    revision: 1,
+    generation: `${platform}-build-generation`,
   };
 }
 
@@ -364,6 +416,11 @@ const originalConfirm = window.confirm;
 
 beforeEach(() => {
   useNativeAgentProjectionStore.getState().reset();
+  useBuildPipelineStore.setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+    viewedSessionIds: new Map(),
+  });
   confirmResult = true;
   confirmMessages = [];
   clipboardWrites = [];
@@ -516,6 +573,11 @@ afterEach(() => {
     environments: new Map(),
     activeEnvironmentId: null,
   } as never);
+  useBuildPipelineStore.setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+    viewedSessionIds: new Map(),
+  });
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
@@ -754,6 +816,173 @@ describe("AgentInfoButton provider resolution", () => {
 
     expect(screen.getByText("Codex Native")).toBeTruthy();
     expect(screen.getByText("gpt-5.3-codex")).toBeTruthy();
+  });
+
+  test("uses the build tab's selected stage as the active native session", async () => {
+    const sessions = [
+      {
+        phase: "build" as const,
+        agent: "codex" as const,
+        iteration: 0,
+        sessionKey: "pipeline-build-key",
+        sdkSessionId: "pipeline-build-session",
+        status: "idle" as const,
+        startedAt: "2026-09-08T10:00:00.000Z",
+        label: "Build Session",
+      },
+      {
+        phase: "verify" as const,
+        agent: "opencode" as const,
+        iteration: 0,
+        sessionKey: "pipeline-verify-key",
+        sdkSessionId: "pipeline-verify-session",
+        status: "running" as const,
+        startedAt: "2026-09-08T10:01:00.000Z",
+        label: "Verification Session",
+      },
+    ];
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          "pipeline-1",
+          buildPipelineFixture({
+            environmentId: ENVIRONMENT_ID,
+            sessions,
+            currentSessionIndex: 1,
+          }),
+        ],
+      ]),
+      buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
+      viewedSessionIds: new Map([["pipeline-1", "pipeline-build-session"]]),
+    });
+    useCodexStore.setState({
+      contextUsage: new Map([["pipeline-build-key", usage({ source: "codex" })]]),
+      selectedModel: new Map([["pipeline-build-key", "gpt-5.3-codex"]]),
+    } as never);
+
+    render(<AgentInfoButton activeTab={buildTab()} />);
+    open();
+
+    expect(screen.getByText("Codex Native")).toBeTruthy();
+    expect(screen.getByText("gpt-5.3-codex")).toBeTruthy();
+    await waitFor(() =>
+      expect(nativeInvokeMock).toHaveBeenCalledWith("get_build_pipeline_session_projection", {
+        pipelineId: "pipeline-1",
+        sessionKey: "pipeline-build-key",
+        refreshUsage: true,
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
+  });
+
+  test.each([
+    ["claude", ["Fork session", "Compact", "Rewind files"]],
+    ["codex", ["Fork session", "Compact", "Review changes"]],
+    ["opencode", ["Fork session", "Compact", "Undo turn", "Share…", "Redo turn"]],
+  ] as const)("keeps %s build-stage mutations hidden after projection", async (agent, actions) => {
+    const sessionId = `${agent}-build-session`;
+    const sessionKey = `${agent}-build-key`;
+    const snapshot = buildPipelineFixture({
+      environmentId: ENVIRONMENT_ID,
+      agentType: agent,
+      sessions: [
+        {
+          phase: "build",
+          agent,
+          iteration: 0,
+          sessionKey,
+          sdkSessionId: sessionId,
+          status: "running",
+          startedAt: "2026-09-08T10:00:00.000Z",
+          label: "Build Session",
+        },
+      ],
+      currentSessionIndex: 0,
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", snapshot]]),
+      buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
+      viewedSessionIds: new Map(),
+    });
+    nativeInvokeMock.mockImplementation((command: string) =>
+      command === "get_build_pipeline_session_projection"
+        ? Promise.resolve(buildStageProjection(agent, sessionId))
+        : command === "get_cursor_account_usage"
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+    );
+
+    render(<AgentInfoButton activeTab={buildTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.sessionId).toBe(
+        sessionId,
+      ),
+    );
+    for (const action of actions) {
+      expect(screen.queryByRole("button", { name: action }) === null).toBe(true);
+    }
+    expect(screen.queryByText("Execution profile") === null).toBe(true);
+    expect(screen.queryByText("Session options") === null).toBe(true);
+    expect(screen.queryByText("Active turn") === null).toBe(true);
+  });
+
+  test("does not reinspect an unchanged selected stage on pipeline revisions", async () => {
+    const session = {
+      phase: "build" as const,
+      agent: "codex" as const,
+      iteration: 0,
+      sessionKey: "stable-build-key",
+      sdkSessionId: "stable-build-session",
+      status: "running" as const,
+      startedAt: "2026-09-08T10:00:00.000Z",
+      label: "Build Session",
+    };
+    const snapshot = buildPipelineFixture({
+      environmentId: ENVIRONMENT_ID,
+      sessions: [session],
+      currentSessionIndex: 0,
+      backendRevision: 1,
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", snapshot]]),
+      buildEnvironmentIds: new Set([ENVIRONMENT_ID]),
+      viewedSessionIds: new Map(),
+    });
+    nativeInvokeMock.mockImplementation((command: string) =>
+      command === "get_build_pipeline_session_projection"
+        ? Promise.resolve(buildStageProjection("codex", session.sdkSessionId))
+        : command === "get_cursor_account_usage"
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+    );
+
+    render(<AgentInfoButton activeTab={buildTab()} />);
+    open();
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.filter(
+          ([command]) => command === "get_build_pipeline_session_projection",
+        ),
+      ).toHaveLength(1),
+    );
+
+    act(() => {
+      useBuildPipelineStore
+        .getState()
+        .replacePipeline({ ...snapshot, backendRevision: 2, taskTitle: "Revision 2" });
+      useBuildPipelineStore
+        .getState()
+        .replacePipeline({ ...snapshot, backendRevision: 3, taskTitle: "Revision 3" });
+    });
+    await act(async () => Promise.resolve());
+
+    expect(
+      nativeInvokeMock.mock.calls.filter(
+        ([command]) => command === "get_build_pipeline_session_projection",
+      ),
+    ).toHaveLength(1);
   });
 });
 

@@ -1,7 +1,17 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { isStartBuildPipelineInput } from "./commands-dependencies.js";
+import {
+  isBuildPipeline,
+  isStartBuildPipelineInput,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "./commands-dependencies.js";
 import type { StartBuildPipelineInput } from "./commands-dependencies.js";
-import { asString, asBoolean, asNonBlankString, toClientEnvironment } from "./commands-helpers.js";
+import {
+  asString,
+  asBoolean,
+  asNonBlankString,
+  asRequiredBoolean,
+  toClientEnvironment,
+} from "./commands-helpers.js";
 import { createFeatureBuild } from "./feature-build.js";
 
 export function registerBuildPipelineCommands(
@@ -144,6 +154,42 @@ export function registerBuildPipelineCommands(
         };
       }
       return record;
+    },
+  );
+  register(
+    "get_build_pipeline_session_projection",
+    async ({ pipelineId, sessionKey, refreshUsage }, context) => {
+      if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+      const id = asNonBlankString(pipelineId, "pipelineId");
+      const key = asNonBlankString(sessionKey, "sessionKey");
+      const shouldRefreshUsage =
+        refreshUsage === undefined ? undefined : asRequiredBoolean(refreshUsage, "refreshUsage");
+      const record = await context.storage.getBuildPipeline(id);
+      const snapshot = record?.snapshot;
+      const pipeline =
+        record && snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+          ? { ...snapshot, controller: "backend" as const, backendRevision: record.revision }
+          : null;
+      if (!pipeline || !isBuildPipeline(pipeline)) {
+        throw new Error("Build pipeline is unavailable");
+      }
+      const session = pipeline.sessions.find((candidate) => candidate.sessionKey === key);
+      if (!session) throw new Error("Build pipeline session is unavailable");
+      const agent = session.agent ?? pipeline.agentType;
+      const identity = {
+        environmentId: pipeline.environmentId,
+        agent,
+        logicalSessionKey: session.sessionKey,
+      };
+      return context.nativeAgents.inspectSession({
+        ...identity,
+        providerSessionId: session.sdkSessionId,
+        origin: session.origin ?? "build-pipeline",
+        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        title: session.label,
+        phase: session.phase,
+        refreshUsage: shouldRefreshUsage,
+      });
     },
   );
   register("list_build_pipelines", async (args, { storage }) =>

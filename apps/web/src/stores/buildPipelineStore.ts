@@ -35,6 +35,8 @@ interface BuildPipelineState {
   /** Backend snapshots cached for rendering; never authored by this store. */
   pipelines: Map<string, BuildPipeline>;
   buildEnvironmentIds: Set<string>;
+  /** Renderer-only stage selection shared by the build tab and shell info pane. */
+  viewedSessionIds: Map<string, string>;
 
   /** The only insertion/update path: replace with an authoritative snapshot. */
   replacePipeline: (pipeline: BuildPipeline) => void;
@@ -42,6 +44,7 @@ interface BuildPipelineState {
   removePipeline: (pipelineId: string) => void;
   removePipelinesForTask: (taskId: string) => void;
   removePipelinesForEnvironment: (environmentId: string) => void;
+  setViewedSessionId: (pipelineId: string, sessionId: string | null) => void;
 
   getPipelineByTaskId: (taskId: string) => BuildPipeline | undefined;
   getPipelineForGitHubIssue: (
@@ -73,6 +76,7 @@ function without(
 export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
   pipelines: new Map(),
   buildEnvironmentIds: new Set(),
+  viewedSessionIds: new Map(),
 
   replacePipeline: (pipeline) => {
     if (!isBuildPipeline(pipeline)) {
@@ -97,9 +101,12 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       if (!state.pipelines.has(pipelineId)) return state;
       const pipelines = new Map(state.pipelines);
       pipelines.delete(pipelineId);
+      const viewedSessionIds = new Map(state.viewedSessionIds);
+      viewedSessionIds.delete(pipelineId);
       return {
         pipelines,
         buildEnvironmentIds: environmentIds(pipelines),
+        viewedSessionIds,
       };
     }),
 
@@ -107,9 +114,13 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipelines = without(state.pipelines, (pipeline) => pipeline.taskId === taskId);
       if (pipelines.size === state.pipelines.size) return state;
+      const viewedSessionIds = new Map(
+        Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
+      );
       return {
         pipelines,
         buildEnvironmentIds: environmentIds(pipelines),
+        viewedSessionIds,
       };
     }),
 
@@ -120,10 +131,23 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         (pipeline) => pipeline.environmentId === environmentId,
       );
       if (pipelines.size === state.pipelines.size) return state;
+      const viewedSessionIds = new Map(
+        Array.from(state.viewedSessionIds).filter(([pipelineId]) => pipelines.has(pipelineId)),
+      );
       return {
         pipelines,
         buildEnvironmentIds: environmentIds(pipelines),
+        viewedSessionIds,
       };
+    }),
+
+  setViewedSessionId: (pipelineId, sessionId) =>
+    set((state) => {
+      if (state.viewedSessionIds.get(pipelineId) === sessionId) return state;
+      const viewedSessionIds = new Map(state.viewedSessionIds);
+      if (sessionId) viewedSessionIds.set(pipelineId, sessionId);
+      else viewedSessionIds.delete(pipelineId);
+      return { viewedSessionIds };
     }),
 
   getPipelineByTaskId: (taskId) =>

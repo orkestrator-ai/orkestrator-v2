@@ -44,6 +44,7 @@ describe("buildPipelineStore backend projection", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
+      viewedSessionIds: new Map(),
     });
   });
 
@@ -202,10 +203,15 @@ describe("buildPipelineStore backend projection", () => {
         environmentId: "env-2",
       }),
     );
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
 
     useBuildPipelineStore.getState().removePipeline("pipeline-1");
     expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-2"]);
     expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-2"]));
+    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+      new Map([["pipeline-2", "session-2"]]),
+    );
 
     const stateBefore = useBuildPipelineStore.getState();
     useBuildPipelineStore.getState().removePipeline("missing");
@@ -228,10 +234,16 @@ describe("buildPipelineStore backend projection", () => {
         environmentId: "env-3",
       }),
     );
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-3", "session-3");
 
     useBuildPipelineStore.getState().removePipelinesForTask("task-1");
     expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-3"]);
     expect(useBuildPipelineStore.getState().buildEnvironmentIds).toEqual(new Set(["env-3"]));
+    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+      new Map([["pipeline-3", "session-3"]]),
+    );
   });
 
   test("removes all projections for a deleted environment", () => {
@@ -250,9 +262,29 @@ describe("buildPipelineStore backend projection", () => {
         environmentId: "env-3",
       }),
     );
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-2", "session-2");
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-3", "session-3");
 
     useBuildPipelineStore.getState().removePipelinesForEnvironment("env-1");
     expect([...useBuildPipelineStore.getState().pipelines.keys()]).toEqual(["pipeline-3"]);
+    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+      new Map([["pipeline-3", "session-3"]]),
+    );
+  });
+
+  test("sets, preserves, and clears the viewed session for one pipeline", () => {
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
+    expect(useBuildPipelineStore.getState().viewedSessionIds).toEqual(
+      new Map([["pipeline-1", "session-1"]]),
+    );
+
+    const stateBefore = useBuildPipelineStore.getState();
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", "session-1");
+    expect(useBuildPipelineStore.getState()).toBe(stateBefore);
+
+    useBuildPipelineStore.getState().setViewedSessionId("pipeline-1", null);
+    expect(useBuildPipelineStore.getState().viewedSessionIds.size).toBe(0);
   });
 
   test("queries by task, id, and active environment", () => {

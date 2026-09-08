@@ -197,12 +197,15 @@ export function BuildChatTab({
   const instanceId = useId();
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(data.pipelineId));
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
+  const selectedSessionId = useBuildPipelineStore(
+    (state) => state.viewedSessionIds.get(data.pipelineId) ?? null,
+  );
+  const setViewedSessionId = useBuildPipelineStore((state) => state.setViewedSessionId);
   // Images the agent wrote inside a Dockerised environment are readable only
   // through its container, exactly as in the native tabs.
   const containerId =
     useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
     undefined;
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
@@ -241,10 +244,13 @@ export function BuildChatTab({
   const mobileViewPanelId = (view: MobileView) =>
     view === "stages" ? stagesPanelId : transcriptPanelId;
 
-  const pinSession = useCallback((sessionId: string) => {
-    pinnedSessionRef.current = true;
-    setSelectedSessionId(sessionId);
-  }, []);
+  const pinSession = useCallback(
+    (sessionId: string) => {
+      pinnedSessionRef.current = true;
+      setViewedSessionId(data.pipelineId, sessionId);
+    },
+    [data.pipelineId, setViewedSessionId],
+  );
 
   const selectSession = (sessionId: string, disappearingTrigger?: HTMLElement) => {
     pinSession(sessionId);
@@ -288,7 +294,7 @@ export function BuildChatTab({
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
-      setSelectedSessionId(null);
+      setViewedSessionId(data.pipelineId, null);
       pinnedSessionRef.current = false;
       return;
     }
@@ -303,8 +309,14 @@ export function BuildChatTab({
       pipeline.sessions[pipeline.currentSessionIndex]?.sdkSessionId ??
       pipeline.sessions.at(-1)?.sdkSessionId ??
       null;
-    if (following !== selectedSessionId) setSelectedSessionId(following);
-  }, [pipeline?.currentSessionIndex, pipeline?.sessions, selectedSessionId]);
+    if (following !== selectedSessionId) setViewedSessionId(data.pipelineId, following);
+  }, [
+    data.pipelineId,
+    pipeline?.currentSessionIndex,
+    pipeline?.sessions,
+    selectedSessionId,
+    setViewedSessionId,
+  ]);
 
   const selectedSession = pipeline?.sessions.find(
     (session) => session.sdkSessionId === selectedSessionId,

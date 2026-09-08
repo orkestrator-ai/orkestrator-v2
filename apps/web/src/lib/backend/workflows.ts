@@ -698,6 +698,22 @@ export async function getBuildPipeline<T = unknown>(
   return invoke<PersistedBuildPipeline<T> | null>("get_build_pipeline", { pipelineId });
 }
 
+/**
+ * Resolve one backend-owned build stage through the same native projection used
+ * by an ordinary agent tab. The backend validates both identifiers against the
+ * persisted pipeline before adopting the provider session for inspection.
+ */
+export async function getBuildPipelineSessionProjection<TMessage = unknown>(input: {
+  pipelineId: string;
+  sessionKey: string;
+  refreshUsage?: boolean;
+}): Promise<NativeAgentSessionProjection<TMessage> | null> {
+  return invoke<NativeAgentSessionProjection<TMessage> | null>(
+    "get_build_pipeline_session_projection",
+    input,
+  );
+}
+
 export type ConditionalBuildPipeline<T> =
   | { unchanged: true; revision: number }
   | {

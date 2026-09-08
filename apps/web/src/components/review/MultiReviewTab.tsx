@@ -16,6 +16,7 @@ import {
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
   type MultiReviewPhase,
+  type MultiReviewStepKind,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
@@ -315,26 +316,68 @@ export function reviewerProgressSummary(reviewers: MultiReviewWorkflow["reviewer
   return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
 }
 
+/**
+ * The one runtime line every card shows: elapsed time, then what the turn cost.
+ *
+ * A turn that never recorded an end is not given one here — an unsettled turn
+ * that is no longer running has no honest elapsed time, so only its measured
+ * consumption is reported.
+ */
+function runtimeSummary(
+  timing: { startedAt?: string; completedAt?: string; tokenCount?: number },
+  running: boolean,
+  now: number,
+): string | null {
+  if (!timing.startedAt) return null;
+  const startedAt = Date.parse(timing.startedAt);
+  if (!Number.isFinite(startedAt)) return null;
+  const tokens =
+    timing.tokenCount === undefined ? null : `${formatTokenCount(timing.tokenCount)} tokens`;
+  const completedAt = timing.completedAt ? Date.parse(timing.completedAt) : Number.NaN;
+  const activelyRunning = running && !Number.isFinite(completedAt);
+  if (!activelyRunning && !Number.isFinite(completedAt)) return tokens;
+  const end = activelyRunning ? now : completedAt;
+  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
+  if (!tokens) return activelyRunning ? `${elapsed} · Tokens pending` : elapsed;
+  return `${elapsed} · ${tokens}`;
+}
+
 export function reviewerRuntimeSummary(
   reviewer: MultiReviewWorkflow["reviewers"][number],
   now = Date.now(),
 ): string | null {
-  if (!reviewer.startedAt) return null;
-  const startedAt = Date.parse(reviewer.startedAt);
-  if (!Number.isFinite(startedAt)) return null;
-  const running = reviewer.status === "running";
-  const completedAt = reviewer.completedAt ? Date.parse(reviewer.completedAt) : Number.NaN;
-  if (!running && !Number.isFinite(completedAt)) {
-    return reviewer.tokenCount === undefined
-      ? null
-      : `${formatTokenCount(reviewer.tokenCount)} tokens`;
+  return runtimeSummary(reviewer, reviewer.status === "running", now);
+}
+
+const STEP_REQUEST_KIND: Record<MultiReviewStepKey, MultiReviewStepKind> = {
+  package: "prepare",
+  consolidation: "consolidate",
+  fix: "fix",
+};
+
+/**
+ * Preparation, consolidation and the fix turn each report their own runtime.
+ *
+ * The backend records them per step because the three share one provider
+ * session whose clock and token counter every dispatch resets. Workflows that
+ * predate those records still have only the shared session, which can be read
+ * for whichever step is using it now.
+ */
+export function multiReviewStepRuntimeSummary(
+  workflow: MultiReviewWorkflow,
+  step: MultiReviewStepKey,
+  running: boolean,
+  now = Date.now(),
+): string | null {
+  if (workflow.stepRuntimes) {
+    // A step this workflow has records for but no record of has not run yet,
+    // and must not borrow the shared session's clock from the step that has.
+    const runtime = workflow.stepRuntimes[STEP_REQUEST_KIND[step]];
+    return runtime ? runtimeSummary(runtime, running, now) : null;
   }
-  const end = running ? now : completedAt;
-  const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  if (reviewer.tokenCount === undefined) {
-    return running ? `${elapsed} · Tokens pending` : elapsed;
-  }
-  return `${elapsed} · ${formatTokenCount(reviewer.tokenCount)} tokens`;
+  return fixSessionRuntimeStep(workflow) === step && workflow.fixSession
+    ? fixSessionRuntimeSummary(workflow.fixSession, now)
+    : null;
 }
 
 const NOTE_TONE_CLASS = {
@@ -493,7 +536,11 @@ function MultiReviewOverviewTab({
   const hasRunningReviewer = workflow?.reviewers.some(
     (reviewer) => reviewer.status === "running" && reviewer.startedAt,
   );
-  const hasRunningFixSession = workflow?.fixSession?.status === "running";
+  const hasRunningFixSession =
+    workflow?.fixSession?.status === "running" ||
+    (workflow?.phase === "interactive" &&
+      workflow.stepRuntimes?.fix !== undefined &&
+      workflow.stepRuntimes.fix.completedAt === undefined);
   const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession);
 
   useEffect(() => {
@@ -713,13 +760,11 @@ function MultiReviewOverviewTab({
       workflow.phase === "consolidating" ||
       workflow.phase === "fixing") &&
     workflow.fixSession?.stalledSince !== undefined;
-  const fixRuntimeSummary = workflow.fixSession
-    ? fixSessionRuntimeSummary(workflow.fixSession, reviewPanelNow)
-    : null;
   const packageStatus = reviewPackageGenerationStep(workflow);
   const consolidationStatus = consolidationStep(workflow);
   const fixStatus = fixStep(workflow);
-  const runtimeStep = fixSessionRuntimeStep(workflow);
+  const stepRuntime = (step: MultiReviewStepKey, status: MultiReviewStepStatus): string | null =>
+    multiReviewStepRuntimeSummary(workflow, step, status.state === "running", reviewPanelNow);
   // Every step reuses the one provider session, so a step that has been reached
   // can be opened for as long as that session exists — including after it failed
   // or was cancelled, which is exactly when its transcript is worth reading.
@@ -777,7 +822,7 @@ function MultiReviewOverviewTab({
             status={packageStatus}
             stalled={workflow.phase === "preparing" && fixSessionStalled}
             fixModel={workflow.fixModel}
-            runtime={runtimeStep === "package" ? fixRuntimeSummary : null}
+            runtime={stepRuntime("package", packageStatus)}
             runtimeLabel="Review package generation runtime"
             openLabel="Open review package generation session"
             openTitle={stepOpenTitle(
@@ -972,7 +1017,7 @@ function MultiReviewOverviewTab({
             status={consolidationStatus}
             stalled={workflow.phase === "consolidating" && fixSessionStalled}
             fixModel={workflow.fixModel}
-            runtime={runtimeStep === "consolidation" ? fixRuntimeSummary : null}
+            runtime={stepRuntime("consolidation", consolidationStatus)}
             runtimeLabel="Consolidation runtime"
             openLabel="Open consolidation session"
             openTitle={stepOpenTitle(
@@ -991,7 +1036,7 @@ function MultiReviewOverviewTab({
             status={fixStatus}
             stalled={workflow.phase === "fixing" && fixSessionStalled}
             fixModel={workflow.fixModel}
-            runtime={runtimeStep === "fix" ? fixRuntimeSummary : null}
+            runtime={stepRuntime("fix", fixStatus)}
             runtimeLabel="Fix runtime"
             openLabel="Open fix model session"
             openTitle={stepOpenTitle(

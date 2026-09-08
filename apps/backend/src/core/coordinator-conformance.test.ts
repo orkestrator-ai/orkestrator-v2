@@ -4,8 +4,12 @@ import {
   claudeDeniedTools,
   claudeReadOnlyAllowedTools,
   claudeReadOnlySandbox,
+  isReadOnlyShellCommand,
 } from "../../../../bridges/claude-bridge/src/services/read-only-policy.js";
-import type { CoordinatorProviderTier } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_ASYNC_CONTRACT,
+  type CoordinatorProviderTier,
+} from "@orkestrator/protocol/coordinator";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -115,5 +119,26 @@ describe("coordinator read-only conformance", () => {
           .delegation,
       ).toBe(true);
     }
+  });
+  test("a coordinator turn has no way to sit and wait", () => {
+    const allowed = claudeReadOnlyAllowedTools({ agentMcpServerNames: ["orkestrator"] });
+    // Waiting is the failure mode this whole design removes: a turn that sleeps
+    // holds the conversation open, bills for the wait, and blocks the user from
+    // saying anything else. Delegated work reports back by waking the
+    // conversation, so nothing here needs to exist.
+    for (const tool of ["Monitor", "ScheduleWakeup", "CronCreate", "CronList", "CronDelete"]) {
+      expect(allowed).not.toContain(tool);
+    }
+    for (const command of ["sleep", "watch", "timeout"]) {
+      expect(isReadOnlyShellCommand(command + " 5").allowed).toBe(false);
+    }
+  });
+
+  test("the async contract is one string, so no surface can disagree about it", () => {
+    // The context prompt, the tool results and the poll guard's refusal all read
+    // this. Two descriptions of when a coordinator is woken is a reason to poll.
+    expect(COORDINATOR_ASYNC_CONTRACT).toContain("woken");
+    expect(COORDINATOR_ASYNC_CONTRACT).toContain("Do not wait, sleep, poll");
+    expect(COORDINATOR_ASYNC_CONTRACT).toContain("silence means the work is still running");
   });
 });

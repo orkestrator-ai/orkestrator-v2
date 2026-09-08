@@ -49,6 +49,7 @@ import { createProject } from "./storage.js";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
+  COORDINATOR_ASYNC_CONTRACT,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 
@@ -3594,6 +3595,10 @@ describe("NativeAgentService", () => {
       expect(sent).toContain("Inspect this");
       expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
       expect(sent).toContain("Provider sub-agents remain inside this coordinator session");
+      // A coordinator that can delegate is told, in the same breath, that
+      // delegating ends its turn. Without this it has every reason to sit and
+      // poll its mailbox, which is what the composer lock used to look like.
+      expect(sent).toContain(COORDINATOR_ASYNC_CONTRACT);
       // The conversation's own platform, not a bare availability question.
       expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(

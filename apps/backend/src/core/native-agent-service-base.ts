@@ -1,5 +1,6 @@
 import * as shared from "./native-agent-service-shared.js";
 import {
+  COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   COORDINATOR_EXECUTION_POLICY,
@@ -460,7 +461,8 @@ export abstract class NativeAgentServiceBase {
       const delegation = this.options.coordinatorDelegationAvailable?.(
         coordinator.conversation.agent,
       )
-        ? `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n`
+        ? `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
+          `${COORDINATOR_ASYNC_CONTRACT}\n`
         : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,

@@ -116,3 +116,27 @@ completion notices are durable and can wake an idle participant, but stored,
 injected, acknowledged, and completed remain distinct states. Pause or mute
 messaging, or set a mailbox's injection policy explicitly to **Off**, to hold
 automatic delivery.
+
+## Delegation is asynchronous
+
+A coordinator turn ends when it has delegated. It does not wait for the worker,
+so the composer stays open and the next thing you type runs as the next turn —
+before any worker mail, which is held behind a queued prompt on purpose.
+
+Each launch, job, or message to a worker opens one **delegation**, and each
+delegation wakes the conversation exactly once, when that worker's turn ends.
+Nothing the worker does in between reaches the coordinator: progress mail is
+stored and readable, but held, and released together with the final report so
+one delegation produces one turn rather than one per message. A worker that
+finishes without reporting still wakes its coordinator, with a notice saying so.
+A worker blocked on an approval or a question has not finished — that needs a
+person. The toolbar keeps showing that the selected conversation is waiting on
+the worker without inferring tab-level attention from an environment-wide
+status.
+
+Because a coordinator is woken rather than waiting, it has no reason to poll.
+Repeatedly reading an unchanged mailbox returns the page with the delegation
+contract attached, and the platforms hold the same line at the tool
+level: Claude's read-only shell has no `sleep`, `watch` or `timeout`, and its
+scheduling and monitoring tools are refused with an explanation rather than a
+bare denial.

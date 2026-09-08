@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   GitBranch,
+  Hourglass,
   Loader2,
   LockKeyhole,
   Pause,
@@ -35,6 +36,7 @@ import * as backend from "@/lib/backend";
 import { cn, createSessionKey } from "@/lib/utils";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useProjectStore } from "@/stores/projectStore";
 
 interface CoordinatorPanelProps {
@@ -201,6 +203,37 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selected = conversations.find(
     (item) => item.id === snapshot?.workspace.selectedConversationId,
   );
+  const environments = useEnvironmentStore((state) => state.environments);
+  /*
+   * Workers this coordinator is still owed an answer by.
+   *
+   * Derived from the snapshot's durable associations rather than anything this
+   * component observed, so it is correct on a fresh mount, after a reload, and
+   * after the page was closed for an hour — the coordinator keeps waiting while
+   * nobody is looking at it.
+   *
+   * Associations are project-wide, so the selected conversation identity is a
+   * load-bearing filter rather than presentation state.
+   */
+  const awaitingWorkers = useMemo(() => {
+    if (!snapshot || !selected) return [];
+    return snapshot.workflows.flatMap((association) => {
+      if (
+        association.coordinatorId !== snapshot.workspace.id ||
+        association.conversationId !== selected.id ||
+        association.delegation?.state !== "running"
+      )
+        return [];
+      const environment = environments.find((item) => item.id === association.resourceId);
+      return [
+        {
+          id: association.id,
+          environmentId: association.resourceId,
+          label: environment?.name ?? association.resourceId,
+        },
+      ];
+    });
+  }, [snapshot, selected, environments]);
   // Scoped to the conversation that produced it, so switching tabs during
   // assignment cannot replay one conversation's first prompt into another.
   const launchForSelected =
@@ -367,6 +400,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           >
             Context r{snapshot.workspace.repositoryContextRevision}
           </span>
+          {awaitingWorkers.length > 0 ? (
+            <span
+              className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
+              title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
+                .map((worker) => worker.label)
+                .join("\n")}`}
+            >
+              <Hourglass className="size-3" />
+              Waiting on {awaitingWorkers.length}{" "}
+              {awaitingWorkers.length === 1 ? "worker" : "workers"}
+            </span>
+          ) : null}
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}

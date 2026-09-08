@@ -171,7 +171,25 @@ export class OrkestratorBackend {
       await handler({ environmentId }, context);
     };
     this.context = context;
-    this.coordinators = new CoordinatorService(storage, () => this.controlMcp.getSettings());
+    this.coordinators = new CoordinatorService(
+      storage,
+      () => this.controlMcp.getSettings(),
+      undefined,
+      async (environmentId, tabId) => {
+        const logicalSessionKey = `env-${environmentId}:${tabId}`;
+        const session = (await storage.listNativeAgentSessions()).find(
+          (candidate) =>
+            candidate.environmentId === environmentId &&
+            candidate.logicalSessionKey === logicalSessionKey,
+        );
+        if (!session) return "unknown";
+        return this.nativeAgents.sessionActivitySnapshot(
+          environmentId,
+          session.agent,
+          logicalSessionKey,
+        );
+      },
+    );
     context.coordinators = this.coordinators;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
@@ -204,7 +222,66 @@ export class OrkestratorBackend {
           // A first observation (`previousState === undefined`) is a backend
           // restart or a newly adopted session, not a turn that ended here.
           if (isAgentTurnEndTransition(event)) {
-            this.probeForAgentCreatedPullRequest(event.environmentId, context);
+            // A coordinator has no environment row and no PR to probe for.
+            if (event.owner !== "coordinator") {
+              this.probeForAgentCreatedPullRequest(event.environmentId, context);
+            }
+            /*
+             * The turn that was holding this session's work just ended, so the
+             * things that were waiting for it can run now rather than on the
+             * next two-second sweep. Both drains coalesce internally, so the
+             * extra call costs nothing when a sweep is already in flight — and
+             * this is what turns a worker's report into a wake within the
+             * dispatch latency instead of the mail backoff, which for a
+             * coordinator could previously reach thirty seconds.
+             */
+            void this.nativeAgents.drainPromptQueueForSession(event).catch((error: unknown) => {
+              console.warn(
+                "[backend] Failed to drain the prompt queue after a turn ended:",
+                error instanceof Error ? error.message : error,
+              );
+            });
+            /*
+             * Settle first, drain second, in that order.
+             *
+             * Settling is what releases the mail a finished worker was holding,
+             * so a drain started before it would run against the old pending
+             * set and the worker's report would wait for the next sweep — the
+             * exact latency this edge exists to remove.
+             *
+             * A coordinator's own turn ending settles nothing: it is the party
+             * being woken, not a worker reporting. Its `logicalSessionKey` is
+             * only a tab address when it has the environment form; a workflow
+             * session's key means something else entirely and must not be
+             * mistaken for one.
+             */
+            const workerTabId =
+              event.owner !== "coordinator" &&
+              event.logicalSessionKey?.startsWith(`env-${event.environmentId}:`)
+                ? event.logicalSessionKey.slice(`env-${event.environmentId}:`.length)
+                : undefined;
+            void (
+              workerTabId
+                ? this.coordinators.settleWorkerDelegations({
+                    environmentId: event.environmentId,
+                    tabId: workerTabId,
+                    state: "completed",
+                  })
+                : Promise.resolve()
+            )
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to settle worker delegations after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              })
+              .then(() => this.agentMail.drainInjects())
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to drain agent mail after a turn ended:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
           }
         },
         onAsyncQuestionAttention: (event) => {
@@ -630,6 +707,10 @@ export class OrkestratorBackend {
       if (coordinatorWorkflowReconcileInFlight) return;
       coordinatorWorkflowReconcileInFlight = this.coordinators
         .reconcileWorkflowNotifications()
+        // A delegation closed by an edge whose wake never reached the mail
+        // store — a crash, a storage fault — is finished here. The wake is
+        // idempotent on `wokenAt`, so a delivered one is not repeated.
+        .then(() => this.coordinators.reconcileWorkerDelegations())
         .catch((error) => {
           console.warn(
             "[backend] Failed to reconcile coordinator workflow notifications:",

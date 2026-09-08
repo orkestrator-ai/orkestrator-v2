@@ -25,7 +25,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
-import { AgentMailButton, openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
+import { openAgentMailForTab } from "@/components/agent-mail/AgentMailButton";
 import { agentMailCapabilities, resolveTabDisplayName } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -370,9 +370,6 @@ export function DraggableTab({
         >
           <X className="h-3 w-3" />
         </button>
-      )}
-      {owningEnvironmentId && (
-        <AgentMailButton environmentId={owningEnvironmentId} tabId={tab.id} variant="tab" />
       )}
     </div>
   );

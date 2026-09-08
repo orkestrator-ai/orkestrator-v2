@@ -99,13 +99,13 @@ describe("useSlashCommandMenu", () => {
 
   test("accepts with Enter or Tab, writes the command, and restores focus", async () => {
     const setText = mock(() => {});
-    const focusInput = mock(() => {});
+    const focusInputAtEnd = mock(() => {});
     const { result } = renderHook(() =>
       useSlashCommandMenu({
         commands: COMMANDS,
         text: "/rev",
         setText,
-        focusInput,
+        focusInputAtEnd,
       }),
     );
     await waitFor(() => expect(result.current.filteredCommands).toHaveLength(1));
@@ -115,7 +115,7 @@ describe("useSlashCommandMenu", () => {
       expect(result.current.handleKeyDown(enter)).toBe(true);
     });
     expect(setText).toHaveBeenCalledWith("/review ");
-    expect(focusInput).toHaveBeenCalledTimes(1);
+    expect(focusInputAtEnd).toHaveBeenCalledTimes(1);
     expect(enter.preventDefault).toHaveBeenCalled();
     expect(result.current.isOpen).toBe(false);
 

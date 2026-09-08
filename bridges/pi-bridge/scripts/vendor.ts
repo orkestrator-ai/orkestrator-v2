@@ -149,7 +149,7 @@ export async function stageRuntimeClosure(options: {
   }
 
   // An upstream package can import another bridge-owned runtime root without
-  // declaring it, as pi-coding-agent 0.85.0 does with pi-server. A top-level
+  // declaring it, as pi-coding-agent 0.85.0 did with pi-server. A top-level
   // link is not visible from inside Bun's nested isolated store, so expose the
   // explicit roots beside one another there too. Preserve any link Bun already
   // created for a declared dependency; it may intentionally select another

@@ -15,17 +15,11 @@
 import { randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import {
-  createAgentSessionFromServices,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  getAgentDir,
-  SessionManager,
-  SettingsManager,
-  type AgentSession,
-  type ExtensionAPI,
-  type LoadExtensionsResult,
-  type SessionEntry,
+import type {
+  AgentSession,
+  ExtensionAPI,
+  LoadExtensionsResult,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
@@ -43,6 +37,14 @@ import {
 } from "./config.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
+import {
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  getAgentDir,
+  SessionManager,
+  SettingsManager,
+} from "./pi-sdk.js";
 import {
   catalogReadFailed,
   emptyComposer,

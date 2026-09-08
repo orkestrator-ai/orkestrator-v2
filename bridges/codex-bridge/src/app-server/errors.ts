@@ -179,7 +179,7 @@ export function isPaginatedHistoryUnsupportedError(error: unknown): error is App
  * for paginated reads until its first user message. The -32601 response carries
  * the materialization signal; the metadata-only read is a defence-in-depth
  * cross-check that this is still the untouched, idle start shape rather than a
- * different paginated-history failure. Verified against Codex 0.153.3 in
+ * different paginated-history failure. Verified against Codex 0.153.4 in
  * `live-contract.test.ts`.
  */
 export function isUnmaterializedThreadError(

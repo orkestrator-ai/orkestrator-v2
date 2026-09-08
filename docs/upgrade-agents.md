@@ -5,14 +5,16 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 
 | Agent | SDK integration | CLI integration | Current pins |
 | --- | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.261`, Anthropic SDK `0.123.0`, CLI `2.1.261` |
-| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.153.3` |
-| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.28` |
+| Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.263`, Anthropic SDK `0.124.0`, CLI `2.1.263` |
+| Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.153.4` |
+| OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.29` |
 | Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.31` |
 | Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.13` |
-| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.0` |
+| Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.1` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
+Verified against upstream stable releases on 2026-09-08; see the
+[upgrade evidence and remaining manual smoke checks](agent-upgrades/2026-09-08.md).
 
 ## What is enforced, and what is not
 
@@ -179,9 +181,9 @@ below.
 1. Choose an exact stable version and read its upstream release notes. Confirm
    that all four repository targets are published before changing pins.
 2. Change the provider's version in
-   `apps/desktop/electron/toolchain-manifest.ts`, its `scripts/download-*.sh`
-   file, and `docker/Dockerfile`. Codex has an additional source of truth
-   described below. OpenCode also has SDK pins that must match its CLI.
+   `apps/desktop/electron/toolchain-manifest.ts` and `docker/Dockerfile`.
+   The shared downloader reads the manifest and has no version mirror. Codex
+   has an additional source of truth described below. OpenCode also has SDK pins that must match its CLI.
 3. Refresh all four artifact records with the live verifier:
 
    ```bash
@@ -527,7 +529,16 @@ contract.
    bun install
    ```
 
-   Confirm both workspace resolutions in `bun.lock` use the intended version.
+   Rebase the Bun SSE patch against the new upstream package as required by
+   `AGENTS.md`. Both `dist/gen/core/serverSentEvents.gen.js` and
+   `dist/v2/gen/core/serverSentEvents.gen.js` must catch a rejected
+   `reader.cancel()`. Use a fresh isolated temporary package/cache for
+   `bun patch` if the workspace uses symlinks: edit the directory Bun prepared,
+   not a workspace symlink into its shared cache, and inspect the generated
+   patch before copying it back. Update the root `patchedDependencies` key,
+   patch path and filename, and `bun.lock` together; remove the old patch.
+   Confirm both workspace resolutions in `bun.lock` use the intended version
+   and inspect both installed clients after `bun install`.
 4. Refresh and verify all four OpenCode artifact records using the shared
    binary procedure. Preserve the macOS `repairInvalidMacSignature` behavior and
    do not add reproducible installed hashes for a locally re-signed file.
@@ -539,11 +550,12 @@ contract.
    ```bash
    bun run --cwd apps/web typecheck
    bun run --cwd apps/backend typecheck
-   bun test --cwd apps/web 'src/lib/opencode-*.test.ts' --parallel
+   (cd apps/web && bun test src/lib/opencode-*.test.ts --parallel)
    bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
      src/core/opencode-provider-dispatch.test.ts \
      src/core/opencode-provider-lifecycle.test.ts \
      src/core/opencode-provider-runtime.test.ts \
+     src/core/opencode-provider-dispose.test.ts \
      --parallel
    OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
      bun run verify:opencode:live
@@ -572,8 +584,9 @@ published two ways:
 - `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent`, the two
   packages it exposes types from (`@earendil-works/pi-ai` and
   `@earendil-works/pi-agent-core`), and `@earendil-works/pi-server`, which the
-  `0.85.0` public entry point imports without declaring. All four are pinned
-  exactly and vendored as runtime roots.
+  `0.85.0` public entry point imported without declaring. Version `0.85.1`
+  removes that experimental import; all four packages remain pinned exactly
+  and vendored as runtime roots.
 - `apps/desktop/electron/toolchain-manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
   and four `bundleIntegrity` records.
 - `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.

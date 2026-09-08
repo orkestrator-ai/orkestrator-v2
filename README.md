@@ -33,7 +33,7 @@ A desktop application for managing isolated Docker-based development environment
 ## Prerequisites
 
 - macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
-- [Bun](https://bun.sh) 1.4.0 or newer - JavaScript runtime, package manager, and native PTY provider
+- [mise](https://mise.jdx.dev) - installs the repository-pinned Bun 1.4.2 runtime
 - [Docker](https://docker.com) - Container runtime
 - [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
 
@@ -43,6 +43,9 @@ A desktop application for managing isolated Docker-based development environment
 # Clone the repository
 git clone <repo-url>
 cd orkestrator-ai
+
+# Install the tool versions pinned in mise.toml
+mise install
 
 # Install dependencies
 bun install

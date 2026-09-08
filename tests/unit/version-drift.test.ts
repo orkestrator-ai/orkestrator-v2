@@ -379,15 +379,20 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfileInstructions()).not.toContain("CURSOR_AGENT_VERSION");
   });
 
-  test("Bun: host-bundled runtime matches the container base image", () => {
-    // The bridges run on Bun both on the host (bundled binary) and inside the
-    // container (oven/bun base). Pinning both to the same version keeps the two
-    // bridge runtimes from drifting apart.
+  test("Bun: host-bundled runtime and container base match the mise pin", () => {
+    // mise.toml is the developer and CI source of truth. The desktop still
+    // bundles Bun for end users, while the container needs Bun in its base
+    // image before a repository has been cloned, so both mirror that pin.
+    const misePin = getMiseToolVersion("bun");
     const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
     const baseImageTag = getDockerfileBaseImageTag();
+    const dockerfile = read("docker/Dockerfile");
 
-    // Base image tag is `<version>-debian`; compare the version segment.
-    expect(baseImageTag).toBe(`${hostPin}-debian`);
+    expect(hostPin).toBe(misePin);
+    expect(baseImageTag).toBe(`${misePin}-debian`);
+    expect(dockerfile).toContain(`mise install --system bun@${misePin}`);
+    expect(dockerfile).toContain(`mise where bun@${misePin}`);
+    expect(dockerfile).toContain(`mise exec bun@${misePin} -- bun --version`);
   });
 
   test("Bun: host download script pins an exact version, not `latest`", () => {
@@ -397,28 +402,27 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   });
 
   test("Bun: package metadata requires the pinned runtime version", () => {
-    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const misePin = getMiseToolVersion("bun");
     const rootPackage = JSON.parse(read("package.json")) as { packageManager?: string };
     const cliPackage = JSON.parse(read("packages/cli/package.json")) as {
       engines?: { bun?: string };
     };
 
-    expect(rootPackage.packageManager).toBe(`bun@${hostPin}`);
-    expect(cliPackage.engines?.bun).toBe(`>=${hostPin}`);
-    expect(getMiseToolVersion("bun")).toBe(hostPin);
+    expect(rootPackage.packageManager).toBe(`bun@${misePin}`);
+    expect(cliPackage.engines?.bun).toBe(`>=${misePin}`);
   });
 
   test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
     // `@types/bun` is published in lockstep with the runtime, so a manifest left
-    // on the previous minor types a Bun the bridges no longer run on. `~x.y.0`
-    // rather than the exact pin: a types patch is a safe float, a minor is not.
+    // below the runtime patch may omit APIs the bridges use. `~x.y.z` rather
+    // than an exact dependency pin still permits compatible type fixes.
     //
     // The manifests are discovered rather than listed. Four declare the
     // dependency today and the rest inherit the root pin, so listing them would
     // reproduce the drift this guards against the moment a package adds its own.
-    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
-    const [major, minor] = hostPin.split(".");
-    const expected = `~${major}.${minor}.0`;
+    const misePin = getMiseToolVersion("bun");
+    const [major, minor] = misePin.split(".");
+    const expected = `~${misePin}`;
     const nextMinor = `${major}.${Number(minor) + 1}.0`;
 
     const declared = packageManifestPaths().flatMap((rel) => {
@@ -435,9 +439,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     for (const { rel, spec } of declared) {
       expect(
         spec,
-        `${rel} declares @types/bun ${spec}, which is not the pinned Bun ${hostPin} minor`,
+        `${rel} declares @types/bun ${spec}, which does not track pinned Bun ${misePin}`,
       ).toBe(expected);
-      expect(semver.satisfies(hostPin, spec), `${spec} must accept the pinned runtime`).toBe(true);
+      expect(semver.satisfies(misePin, spec), `${spec} must accept the pinned runtime`).toBe(true);
       expect(
         semver.satisfies(`${major}.${minor}.999999`, spec),
         `${spec} must allow patch-only type updates`,
@@ -451,6 +455,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("Bun: CI validates every supported host download and container architecture", () => {
     const workflow = read(".github/workflows/validate-bun-runtime.yml");
+    const lintWorkflow = read(".github/workflows/lint.yml");
     const configuredRunners = workflow
       .split("\n")
       .map((line) => line.trim())
@@ -460,6 +465,11 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(configuredRunners.sort()).toEqual(
       ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15"].sort(),
     );
+    for (const source of [workflow, lintWorkflow]) {
+      expect(source).toContain("uses: jdx/mise-action@");
+      expect(source).not.toContain("oven-sh/setup-bun@");
+    }
+    expect(workflow.match(/- "mise\.toml"/g)).toHaveLength(2);
     expect(workflow).toContain("run: ./scripts/download-bun.sh");
     expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
   });
@@ -469,7 +479,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // tree the SDK actually resolves its native binary from at runtime. Stripping
     // musl from top-level node_modules (the historical location) is a no-op against
     // that runtime path. This guards against regressing to the ineffective form.
-    // Verified in oven/bun:1.4.0-debian: the bridge resolves the gnu binary from this tree.
+    // Verified with the pinned oven/bun Debian image: the bridge resolves the gnu binary from this tree.
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain(
       "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",

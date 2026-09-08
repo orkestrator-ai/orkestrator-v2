@@ -7,11 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
-# Pin the bundled Bun to the same version as the container runtime
-# (docker/Dockerfile `FROM oven/bun:<version>-debian`) so the host bridge and
-# the in-container bridge run on an identical runtime. tests/unit/version-drift
-# enforces this match; bump both together.
-BUN_VERSION="1.4.0"
+# Mirror the mise-managed Bun version in the packaged desktop runtime and the
+# container base (docker/Dockerfile `FROM oven/bun:<version>-debian`) so every
+# bridge runs on an identical release. tests/unit/version-drift enforces all
+# three pins.
+BUN_VERSION="1.4.2"
 
 # Detect architecture
 ARCH=$(uname -m)

@@ -51,7 +51,7 @@ describe("TabShell", () => {
   test("omits inactive and unavailable controls", () => {
     const { container } = render(<TabShell isActive={false}>Tab title</TabShell>);
 
-    expect(container.querySelector("[aria-hidden='true'].bg-primary")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector("[aria-hidden='true'].bg-primary") === null).toBe(true);
+    expect(screen.queryByRole("button") === null).toBe(true);
   });
 });

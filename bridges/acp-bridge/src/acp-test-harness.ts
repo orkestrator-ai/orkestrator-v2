@@ -118,8 +118,11 @@ afterEach(cleanupTrackedResources);
 
 export async function temporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(resolve(os.tmpdir(), "acp-bridge-test-"));
-  temporaryDirectories.add(directory);
-  return directory;
+  // Keep child CWDs and fixture paths in the same namespace on macOS, where
+  // tmpdir() may use /var while spawned processes report /private/var.
+  const canonical = await fs.realpath(directory);
+  temporaryDirectories.add(canonical);
+  return canonical;
 }
 
 export async function unusedPort(): Promise<number> {

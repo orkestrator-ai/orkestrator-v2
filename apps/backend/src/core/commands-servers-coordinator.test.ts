@@ -23,7 +23,9 @@ describe("Coordinator Codex server", () => {
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-server-"));
+    // Spawned processes canonicalize macOS's /var temporary-directory alias.
+    // Build expected paths from the same canonical root they report.
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-server-")));
     checkout = path.join(root, "checkout");
     await fs.mkdir(checkout);
     await runCommand("git", ["init", "-b", "main"], { cwd: checkout });

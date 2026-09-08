@@ -745,11 +745,14 @@ names at all. Two invariants keep it honest:
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.4.0-debian` and every version below is
-pinned by an `ARG` in `docker/Dockerfile`, which is the source of truth.
+The image is built from `oven/bun:1.4.2-debian`, matching the Bun version
+managed in `mise.toml` for development and CI. Every agent CLI version below
+is pinned by an `ARG` in `docker/Dockerfile`, which is its container source of
+truth.
 
 Runtimes:
-- Bun, from the base image. It builds and runs the bridge servers.
+- Bun, installed in mise's shared system tool directory. The matching base-image
+  runtime bootstraps the image build before mise is installed.
 - Node.js 24 LTS, installed over the base image and verified against the
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 

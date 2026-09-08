@@ -1,5 +1,13 @@
 import { memo, useState, type DragEvent } from "react";
-import { ChevronRight, Folder, FolderInput, FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ChevronRight,
+  Copy,
+  Folder,
+  FolderInput,
+  FolderOpen,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import { useFilesPanelStore } from "@/stores";
@@ -11,6 +19,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { copyFilePath } from "./copy-file-path";
 
 const EMPTY_CHANGED_PATHS: ReadonlySet<string> = new Set();
 export const FILE_DRAG_TYPE = "application/x-orkestrator-workspace-file";
@@ -174,14 +183,14 @@ export const FileTreeNode = memo(function FileTreeNode({
     </div>
   );
 
-  if (!onReveal && !onDelete && !onRequestMove && !(onRevert && changedPaths.has(item.path))) {
-    return fileRow;
-  }
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{fileRow}</ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
+          <Copy />
+          Copy path
+        </ContextMenuItem>
         {onRequestMove && (
           <ContextMenuItem disabled={movePending} onSelect={() => onRequestMove(item.path)}>
             <FolderInput />

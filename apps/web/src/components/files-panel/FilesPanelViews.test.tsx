@@ -6,9 +6,12 @@ import { useFilesPanelStore } from "@/stores";
 import type { FileNode, GitFileChange } from "@/lib/backend";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import { AllFilesView } from "./AllFilesView";
+import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangesView } from "./ChangesView";
 import { FileTreeNode } from "./FileTreeNode";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { mockToastSuccess } from "../../../../../tests/mocks/sonner";
 
 const createFileTab = mock(() => undefined);
 
@@ -90,6 +93,8 @@ function fireDrag(target: Element, type: string, dataTransfer: DataTransfer): vo
 describe("files panel views", () => {
   beforeEach(() => {
     createFileTab.mockClear();
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => undefined);
     setMobileViewport(false);
     useFilesPanelStore.setState({
       isOpen: true,
@@ -150,6 +155,18 @@ describe("files panel views", () => {
     expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });
 
+  test("ChangedFileItem copies a workspace-relative path for deleted files", async () => {
+    render(<ChangedFileItem change={{ ...change, status: "D" }} />);
+
+    fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
+    fireEvent.click(await screen.findByText("Copy path"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith("src/App.tsx"));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Path copied to clipboard", {
+      description: "src/App.tsx",
+    });
+  });
+
   test("FileTreeNode expands folders and exposes changed-file actions", async () => {
     const onReveal = mock(() => undefined);
     const onRevert = mock(() => undefined);
@@ -168,6 +185,9 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    fireEvent.contextMenu(fileButton);
+    fireEvent.click(await screen.findByText("Copy path"));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith("src/App.tsx"));
     fireEvent.contextMenu(fileButton);
     fireEvent.click(await screen.findByText("Reveal in file manager"));
     expect(onReveal).toHaveBeenCalledWith("src/App.tsx");

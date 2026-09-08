@@ -8,7 +8,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import { Copy, FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import { copyFilePath } from "./copy-file-path";
 
 interface ChangedFileItemProps {
   change: GitFileChange;
@@ -52,12 +53,14 @@ export function ChangedFileItem({
     </button>
   );
 
-  if (!reveal && !onRevert && !onDelete) return item;
-
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
       <ContextMenuContent>
+        <ContextMenuItem onSelect={() => void copyFilePath(change.path)}>
+          <Copy />
+          Copy path
+        </ContextMenuItem>
         {reveal && (
           <ContextMenuItem onSelect={() => reveal(change.path)}>
             <FolderOpen />

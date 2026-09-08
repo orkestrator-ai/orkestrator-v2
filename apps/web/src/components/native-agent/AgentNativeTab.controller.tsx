@@ -1922,13 +1922,7 @@ export function SharedNativeAgentController({
                   disabled={settingsLocked}
                 />
                 {(projection?.composerControls ?? [])
-                  .filter(
-                    (control) =>
-                      control.id.startsWith("parameter:") &&
-                      // Cursor's pre-combined variants are the same model name
-                      // repeated for every effort/fast/thinking cross product.
-                      control.id !== "parameter:variant",
-                  )
+                  .filter((control) => control.id.startsWith("parameter:"))
                   .map((control) => {
                     const parameterId = control.id.slice("parameter:".length);
                     if (control.kind === "toggle") {

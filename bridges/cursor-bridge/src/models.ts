@@ -203,6 +203,13 @@ export async function hydrateComposer(
   composer: NativeAgentComposerState,
 ): Promise<NativeAgentComposerState> {
   const models = await listModels();
+  return hydrateComposerWithModels(composer, models);
+}
+
+function hydrateComposerWithModels(
+  composer: NativeAgentComposerState,
+  models: AgentModel[],
+): NativeAgentComposerState {
   const selectedModelId = composer.selectedModelId ?? models[0]?.id ?? FALLBACK_MODEL_ID;
   const selected = models.find((model) => model.id === selectedModelId);
   const parameterValues = { ...composer.parameterValues };
@@ -224,6 +231,11 @@ export async function hydrateComposer(
     },
   };
 }
+
+export const __testing = {
+  hydrateComposerWithModels,
+  normalizeModel,
+};
 
 function boundId(value: string): string {
   const trimmed = value?.trim() ?? "";

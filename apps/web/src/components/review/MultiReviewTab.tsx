@@ -334,10 +334,11 @@ function runtimeSummary(
   const tokens =
     timing.tokenCount === undefined ? null : `${formatTokenCount(timing.tokenCount)} tokens`;
   const completedAt = timing.completedAt ? Date.parse(timing.completedAt) : Number.NaN;
-  if (!running && !Number.isFinite(completedAt)) return tokens;
-  const end = running ? now : completedAt;
+  const activelyRunning = running && !Number.isFinite(completedAt);
+  if (!activelyRunning && !Number.isFinite(completedAt)) return tokens;
+  const end = activelyRunning ? now : completedAt;
   const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  if (!tokens) return running ? `${elapsed} · Tokens pending` : elapsed;
+  if (!tokens) return activelyRunning ? `${elapsed} · Tokens pending` : elapsed;
   return `${elapsed} · ${tokens}`;
 }
 
@@ -535,7 +536,11 @@ function MultiReviewOverviewTab({
   const hasRunningReviewer = workflow?.reviewers.some(
     (reviewer) => reviewer.status === "running" && reviewer.startedAt,
   );
-  const hasRunningFixSession = workflow?.fixSession?.status === "running";
+  const hasRunningFixSession =
+    workflow?.fixSession?.status === "running" ||
+    (workflow?.phase === "interactive" &&
+      workflow.stepRuntimes?.fix !== undefined &&
+      workflow.stepRuntimes.fix.completedAt === undefined);
   const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession);
 
   useEffect(() => {

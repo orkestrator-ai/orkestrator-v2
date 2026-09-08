@@ -15,6 +15,7 @@ import {
 } from "./review-workflow.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
+  REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
   REVIEW_FANOUT_MAX_SNAPSHOT_PATHS,
   REVIEW_FANOUT_MIN_REVIEWERS,
   isReviewerModelSelection,
@@ -220,6 +221,8 @@ export interface MultiReviewWorkflow {
     schemaRepairAttempts?: number;
     schemaRepairPrompt?: string;
     idleResultPolls?: number;
+    /** Bounded terminal polls while the provider finalizes cumulative usage. */
+    usageFinalizationPolls?: number;
   };
   cancellingSince?: string;
   error?: string;
@@ -412,6 +415,7 @@ function isActiveRequest(
       "schemaRepairAttempts",
       "schemaRepairPrompt",
       "idleResultPolls",
+      "usageFinalizationPolls",
     ]) &&
     MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind) &&
     nonBlank(value.requestId) &&
@@ -420,7 +424,11 @@ function isActiveRequest(
     Number.isFinite(Date.parse(value.createdAt)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
-    optionalPollCount(value.idleResultPolls)
+    optionalPollCount(value.idleResultPolls) &&
+    (value.usageFinalizationPolls === undefined ||
+      (Number.isSafeInteger(value.usageFinalizationPolls) &&
+        (value.usageFinalizationPolls as number) >= 0 &&
+        (value.usageFinalizationPolls as number) <= REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS))
   );
 }
 

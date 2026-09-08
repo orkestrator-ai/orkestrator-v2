@@ -1,4 +1,5 @@
 import { reviewPackageArtifactPath } from "./review-artifacts";
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "./review-fanout";
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
@@ -496,12 +497,22 @@ test("preparation and immutable package references survive strict workflow valid
       requestId: "prepare-1",
       state: "dispatching",
       createdAt: timestamp,
+      usageFinalizationPolls: REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
     },
     createdAt: timestamp,
     updatedAt: timestamp,
     backendRevision: 1,
   };
   expect(isMultiReviewWorkflow(workflow)).toBe(true);
+  expect(
+    isMultiReviewWorkflow({
+      ...workflow,
+      activeRequest: {
+        ...workflow.activeRequest,
+        usageFinalizationPolls: REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS + 1,
+      },
+    }),
+  ).toBe(false);
   expect(isMultiReviewTerminalPhase("preparing")).toBe(false);
   const id = "review-package-multi-test";
   const sha256 = "a".repeat(64);

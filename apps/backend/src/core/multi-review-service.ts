@@ -17,6 +17,7 @@ import {
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -131,8 +132,23 @@ function beginStepRuntime(
   const runtimes = (workflow.stepRuntimes ??= {});
   runtimes[kind] = {
     startedAt: session.startedAt,
-    ...(session.tokenCount === undefined ? {} : { tokenBaseline: session.tokenCount }),
+    ...(session.tokenCount === undefined
+      ? kind === "prepare"
+        ? { tokenBaseline: 0 }
+        : {}
+      : { tokenBaseline: session.tokenCount }),
   };
+}
+
+/** Adopt the clock of a request that was already running when step records were introduced. */
+function backfillActiveStepRuntime(
+  workflow: MultiReviewWorkflow,
+  session: MultiReviewFixSession,
+): boolean {
+  const kind = workflow.activeRequest?.kind;
+  if (!kind || workflow.stepRuntimes?.[kind]) return false;
+  beginStepRuntime(workflow, kind, session);
+  return true;
 }
 
 /** Stops a step's clock, keeping the first settlement when one is already recorded. */
@@ -809,6 +825,8 @@ export class MultiReviewService {
         delete workflow.activeRequest;
         delete workflow.consolidatedReport;
         delete workflow.fixResult;
+        delete workflow.stepRuntimes?.consolidate;
+        delete workflow.stepRuntimes?.fix;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
         clearPendingAddressIdentity(workflow);
@@ -1259,6 +1277,12 @@ export class MultiReviewService {
           workflow.fixSessionKey = fixSession.sessionKey;
         }
       }
+      const dispatchedSession = workflow.fixSession;
+      if (dispatchedSession) {
+        dispatchedSession.startedAt = nowIso();
+        delete dispatchedSession.completedAt;
+        beginStepRuntime(workflow, "fix", dispatchedSession);
+      }
       workflow.fixTabId = result?.tabId ?? workflow.addressTabId ?? workflow.fixTabId;
       if (result?.presentationError) workflow.presentationError = result.presentationError;
       else delete workflow.presentationError;
@@ -1535,26 +1559,51 @@ export class MultiReviewService {
     token: string,
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
-    usage: { messages?: Promise<unknown[]>; usageChanged: boolean } = { usageChanged: false },
+    observedUsage: { sessionTokens?: number } | undefined,
   ): Promise<void> {
     const previousDigest = session.progressDigest;
+    let usageChanged = await this.refreshFixSessionUsage(
+      workflow,
+      token,
+      provider,
+      session,
+      observedUsage,
+      undefined,
+    );
+    const needsTranscriptUsage =
+      this.validSessionTokens(observedUsage) === undefined &&
+      provider.usageFromMessages !== undefined;
+    let messages: Promise<unknown[]> | undefined;
     const observation = await this.progress.observe(
       session.providerSessionId,
-      async () =>
-        usage.messages
-          ? (await usage.messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES)
+      async () => {
+        messages = needsTranscriptUsage
+          ? this.readFixSessionMessages(provider, session)
           : provider.messages(session.providerSessionId, {
               limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-            }),
+            });
+        return (await messages).slice(-PROGRESS_TRANSCRIPT_TAIL_MESSAGES);
+      },
       session.progressDigest,
     );
+    if (needsTranscriptUsage && messages) {
+      const transcriptUsageChanged = await this.refreshFixSessionUsage(
+        workflow,
+        token,
+        provider,
+        session,
+        undefined,
+        messages,
+      );
+      usageChanged = usageChanged || transcriptUsageChanged;
+    }
     await this.assertFence(workflow.id, token);
     const decision = commitProgressObservation(session, observation);
     if (decision === "reset" || decision === "hold") {
       await this.save(workflow, token);
       return;
     }
-    const changed = usage.usageChanged || session.progressDigest !== previousDigest;
+    const changed = usageChanged || session.progressDigest !== previousDigest;
     const elapsedMs = noProgressElapsedMs(session.progressAt, session.startedAt);
     if (elapsedMs === null) {
       if (changed) await this.save(workflow, token);
@@ -1578,23 +1627,23 @@ export class MultiReviewService {
   /**
    * Reads the transcript tail once for the providers that meter usage from it.
    *
-   * The rejection is absorbed here rather than by each caller: usage is
-   * presentation metadata, and an unreadable transcript must never fail an
-   * otherwise healthy turn — nor leave an unhandled rejection behind when the
-   * probe that would have awaited it is skipped.
+   * The promise deliberately remains rejectable. The progress tracker treats a
+   * failed read as "nothing learned", while usage metering catches and logs the
+   * same rejection without failing the supervised turn.
    */
   private readFixSessionMessages(
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
-  ): Promise<unknown[]> | undefined {
-    if (!provider.usageFromMessages) return undefined;
+  ): Promise<unknown[]> {
     const limit = provider.usageMessageLimit;
-    return provider
-      .messages(session.providerSessionId, limit === undefined ? {} : { limit })
-      .catch((error: unknown) => {
-        console.warn("[multi-review] Reading fix session transcript failed:", errorMessage(error));
-        return [] as unknown[];
-      });
+    return provider.messages(session.providerSessionId, limit === undefined ? {} : { limit });
+  }
+
+  private validSessionTokens(usage: { sessionTokens?: number } | undefined): number | undefined {
+    const reported = usage?.sessionTokens;
+    return typeof reported === "number" && Number.isSafeInteger(reported) && reported >= 0
+      ? reported
+      : undefined;
   }
 
   /**
@@ -1614,22 +1663,21 @@ export class MultiReviewService {
     messages: Promise<unknown[]> | undefined,
   ): Promise<boolean> {
     try {
+      const observed = this.validSessionTokens(observedUsage);
       const usage =
-        observedUsage ??
-        (provider.usageFromMessages && messages
+        observed === undefined && provider.usageFromMessages && messages
           ? provider.usageFromMessages(await messages)
-          : undefined);
-      const reported = usage?.sessionTokens;
-      if (typeof reported !== "number" || !Number.isSafeInteger(reported) || reported < 0) {
-        return false;
-      }
+          : undefined;
+      const reported = observed ?? this.validSessionTokens(usage);
+      if (reported === undefined) return false;
       await this.assertFence(workflow.id, token);
       const tokenCount = Math.max(session.tokenCount ?? 0, reported);
       const kind = workflow.activeRequest?.kind;
       const runtime = kind ? workflow.stepRuntimes?.[kind] : undefined;
-      const stepTokens = runtime
-        ? Math.max(0, tokenCount - (runtime.tokenBaseline ?? 0))
-        : undefined;
+      const stepTokens =
+        runtime?.tokenBaseline === undefined
+          ? undefined
+          : Math.max(0, tokenCount - runtime.tokenBaseline);
       if (
         session.tokenCount === tokenCount &&
         (runtime === undefined || runtime.tokenCount === stepTokens)
@@ -1700,6 +1748,24 @@ export class MultiReviewService {
       provider: workflow.fixModel.agent,
       fence: session.sessionKey,
     });
+    let runtimeBackfilled = backfillActiveStepRuntime(workflow, session);
+    if (
+      !workflow.stepRuntimes &&
+      !workflow.activeRequest &&
+      workflow.phase === "consolidating" &&
+      session.completedAt
+    ) {
+      workflow.stepRuntimes = {
+        prepare: {
+          startedAt: session.startedAt,
+          completedAt: session.completedAt,
+          ...(session.tokenCount === undefined ? {} : { tokenCount: session.tokenCount }),
+          tokenBaseline: 0,
+        },
+      };
+      runtimeBackfilled = true;
+    }
+    if (runtimeBackfilled) await this.save(workflow, token);
     if (!workflow.activeRequest) {
       const requestId = randomUUID();
       const kind = preparing ? "prepare" : "consolidate";
@@ -1785,28 +1851,33 @@ export class MultiReviewService {
     const observation = await readProviderStatus(provider, session.providerSessionId);
     const { status, error: statusDetail } = observation;
     await this.assertFence(workflow.id, token);
-    // Shared with the progress probe below: a provider whose usage only comes
-    // from its transcript must not be read twice per tick.
-    const messages = this.readFixSessionMessages(provider, session);
+    if (status === "running") {
+      if (request.idleResultPolls !== undefined || request.usageFinalizationPolls !== undefined) {
+        delete request.idleResultPolls;
+        delete request.usageFinalizationPolls;
+        await this.save(workflow, token);
+      }
+      await this.observeFixSessionProgress(
+        workflow,
+        token,
+        provider,
+        session,
+        observation.contextUsage,
+      );
+      return;
+    }
+    const terminalMessages =
+      this.validSessionTokens(observation.contextUsage) === undefined && provider.usageFromMessages
+        ? this.readFixSessionMessages(provider, session)
+        : undefined;
     const usageChanged = await this.refreshFixSessionUsage(
       workflow,
       token,
       provider,
       session,
       observation.contextUsage,
-      messages,
+      terminalMessages,
     );
-    if (status === "running") {
-      if (request.idleResultPolls !== undefined) {
-        delete request.idleResultPolls;
-        await this.save(workflow, token);
-      }
-      await this.observeFixSessionProgress(workflow, token, provider, session, {
-        messages,
-        usageChanged,
-      });
-      return;
-    }
     if (usageChanged) await this.save(workflow, token);
     if (status === "blocked") {
       // Unattended interactions were already resolved above; a provider still
@@ -1839,6 +1910,15 @@ export class MultiReviewService {
       }
       return;
     }
+    if (
+      observation.usagePending === true &&
+      (request.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS
+    ) {
+      request.usageFinalizationPolls = (request.usageFinalizationPolls ?? 0) + 1;
+      await this.save(workflow, token);
+      return;
+    }
+    delete request.usageFinalizationPolls;
     if (request.kind === "prepare") {
       if (
         !result.ok &&

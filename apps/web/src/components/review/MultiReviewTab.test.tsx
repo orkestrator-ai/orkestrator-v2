@@ -2256,6 +2256,55 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
   });
 
+  test("shows the interactive fix turn from its durable runtime record", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "interactive",
+      stepRuntimes: {
+        prepare: {
+          startedAt: "2026-08-14T00:00:00.000Z",
+          completedAt: "2026-08-14T00:01:20.000Z",
+          tokenCount: 40_000,
+        },
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+        fix: { startedAt: "2026-08-14T00:10:00.000Z", tokenBaseline: 65_000 },
+      },
+    };
+    const now = Date.parse("2026-08-14T00:11:10.000Z");
+
+    expect(multiReviewStepRuntimeSummary(workflow, "fix", true, now)).toBe(
+      "1m 10s · Tokens pending",
+    );
+  });
+
+  test("a settled runtime wins over a stale running card state", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      stepRuntimes: {
+        consolidate: {
+          startedAt: "2026-08-14T00:05:00.000Z",
+          completedAt: "2026-08-14T00:07:45.000Z",
+          tokenCount: 25_000,
+        },
+      },
+    };
+
+    expect(
+      multiReviewStepRuntimeSummary(
+        workflow,
+        "consolidation",
+        true,
+        Date.parse("2026-08-14T00:20:00.000Z"),
+      ),
+    ).toBe("2m 45s · 25k tokens");
+  });
+
   test("falls back to the shared session clock for workflows without step records", () => {
     const ready = readyWorkflow();
     const now = Date.parse("2026-08-14T00:02:05.000Z");

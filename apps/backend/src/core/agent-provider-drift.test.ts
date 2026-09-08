@@ -270,6 +270,36 @@ describe("providerAdvisoryNotices", () => {
     ]);
   });
 
+  test("prefers a stable condition over its mixed-version message-only duplicate", () => {
+    expect(
+      providerAdvisoryNotices([
+        {
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+        {
+          id: "mcp:t1:github",
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "advisory",
+        message: "github MCP failed to start",
+        severity: "error",
+        occurrenceId: "mcp:t1:github",
+      },
+    ]);
+
+    expect(
+      providerAdvisoryNotices([
+        { id: "mcp:t1:a", message: "same", severity: "error" },
+        { id: "mcp:t1:b", message: "same", severity: "error" },
+      ]),
+    ).toHaveLength(2);
+  });
+
   test("is bounded, keeping the most recent", () => {
     const advisories = providerAdvisoryNotices(
       Array.from({ length: 9 }, (_, index) => ({

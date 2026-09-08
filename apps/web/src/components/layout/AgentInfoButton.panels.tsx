@@ -547,27 +547,29 @@ function codexRateLimitLabel({
 export function AgentRuntimePanel({
   runtime,
   providerLabel,
+  includeMetrics = true,
   openNoticeId,
   onOpenNoticeChange,
 }: {
   runtime: NativeAgentRuntimeSummary | undefined;
   providerLabel: string;
+  includeMetrics?: boolean;
   openNoticeId?: string | null;
   onOpenNoticeChange?: (noticeId: string | null) => void;
 }) {
-  const metrics = (
-    [
-      ["MCP", runtime?.mcpServers],
-      ["Commands", runtime?.commands],
-      ["Skills", runtime?.skills],
-      ["Hooks", runtime?.hooks],
-    ] as const
-  ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]));
+  const metrics = includeMetrics
+    ? (
+        [
+          ["MCP", runtime?.mcpServers],
+          ["Commands", runtime?.commands],
+          ["Skills", runtime?.skills],
+          ["Hooks", runtime?.hooks],
+        ] as const
+      ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]))
+    : [];
 
   const drift = runtime?.drift;
-  // Routine lifecycle information belongs in the MCP inventory. The notice
-  // stack is reserved for warnings and failures that need attention.
-  const notices = (runtime?.notices ?? []).filter((notice) => notice.severity !== "info").slice(-5);
+  const notices = (runtime?.notices ?? []).slice(-5);
 
   if (
     metrics.length === 0 &&

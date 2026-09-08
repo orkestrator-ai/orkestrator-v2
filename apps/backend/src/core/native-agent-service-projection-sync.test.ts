@@ -15,6 +15,49 @@ import {
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 describe("native agent remote projection synchronization", () => {
+  test("synchronizes runtime-health authority as an explicit projection field", async () => {
+    let authoritative = false;
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        runtimeHealthAuthoritative: authoritative,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-sync-health-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-health",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        });
+        if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
+        expect(first.projection.runtimeHealthAuthoritative).toBe(false);
+
+        authoritative = true;
+        const changed = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+          knownToken: first.token,
+        });
+        if (changed.status !== "delta") throw new Error("Expected sync delta");
+        expect(changed.delta.setFields.runtimeHealthAuthoritative).toBe(true);
+        expect(
+          applyNativeAgentProjectionDelta(first.projection, changed.delta)
+            ?.runtimeHealthAuthoritative,
+        ).toBe(true);
+      },
+    );
+  });
+
   test("returns unchanged envelopes, bounded deltas, and independent history pages", async () => {
     let messages = Array.from({ length: 150 }, (_, index) => ({
       id: `message-${index}`,

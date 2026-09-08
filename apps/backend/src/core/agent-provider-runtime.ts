@@ -458,8 +458,15 @@ export function providerAdvisoryNotices(
   limit = MAX_PROJECTION_ADVISORIES,
 ): NativeAgentNotice[] {
   const advisories = new Map<string, NativeAgentNotice & { kind: "advisory"; severity: "error" }>();
+  const messagesWithStableIdentity = new Set(
+    notices.flatMap((notice) => (notice.id ? [notice.message] : [])),
+  );
   for (const notice of notices) {
     if (notice.severity !== "error") continue;
+    // A mixed-version handoff can contain both the stable condition and its
+    // legacy message-only rendering. Prefer the stable form without collapsing
+    // distinct id-bearing conditions that happen to share copy.
+    if (!notice.id && messagesWithStableIdentity.has(notice.message)) continue;
     const latestOccurrence = notice.occurrences?.at(-1);
     const occurrenceId =
       notice.id ??

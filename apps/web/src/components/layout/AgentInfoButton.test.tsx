@@ -2158,7 +2158,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText("notice two")).toBeTruthy();
   });
 
-  test("keeps routine information out of the notice stack and styles errors as errors", async () => {
+  test("styles errors as errors without hiding provider diagnostics", async () => {
     seedCodex();
     seedCodexProjection({
       notices: [
@@ -2175,7 +2175,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
     open();
 
     await waitFor(() => expect(screen.getByText("github MCP failed to start")).toBeTruthy());
-    expect(screen.queryByText("MCP inventory refreshed") === null).toBe(true);
+    expect(screen.getByText("MCP inventory refreshed")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Show details for github MCP failed to start" }).className,
     ).toContain("border-destructive");
@@ -2773,6 +2773,27 @@ describe("AgentInfoButton Claude session options", () => {
       ...extra,
     } as never);
   }
+
+  test("keeps Claude informational diagnostics in the runtime panel", () => {
+    seedClaude();
+    useNativeAgentProjectionStore.getState().setProjection(CLAUDE_KEY, {
+      ...neutralClaudeProjection(),
+      runtime: {
+        notices: [
+          {
+            method: "system/auth_status",
+            message: "Claude authentication refreshed",
+            severity: "info",
+            source: "provider",
+          },
+        ],
+      },
+    });
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.getByText("Claude authentication refreshed")).toBeTruthy();
+  });
 
   test("renders both checkboxes even when the init payload reported no agents", () => {
     /*

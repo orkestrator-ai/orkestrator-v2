@@ -4492,6 +4492,7 @@ describe("AgentNativeTab", () => {
         contextUsage?: NativeAgentSessionProjection["contextUsage"];
         backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
         sessionId?: string;
+        runtimeHealthAuthoritative?: boolean;
       } = {},
     ) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
@@ -4518,6 +4519,9 @@ describe("AgentNativeTab", () => {
         ...(overrides.backgroundTasks ? { backgroundTasks: overrides.backgroundTasks } : {}),
         ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         ...(overrides.notices ? { notices: overrides.notices } : {}),
+        ...(overrides.runtimeHealthAuthoritative === undefined
+          ? {}
+          : { runtimeHealthAuthoritative: overrides.runtimeHealthAuthoritative }),
         interactions: [],
         composerControls: [],
         composer: {
@@ -5436,6 +5440,53 @@ describe("AgentNativeTab", () => {
       expect(
         await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
       ).toBeTruthy();
+    });
+
+    test("does not retire a dismissal from an unavailable runtime-health snapshot", async () => {
+      const tabId = "tab-unavailable-notice-health";
+      const notice = {
+        kind: "advisory" as const,
+        message: "github MCP failed to start",
+        severity: "error" as const,
+        occurrenceId: "mcp:thread-1:github",
+      };
+      seedProjection({
+        sessionId: "session-a",
+        notices: [notice],
+        runtimeHealthAuthoritative: true,
+      });
+      const view = render(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
+      );
+
+      seedProjection({
+        sessionId: "session-a",
+        notices: [],
+        runtimeHealthAuthoritative: false,
+      });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
+      );
+      await waitFor(() =>
+        expect(
+          useNativeNoticeDismissalStore
+            .getState()
+            .sessions.some((session) => session.sessionIdentity.includes("session-a")),
+        ).toBe(true),
+      );
+
+      seedProjection({
+        sessionId: "session-a",
+        notices: [notice],
+        runtimeHealthAuthoritative: true,
+      });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
+      );
+      expect(screen.queryByText("github MCP failed to start") === null).toBe(true);
     });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {

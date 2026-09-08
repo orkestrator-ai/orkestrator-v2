@@ -345,7 +345,7 @@ export function SharedNativeAgentController({
     // An absent projection means rehydration is still in flight, not that every
     // condition recovered. Only an authoritative snapshot may retire a
     // dismissal and allow a later recurrence to surface again.
-    if (!projection) return;
+    if (!projection || projection.runtimeHealthAuthoritative === false) return;
     reconcileNoticeDismissals(noticeSessionIdentity, activeNoticeIds);
   }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));

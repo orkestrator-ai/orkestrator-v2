@@ -1802,11 +1802,11 @@ describe("runtime notices", () => {
       ["mcpServer/startupStatus/updated", { name: "docs", status: "starting" }],
       ["mcpServer/startupStatus/updated", { name: "docs", status: "ready" }],
       ["mcpServer/startupStatus/updated", { name: "docs", status: "cancelled" }],
-      ["mcpServer/startupStatus/updated", { name: "docs", status: "failed" }],
-      ["mcpServer/startupStatus/updated", { name: "docs", error: "Connection refused" }],
-      ["mcpServer/startupStatus/updated", { name: "docs", failureReason: "Timed out" }],
-      ["mcpServer/startupStatus/updated", { name: "docs", status: "retrying" }],
-      ["mcpServer/startupStatus/updated", { name: "docs" }],
+      ["mcpServer/startupStatus/updated", { name: "failed", status: "failed" }],
+      ["mcpServer/startupStatus/updated", { name: "errored", error: "Connection refused" }],
+      ["mcpServer/startupStatus/updated", { name: "timed-out", failureReason: "Timed out" }],
+      ["mcpServer/startupStatus/updated", { name: "retrying", status: "retrying" }],
+      ["mcpServer/startupStatus/updated", { name: "unknown" }],
     ]);
 
     expect(captured.map((notice) => notice.severity)).toEqual([
@@ -1853,6 +1853,66 @@ describe("runtime notices", () => {
     expect(inventory.data[0]?.error).toBeUndefined();
   });
 
+  test("keeps a failure when the matching inventory status is unavailable", async () => {
+    const h = harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "docs", runtimeStatus: null, tools: {} }],
+      }),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      threadId: "t1",
+      name: "docs",
+      status: "failed",
+      error: "Connection refused",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const health = await h.engine.getRuntimeHealth("t1");
+    expect(health.notices).toEqual([
+      expect.objectContaining({ id: "mcp:t1:docs", message: "docs MCP failed to start" }),
+    ]);
+    const inventory = (await h.engine.listMcpServers("t1")) as {
+      data: Array<{ error?: string }>;
+    };
+    expect(inventory.data[0]?.error).toBe("Connection refused");
+  });
+
+  test("retires an MCP failure when a successful inventory omits the server", async () => {
+    const h = harness({ "mcpServerStatus/list": () => ({ data: [] }) });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "removed",
+      status: "failed",
+      error: "Connection refused",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([]);
+  });
+
+  test("fails open when the MCP inventory cannot be read", async () => {
+    const h = harness({
+      "mcpServerStatus/list": () => {
+        throw new Error("inventory unavailable");
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "docs",
+      status: "failed",
+      error: "Connection refused",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({ id: "mcp:global:docs" }),
+    ]);
+  });
+
   test("exposes a current MCP failure with stable identity and safe detail", async () => {
     const h = harness({
       "mcpServerStatus/list": () => ({
@@ -1882,6 +1942,163 @@ describe("runtime notices", () => {
       data: Array<{ error?: string }>;
     };
     expect(inventory.data[0]?.error).toBe("Connection refused");
+  });
+
+  test("uses accurate messages for authentication and unknown startup states", async () => {
+    const authentication = harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "github", runtimeStatus: "authenticationRequired", tools: {} }],
+      }),
+    });
+    await authentication.engine.start();
+    authentication.child().notify("mcpServer/startupStatus/updated", {
+      name: "github",
+      status: "failed",
+      failureReason: "reauthenticationRequired",
+    });
+    await settle();
+    await authentication.engine.getSupervisor().notificationQueue.drainAll();
+    expect((await authentication.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({
+        message: "github MCP authentication required",
+        severity: "error",
+      }),
+    ]);
+
+    const unknown = harness({
+      "mcpServerStatus/list": () => {
+        throw new Error("inventory unavailable");
+      },
+    });
+    await unknown.engine.start();
+    unknown.child().notify("mcpServer/startupStatus/updated", {
+      name: "docs",
+      status: "retrying",
+    });
+    await settle();
+    await unknown.engine.getSupervisor().notificationQueue.drainAll();
+    expect((await unknown.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({
+        message: "docs MCP reported a startup warning",
+        severity: "warning",
+      }),
+    ]);
+  });
+
+  test("keeps global and thread-scoped recovery identities isolated", async () => {
+    const h = harness();
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      threadId: "t1",
+      name: "docs",
+      status: "failed",
+      error: "thread failure",
+    });
+    h.child().notify("mcpServer/startupStatus/updated", { name: "docs", status: "ready" });
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "github",
+      status: "failed",
+      error: "global failure",
+    });
+    h.child().notify("mcpServer/startupStatus/updated", {
+      threadId: "t1",
+      name: "github",
+      status: "cancelled",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const health = await h.engine.getRuntimeHealth();
+    expect(health.notices.map((notice) => notice.id).sort()).toEqual([
+      "mcp:global:github",
+      "mcp:t1:docs",
+    ]);
+  });
+
+  test("does not attach a thread-scoped failure to a global-only inventory", async () => {
+    const h = harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "docs", runtimeStatus: "failed", tools: {} }],
+      }),
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      threadId: "t1",
+      name: "docs",
+      status: "failed",
+      error: "thread secret",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const globalOnly = (await h.engine.listMcpServers(null)) as {
+      data: Array<{ error?: string }>;
+    };
+    const owningThread = (await h.engine.listMcpServers("t1")) as {
+      data: Array<{ error?: string }>;
+    };
+    expect(globalOnly.data[0]?.error).toBeUndefined();
+    expect(owningThread.data[0]?.error).toBe("thread secret");
+  });
+
+  test("retains existing diagnostics when MCP reload fails", async () => {
+    const h = harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "docs", runtimeStatus: "failed", tools: {} }],
+      }),
+      "config/mcpServer/reload": () => {
+        throw new Error("reload unavailable");
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "docs",
+      status: "failed",
+      error: "Connection refused",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    await expect(h.engine.reconnectMcpServers()).rejects.toThrow("reload unavailable");
+    expect((await h.engine.getRuntimeHealth()).notices).toEqual([
+      expect.objectContaining({ id: "mcp:global:docs" }),
+    ]);
+  });
+
+  test("successful MCP reload removes only notices that predate the request", async () => {
+    let emitFreshFailure = () => undefined;
+    const h = harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "docs", runtimeStatus: "failed", tools: {} }],
+      }),
+      "config/mcpServer/reload": () => {
+        emitFreshFailure();
+        return {};
+      },
+    });
+    emitFreshFailure = () => {
+      h.child().notify("mcpServer/startupStatus/updated", {
+        name: "docs",
+        status: "failed",
+        error: "fresh failure",
+      });
+    };
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "docs",
+      status: "failed",
+      error: "old failure",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    await h.engine.reconnectMcpServers();
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+    const inventory = (await h.engine.listMcpServers()) as {
+      data: Array<{ error?: string }>;
+    };
+    expect(inventory.data[0]?.error).toBe("fresh failure");
   });
 
   test("exposes only the selected provider detail fields", async () => {
@@ -2003,6 +2220,26 @@ describe("runtime notices", () => {
     expect(captured.every((notice) => notice.message === "Codex reported warning")).toBe(true);
   });
 
+  test("repeated MCP failures do not evict unrelated runtime warnings", async () => {
+    const notifications: Array<[string, unknown]> = [
+      ["configWarning", { summary: "Keep this warning" }],
+      ...Array.from(
+        { length: 130 },
+        (_, index) =>
+          [
+            "mcpServer/startupStatus/updated",
+            { name: "docs", status: "failed", error: `failure ${index}` },
+          ] as [string, unknown],
+      ),
+    ];
+    const captured = await noticesFor(notifications);
+    expect(captured.map((notice) => notice.method)).toEqual([
+      "configWarning",
+      "mcpServer/startupStatus/updated",
+    ]);
+    expect(captured[1]?.detail).toContain("failure 129");
+  });
+
   test("credentials in a startup error are redacted at capture, not on the way out", async () => {
     const captured = await noticesFor([
       [
@@ -2033,6 +2270,11 @@ describe("runtime notices", () => {
     const h = harness();
     await h.engine.start();
     const dead = h.child();
+    dead.notify("configWarning", { summary: "still actionable after restart" });
+    dead.notify("deprecationNotice", { summary: "migration still required after restart" });
+    dead.notify("warning", { threadId: "thread-1", message: "old thread warning" });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
     dead.exit(1);
     await h.engine.getSupervisor().ensureReady();
 
@@ -2044,7 +2286,17 @@ describe("runtime notices", () => {
     const health = (await h.engine.getRuntimeHealth()) as {
       notices: Array<{ method: string }>;
     };
-    expect(health.notices.map((notice) => notice.method)).toEqual(["configWarning"]);
+    expect(health.notices.map((notice) => notice.method)).toEqual([
+      "configWarning",
+      "deprecationNotice",
+      "configWarning",
+    ]);
+    expect(health.notices.map((notice) => notice.detail)).toContain(
+      "still actionable after restart",
+    );
+    expect(health.notices.map((notice) => notice.detail)).toContain(
+      "migration still required after restart",
+    );
   });
 
   test("absolute paths, identity, and private filenames never leave runtime health", async () => {

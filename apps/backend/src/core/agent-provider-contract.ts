@@ -238,6 +238,8 @@ export interface ProviderInteractiveSnapshot {
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
+  /** False when optional runtime health could not be read for this snapshot. */
+  runtimeHealthAuthoritative?: boolean;
   providerQueue?: NativeAgentQueueSnapshot;
   /**
    * The interaction kinds this *session* can raise, when the provider reports.
@@ -409,6 +411,8 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
 export interface ProviderRuntimeHealth {
   summary: NativeAgentRuntimeSummary;
   notices: NativeAgentRuntimeNotice[];
+  /** Whether the empty/non-empty result came from a successful provider read. */
+  authoritative?: boolean;
 }
 
 export interface BridgeConnection {

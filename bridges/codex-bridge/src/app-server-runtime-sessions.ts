@@ -927,7 +927,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   async listMcpServers(sessionId: string): Promise<unknown | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
-    return this.options.engine.listMcpServers(session.threadId);
+    return this.options.engine.listMcpServers(session.threadId ?? null);
   }
 
   async performMcpAction(

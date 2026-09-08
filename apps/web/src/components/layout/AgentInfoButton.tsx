@@ -1880,6 +1880,19 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     onOpenNoticeChange={setRuntimeNoticeDialogId}
                   />
                 )}
+                {(activeSession.provider === "claude" || activeSession.provider === "opencode") &&
+                (neutralProjection?.runtime?.state ||
+                  neutralProjection?.runtime?.version ||
+                  neutralProjection?.runtime?.drift ||
+                  (neutralProjection?.runtime?.notices?.length ?? 0) > 0) ? (
+                  <AgentRuntimePanel
+                    runtime={neutralProjection?.runtime}
+                    providerLabel={activeSession.providerLabel}
+                    includeMetrics={false}
+                    openNoticeId={runtimeNoticeDialogId}
+                    onOpenNoticeChange={setRuntimeNoticeDialogId}
+                  />
+                ) : null}
                 <AgentInteractionCapability
                   kinds={neutralProjection?.capabilities?.interactions?.kinds}
                   providerLabel={activeSession.providerLabel}

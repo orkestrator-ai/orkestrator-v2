@@ -182,6 +182,28 @@ describe("native agent projection synchronization", () => {
     expect(next).not.toHaveProperty("sessionId");
   });
 
+  test("carries runtime-health authority through projection deltas", () => {
+    const unavailable = applyNativeAgentProjectionDelta(projection(), {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      setFields: { runtimeHealthAuthoritative: false },
+      unsetFields: [],
+      revision: 2,
+      generation: "generation-1",
+    });
+    expect(unavailable?.runtimeHealthAuthoritative).toBe(false);
+
+    const restored = applyNativeAgentProjectionDelta(unavailable!, {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      setFields: { runtimeHealthAuthoritative: true },
+      unsetFields: [],
+      revision: 3,
+      generation: "generation-1",
+    });
+    expect(restored?.runtimeHealthAuthoritative).toBe(true);
+  });
+
   test("rejects duplicate or unknown ordered message ids", () => {
     expect(
       applyNativeAgentProjectionDelta(projection(), {

@@ -950,6 +950,8 @@ The exit status is authoritative; text matching is only a diagnostic aid because
 some tests intentionally exercise and print error paths. See
 [`docs/test-logs.md`](docs/test-logs.md) for limits and retention.
 
+When running tests for a code review, normally `bun run test` is adequite. Only use logged tests for interrogating those specific areas and where there's a need for the outputs. At code review this should already have been done. So `bun run test` is enough.
+
 ### Required frontend-to-browser test cycle for agents
 
 Use this cycle whenever a change affects rendered UI, routing, browser gateway

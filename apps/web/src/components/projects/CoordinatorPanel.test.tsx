@@ -541,7 +541,7 @@ describe("CoordinatorPanel", () => {
     await waitFor(() => expect(syncGit).toHaveBeenCalledWith("project-1"));
   });
 
-  test("disables Git mutations during an active turn and dismisses context warnings", async () => {
+  test("disables Git mutations during an active turn and persists dismissed context warnings", async () => {
     ensuredGit = {
       ...gitStatus,
       upstream: "origin/main",
@@ -595,16 +595,6 @@ describe("CoordinatorPanel", () => {
     expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
     cleanup();
 
-    ensuredSnapshot = {
-      ...ensuredSnapshot,
-      workspace: {
-        ...ensuredSnapshot.workspace,
-        conversations: ensuredSnapshot.workspace.conversations.map((conversation) => ({
-          ...conversation,
-          repositoryContextRevisionAcknowledged: 1,
-        })),
-      },
-    };
     act(() => {
       useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
         ...useNativeAgentProjectionStore.getState().projections.get(sessionKey)!,
@@ -614,7 +604,149 @@ describe("CoordinatorPanel", () => {
     });
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
     expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
+  });
+
+  test("hides repository context warnings acknowledged by the selected conversation", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        repositoryContextRevision: 1,
+        repositoryContextEvents: [
+          {
+            revision: 1,
+            branch: "main",
+            headCommit: "b".repeat(40),
+            occurredAt: new Date(1).toISOString(),
+          },
+        ],
+        conversations: snapshot.workspace.conversations.map((conversation) => ({
+          ...conversation,
+          repositoryContextRevisionAcknowledged: 1,
+        })),
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+  });
+
+  test("dismisses repository context warnings without a selected conversation across remounts", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [],
+        selectedConversationId: null,
+        repositoryContextRevision: 1,
+        repositoryContextEvents: [
+          {
+            revision: 1,
+            branch: "main",
+            headCommit: "b".repeat(40),
+            occurredAt: new Date(1).toISOString(),
+          },
+        ],
+      },
+    };
+
+    const active = render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
+    expect(screen.getByText("No open coordinator conversation.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss repository context notice" }));
+    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+    active.unmount();
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByText("No open coordinator conversation.");
+    expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
+  });
+
+  test("shows a newer repository context warning after dismissing an earlier revision", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        repositoryContextRevision: 1,
+        repositoryContextEvents: [
+          {
+            revision: 1,
+            branch: "main",
+            headCommit: "b".repeat(40),
+            occurredAt: new Date(1).toISOString(),
+          },
+        ],
+      },
+    };
+
+    const first = render(<CoordinatorPanel projectId="project-1" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Dismiss repository context notice" }),
+    );
+    first.unmount();
+
+    ensuredSnapshot = {
+      ...ensuredSnapshot,
+      workspace: {
+        ...ensuredSnapshot.workspace,
+        repositoryContextRevision: 2,
+        repositoryContextEvents: [
+          ...(ensuredSnapshot.workspace.repositoryContextEvents ?? []),
+          {
+            revision: 2,
+            branch: "feature",
+            headCommit: "c".repeat(40),
+            occurredAt: new Date(2).toISOString(),
+          },
+        ],
+      },
+    };
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(/context r2/)).toBeTruthy();
+  });
+
+  test("scopes dismissed repository context warnings to one conversation", async () => {
+    const secondConversation = {
+      ...snapshot.workspace.conversations[0]!,
+      id: "conversation-2",
+      tabId: "coordinator-tab-2",
+      logicalSessionKey: "coordinator-coordinator-1:conversation-2",
+      title: "Second",
+      mailboxIncarnationId: "incarnation-2",
+    };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [...snapshot.workspace.conversations, secondConversation],
+        repositoryContextRevision: 1,
+        repositoryContextEvents: [
+          {
+            revision: 1,
+            branch: "main",
+            headCommit: "b".repeat(40),
+            occurredAt: new Date(1).toISOString(),
+          },
+        ],
+      },
+    };
+
+    const first = render(<CoordinatorPanel projectId="project-1" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Dismiss repository context notice" }),
+    );
+    first.unmount();
+
+    ensuredSnapshot = {
+      ...ensuredSnapshot,
+      workspace: {
+        ...ensuredSnapshot.workspace,
+        selectedConversationId: secondConversation.id,
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
   });
 });

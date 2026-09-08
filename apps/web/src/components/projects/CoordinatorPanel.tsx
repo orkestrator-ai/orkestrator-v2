@@ -242,10 +242,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const blocked = git?.repositoryOperationBlockedReason ?? null;
   const dirty = Boolean(git && (git.trackedChanges > 0 || git.untrackedChanges > 0));
   const newestContextEvent = snapshot?.workspace.repositoryContextEvents?.at(-1);
-  const contextNoticeSessionIdentity =
-    snapshot && selected
-      ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected.id}`
-      : undefined;
+  const contextNoticeSessionIdentity = snapshot
+    ? `coordinator\u0000${projectId}\u0000${snapshot.workspace.id}\u0000${selected?.id ?? "none"}`
+    : undefined;
   const contextNoticeOccurrenceId = newestContextEvent
     ? `repository-context\u0000${newestContextEvent.revision}`
     : undefined;

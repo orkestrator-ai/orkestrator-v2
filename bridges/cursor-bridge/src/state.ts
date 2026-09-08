@@ -232,6 +232,8 @@ export interface ActiveSubagentDescriptor {
 export interface SessionState {
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  /** Per-turn review boundary; changing it reattaches the same SDK conversation. */
+  readOnly?: boolean;
   clientSessionKey?: string;
   /** The SDK's own agent id. Stable across bridge restarts; what resume takes. */
   agentId?: string;

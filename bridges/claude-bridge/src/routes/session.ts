@@ -542,6 +542,10 @@ session.post("/:id/prompt", async (c) => {
         ? (rawEffort as "low" | "medium" | "high" | "xhigh" | "max")
         : undefined;
     const rawPermissionMode = body.permissionMode as string | undefined;
+    const readOnly = body.readOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      return c.json({ error: "readOnly must be a boolean" }, 400);
+    }
     const permissionMode =
       rawPermissionMode &&
       ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(
@@ -671,6 +675,7 @@ session.post("/:id/prompt", async (c) => {
             attachments,
             effort,
             permissionMode,
+            ...(typeof readOnly === "boolean" ? { readOnly } : {}),
             fastMode,
             agent,
             includeLocalSettings,
@@ -722,6 +727,7 @@ session.post("/:id/prompt", async (c) => {
       model,
       effort,
       permissionMode,
+      ...(typeof readOnly === "boolean" ? { readOnly } : {}),
       fastMode,
       agent,
       includeLocalSettings,
@@ -734,6 +740,7 @@ session.post("/:id/prompt", async (c) => {
       attachments,
       effort,
       permissionMode,
+      ...(typeof readOnly === "boolean" ? { readOnly } : {}),
       fastMode,
       agent,
       includeLocalSettings,

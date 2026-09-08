@@ -751,6 +751,8 @@ export interface PromptOptions {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  /** Restrict this turn to inspection without enabling Claude's plan workflow. */
+  readOnly?: boolean;
   /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */
   fastMode?: boolean;
   /** Named top-level agent/profile discovered from the SDK. */

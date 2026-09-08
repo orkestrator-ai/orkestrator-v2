@@ -866,7 +866,12 @@ export function SharedNativeAgentController({
   const selectedComposeProfileId = effectiveComposeProfileId ?? DEFAULT_EXECUTION_PROFILE_ID;
 
   const submit = useCallback(
-    async (text: string, requestId?: string, preparedPrompt = false) => {
+    async (
+      text: string,
+      requestId?: string,
+      preparedPrompt = false,
+      modeOverride?: "build" | "plan",
+    ) => {
       const restoreComposerFocus = Boolean(
         inputContainerRef.current?.contains(document.activeElement),
       );
@@ -976,7 +981,7 @@ export function SharedNativeAgentController({
         requestId: dispatchRequestId,
         model: composer?.selectedModelId,
         reasoningEffort: composer?.selectedReasoningId,
-        mode: composer?.selectedModeId,
+        mode: modeOverride ?? composer?.selectedModeId,
         fastMode: composer?.fastModeEnabled ?? undefined,
         subAgent: platform === "claude" ? effectiveComposeProfileId : undefined,
         executionAgent: platform === "opencode" ? effectiveComposeProfileId : undefined,
@@ -2063,7 +2068,11 @@ export function SharedNativeAgentController({
             isReviewTab && projection && !isTurnActive && messages.length > 0,
           )}
           onAddressAll={async () => {
-            await submit(ADDRESS_ALL_REVIEW_PROMPT);
+            if (composer?.selectedModeId === "plan") {
+              const updated = await updateControlsSafely({ mode: "build" });
+              if (updated === null) return;
+            }
+            await submit(ADDRESS_ALL_REVIEW_PROMPT, undefined, false, "build");
           }}
           queue={
             projection?.queue

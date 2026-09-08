@@ -160,7 +160,18 @@ export function cursorDeniedTools(
 }
 
 async function attach(state: SessionState): Promise<SDKAgent> {
-  const policy = resolveCursorExecutionPolicy(state.policy);
+  const policy = resolveCursorExecutionPolicy(
+    state.readOnly
+      ? {
+          id: "coordinator-read-only",
+          sandbox: "provider",
+          approvals: "deny",
+          projectResources: false,
+          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+          networkAccess: "restricted",
+        }
+      : state.policy,
+  );
   const readOnly = policy.id === "coordinator-read-only";
   if (policy.approvals === "deny" && !readOnly) {
     throw new Error(

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { MULTI_REVIEW_PLAN_TOOL_PROHIBITION } from "@orkestrator/protocol/multi-review";
 import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewPreparationPrompt,
@@ -144,7 +145,7 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain('"reviewSourceIds":["reviewer-1/');
     expect(prompt).toContain("record the narrower scope as a limitation");
     expect(prompt).toContain("This is a report-consolidation turn, not a planning turn");
-    expect(prompt).toContain("Do not invoke CreatePlan, create_plan, EnterPlanMode");
+    expect(prompt).toContain(MULTI_REVIEW_PLAN_TOOL_PROHIBITION);
     expect(prompt).toContain("A plan, plan-review card, or approval request is not a valid result");
     expect(prompt).toContain("Return the consolidated structured report directly");
     expect(prompt).toContain("## Structured report structural preflight");

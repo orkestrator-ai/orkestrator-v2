@@ -138,6 +138,20 @@ const OPENCODE_READ_ONLY_PERMISSIONS = Object.freeze([
   "task",
 ]);
 
+/** Per-message tool mask for a structured report turn that must not mutate state. */
+export const OPENCODE_READ_ONLY_TURN_TOOLS: Readonly<Record<string, boolean>> = Object.freeze({
+  write: false,
+  edit: false,
+  patch: false,
+  apply_patch: false,
+  bash: false,
+  shell: false,
+  task: false,
+  todowrite: false,
+  webfetch: false,
+  websearch: false,
+});
+
 export function effectiveOpenCodePolicy(
   policy: NativeAgentExecutionPolicy,
 ): NativeAgentExecutionPolicy {

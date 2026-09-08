@@ -147,6 +147,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       requestId?: string;
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
+      readOnly?: boolean;
       agentMcp?: { url: string; token: string };
     },
   ): Promise<
@@ -197,6 +198,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       requestId?: string;
       attachments: PromptAttachmentInput[];
       outputSchema?: JsonSchema;
+      readOnly?: boolean;
       agentMcp?: { url: string; token: string };
     },
   ): Promise<
@@ -433,6 +435,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         : wrapPromptForConversationMode(promptWithRecoveredContext, session.config.mode),
       input.attachments,
     );
+    // Consolidation is a structured report turn, not a planning turn. Apply
+    // the read-only boundary to this turn's sandbox without changing the
+    // conversation mode or persisting it onto the reusable Fix session.
+    const turnConfig: EngineTurnConfig = input.readOnly
+      ? { ...session.config, sandbox: "read-only", approvalPolicy: "never" }
+      : session.config;
 
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is
@@ -447,7 +455,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         this.options.engine.startTurn({
           handle: context!.engineHandle,
           input: engineInput,
-          config: session.config,
+          config: turnConfig,
           requestId,
           outputSchema: input.outputSchema,
         });

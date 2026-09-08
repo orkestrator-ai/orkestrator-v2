@@ -84,6 +84,7 @@ import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
+import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -450,7 +451,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     applyVendorUpdate(state, method, params);
   };
   child.onPermission = (requestId, params) => {
-    if (state.policy?.approvals === "deny") {
+    if (effectiveTurnExecutionPolicy(state)?.approvals === "deny") {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
@@ -530,9 +531,18 @@ export async function ensureSessionProcess(
   return signal ? raceAbort(attach, signal) : attach;
 }
 
+export async function setSessionReadOnly(state: SessionState, readOnly: boolean): Promise<void> {
+  if ((state.readOnly === true) === readOnly) return;
+  const previous = state.child;
+  state.child = null;
+  clearApprovals(state);
+  state.readOnly = readOnly;
+  await previous?.close();
+}
+
 export async function spawnAndLoadSession(state: SessionState): Promise<AcpProcess> {
   if (state.child) return state.child;
-  const child = new AcpProcess({ policy: state.policy });
+  const child = new AcpProcess({ policy: effectiveTurnExecutionPolicy(state) });
   try {
     const initialized = await child.initialize();
     const capabilities = isObject(initialized.agentCapabilities)

@@ -200,6 +200,7 @@ export interface ProviderCreateSessionOptions {
 }
 
 export interface ProviderSendOptions {
+  /** Per-turn mutation boundary; independent of plan/build response semantics. */
   readOnly?: boolean;
   requestId: string;
   attachments?: PromptAttachment[];

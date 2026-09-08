@@ -1362,6 +1362,19 @@ describe("session routes", () => {
       });
     });
 
+    test("forwards a read-only build turn independently of permission mode", async () => {
+      await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Consolidate the reports",
+        permissionMode: "dontAsk",
+        readOnly: true,
+      });
+
+      expect(mockSendPrompt.mock.calls[0]?.[2]).toMatchObject({
+        permissionMode: "dontAsk",
+        readOnly: true,
+      });
+    });
+
     test("forwards the agent, local-settings and suggestion options", async () => {
       await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "test",

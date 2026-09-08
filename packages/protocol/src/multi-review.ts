@@ -35,8 +35,9 @@ export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
 export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
-export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION =
-  "This is an implementation turn, not a planning turn. You are already in build mode: remain in build mode and begin editing the files now. Do not enter, propose, switch to, or imitate plan mode. Do not invoke CreatePlan, create_plan, EnterPlanMode, or any equivalent planning or mode-switch tool, even if the provider offers one. A plan, plan-review card, or approval request is not a valid response to this prompt. Do not ask the user to approve a plan or switch modes, and do not pause before implementation. Use the file-editing and command tools directly, complete the necessary edits, and run relevant validation in this turn.";
+export const MULTI_REVIEW_PLAN_TOOL_PROHIBITION =
+  "Do not invoke CreatePlan, create_plan, EnterPlanMode, or any equivalent planning or mode-switch tool, even if the provider offers one.";
+export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION = `This is an implementation turn, not a planning turn. You are already in build mode: remain in build mode and begin editing the files now. Do not enter, propose, switch to, or imitate plan mode. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid response to this prompt. Do not ask the user to approve a plan or switch modes, and do not pause before implementation. Use the file-editing and command tools directly, complete the necessary edits, and run relevant validation in this turn.`;
 /**
  * Ends the automated preparation/consolidation contract when their session
  * becomes an ordinary, user-facing Fix conversation.

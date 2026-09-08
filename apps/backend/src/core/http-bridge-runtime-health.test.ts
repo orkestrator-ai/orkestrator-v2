@@ -7,7 +7,7 @@
  * require reshaping the one bridge that already had it.
  */
 import { describe, expect, test } from "bun:test";
-import { httpProvider } from "./agent-provider-test-support.js";
+import { httpProvider, waitUntil } from "./agent-provider-test-support.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 
 describe("bridgeRuntimeSummary", () => {
@@ -62,6 +62,50 @@ describe("bridgeRuntimeSummary", () => {
     expect(summary.notices).toHaveLength(1);
     expect(summary.notices?.[0]?.count).toBe(2);
     expect(summary.notices?.[0]?.occurrences).toHaveLength(2);
+  });
+
+  test("groups Codex notices by their structured condition identity", () => {
+    const summary = bridgeRuntimeSummary({
+      engine: {},
+      notices: [
+        {
+          id: "mcp:t1:github",
+          subject: "github",
+          method: "mcpServer/startupStatus/updated",
+          message: "github MCP failed to start",
+          severity: "error",
+          detail: "first",
+        },
+        {
+          id: "mcp:t1:github",
+          subject: "github",
+          method: "mcpServer/startupStatus/updated",
+          message: "github MCP failed to start",
+          severity: "error",
+          detail: "second",
+        },
+        {
+          id: "mcp:t1:docs",
+          subject: "docs",
+          method: "mcpServer/startupStatus/updated",
+          message: "docs MCP failed to start",
+          severity: "error",
+        },
+      ],
+    })!;
+
+    expect(summary.notices).toHaveLength(2);
+    expect(summary.notices?.[0]).toMatchObject({
+      id: "mcp:t1:github",
+      subject: "github",
+      count: 2,
+    });
+    expect(snapshotNotices({ transcriptTruncated: false, runtime: summary })).toContainEqual({
+      kind: "advisory",
+      message: "github MCP failed to start",
+      severity: "error",
+      occurrenceId: "mcp:t1:github",
+    });
   });
 
   test("preserves Codex notice severity while keeping both out of the tab", () => {
@@ -195,8 +239,73 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
       drift: { unknownEvents: 1, unknownKinds: ["future-event"] },
       notices: [{ message: "deprecated", severity: "warning", source: "provider" }],
     });
+    expect(snapshot.runtimeHealthAuthoritative).toBe(true);
     expect(snapshot.notices).toBeUndefined();
     expect(requests.some(({ url }) => url.endsWith("/runtime-health"))).toBe(true);
+  });
+
+  test("marks an interactive snapshot when optional runtime health is unavailable", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/init")) {
+        return Response.json({ initData: { mcpServers: [], plugins: [], slashCommands: [] } });
+      }
+      if (url.endsWith("/runtime-health")) {
+        return new Response("unavailable", { status: 503 });
+      }
+      return Response.json({ status: "idle" });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("s-1");
+    expect(snapshot.runtimeHealthAuthoritative).toBe(false);
+    expect(snapshot.notices).toBeUndefined();
+    const cached = await provider.interactiveSnapshot!("s-1");
+    expect(cached.runtimeHealthAuthoritative).toBe(false);
+  });
+
+  test("an authoritative empty refresh retires cached runtime notices", async () => {
+    let failing = true;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/init")) {
+        return Response.json({ initData: { mcpServers: [], plugins: [], slashCommands: [] } });
+      }
+      if (url.endsWith("/runtime-health")) {
+        return Response.json(
+          failing
+            ? {
+                summary: {},
+                notices: [{ message: "MCP failed", severity: "error", source: "provider" }],
+              }
+            : { summary: {}, notices: [] },
+        );
+      }
+      return Response.json({ status: "idle" });
+    });
+
+    const failed = await provider.interactiveSnapshot!("s-1");
+    expect(failed.notices).toEqual([
+      { kind: "advisory", message: "MCP failed", severity: "error" },
+    ]);
+    failing = false;
+    const metadata = (
+      provider as unknown as {
+        interactiveMetadata: Map<string, { expiresAt: number }>;
+      }
+    ).interactiveMetadata;
+    metadata.get("s-1")!.expiresAt = 0;
+    await provider.interactiveSnapshot!("s-1");
+    await waitUntil(() => {
+      const runtime = (
+        metadata as Map<string, { expiresAt: number; runtime?: { notices?: unknown[] } }>
+      ).get("s-1")?.runtime;
+      return runtime?.notices?.length === 0;
+    });
+
+    const recovered = await provider.interactiveSnapshot!("s-1");
+    expect(recovered.runtimeHealthAuthoritative).toBe(true);
+    expect(recovered.runtime?.notices).toEqual([]);
+    expect(recovered.notices).toBeUndefined();
   });
 
   test("reads the route and normalizes it", async () => {
@@ -209,6 +318,7 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     expect(await provider.runtimeHealth!("s-1")).toEqual({
       summary: { state: "attached" },
       notices: [],
+      authoritative: true,
     });
   });
 
@@ -216,14 +326,22 @@ describe("HttpBridgeProvider.runtimeHealth", () => {
     // A 404 here must never fail the environment: this hop cannot tell "older
     // bridge" from "gone session", and health is optional metadata either way.
     const { provider } = httpProvider(() => new Response("not found", { status: 404 }));
-    expect(await provider.runtimeHealth!("s-1")).toEqual({ summary: {}, notices: [] });
+    expect(await provider.runtimeHealth!("s-1")).toEqual({
+      summary: {},
+      notices: [],
+      authoritative: false,
+    });
   });
 
   test("answers empty when the read throws outright", async () => {
     const { provider } = httpProvider(() => {
       throw new Error("bridge down");
     });
-    expect(await provider.runtimeHealth!("s-1")).toEqual({ summary: {}, notices: [] });
+    expect(await provider.runtimeHealth!("s-1")).toEqual({
+      summary: {},
+      notices: [],
+      authoritative: false,
+    });
   });
 
   test("carries notices out beside the summary", async () => {

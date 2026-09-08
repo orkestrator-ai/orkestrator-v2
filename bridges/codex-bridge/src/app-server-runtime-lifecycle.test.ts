@@ -4166,6 +4166,37 @@ describe("runtime health", () => {
     ]);
   });
 
+  test("an unmaterialized session does not inherit another thread's MCP error detail", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => ({
+        data: [{ name: "docs", runtimeStatus: "failed", tools: {} }],
+      }),
+    });
+    const owner = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(owner.sessionId, {
+      prompt: "materialize",
+      requestId: "req-1",
+      attachments: [],
+    });
+    const unmaterialized = h.runtime.createSession({ mode: "build" });
+    h.child().notify("mcpServer/startupStatus/updated", {
+      threadId: "thread-1",
+      name: "docs",
+      status: "failed",
+      error: "owner failure",
+    });
+    await h.drain();
+
+    const ownerInventory = (await h.runtime.listMcpServers(owner.sessionId)) as {
+      data: Array<{ error?: string }>;
+    };
+    const unmaterializedInventory = (await h.runtime.listMcpServers(unmaterialized.sessionId)) as {
+      data: Array<{ error?: string }>;
+    };
+    expect(ownerInventory.data[0]?.error).toBe("owner failure");
+    expect(unmaterializedInventory.data[0]?.error).toBeUndefined();
+  });
+
   test("an unknown session is rejected instead of returning environment-wide data", async () => {
     const h = await harness({
       "mcpServerStatus/list": () => ({ data: [] }),

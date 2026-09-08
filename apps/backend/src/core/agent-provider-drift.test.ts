@@ -101,6 +101,27 @@ describe("normalizeProviderRuntimeNotices", () => {
     ]);
   });
 
+  test("preserves bounded stable identity and subject fields", () => {
+    expect(
+      normalizeProviderRuntimeNotices([
+        {
+          id: `mcp:${"x".repeat(300)}`,
+          subject: "github",
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: `mcp:${"x".repeat(252)}`,
+        subject: "github",
+        message: "github MCP failed to start",
+        severity: "error",
+        source: "bridge",
+      },
+    ]);
+  });
+
   test("drops a notice with no usable message", () => {
     expect(normalizeProviderRuntimeNotices([{ method: "m" }, { message: "" }, null, 7])).toEqual(
       [],
@@ -226,6 +247,57 @@ describe("providerAdvisoryNotices", () => {
         occurrenceId: "provider\u0000failed\u00002026-09-07T10:01:00.000Z\u00002",
       },
     ]);
+  });
+
+  test("uses a stable condition identity instead of repeat timestamps when available", () => {
+    expect(
+      providerAdvisoryNotices([
+        {
+          id: "mcp:t1:github",
+          message: "github MCP failed to start",
+          severity: "error",
+          count: 9,
+          occurrences: [{ receivedAt: "2026-09-08T10:00:00.000Z" }],
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "advisory",
+        message: "github MCP failed to start",
+        severity: "error",
+        occurrenceId: "mcp:t1:github",
+      },
+    ]);
+  });
+
+  test("prefers a stable condition over its mixed-version message-only duplicate", () => {
+    expect(
+      providerAdvisoryNotices([
+        {
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+        {
+          id: "mcp:t1:github",
+          message: "github MCP failed to start",
+          severity: "error",
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "advisory",
+        message: "github MCP failed to start",
+        severity: "error",
+        occurrenceId: "mcp:t1:github",
+      },
+    ]);
+
+    expect(
+      providerAdvisoryNotices([
+        { id: "mcp:t1:a", message: "same", severity: "error" },
+        { id: "mcp:t1:b", message: "same", severity: "error" },
+      ]),
+    ).toHaveLength(2);
   });
 
   test("is bounded, keeping the most recent", () => {

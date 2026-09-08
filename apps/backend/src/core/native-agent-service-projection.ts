@@ -1835,6 +1835,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? { policy: snapshot.policy ?? resolved.session.policy }
           : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
+        ...(snapshot.runtimeHealthAuthoritative === undefined
+          ? {}
+          : { runtimeHealthAuthoritative: snapshot.runtimeHealthAuthoritative }),
         ...(snapshot.runtime || mcpServers.length > 0
           ? {
               runtime: {

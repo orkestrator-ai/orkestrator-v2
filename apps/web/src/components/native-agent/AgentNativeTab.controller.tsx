@@ -5,6 +5,7 @@ import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-setting
 import {
   nativeAsyncQuestionRequestId,
   resolveReasoningId,
+  type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
@@ -129,6 +130,11 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
+
+function nativeNoticeDismissalId(notice: NativeAgentNotice): string {
+  const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
+  return `${notice.kind}\u0000${severity}\u0000${notice.occurrenceId ?? notice.message}`;
+}
 
 export async function enqueueNativeAsyncQuestionResponse(input: {
   platform: string;
@@ -330,6 +336,18 @@ export function SharedNativeAgentController({
         ?.occurrenceIds ?? EMPTY_DISMISSED_NOTICE_IDS,
   );
   const dismissNotice = useNativeNoticeDismissalStore((state) => state.dismiss);
+  const reconcileNoticeDismissals = useNativeNoticeDismissalStore((state) => state.reconcile);
+  const activeNoticeIds = useMemo(
+    () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
+    [projection?.notices],
+  );
+  useEffect(() => {
+    // An absent projection means rehydration is still in flight, not that every
+    // condition recovered. Only an authoritative snapshot may retire a
+    // dismissal and allow a later recurrence to surface again.
+    if (!projection || projection.runtimeHealthAuthoritative === false) return;
+    reconcileNoticeDismissals(noticeSessionIdentity, activeNoticeIds);
+  }, [activeNoticeIds, noticeSessionIdentity, projection, reconcileNoticeDismissals]);
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const updateDraft = useNativeComposeStore((state) => state.updateDraft);
   const clearDraft = useNativeComposeStore((state) => state.clearDraft);
@@ -1483,7 +1501,7 @@ export function SharedNativeAgentController({
     ) : null,
     ...(projection?.notices ?? []).flatMap((notice) => {
       const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
-      const noticeId = `${notice.kind}\u0000${severity}\u0000${notice.occurrenceId ?? notice.message}`;
+      const noticeId = nativeNoticeDismissalId(notice);
       if (dismissedNoticeIds.includes(noticeId)) return [];
 
       const isError = severity === "error";

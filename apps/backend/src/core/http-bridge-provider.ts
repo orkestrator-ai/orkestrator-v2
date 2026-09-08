@@ -43,6 +43,10 @@ import {
 import type { PromptAttachment } from "./prompt-attachments.js";
 import { bridgeRuntimeSummary, snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
+  refreshHttpBridgeRuntimeMetadata,
+  type HttpBridgeRuntimeMetadata,
+} from "./http-bridge-runtime-metadata.js";
+import {
   asRecord,
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
@@ -111,14 +115,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * do have to be reconciled against the bridge.
    */
   private readonly codexModes = new Map<string, ProviderExecutionMode>();
-  private readonly interactiveMetadata = new Map<
-    string,
-    {
-      expiresAt: number;
-      executionProfiles?: NativeAgentComposerState["executionProfiles"];
-      runtime?: NativeAgentRuntimeSummary;
-    }
-  >();
+  private readonly interactiveMetadata = new Map<string, HttpBridgeRuntimeMetadata>();
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
   private readonly runtimeMetadataRefreshes = new Map<string, Promise<void>>();
   private runtimeMetadataGeneration = 0;
@@ -638,62 +635,27 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         {},
         this.fetchImpl,
       );
-      if (!response.ok) return { summary: {}, notices: [] };
+      if (!response.ok) return { summary: {}, notices: [], authoritative: false };
       const summary = bridgeRuntimeSummary(
         await boundedJson(response, `${this.agent} runtime health read`, {
           remaining: 512 * 1024,
         }),
       );
-      return { summary: summary ?? {}, notices: summary?.notices ?? [] };
+      if (!summary) return { summary: {}, notices: [], authoritative: false };
+      return { summary, notices: summary.notices ?? [], authoritative: true };
     } catch {
-      return { summary: {}, notices: [] };
+      return { summary: {}, notices: [], authoritative: false };
     }
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
-    const pending = this.runtimeMetadataRefreshes.get(sessionId);
-    if (pending) return pending;
-    const retained = this.interactiveMetadata.get(sessionId);
-    const generation = this.runtimeMetadataGeneration;
-    const operation = (async () => {
-      try {
-        const { summary: runtime } = await this.runtimeHealth(sessionId);
-        if (generation !== this.runtimeMetadataGeneration) return;
-        if (Object.keys(runtime).length === 0 && retained) {
-          if (this.interactiveMetadata.get(sessionId) === retained) {
-            retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
-          }
-          return;
-        }
-        setBoundedMapEntry(
-          this.interactiveMetadata,
-          sessionId,
-          {
-            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-            ...(retained?.executionProfiles && {
-              executionProfiles: retained.executionProfiles,
-            }),
-            runtime: { ...retained?.runtime, ...runtime },
-          },
-          MAX_TRACKED_INTERACTION_SESSIONS,
-        );
-      } catch {
-        // Keep known inventory usable and avoid retrying a failed optional
-        // endpoint on every 500ms projection poll.
-        if (
-          generation === this.runtimeMetadataGeneration &&
-          retained &&
-          this.interactiveMetadata.get(sessionId) === retained
-        ) {
-          retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
-        }
-      }
-    })();
-    this.runtimeMetadataRefreshes.set(sessionId, operation);
-    return operation.finally(() => {
-      if (this.runtimeMetadataRefreshes.get(sessionId) === operation) {
-        this.runtimeMetadataRefreshes.delete(sessionId);
-      }
+    return refreshHttpBridgeRuntimeMetadata({
+      sessionId,
+      metadata: this.interactiveMetadata,
+      refreshes: this.runtimeMetadataRefreshes,
+      generation: this.runtimeMetadataGeneration,
+      currentGeneration: () => this.runtimeMetadataGeneration,
+      read: () => this.runtimeHealth(sessionId),
     });
   }
 
@@ -771,13 +733,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
               ...healthRuntime,
             }
           : undefined;
-      if (refreshMetadata && !cachedMetadata) {
+      if (refreshMetadata && !cachedMetadata && health) {
         setBoundedMapEntry(
           this.interactiveMetadata,
           sessionId,
           {
-            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+            expiresAt:
+              Date.now() +
+              (health.authoritative === false
+                ? INTERACTIVE_RUNTIME_METADATA_RETRY_MS
+                : INTERACTIVE_RUNTIME_METADATA_TTL_MS),
             ...(runtime ? { runtime } : {}),
+            runtimeHealthAuthoritative: health.authoritative !== false,
           },
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
@@ -806,6 +773,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
+        ...(health
+          ? { runtimeHealthAuthoritative: health.authoritative !== false }
+          : cachedMetadata?.runtimeHealthAuthoritative !== undefined
+            ? { runtimeHealthAuthoritative: cachedMetadata.runtimeHealthAuthoritative }
+            : {}),
         ...(Array.isArray(bridgeQueue?.items)
           ? { providerQueue: { items: bridgeQueue.items.slice(0, 512) } }
           : {}),
@@ -870,14 +842,19 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       );
       const rawPhase = payload?.phase;
       let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
-      if (runtimeResponse) runtime = runtimeResponse.summary;
-      if (refreshMetadata && !cachedMetadata) {
+      if (runtimeResponse?.authoritative !== false) runtime = runtimeResponse?.summary ?? runtime;
+      if (refreshMetadata && !cachedMetadata && runtimeResponse) {
         setBoundedMapEntry(
           this.interactiveMetadata,
           sessionId,
           {
-            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+            expiresAt:
+              Date.now() +
+              (runtimeResponse.authoritative === false
+                ? INTERACTIVE_RUNTIME_METADATA_RETRY_MS
+                : INTERACTIVE_RUNTIME_METADATA_TTL_MS),
             ...(runtime ? { runtime } : {}),
+            runtimeHealthAuthoritative: runtimeResponse.authoritative !== false,
           },
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
@@ -929,6 +906,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
         ...(runtime ? { runtime } : {}),
+        ...(runtimeResponse
+          ? { runtimeHealthAuthoritative: runtimeResponse.authoritative !== false }
+          : cachedMetadata?.runtimeHealthAuthoritative !== undefined
+            ? { runtimeHealthAuthoritative: cachedMetadata.runtimeHealthAuthoritative }
+            : {}),
         ...(codexNotices.length > 0 ? { notices: codexNotices } : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
       };
@@ -936,7 +918,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     let executionProfiles: NativeAgentComposerState["executionProfiles"] =
       cachedMetadata?.executionProfiles;
     let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
-    if (runtimeResponse) runtime = { ...runtime, ...runtimeResponse.summary };
+    if (runtimeResponse && runtimeResponse.authoritative !== false) {
+      runtime = { ...runtime, ...runtimeResponse.summary };
+    }
     if (initResponse?.ok) {
       const initPayload = asRecord(
         await boundedJson(initResponse, "Claude init read", { remaining: 256 * 1024 }),
@@ -965,16 +949,31 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       }
     }
     if (refreshMetadata) {
-      setBoundedMapEntry(
-        this.interactiveMetadata,
-        sessionId,
-        {
-          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-          ...(executionProfiles ? { executionProfiles } : {}),
-          ...(runtime ? { runtime } : {}),
-        },
-        MAX_TRACKED_INTERACTION_SESSIONS,
-      );
+      if (cachedMetadata) {
+        // A background health refresh owns runtime and expiry once cached data
+        // exists. Only merge the independent Claude-init catalogue here so a
+        // slower foreground read cannot overwrite freshly reconciled notices.
+        const current = this.interactiveMetadata.get(sessionId);
+        if (current && executionProfiles) current.executionProfiles = executionProfiles;
+      } else {
+        setBoundedMapEntry(
+          this.interactiveMetadata,
+          sessionId,
+          {
+            expiresAt:
+              Date.now() +
+              (runtimeResponse?.authoritative === false
+                ? INTERACTIVE_RUNTIME_METADATA_RETRY_MS
+                : INTERACTIVE_RUNTIME_METADATA_TTL_MS),
+            ...(executionProfiles ? { executionProfiles } : {}),
+            ...(runtime ? { runtime } : {}),
+            ...(runtimeResponse
+              ? { runtimeHealthAuthoritative: runtimeResponse.authoritative !== false }
+              : {}),
+          },
+          MAX_TRACKED_INTERACTION_SESSIONS,
+        );
+      }
     }
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
@@ -1004,6 +1003,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
       ...(runtime ? { runtime } : {}),
+      ...(runtimeResponse
+        ? { runtimeHealthAuthoritative: runtimeResponse.authoritative !== false }
+        : cachedMetadata?.runtimeHealthAuthoritative !== undefined
+          ? { runtimeHealthAuthoritative: cachedMetadata.runtimeHealthAuthoritative }
+          : {}),
       ...(claudeNotices.length > 0 ? { notices: claudeNotices } : {}),
       ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
         ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }

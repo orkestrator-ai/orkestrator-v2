@@ -364,6 +364,8 @@ interface RuntimeNotice {
   global: boolean;
   method: string;
   severity: "info" | "warning" | "error";
+  id?: string;
+  subject?: string;
   detail?: string;
   receivedAt: string;
   threadId?: string;
@@ -373,6 +375,8 @@ interface RuntimeHealthNotice {
   method: string;
   message: string;
   severity: "info" | "warning" | "error";
+  id?: string;
+  subject?: string;
   detail?: string;
   receivedAt: string;
 }
@@ -435,6 +439,54 @@ function runtimeNoticeDetail(method: string, params: Record<string, unknown>): s
 
   const detail = parts.filter(Boolean).join("\n");
   return detail ? redactRuntimeNoticeDetail(detail) : undefined;
+}
+
+function mcpRuntimeStatus(value: unknown): Map<string, string | null> | undefined {
+  const root = objectRecord(value);
+  if (typeof root.error === "string" || !Array.isArray(root.data)) return undefined;
+  const statuses = new Map<string, string | null>();
+  for (const candidate of root.data) {
+    const entry = objectRecord(candidate);
+    const name = optionalPublicString(entry.name);
+    const status = optionalPublicString(entry.runtimeStatus);
+    if (name) statuses.set(name, status ?? null);
+  }
+  return statuses;
+}
+
+const SETTLED_MCP_RUNTIME_STATUSES = new Set([
+  "notStarted",
+  "starting",
+  "connected",
+  "cancelled",
+  "disabled",
+]);
+
+function mcpStatusKeepsFailure(status: string | null | undefined): boolean {
+  return status === null || status === undefined || !SETTLED_MCP_RUNTIME_STATUSES.has(status);
+}
+
+function mcpFailureReason(notice: RuntimeNotice): string | undefined {
+  if (!notice.detail) return undefined;
+  const lines = notice.detail.split("\n");
+  const reason = lines.length > 1 ? lines.slice(1).join("\n") : notice.detail;
+  return reason || undefined;
+}
+
+function mcpRuntimeNoticeMessage(
+  notice: RuntimeNotice,
+  inventoryStatus: string | null | undefined,
+): string {
+  if (!notice.subject) return `Codex reported ${notice.method.replaceAll("/", " ")}`;
+  if (
+    inventoryStatus === "authenticationRequired" ||
+    notice.detail?.split("\n").includes("reauthenticationRequired")
+  ) {
+    return `${notice.subject} MCP authentication required`;
+  }
+  return notice.severity === "error"
+    ? `${notice.subject} MCP failed to start`
+    : `${notice.subject} MCP reported a startup warning`;
 }
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
@@ -699,19 +751,53 @@ export class AppServerEngine implements CodexEngine {
         typeof params.threadId === "string" && params.threadId.length > 0
           ? params.threadId
           : undefined;
-      this.runtimeNotices.push({
-        global:
-          notification.method === "configWarning" || notification.method === "deprecationNotice",
-        method: notification.method,
-        severity: runtimeNoticeSeverity(notification.method, params),
-        // Redacted at *capture*, not on the way out: MCP-server startup errors
-        // are the likeliest place for a real token or a credentialed URL to
-        // appear. Truncate afterwards so redaction sees whole tokens.
-        ...(detail ? { detail } : {}),
-        receivedAt: new Date().toISOString(),
-        ...(threadId ? { threadId } : {}),
-      });
-      if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
+      const severity = runtimeNoticeSeverity(notification.method, params);
+      const mcpName =
+        notification.method === "mcpServer/startupStatus/updated"
+          ? optionalPublicString(params.name)
+          : undefined;
+
+      // Lifecycle events describe inventory, not user-facing advisories. A
+      // successful or cancelled attempt also retires any failure retained from
+      // an earlier attempt for this server.
+      if (
+        notification.method === "mcpServer/startupStatus/updated" &&
+        mcpName &&
+        (params.status === "ready" || params.status === "cancelled")
+      ) {
+        this.removeMcpRuntimeNotices(mcpName, threadId);
+      }
+
+      if (notification.method !== "mcpServer/startupStatus/updated" || severity !== "info") {
+        const runtimeNotice: RuntimeNotice = {
+          global:
+            notification.method === "configWarning" ||
+            notification.method === "deprecationNotice" ||
+            (notification.method === "mcpServer/startupStatus/updated" && !threadId),
+          method: notification.method,
+          severity,
+          ...(mcpName
+            ? {
+                id: `mcp:${threadId ?? "global"}:${mcpName}`,
+                subject: mcpName,
+              }
+            : {}),
+          // Redacted at *capture*, not on the way out: MCP-server startup errors
+          // are the likeliest place for a real token or a credentialed URL to
+          // appear. Truncate afterwards so redaction sees whole tokens.
+          ...(detail ? { detail } : {}),
+          receivedAt: new Date().toISOString(),
+          ...(threadId ? { threadId } : {}),
+        };
+        if (runtimeNotice.id) {
+          const previousIndex = this.runtimeNotices.findIndex(
+            (notice) => notice.id === runtimeNotice.id,
+          );
+          if (previousIndex >= 0) this.runtimeNotices.splice(previousIndex, 1);
+        }
+        this.runtimeNotices.push(runtimeNotice);
+        if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
+      }
     }
 
     const result = reduceNotification(notification, generation);
@@ -748,6 +834,15 @@ export class AppServerEngine implements CodexEngine {
     // Same for approvals: the old child has forgotten the request, so the card on
     // screen is stale and must be withdrawn rather than left to time out.
     this.router.abandonGeneration(previous);
+    // Thread-scoped and MCP notices describe the replaced child. Global config
+    // and deprecation warnings remain actionable across a restart and have no
+    // authoritative snapshot from which the replacement can rehydrate them.
+    for (let index = this.runtimeNotices.length - 1; index >= 0; index -= 1) {
+      const notice = this.runtimeNotices[index];
+      if (!notice?.global || notice.method === "mcpServer/startupStatus/updated") {
+        this.runtimeNotices.splice(index, 1);
+      }
+    }
     for (const binding of this.bindings.values()) binding.generation = previous;
     this.emit({ kind: "engine.generation", generation, previous, engineGeneration: generation });
   }
@@ -757,6 +852,38 @@ export class AppServerEngine implements CodexEngine {
       for (const waiter of waiters) waiter.resolve("failed");
     }
     this.terminalWaiters.clear();
+  }
+
+  private removeMcpRuntimeNotices(name: string, threadId?: string): void {
+    for (let index = this.runtimeNotices.length - 1; index >= 0; index -= 1) {
+      const notice = this.runtimeNotices[index];
+      if (
+        notice?.method === "mcpServer/startupStatus/updated" &&
+        notice.subject === name &&
+        notice.threadId === threadId
+      ) {
+        this.runtimeNotices.splice(index, 1);
+      }
+    }
+  }
+
+  private latestMcpRuntimeNotice(
+    name: string,
+    threadId?: string | null,
+  ): RuntimeNotice | undefined {
+    for (let index = this.runtimeNotices.length - 1; index >= 0; index -= 1) {
+      const notice = this.runtimeNotices[index];
+      if (
+        notice?.method === "mcpServer/startupStatus/updated" &&
+        notice.subject === name &&
+        (threadId === undefined ||
+          notice.global ||
+          (typeof threadId === "string" && notice.threadId === threadId))
+      ) {
+        return notice;
+      }
+    }
+    return undefined;
   }
 
   private resolveTerminalWaiters(
@@ -1016,6 +1143,7 @@ export class AppServerEngine implements CodexEngine {
     const value = (result: PromiseSettledResult<unknown>) =>
       result.status === "fulfilled" ? result.value : { error: "Unavailable" };
     const engine = this.getHealth();
+    const mcpStatuses = mcpRuntimeStatus(value(mcp));
     return {
       engine: {
         state: engine.state,
@@ -1035,10 +1163,21 @@ export class AppServerEngine implements CodexEngine {
       hooks: allowlistRuntimeInventory(value(hooks), "hooks"),
       notices: this.runtimeNotices
         .filter((notice) => threadId === undefined || notice.global || notice.threadId === threadId)
+        .filter((notice) => {
+          if (notice.method !== "mcpServer/startupStatus/updated" || !notice.subject) return true;
+          if (!mcpStatuses) return true;
+          if (!mcpStatuses.has(notice.subject)) return false;
+          return mcpStatusKeepsFailure(mcpStatuses.get(notice.subject));
+        })
         .map((notice) => ({
           method: notice.method,
-          message: `Codex reported ${notice.method.replaceAll("/", " ")}`,
+          message:
+            notice.method === "mcpServer/startupStatus/updated" && notice.subject
+              ? mcpRuntimeNoticeMessage(notice, mcpStatuses?.get(notice.subject))
+              : `Codex reported ${notice.method.replaceAll("/", " ")}`,
           severity: notice.severity,
+          ...(notice.id ? { id: notice.id } : {}),
+          ...(notice.subject ? { subject: notice.subject } : {}),
           ...(notice.detail ? { detail: notice.detail } : {}),
           receivedAt: notice.receivedAt,
         })),
@@ -1047,15 +1186,41 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async listMcpServers(threadId?: string | null): Promise<unknown> {
-    return this.supervisor.request("mcpServerStatus/list", {
+    const response = await this.supervisor.request("mcpServerStatus/list", {
       limit: 100,
       detail: "full",
       ...(threadId ? { threadId } : {}),
     });
+    const root = objectRecord(response);
+    if (!Array.isArray(root.data)) return response;
+    return {
+      ...root,
+      data: root.data.map((candidate) => {
+        const entry = objectRecord(candidate);
+        const name = optionalPublicString(entry.name);
+        if (!name) return candidate;
+        const runtimeStatus = optionalPublicString(entry.runtimeStatus);
+        if (!mcpStatusKeepsFailure(runtimeStatus ?? null)) {
+          return candidate;
+        }
+        const notice = this.latestMcpRuntimeNotice(name, threadId);
+        const error = notice ? mcpFailureReason(notice) : undefined;
+        return error ? { ...entry, error } : candidate;
+      }),
+    };
   }
 
   async reconnectMcpServers(): Promise<void> {
+    const previous = new Set(
+      this.runtimeNotices.filter((notice) => notice.method === "mcpServer/startupStatus/updated"),
+    );
     await this.supervisor.request("config/mcpServer/reload", undefined);
+    // Reload is authoritative only after it succeeds. Remove the snapshot that
+    // predates the request, while retaining fresh failures emitted in flight.
+    for (let index = this.runtimeNotices.length - 1; index >= 0; index -= 1) {
+      const notice = this.runtimeNotices[index];
+      if (notice && previous.has(notice)) this.runtimeNotices.splice(index, 1);
+    }
   }
 
   async beginMcpOauth(

@@ -245,6 +245,34 @@ function RuntimeNoticeCard({
 }) {
   const count = notice.count ?? 1;
   const occurrences = notice.occurrences ?? [];
+  const severity = notice.severity ?? "warning";
+  const appearance =
+    severity === "error"
+      ? {
+          button:
+            "border-destructive/35 bg-destructive/10 text-destructive hover:border-destructive/55 hover:bg-destructive/15 focus-visible:ring-destructive/60",
+          dialog: "border-destructive/30",
+          summary: "border-destructive/30 bg-destructive/10",
+          title: "text-destructive",
+          method: "text-destructive/65",
+        }
+      : severity === "info"
+        ? {
+            button:
+              "border-border/70 bg-muted/20 text-foreground/80 hover:border-border hover:bg-muted/35 focus-visible:ring-ring/60",
+            dialog: "border-border",
+            summary: "border-border/70 bg-muted/20",
+            title: "text-foreground",
+            method: "text-muted-foreground",
+          }
+        : {
+            button:
+              "border-amber-500/20 bg-amber-500/5 text-amber-100/80 hover:border-amber-400/35 hover:bg-amber-500/10 focus-visible:ring-amber-400/60",
+            dialog: "border-amber-500/20",
+            summary: "border-amber-500/20 bg-amber-500/5",
+            title: "text-amber-100",
+            method: "text-amber-100/55",
+          };
   return (
     <Dialog
       open={openNoticeId === noticeId}
@@ -253,7 +281,10 @@ function RuntimeNoticeCard({
       <DialogTrigger asChild>
         <button
           type="button"
-          className="group flex w-full items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-left text-xs text-amber-100/80 transition-colors hover:border-amber-400/35 hover:bg-amber-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+          className={cn(
+            "group flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2",
+            appearance.button,
+          )}
           aria-label={`Show details for ${notice.message}`}
         >
           <span className="min-w-0 flex-1">
@@ -263,19 +294,23 @@ function RuntimeNoticeCard({
           <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform group-hover:translate-x-0.5 group-hover:opacity-90" />
         </button>
       </DialogTrigger>
-      <DialogContent className="max-w-xl border-amber-500/20 sm:max-w-xl">
+      <DialogContent className={cn("max-w-xl sm:max-w-xl", appearance.dialog)}>
         <DialogHeader>
-          <DialogTitle>{providerLabel} runtime notice</DialogTitle>
+          <DialogTitle>
+            {providerLabel} runtime {severity === "error" ? "error" : "notice"}
+          </DialogTitle>
           <DialogDescription>
             {count === 1 ? "One occurrence" : `${count} occurrences`}. Sensitive values and local
             paths are redacted.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-            <div className="text-sm font-medium text-amber-100">{notice.message}</div>
+          <div className={cn("rounded-lg border p-3", appearance.summary)}>
+            <div className={cn("text-sm font-medium", appearance.title)}>{notice.message}</div>
             {notice.method ? (
-              <div className="mt-1 font-mono text-[11px] text-amber-100/55">{notice.method}</div>
+              <div className={cn("mt-1 font-mono text-[11px]", appearance.method)}>
+                {notice.method}
+              </div>
             ) : null}
           </div>
           {occurrences.length > 0 ? (
@@ -512,22 +547,26 @@ function codexRateLimitLabel({
 export function AgentRuntimePanel({
   runtime,
   providerLabel,
+  includeMetrics = true,
   openNoticeId,
   onOpenNoticeChange,
 }: {
   runtime: NativeAgentRuntimeSummary | undefined;
   providerLabel: string;
+  includeMetrics?: boolean;
   openNoticeId?: string | null;
   onOpenNoticeChange?: (noticeId: string | null) => void;
 }) {
-  const metrics = (
-    [
-      ["MCP", runtime?.mcpServers],
-      ["Commands", runtime?.commands],
-      ["Skills", runtime?.skills],
-      ["Hooks", runtime?.hooks],
-    ] as const
-  ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]));
+  const metrics = includeMetrics
+    ? (
+        [
+          ["MCP", runtime?.mcpServers],
+          ["Commands", runtime?.commands],
+          ["Skills", runtime?.skills],
+          ["Hooks", runtime?.hooks],
+        ] as const
+      ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]))
+    : [];
 
   const drift = runtime?.drift;
   const notices = (runtime?.notices ?? []).slice(-5);
@@ -580,7 +619,9 @@ export function AgentRuntimePanel({
       {notices.length > 0 ? (
         <div className="space-y-1.5">
           {notices.map((notice) => {
-            const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
+            const noticeId =
+              notice.id ??
+              `${notice.source ?? "bridge"}\u0000${notice.severity ?? "warning"}\u0000${notice.method ?? "notice"}\u0000${notice.message}`;
             return (
               <RuntimeNoticeCard
                 key={noticeId}

@@ -41,4 +41,22 @@ describe("native notice dismissals", () => {
     expect(sessions.at(-1)?.occurrenceIds).toHaveLength(20);
     expect(sessions.at(-1)?.occurrenceIds[0]).toBe("occurrence-5");
   });
+
+  test("keeps dismissals for active conditions and retires recovered ones", () => {
+    const store = useNativeNoticeDismissalStore.getState();
+    store.dismiss("codex/session-a", "mcp:t1:github");
+    store.dismiss("codex/session-a", "mcp:t1:docs");
+    store.dismiss("codex/session-b", "mcp:t2:github");
+
+    useNativeNoticeDismissalStore.getState().reconcile("codex/session-a", ["mcp:t1:github"]);
+    expect(useNativeNoticeDismissalStore.getState().sessions).toEqual([
+      { sessionIdentity: "codex/session-b", occurrenceIds: ["mcp:t2:github"] },
+      { sessionIdentity: "codex/session-a", occurrenceIds: ["mcp:t1:github"] },
+    ]);
+
+    useNativeNoticeDismissalStore.getState().reconcile("codex/session-a", []);
+    expect(useNativeNoticeDismissalStore.getState().sessions).toEqual([
+      { sessionIdentity: "codex/session-b", occurrenceIds: ["mcp:t2:github"] },
+    ]);
+  });
 });

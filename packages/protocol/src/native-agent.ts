@@ -872,6 +872,10 @@ export type NativeAgentNoticeSource = (typeof NATIVE_AGENT_NOTICE_SOURCES)[numbe
 
 export interface NativeAgentRuntimeNotice {
   message: string;
+  /** Stable identity for one currently authoritative runtime condition. */
+  id?: string;
+  /** Short provider-owned object name, such as the MCP server that failed. */
+  subject?: string;
   method?: string;
   count?: number;
   /**
@@ -1268,6 +1272,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   /** Provider limits can arrive before the first token-usage snapshot. */
   rateLimits?: NativeAgentRateLimitWindow[];
   runtime?: NativeAgentRuntimeSummary;
+  /** False when optional runtime health was unavailable for this projection. */
+  runtimeHealthAuthoritative?: boolean;
   auth?: NativeAgentAuthStatus;
   notices?: NativeAgentNotice[];
   /** Content-free marker for an idempotent backend-owned retry. */
@@ -1315,6 +1321,7 @@ export type NativeAgentProjectionField =
   | "contextUsage"
   | "rateLimits"
   | "runtime"
+  | "runtimeHealthAuthoritative"
   | "notices"
   | "recoverableDispatch"
   | "backgroundTasks"
@@ -1402,6 +1409,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "contextUsage",
   "rateLimits",
   "runtime",
+  "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
   "backgroundTasks",
@@ -1423,6 +1431,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "contextUsage",
   "rateLimits",
   "runtime",
+  "runtimeHealthAuthoritative",
   "notices",
   "recoverableDispatch",
   "backgroundTasks",
@@ -1452,7 +1461,9 @@ export function isNativeAgentSessionProjection(
     !Number.isSafeInteger(candidate.revision) ||
     (candidate.revision as number) < 0 ||
     (typeof candidate.generation !== "string" &&
-      !(typeof candidate.generation === "number" && Number.isSafeInteger(candidate.generation)))
+      !(typeof candidate.generation === "number" && Number.isSafeInteger(candidate.generation))) ||
+    (candidate.runtimeHealthAuthoritative !== undefined &&
+      typeof candidate.runtimeHealthAuthoritative !== "boolean")
   ) {
     return false;
   }

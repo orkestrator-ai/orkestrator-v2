@@ -214,6 +214,11 @@ interface PaneLayoutState {
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
   clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
   clearTabAgentHandoff: (tabId: string, environmentId?: string) => void;
+  /**
+   * Retire a setup tab's setup marker, leaving an ordinary terminal tab in
+   * place. Returns whether anything changed.
+   */
+  retireSetupTabMarker: (tabId: string, environmentId?: string) => boolean;
   updateTabNativeSessionId: (
     tabId: string,
     sessionId: string | undefined,
@@ -1048,6 +1053,37 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
     deleteUnreferencedAgentHandoffs(envId, [tabWithHandoff], newRoot);
+  },
+
+  retireSetupTabMarker: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return false;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return false;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || !existingTab?.isSetupTab) return false;
+
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        // Dropped rather than set to false: the persisted layout reader treats
+        // the field's presence as the marker, and a tab carrying
+        // `isSetupTab: false` would round-trip as one that was never a setup
+        // tab anyway. Everything else about the tab — id, title, ordering — is
+        // kept so the user sees the same tab they were already looking at.
+        const { isSetupTab: _retired, ...rest } = tab;
+        return rest;
+      }),
+    }));
+
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
+    return true;
   },
 
   updateTabNativeSessionId: (tabId, sessionId, environmentId) => {

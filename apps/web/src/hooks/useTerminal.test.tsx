@@ -64,8 +64,10 @@ const resizeLocalTerminalMock = mock(
 const resizeTerminalMock = mock(
   async (_sessionId: string, _cols: number, _rows: number) => undefined,
 );
-const writeLocalTerminalMock = mock(async (_sessionId: string, _data: string) => undefined);
-const writeTerminalMock = mock(async (_sessionId: string, _data: string) => undefined);
+// Both resolve to the backend's delivery verdict, so the default is a
+// keystroke that actually reached a shell.
+const writeLocalTerminalMock = mock(async (_sessionId: string, _data: string) => true);
+const writeTerminalMock = mock(async (_sessionId: string, _data: string) => true);
 
 const realBackendSnapshot = { ...realBackend };
 mock.module("@/lib/backend", () => ({
@@ -140,8 +142,8 @@ describe("useTerminal reconnect behavior", () => {
     detachTerminalMock.mockImplementation(async () => undefined);
     resizeLocalTerminalMock.mockImplementation(async () => undefined);
     resizeTerminalMock.mockImplementation(async () => undefined);
-    writeLocalTerminalMock.mockImplementation(async () => undefined);
-    writeTerminalMock.mockImplementation(async () => undefined);
+    writeLocalTerminalMock.mockImplementation(async () => true);
+    writeTerminalMock.mockImplementation(async () => true);
     listenMock.mockImplementation(async () => unlistenMock);
   });
 
@@ -2258,10 +2260,11 @@ describe("useTerminal reconnect behavior", () => {
     });
   });
 
-  it("ignores writes and resizes issued with no active session", async () => {
+  it("reports rather than silently drops input issued with no active session", async () => {
     const { result } = renderHook(() =>
       useTerminal({
         containerId: "container-1",
+        terminalKey: "tab-1",
         persistSession: true,
       }),
     );
@@ -2273,7 +2276,53 @@ describe("useTerminal reconnect behavior", () => {
 
     expect(writeTerminalMock).not.toHaveBeenCalled();
     expect(resizeTerminalMock).not.toHaveBeenCalled();
-    // No session id means no toast id, so the failure surface stays silent.
+    // A terminal with no session still renders its replayed scrollback, so
+    // dropping this silently is indistinguishable from a working shell that
+    // simply echoed nothing. It falls back to the tab's own toast id.
+    expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+      id: "terminal-input-tab-1",
+      description: "This terminal is not connected to a running shell.",
+      action: { label: "Reconnect", onClick: expect.any(Function) },
+    });
+  });
+
+  it("reports input the backend refused in band without throwing", async () => {
+    // `terminal_write` answers `{ delivered: false }` when the PTY is gone, so
+    // the promise resolves and only the payload says the keystroke was dropped.
+    writeTerminalMock.mockResolvedValueOnce(false);
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("input");
+    });
+
+    expect(writeTerminalMock).toHaveBeenCalledWith("session-new-container", "input");
+    expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+      id: "terminal-input-session-new-container",
+      description: "The shell for this terminal is no longer running.",
+      action: { label: "Reconnect", onClick: expect.any(Function) },
+    });
+  });
+
+  it("stays quiet when the backend confirms the keystroke reached a shell", async () => {
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("input");
+    });
+
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 

@@ -181,6 +181,7 @@ export function TerminalContainer({
     getPane,
     navigateFileTab,
     clearFileTabNavigation,
+    retireSetupTabMarker,
   } = usePaneLayoutStore(
     useShallow((state) => ({
       setActiveEnvironment: state.setActiveEnvironment,
@@ -199,6 +200,7 @@ export function TerminalContainer({
       getPane: state.getPane,
       navigateFileTab: state.navigateFileTab,
       clearFileTabNavigation: state.clearFileTabNavigation,
+      retireSetupTabMarker: state.retireSetupTabMarker,
     })),
   );
 
@@ -282,6 +284,26 @@ export function TerminalContainer({
     [environmentId, setupSessionKeyForTab],
   );
 
+  /**
+   * A setup tab whose PTY is gone is an attach-only view of a saved transcript:
+   * it can never create a shell of its own, so it renders like a working
+   * terminal and silently drops every keystroke. Once the transcript is safely
+   * in the terminal store, drop the setup marker. What is left is an ordinary
+   * terminal tab, which does create its own PTY and replays the retained
+   * transcript ahead of the new shell's output — so the history survives and
+   * the tab becomes usable again.
+   */
+  const retireDeadSetupTab = useCallback(
+    (tabId: string) => {
+      if (!retireSetupTabMarker(tabId, environmentId)) return;
+      console.info("[setup-terminal] retired setup marker for a tab with no live PTY", {
+        environmentId,
+        tabId,
+      });
+    },
+    [environmentId, retireSetupTabMarker],
+  );
+
   const bindBackendSetupSession = useCallback(
     async (tabId = "default") => {
       // Tracked per tab, not globally: a global latch made a second unbound
@@ -355,6 +377,12 @@ export function TerminalContainer({
             setupSessionUnavailableTabsRef.current.add(tabId);
           } else {
             setupSessionUnavailableTabsRef.current.delete(tabId);
+            // Keeping the transcript is the right call, but it used to mean
+            // keeping a tab that could never attach and never be retired.
+            // Demote it instead, so it keeps the history *and* gets a shell.
+            if (!startedWhileSetupRunning && !backendSetupRunningRef.current) {
+              retireDeadSetupTab(tabId);
+            }
           }
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
@@ -419,6 +447,9 @@ export function TerminalContainer({
             serializedBuffer: current?.serializedBuffer || replayableTranscript.buffer,
           });
           setupSessionUnavailableTabsRef.current.delete(tabId);
+          if (!startedWhileSetupRunning && !backendSetupRunningRef.current) {
+            retireDeadSetupTab(tabId);
+          }
           return false;
         }
         lookupSettled = true;
@@ -501,7 +532,13 @@ export function TerminalContainer({
         }
       }
     },
-    [environmentId, hasBoundSetupSession, loadReplayableSetupTranscript, setupSessionKeyForTab],
+    [
+      environmentId,
+      hasBoundSetupSession,
+      loadReplayableSetupTranscript,
+      retireDeadSetupTab,
+      setupSessionKeyForTab,
+    ],
   );
 
   useEffect(

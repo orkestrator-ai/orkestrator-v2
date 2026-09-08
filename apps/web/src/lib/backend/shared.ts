@@ -26,3 +26,18 @@ export function parseTerminalSessionCreateResult(value: unknown): TerminalSessio
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+
+/**
+ * A backend that can no longer reach a session's PTY reports the refusal in
+ * band as `{ delivered: false }` rather than throwing, so a caller that
+ * discards the result silently tells the user a keystroke landed in a shell
+ * that is gone. Only an explicit `false` is proof of non-delivery: older
+ * backends omit the field entirely, so anything else is read as delivered.
+ */
+export function terminalWriteWasDelivered(result: unknown): boolean {
+  return !(
+    typeof result === "object" &&
+    result !== null &&
+    (result as { delivered?: unknown }).delivered === false
+  );
+}

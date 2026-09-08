@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
+import { writeCoordinatorAttachment } from "@/lib/backend";
 import { createSessionKey } from "@/lib/utils";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -158,6 +159,14 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     [persistLockedPane, props.data.environmentId, props.tabId],
   );
 
+  // Stable across renders: the paste handler re-registers its document
+  // listener whenever this identity changes.
+  const writeCoordinatorImage = useCallback(
+    (filename: string, base64Data: string) =>
+      writeCoordinatorAttachment(props.data.environmentId, filename, base64Data),
+    [props.data.environmentId],
+  );
+
   // A tab whose platform has no adapter is a data problem, not a crash. Render
   // the mismatch instead of throwing out of the pane and taking its siblings
   // down with it.
@@ -196,6 +205,17 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
                   },
                 })}
             {...(props.coordinatorProjectId ? { projectId: props.coordinatorProjectId } : {})}
+            {...(props.coordinatorWorkspacePath
+              ? { workspacePath: props.coordinatorWorkspacePath }
+              : {})}
+            {...(props.executionPolicy === "coordinator-read-only"
+              ? {
+                  // The checkout this conversation reads is the user's own, so a
+                  // pasted image is staged under application data instead — the
+                  // same place the assigned composer writes one.
+                  writeImage: writeCoordinatorImage,
+                }
+              : {})}
             {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}
             {...(props.platformNotes ? { platformNotes: props.platformNotes } : {})}
             {...(props.unassignedPlaceholder ? { placeholder: props.unassignedPlaceholder } : {})}

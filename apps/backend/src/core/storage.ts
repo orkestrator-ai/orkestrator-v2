@@ -360,6 +360,44 @@ export class StorageService extends StorageKanban {
     });
   }
 
+  /**
+   * Where one conversation's attachments live, outside the project checkout.
+   *
+   * A coordinator points at the user's own repository and must never write to
+   * it, so a pasted image is staged here instead. The bridge launcher hands
+   * this exact directory to the provider process as its extra readable
+   * attachment root, which is why the path is computed in one place rather
+   * than spelled out again at the launcher.
+   */
+  coordinatorAttachmentDirectory(coordinatorId: string, conversationId: string): string {
+    return path.join(this.dataDir, "coordinator-attachments", coordinatorId, conversationId);
+  }
+
+  /**
+   * Reclaim attachment directories after closed conversations leave the
+   * durable retention window.
+   *
+   * This sweeps the coordinator directory rather than deleting only the ids
+   * pruned by one mutation. A cleanup interrupted after the store write is
+   * therefore retried by the next retention pass instead of becoming a
+   * permanent orphan.
+   */
+  async pruneCoordinatorAttachmentDirectories(
+    coordinatorId: string,
+    retainedConversationIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const root = path.join(this.dataDir, "coordinator-attachments", coordinatorId);
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    await Promise.all(
+      entries
+        .filter((entry) => !retainedConversationIds.has(entry.name))
+        .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true })),
+    );
+  }
+
   async writeCoordinatorAttachment(
     coordinatorId: string,
     conversationId: string,
@@ -377,12 +415,7 @@ export class StorageService extends StorageKanban {
     if (!image) throw new Error("Coordinator attachment is invalid");
     const mediaType = mimeTypeForImageData(image.filename, image.data);
     const extension = mediaType === "image/jpeg" ? "jpg" : mediaType.slice("image/".length);
-    const directory = path.join(
-      this.dataDir,
-      "coordinator-attachments",
-      coordinatorId,
-      conversationId,
-    );
+    const directory = this.coordinatorAttachmentDirectory(coordinatorId, conversationId);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const target = path.join(directory, `${randomUUID()}.${extension}`);
     await fs.writeFile(target, Buffer.from(image.data, "base64"), { flag: "wx", mode: 0o600 });

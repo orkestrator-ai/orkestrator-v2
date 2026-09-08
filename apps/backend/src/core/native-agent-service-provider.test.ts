@@ -38,7 +38,13 @@ import {
   type NativeAgentServiceOptions,
 } from "./native-agent-service.js";
 
-import { StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage.js";
+
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -924,6 +930,87 @@ describe("NativeAgentService", () => {
         globalThis.fetch = originalFetch;
       }
     });
+  });
+
+  test("stages a coordinator's images outside the checkout it may not write to", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-coordinator-stage-"));
+    const storage = await createStorage(dataDir);
+    const checkout = path.join(dataDir, "checkout");
+    await fs.mkdir(checkout);
+    const project = await storage.addProject(createProject("remote", checkout));
+    const now = new Date(0).toISOString();
+    await storage.mutateCoordinatorWorkspace(project.id, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: project.id,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "conversation-1",
+          tabId: "coordinator-tab",
+          logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+          agent: "codex",
+          title: "Coordinator",
+          createdAt: now,
+          mailboxIncarnationId: "incarnation-1",
+        },
+      ],
+      selectedConversationId: "conversation-1",
+      repositoryContextRevision: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    // Reaching a workspace-staging command at all would mean writing into the
+    // user's own checkout, which is the one thing a read-only coordinator must
+    // never do — so the invoker refuses every command.
+    const service = new NativeAgentService(storage, refusingInvoke, {});
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return new Response(null, { status: 202 });
+    }) as unknown as typeof fetch;
+    try {
+      const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      internals(service).bridgeConnection = async () => ({
+        agent: "codex",
+        baseUrl: "http://127.0.0.1:4123",
+        authToken: "token",
+        directory: checkout,
+      });
+      const provider = await internals(service).provider({
+        environmentId: runtimeId,
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+      });
+
+      await provider.send("provider-1", "Inspect it", {
+        requestId: "request-1",
+        images: [{ filename: "reference.png", data: "cG5n" }],
+      });
+
+      const attachments = JSON.parse(String(requests[0]?.init?.body)).attachments as Array<{
+        type: string;
+        path: string;
+        filename: string;
+        dataUrl: string;
+      }>;
+      expect(attachments).toMatchObject([
+        { type: "image", filename: "reference.png", dataUrl: "data:image/png;base64,cG5n" },
+      ]);
+      expect(attachments[0]!.path.startsWith(checkout)).toBe(false);
+      expect(
+        attachments[0]!.path.startsWith(
+          storage.coordinatorAttachmentDirectory("coordinator-1", "conversation-1"),
+        ),
+      ).toBe(true);
+      expect(await fs.readFile(attachments[0]!.path)).toEqual(Buffer.from("cG5n", "base64"));
+    } finally {
+      globalThis.fetch = originalFetch;
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   test("rejects provider session creation when deletion intent wins the environment lock", async () => {

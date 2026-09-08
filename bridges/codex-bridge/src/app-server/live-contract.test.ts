@@ -20,8 +20,11 @@
  * — a contract test against the wrong build proves nothing. That resolution is
  * unit-tested by `live-binary.test.ts`, which runs in the default suite.
  *
- * The default live contract starts no turn, so it spends no credits. Only the
- * separately gated MCP approval canary copies auth and calls a model.
+ * The default live suite never starts a turn, so no credits are spent and no
+ * model is called. Two contracts are the exceptions, each separately gated:
+ * the MCP approval canary (RUN_LIVE_CODEX_MCP_APPROVAL_CANARY=1) and the
+ * coordinator attachment contract (RUN_LIVE_CODEX_ATTACHMENT_TURN=1), which
+ * cannot be proved without asking the real sandbox to open the staged image.
  */
 import { describe, test, expect } from "bun:test";
 import { spawn } from "node:child_process";
@@ -33,9 +36,12 @@ import { JsonlRpcClient } from "./jsonl-rpc-client.js";
 import { AppServerRpcError, isUnmaterializedThreadError } from "./errors.js";
 import { pinnedVersion, resolveCodexBinary } from "./live-binary.js";
 import type { InboundNotification } from "./envelope-validation.js";
+import { BRIDGE_ATTACHMENT_ROOT_ENV, codexAppServerConfigOverrides } from "../codex-config.js";
 
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
+const describeLiveAttachmentTurn =
+  LIVE && process.env.RUN_LIVE_CODEX_ATTACHMENT_TURN === "1" ? describe : describe.skip;
 const testLiveMcpApproval =
   LIVE && process.env.RUN_LIVE_CODEX_MCP_APPROVAL_CANARY === "1" ? test : test.skip;
 
@@ -44,12 +50,13 @@ interface LiveSession {
   notifications: InboundNotification[];
   codexHome: string;
   workspace: string;
+  attachmentRoot?: string;
   stop: () => Promise<void>;
 }
 
 /** Boots a real app-server against a throwaway CODEX_HOME and workspace. */
 async function boot(
-  options: { copyAuth?: boolean; extraArgs?: string[] } = {},
+  options: { copyAuth?: boolean; coordinator?: boolean; extraArgs?: string[] } = {},
 ): Promise<LiveSession> {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-live-home-"));
   const workspace = await mkdtemp(join(tmpdir(), "ork-live-ws-"));
@@ -65,7 +72,25 @@ async function boot(
   }
 
   const binary = await resolveCodexBinary();
-  const child = spawn(binary, ["app-server", "--stdio", ...(options.extraArgs ?? [])], {
+  const attachmentRoot = options.coordinator
+    ? join(codexHome, "coordinator-attachments")
+    : undefined;
+  if (attachmentRoot) await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
+  const configOverrides = options.coordinator
+    ? codexAppServerConfigOverrides({
+        ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+        CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-live-attachment",
+        CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+        CWD: workspace,
+        [BRIDGE_ATTACHMENT_ROOT_ENV]: attachmentRoot,
+      })
+    : {};
+  const args = ["app-server", "--stdio"];
+  for (const [key, value] of Object.entries(configOverrides)) {
+    args.push("-c", `${key}=${value}`);
+  }
+  args.push(...(options.extraArgs ?? []));
+  const child = spawn(binary, args, {
     cwd: workspace,
     env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
     stdio: ["pipe", "pipe", "pipe"],
@@ -87,12 +112,27 @@ async function boot(
     notifications,
     codexHome,
     workspace,
+    ...(attachmentRoot ? { attachmentRoot } : {}),
     stop: async () => {
       client.close();
       child.stdin.end();
       child.kill("SIGTERM");
     },
   };
+}
+
+async function waitForNotification(
+  session: LiveSession,
+  method: string,
+  timeoutMs: number,
+): Promise<InboundNotification> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const notification = session.notifications.find((entry) => entry.method === method);
+    if (notification) return notification;
+    await Bun.sleep(50);
+  }
+  throw new Error(`Timed out waiting for ${method}`);
 }
 
 interface McpMutationProbe {
@@ -528,6 +568,44 @@ describeLive("live config side effects", () => {
       await session.stop();
     }
   }, 60_000);
+});
+
+describeLiveAttachmentTurn("live coordinator attachment permission", () => {
+  test("a coordinator permission profile lets app-server consume its staged local image", async () => {
+    const session = await boot({ copyAuth: true, coordinator: true });
+    try {
+      await handshake(session);
+      const attachmentPath = join(session.attachmentRoot!, "pixel.png");
+      await writeFile(
+        attachmentPath,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          "base64",
+        ),
+        { mode: 0o600 },
+      );
+      const started = await session.client.request<{
+        thread: { id: string };
+        activePermissionProfile?: { id: string } | null;
+      }>("thread/start", {
+        cwd: session.workspace,
+        approvalPolicy: "never",
+      });
+      expect(started.activePermissionProfile?.id).toBe("coordinator-live-attachment");
+
+      await session.client.request("turn/start", {
+        threadId: started.thread.id,
+        input: [
+          { type: "text", text: "Reply with OK after inspecting this image.", text_elements: [] },
+          { type: "localImage", path: attachmentPath },
+        ],
+      });
+      const completed = await waitForNotification(session, "turn/completed", 120_000);
+      expect(completed.params).toMatchObject({ turn: { status: "completed", error: null } });
+    } finally {
+      await session.stop();
+    }
+  }, 150_000);
 });
 
 describeLive("live shutdown", () => {

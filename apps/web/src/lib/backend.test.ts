@@ -1889,6 +1889,44 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  test("routes remote-desktop loopback links through the gateway proxy", async () => {
+    const openExternal = mock(async () => undefined);
+    window.orkestrator = {
+      ...window.orkestrator,
+      shell: { openExternal },
+    } as typeof window.orkestrator;
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net",
+    };
+
+    await openInBrowser("http://localhost:5173/");
+
+    expect(openExternal).toHaveBeenCalledWith(
+      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/5173",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the backend opener when an older Electron preload has no shell API", async () => {
+    window.orkestrator = {
+      ...window.orkestrator,
+      shell: undefined,
+    } as typeof window.orkestrator;
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net",
+    };
+
+    await openInBrowser("https://example.com/docs");
+
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://example.com/docs",
+    });
+  });
+
   test("submits backend-owned environment starts with the expected command payload", async () => {
     await backendWrappers.startEnvironmentInBackground("env-background");
 

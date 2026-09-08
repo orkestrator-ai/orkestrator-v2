@@ -1,5 +1,5 @@
 import { invoke } from "@/lib/native/backend";
-import { getGatewayBaseUrl } from "@/lib/gateway-url";
+import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import type {
   Environment,
   AppConfig,
@@ -404,7 +404,7 @@ export async function openInBrowser(url: string): Promise<void> {
   // The Electron main process always runs on the client, even when this
   // renderer's backend commands are routed to a remote Orkestrator server.
   if (window.orkestrator?.shell?.openExternal) {
-    return window.orkestrator.shell.openExternal(url);
+    return window.orkestrator.shell.openExternal(resolveGatewayLoopbackBaseUrl(url));
   }
   // Browser clients open links in their own browser rather than asking the
   // backend host to launch one.

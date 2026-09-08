@@ -277,6 +277,14 @@ describe("main IPC registration", () => {
     );
   });
 
+  test("accepts HTTP loopback URLs for the external browser", async () => {
+    const harness = createHarness();
+
+    await harness.invoke("orkestrator:shell:open-external", "http://localhost:34121/");
+
+    expect(harness.shellApi.openExternal).toHaveBeenCalledWith("http://localhost:34121/");
+  });
+
   test("validates web client toggle values", async () => {
     const harness = createHarness();
 

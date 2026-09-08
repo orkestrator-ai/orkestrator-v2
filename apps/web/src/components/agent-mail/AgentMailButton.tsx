@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Inbox, Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
@@ -19,6 +19,7 @@ import type {
   AgentMailMessageSummary,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
+import { AGENT_MAIL_DEFAULT_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 
 const OPEN_EVENT = "orkestrator:open-agent-mail";
 
@@ -111,6 +112,8 @@ export function AgentMailButton() {
   const [expanded, setExpanded] = useState<AgentMailMessage | null>(null);
   const [compose, setCompose] = useState(false);
   const [destination, setDestination] = useState("");
+  const [focus, setFocus] = useState<MailboxAddress | null>(null);
+  const [focusUnavailable, setFocusUnavailable] = useState(false);
   const [replyToMessageId, setReplyToMessageId] = useState<string>();
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -118,60 +121,106 @@ export function AgentMailButton() {
   const [statusFilter, setStatusFilter] = useState<"all" | "unread" | "retry">("all");
   const [actionError, setActionError] = useState<string>();
   const sendAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const destinationRef = useRef("");
+  const focusRef = useRef<MailboxAddress | null>(null);
+  const hydrateGeneration = useRef(0);
 
-  const hydrate = async (focus?: MailboxAddress) => {
-    setLoading(true);
-    try {
-      const [snapshot, sentMessages] = await Promise.all([
-        refreshInbox(),
-        backend.listAgentMailSent(),
-      ]);
-      const availableById = new Map(
-        snapshot.directory
-          .filter((mailbox) => mailbox.capabilities.canPull)
-          .map((mailbox) => [mailbox.mailboxId, mailbox]),
-      );
-      // The directory only lists persisted mailboxes. A tab opened for the
-      // first time, or a Sent recipient that has since left the directory,
-      // still needs a descriptor so compose, settings, Reply, and the Sent
-      // view can name it — fetch those directly.
-      const missing = new Map<string, MailboxAddress>();
-      if (focus && !availableById.has(mailboxIdOf(focus))) missing.set(mailboxIdOf(focus), focus);
-      for (const message of sentMessages ?? []) {
-        const recipient = { environmentId: message.toEnvironmentId, tabId: message.toTabId };
-        if (!availableById.has(mailboxIdOf(recipient)))
-          missing.set(mailboxIdOf(recipient), recipient);
-      }
-      for (const mailbox of useAgentMailStore.getState().mailboxes.values()) {
-        for (const message of mailbox.messages) {
-          if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
-          const sender = { environmentId: message.from.environmentId, tabId: message.from.tabId };
-          if (!availableById.has(mailboxIdOf(sender))) missing.set(mailboxIdOf(sender), sender);
+  const hydrate = useCallback(
+    async (requestedFocus?: MailboxAddress | null) => {
+      const activeFocus = requestedFocus === undefined ? focusRef.current : requestedFocus;
+      const generation = ++hydrateGeneration.current;
+      const focusedMailboxId = activeFocus ? mailboxIdOf(activeFocus) : null;
+      const cachedFocus = focusedMailboxId
+        ? useAgentMailStore.getState().mailboxes.get(focusedMailboxId)
+        : undefined;
+      setLoading(true);
+      setFocusUnavailable(false);
+      setActionError(undefined);
+      try {
+        const [snapshot, sentMessages] = await Promise.all([
+          refreshInbox(),
+          backend.listAgentMailSent(activeFocus ?? undefined),
+        ]);
+        const availableById = new Map(
+          snapshot.directory
+            .filter((mailbox) => mailbox.capabilities.canPull)
+            .map((mailbox) => [mailbox.mailboxId, mailbox]),
+        );
+        // A descriptor can appear between the inbox snapshot and this lookup as
+        // pane-layout synchronization completes. Bound historical recipient
+        // backfill so opening the global surface cannot scale with all history.
+        const missing = new Map<string, MailboxAddress>();
+        if (activeFocus && focusedMailboxId && !availableById.has(focusedMailboxId)) {
+          missing.set(focusedMailboxId, activeFocus);
         }
-      }
-      if (missing.size > 0) {
-        const fetched = await backend.getAgentMailMailboxes(Array.from(missing.values()));
-        for (const mailbox of fetched.mailboxes) {
-          if (mailbox.descriptor.capabilities.canPull)
-            availableById.set(mailbox.descriptor.mailboxId, mailbox.descriptor);
+        for (const message of (sentMessages ?? []).slice(0, AGENT_MAIL_DEFAULT_LIST_LIMIT)) {
+          if (missing.size >= AGENT_MAIL_DEFAULT_LIST_LIMIT) break;
+          const recipient = { environmentId: message.toEnvironmentId, tabId: message.toTabId };
+          if (!availableById.has(mailboxIdOf(recipient)))
+            missing.set(mailboxIdOf(recipient), recipient);
         }
-        if (focus) {
-          const focused = fetched.mailboxes.filter(
-            (mailbox) => mailbox.descriptor.mailboxId === mailboxIdOf(focus),
+        let inspectedSenders = 0;
+        senderBackfill: for (const mailbox of useAgentMailStore.getState().mailboxes.values()) {
+          for (const message of mailbox.messages) {
+            if (
+              missing.size >= AGENT_MAIL_DEFAULT_LIST_LIMIT ||
+              inspectedSenders >= AGENT_MAIL_DEFAULT_LIST_LIMIT
+            )
+              break senderBackfill;
+            inspectedSenders += 1;
+            if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
+            const sender = { environmentId: message.from.environmentId, tabId: message.from.tabId };
+            if (!availableById.has(mailboxIdOf(sender))) missing.set(mailboxIdOf(sender), sender);
+          }
+        }
+        if (missing.size > 0) {
+          const fetched = await backend.getAgentMailMailboxes(Array.from(missing.values()));
+          if (generation !== hydrateGeneration.current) return;
+          for (const mailbox of fetched.mailboxes) {
+            if (mailbox.descriptor.capabilities.canPull)
+              availableById.set(mailbox.descriptor.mailboxId, mailbox.descriptor);
+          }
+          if (activeFocus && focusedMailboxId) {
+            const focused = fetched.mailboxes.filter(
+              (mailbox) => mailbox.descriptor.mailboxId === focusedMailboxId,
+            );
+            if (focused.length > 0) useAgentMailStore.getState().setMailboxes(focused);
+          }
+        }
+        if (generation !== hydrateGeneration.current) return;
+        setDirectory(Array.from(availableById.values()));
+        setSent(sentMessages ?? []);
+        if (activeFocus && focusedMailboxId && !availableById.has(focusedMailboxId)) {
+          setFocusUnavailable(true);
+          setActionError("This tab's mailbox is not ready yet. Try again in a moment.");
+        }
+      } catch (error) {
+        if (generation !== hydrateGeneration.current) return;
+        if (cachedFocus) {
+          if (!useAgentMailStore.getState().mailboxes.has(cachedFocus.descriptor.mailboxId))
+            useAgentMailStore.getState().setMailbox(cachedFocus);
+          setDirectory((current) => [
+            cachedFocus.descriptor,
+            ...current.filter((mailbox) => mailbox.mailboxId !== cachedFocus.descriptor.mailboxId),
+          ]);
+        }
+        if (activeFocus) {
+          setFocusUnavailable(true);
+          setActionError(
+            cachedFocus
+              ? "Could not refresh this mailbox. Showing the last available snapshot."
+              : "This tab's mailbox could not be loaded. Try again in a moment.",
           );
-          if (focused.length > 0) useAgentMailStore.getState().setMailboxes(focused);
         }
+        toast.error("Could not load agent messages", {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        if (generation === hydrateGeneration.current) setLoading(false);
       }
-      setDirectory(Array.from(availableById.values()));
-      setSent(sentMessages ?? []);
-    } catch (error) {
-      toast.error("Could not load agent messages", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [refreshInbox],
+  );
 
   useEffect(() => {
     const listener = (raw: Event) => {
@@ -179,18 +228,29 @@ export function AgentMailButton() {
         | { environmentId?: string; tabId?: string; mode?: string }
         | undefined;
       if (!detail?.environmentId || !detail.tabId) return;
-      const focus = { environmentId: detail.environmentId, tabId: detail.tabId };
+      const nextFocus = { environmentId: detail.environmentId, tabId: detail.tabId };
+      const nextDestination = mailboxIdOf(nextFocus);
+      focusRef.current = nextFocus;
+      setFocus(nextFocus);
       setOpen(true);
-      setDestination(mailboxIdOf(focus));
+      if (destinationRef.current !== nextDestination) {
+        setSubject("");
+        setBody("");
+        sendAttempt.current = null;
+      }
+      destinationRef.current = nextDestination;
+      setDestination(nextDestination);
       setReplyToMessageId(undefined);
+      setActionError(undefined);
+      setFocusUnavailable(false);
       setExpanded(null);
       setBox("inbox");
       setCompose(detail.mode === "compose");
-      void hydrate(focus);
+      void hydrate(nextFocus);
     };
     window.addEventListener(OPEN_EVENT, listener);
     return () => window.removeEventListener(OPEN_EVENT, listener);
-  });
+  }, [hydrate]);
 
   useEffect(() => {
     if (failedSent.size === 0) return;
@@ -211,9 +271,12 @@ export function AgentMailButton() {
     if (!authoritative || authoritative.revision > expanded.revision) setExpanded(null);
   }, [expanded, mailboxes, sent]);
 
-  const inboxRows: MessageRow[] = Array.from(mailboxes.values()).flatMap((mailbox) =>
-    mailbox.messages.map((message) => ({ mailbox: mailbox.descriptor, message, sent: false })),
-  );
+  const focusedMailboxId = focus ? mailboxIdOf(focus) : null;
+  const inboxRows: MessageRow[] = Array.from(mailboxes.values())
+    .filter((mailbox) => !focusedMailboxId || mailbox.descriptor.mailboxId === focusedMailboxId)
+    .flatMap((mailbox) =>
+      mailbox.messages.map((message) => ({ mailbox: mailbox.descriptor, message, sent: false })),
+    );
   const sentRows: MessageRow[] = sent.flatMap((message) => {
     const mailbox = directory.find(
       (candidate) =>
@@ -248,11 +311,13 @@ export function AgentMailButton() {
     new Map(directory.map((mailbox) => [mailbox.projectId, mailbox.projectName])).entries(),
   );
   const selectedMailbox = directory.find((candidate) => candidate.mailboxId === destination);
-  const policyMailbox = selectedMailbox;
+  const focusedMailbox = focusedMailboxId
+    ? directory.find((candidate) => candidate.mailboxId === focusedMailboxId)
+    : undefined;
+  const policyMailbox = focus ? focusedMailbox : selectedMailbox;
 
   const read = async (mailbox: MailboxDescriptor, messageId: string, isSent: boolean) => {
     try {
-      setDestination(mailbox.mailboxId);
       const message = await backend.getAgentMailMessage(
         mailbox.environmentId,
         mailbox.tabId,
@@ -274,7 +339,10 @@ export function AgentMailButton() {
     mutedInbound?: boolean;
     mutedOutbound?: boolean;
   }) => {
-    if (!policyMailbox) return;
+    if (!policyMailbox) {
+      setActionError("Select an available mailbox before changing its settings.");
+      return;
+    }
     setActionError(undefined);
     try {
       await backend.updateAgentMailboxPolicy({
@@ -319,7 +387,14 @@ export function AgentMailButton() {
 
   const sendMessage = async () => {
     const mailbox = selectedMailbox;
-    if (!mailbox || !body.trim()) return;
+    if (!mailbox) {
+      setActionError("Select an available mailbox before sending this message.");
+      toast.error("Message was not sent", {
+        description: "The selected mailbox is not available.",
+      });
+      return;
+    }
+    if (!body.trim()) return;
     const payload = {
       toEnvironmentId: mailbox.environmentId,
       toTabId: mailbox.tabId,
@@ -363,7 +438,12 @@ export function AgentMailButton() {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) void hydrate();
+        if (next) {
+          focusRef.current = null;
+          setFocus(null);
+          setFocusUnavailable(false);
+          void hydrate(null);
+        }
       }}
       modal={false}
     >
@@ -391,11 +471,11 @@ export function AgentMailButton() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium">
-                {selectedMailbox?.displayName || "Agent messages"}
+                {focusedMailbox?.displayName || "Agent messages"}
               </p>
               <p className="text-[11px] text-muted-foreground">
-                {selectedMailbox
-                  ? `${selectedMailbox.environmentName} · ${selectedMailbox.presence.replaceAll("_", " ")}`
+                {focusedMailbox
+                  ? `${focusedMailbox.environmentName} · ${focusedMailbox.presence.replaceAll("_", " ")}`
                   : "Durable messages across every environment"}
               </p>
             </div>
@@ -441,24 +521,34 @@ export function AgentMailButton() {
           )}
         </div>
         {actionError && (
-          <p
+          <div
             role="alert"
-            className="border-b border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-300"
+            className="flex items-center justify-between gap-3 border-b border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-300"
           >
-            {actionError}
-          </p>
+            <span>{actionError}</span>
+            {focusUnavailable && (
+              <Button size="sm" variant="outline" onClick={() => void hydrate()} disabled={loading}>
+                Retry
+              </Button>
+            )}
+          </div>
         )}
         {compose && (
           <div className="space-y-2 border-b border-cyan-400/20 bg-cyan-400/[0.035] p-3">
             <select
               aria-label="Message destination"
               value={destination}
-              onChange={(event) => setDestination(event.target.value)}
+              onChange={(event) => {
+                destinationRef.current = event.target.value;
+                setDestination(event.target.value);
+              }}
+              disabled={focus !== null}
               className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-xs"
             >
               <option value="">Choose a destination…</option>
               {directory
                 .filter((mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull)
+                .filter((mailbox) => !focusedMailboxId || mailbox.mailboxId === focusedMailboxId)
                 .map((mailbox) => (
                   <option key={mailbox.mailboxId} value={mailbox.mailboxId}>
                     {mailbox.displayName} · {mailbox.environmentName} · {policyLabel(mailbox)}
@@ -468,11 +558,15 @@ export function AgentMailButton() {
             <div className="max-h-36 space-y-1 overflow-y-auto">
               {directory
                 .filter((mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull)
+                .filter((mailbox) => !focusedMailboxId || mailbox.mailboxId === focusedMailboxId)
                 .map((mailbox) => (
                   <button
                     key={mailbox.mailboxId}
                     type="button"
-                    onClick={() => setDestination(mailbox.mailboxId)}
+                    onClick={() => {
+                      destinationRef.current = mailbox.mailboxId;
+                      setDestination(mailbox.mailboxId);
+                    }}
                     className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left ${
                       destination === mailbox.mailboxId
                         ? "border-cyan-400/40 bg-cyan-400/10"
@@ -517,7 +611,7 @@ export function AgentMailButton() {
               <Button
                 size="sm"
                 onClick={() => void sendMessage()}
-                disabled={!destination || !body.trim()}
+                disabled={!selectedMailbox || !body.trim()}
               >
                 {sendLabel(selectedMailbox)}
               </Button>
@@ -645,10 +739,17 @@ export function AgentMailButton() {
                                   size="sm"
                                   variant="secondary"
                                   onClick={() => {
-                                    setDestination(`${sender.environmentId}\0${sender.tabId}`);
+                                    focusRef.current = null;
+                                    setFocus(null);
+                                    destinationRef.current = `${sender.environmentId}\0${sender.tabId}`;
+                                    setDestination(destinationRef.current);
                                     setReplyToMessageId(expanded.id);
                                     setSubject(expanded.subject ? `Re: ${expanded.subject}` : "");
+                                    setBody("");
+                                    setActionError(undefined);
+                                    sendAttempt.current = null;
                                     setCompose(true);
+                                    void hydrate(null);
                                   }}
                                 >
                                   Reply

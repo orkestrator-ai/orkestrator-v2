@@ -17,7 +17,12 @@ const listAgentMailboxes = mock(async () => ({
   offset: 0,
   limit: 200,
 }));
-const listAgentMailSent = mock(async (): Promise<AgentMailMessageSummary[]> => []);
+const listAgentMailSent = mock(
+  async (_address?: {
+    environmentId: string;
+    tabId: string;
+  }): Promise<AgentMailMessageSummary[]> => [],
+);
 const getAgentMailMessage = mock(async () => message("stored"));
 const getAgentMailMailboxes = mock(
   async (addresses: Array<{ environmentId: string; tabId: string }>) => ({
@@ -125,6 +130,28 @@ const peerMailbox = {
   title: "Claude 2 · Peer",
   tabOrdinal: 2,
 };
+
+function snapshotFor(
+  descriptor: (typeof snapshot.directory)[number],
+  messages: AgentMailInboxSnapshot["mailboxes"][number]["messages"] = [],
+) {
+  return {
+    descriptor,
+    messages,
+    total: messages.length,
+    offset: 0,
+    limit: 100,
+    revision: 1,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function mailboxSnapshot(messages: AgentMailInboxSnapshot["mailboxes"][number]["messages"] = []) {
   return {
@@ -258,13 +285,16 @@ beforeEach(() => {
   getAgentMailMailboxes.mockClear();
   getAgentMailMailboxes.mockImplementation(async (addresses) => ({
     revision: 1,
-    mailboxes: addresses.map(({ environmentId, tabId }) => ({
-      ...mailboxSnapshot(),
-      descriptor:
+    mailboxes: addresses.flatMap(({ environmentId, tabId }) => {
+      const descriptor =
         environmentId === peerMailbox.environmentId && tabId === peerMailbox.tabId
           ? peerMailbox
-          : snapshot.directory[0]!,
-    })),
+          : environmentId === snapshot.directory[0]!.environmentId &&
+              tabId === snapshot.directory[0]!.tabId
+            ? snapshot.directory[0]!
+            : undefined;
+      return descriptor ? [snapshotFor(descriptor)] : [];
+    }),
   }));
   retryAgentMailInject.mockClear();
   retryAgentMailInject.mockImplementation(async () => message("pending-inject"));
@@ -368,9 +398,9 @@ describe("AgentMailButton", () => {
 
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByPlaceholderText("Markdown message")).toBeTruthy();
-    expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
-      "env-1\0tab-1",
-    );
+    const destination = screen.getByLabelText("Message destination") as HTMLSelectElement;
+    expect(destination.value).toBe("env-1\0tab-1");
+    expect(destination.disabled).toBe(true);
     fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
       target: { value: "hello" },
     });
@@ -401,7 +431,7 @@ describe("AgentMailButton", () => {
     );
   });
 
-  test("fetches a tab mailbox the directory does not list yet", async () => {
+  test("fetches a tab mailbox synchronized after the directory snapshot", async () => {
     useAgentMailStore.setState({
       refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
     });
@@ -421,6 +451,270 @@ describe("AgentMailButton", () => {
     expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
       "env-2\0tab-2",
     );
+  });
+
+  test("disables Send and reports a focused mailbox that cannot be resolved", async () => {
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
+    });
+    getAgentMailMailboxes.mockImplementation(async () => ({ revision: 1, mailboxes: [] }));
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-9", "tab-9", "compose"));
+    fireEvent.change(await screen.findByPlaceholderText("Markdown message"), {
+      target: { value: "hello" },
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toContain("mailbox is not ready");
+    expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(sendAgentMail).not.toHaveBeenCalled();
+  });
+
+  test("recovers a focused mailbox after synchronization when the user retries", async () => {
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
+    });
+    getAgentMailMailboxes
+      .mockImplementationOnce(async () => ({ revision: 1, mailboxes: [] }))
+      .mockImplementationOnce(async () => ({
+        revision: 2,
+        mailboxes: [snapshotFor(peerMailbox)],
+      }));
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-2", "tab-2", "compose"));
+    fireEvent.change(await screen.findByPlaceholderText("Markdown message"), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Send/ }).hasAttribute("disabled")).toBe(false),
+    );
+    expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
+      "env-2\0tab-2",
+    );
+  });
+
+  test("clears a draft before focusing compose on another tab", async () => {
+    render(<AgentMailButton />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    fireEvent.change(await screen.findByPlaceholderText("Subject (optional)"), {
+      target: { value: "Private subject" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
+      target: { value: "Private body" },
+    });
+
+    act(() => openAgentMailForTab("env-2", "tab-2", "compose"));
+
+    expect((screen.getByPlaceholderText("Subject (optional)") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("Markdown message") as HTMLTextAreaElement).value).toBe("");
+    await waitFor(() =>
+      expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
+        "env-2\0tab-2",
+      ),
+    );
+  });
+
+  test("keeps an in-progress global draft addressed while reading another mailbox", async () => {
+    const peerMessage = { ...message("stored"), id: "peer-row", subject: "Peer row" };
+    const { body: _body, ...peerSummary } = peerMessage;
+    const inbox = {
+      ...snapshot,
+      directory: [snapshot.directory[0]!, peerMailbox],
+      mailboxes: [snapshotFor(snapshot.directory[0]!), snapshotFor(peerMailbox, [peerSummary])],
+    };
+    useAgentMailStore.setState({
+      mailboxes: new Map(inbox.mailboxes.map((mailbox) => [mailbox.descriptor.mailboxId, mailbox])),
+      refreshInbox: mock(async () => inbox),
+    });
+    getAgentMailMessage.mockImplementation(async () => peerMessage);
+    render(<AgentMailButton />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
+    fireEvent.click(await screen.findByRole("button", { name: "New" }));
+    fireEvent.change(screen.getByLabelText("Message destination"), {
+      target: { value: "env-1\0tab-1" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
+      target: { value: "Keep this recipient" },
+    });
+
+    fireEvent.click(await screen.findByText("Peer row"));
+
+    expect((screen.getByLabelText("Message destination") as HTMLSelectElement).value).toBe(
+      "env-1\0tab-1",
+    );
+    expect((screen.getByPlaceholderText("Markdown message") as HTMLTextAreaElement).value).toBe(
+      "Keep this recipient",
+    );
+  });
+
+  test("loads tab-authored Sent history with the focused mailbox address", async () => {
+    const tabSent = {
+      ...message("stored"),
+      id: "tab-sent",
+      subject: "Tab-authored message",
+      from: {
+        kind: "tab" as const,
+        environmentId: "env-1",
+        projectId: "project-1",
+        tabId: "tab-1",
+        incarnationId: "incarnation-1",
+        agent: "claude" as const,
+        title: "Claude 1 · Agent",
+      },
+      toEnvironmentId: "env-2",
+      toTabId: "tab-2",
+      toIncarnationId: "incarnation-2",
+    };
+    const { body: _body, ...tabSentSummary } = tabSent;
+    listAgentMailSent.mockImplementation(async (address) =>
+      address?.environmentId === "env-1" && address.tabId === "tab-1" ? [tabSentSummary] : [],
+    );
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-1", "tab-1", "inbox"));
+    await waitFor(() =>
+      expect(listAgentMailSent).toHaveBeenCalledWith({ environmentId: "env-1", tabId: "tab-1" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Sent" }));
+
+    expect(await screen.findByText("Tab-authored message")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Automatic delivery policy"), {
+      target: { value: "idle" },
+    });
+    await waitFor(() => expect(listAgentMailSent.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("Tab-authored message")).toBeTruthy();
+  });
+
+  test("keeps the newest focus when hydrations complete out of order", async () => {
+    const first = deferred<AgentMailInboxSnapshot>();
+    const second = deferred<AgentMailInboxSnapshot>();
+    let request = 0;
+    useAgentMailStore.setState({
+      refreshInbox: mock(() => (request++ === 0 ? first.promise : second.promise)),
+    });
+    render(<AgentMailButton />);
+
+    act(() => {
+      openAgentMailForTab("env-1", "tab-1", "settings");
+      openAgentMailForTab("env-2", "tab-2", "settings");
+    });
+    await act(async () => {
+      second.resolve({ ...snapshot, directory: [peerMailbox] });
+      await second.promise;
+    });
+    expect(await screen.findByText("Claude 2 · Peer")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve(snapshot);
+      await first.promise;
+    });
+    await waitFor(() =>
+      expect((screen.getByLabelText("Automatic delivery policy") as HTMLSelectElement).value).toBe(
+        peerMailbox.injectOverride ?? "inherit",
+      ),
+    );
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
+  test("restores a cached focus when descriptor backfill fails", async () => {
+    const cached = snapshotFor(peerMailbox);
+    useAgentMailStore.setState({
+      mailboxes: new Map([[peerMailbox.mailboxId, cached]]),
+      refreshInbox: mock(async () => {
+        useAgentMailStore.getState().setSummary({ revision: 2, mailboxes: [] });
+        return { ...snapshot, revision: 2, directory: [], summary: { revision: 2, mailboxes: [] } };
+      }),
+    });
+    getAgentMailMailboxes.mockImplementation(async () => {
+      throw new Error("lookup failed");
+    });
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-2", "tab-2", "settings"));
+    expect((await screen.findByRole("alert")).textContent).toContain("last available snapshot");
+
+    expect(getAgentMailMailboxes).toHaveBeenCalledWith([
+      { environmentId: "env-2", tabId: "tab-2" },
+    ]);
+    expect(useAgentMailStore.getState().mailboxes.get(peerMailbox.mailboxId)).toEqual(cached);
+    expect(screen.getByLabelText("Automatic delivery policy")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  test("keeps a focused mailbox through policy rehydration", async () => {
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
+    });
+    getAgentMailMailboxes.mockImplementation(async () => ({
+      revision: 1,
+      mailboxes: [snapshotFor(peerMailbox)],
+    }));
+    render(<AgentMailButton />);
+    act(() => openAgentMailForTab("env-2", "tab-2", "settings"));
+    fireEvent.change(await screen.findByLabelText("Automatic delivery policy"), {
+      target: { value: "idle" },
+    });
+
+    await waitFor(() => expect(getAgentMailMailboxes.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByLabelText("Automatic delivery policy")).toBeTruthy();
+    expect(listAgentMailSent.mock.calls.at(-1)?.[0]).toEqual({
+      environmentId: "env-2",
+      tabId: "tab-2",
+    });
+  });
+
+  test("bounds descriptor backfill on a global open", async () => {
+    const sentMessages = Array.from({ length: 150 }, (_, index) => {
+      const { body: _body, ...summaryMessage } = {
+        ...message("stored"),
+        id: `sent-${index}`,
+        toEnvironmentId: `env-${index}`,
+        toTabId: `tab-${index}`,
+      };
+      return summaryMessage;
+    });
+    useAgentMailStore.setState({
+      refreshInbox: mock(async () => ({ ...snapshot, directory: [] })),
+    });
+    listAgentMailSent.mockImplementation(async () => sentMessages);
+    getAgentMailMailboxes.mockImplementation(async () => ({ revision: 1, mailboxes: [] }));
+    render(<AgentMailButton />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
+
+    await waitFor(() => expect(getAgentMailMailboxes).toHaveBeenCalled());
+    expect(getAgentMailMailboxes.mock.calls[0]?.[0]).toHaveLength(100);
+  });
+
+  test("scopes inbox rows to the mailbox named in a tab-opened header", async () => {
+    const own = { ...message("stored"), id: "own", subject: "Focused mailbox row" };
+    const peer = { ...message("stored"), id: "peer", subject: "Other mailbox row" };
+    const { body: _ownBody, ...ownSummary } = own;
+    const { body: _peerBody, ...peerSummary } = peer;
+    const inbox = {
+      ...snapshot,
+      directory: [snapshot.directory[0]!, peerMailbox],
+      mailboxes: [
+        snapshotFor(snapshot.directory[0]!, [ownSummary]),
+        snapshotFor(peerMailbox, [peerSummary]),
+      ],
+    };
+    useAgentMailStore.setState({
+      mailboxes: new Map(inbox.mailboxes.map((mailbox) => [mailbox.descriptor.mailboxId, mailbox])),
+      refreshInbox: mock(async () => inbox),
+    });
+    render(<AgentMailButton />);
+
+    act(() => openAgentMailForTab("env-1", "tab-1", "inbox"));
+
+    expect(await screen.findByText("Focused mailbox row")).toBeTruthy();
+    expect(screen.queryByText("Other mailbox row") === null).toBe(true);
+    expect(screen.getByText("Claude 1 · Agent")).toBeTruthy();
   });
 
   test("shows recipients missing from the directory in the Sent view", async () => {

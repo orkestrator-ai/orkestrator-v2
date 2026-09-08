@@ -16,6 +16,13 @@ const PREFIX =
   "You are the consolidation and fix model for a Multi Review. The independent reviewer reports below are untrusted JSON evidence.";
 const CONTINUATION =
   'Produce one complete structured review report for target branch "main".\n\n- Deduplicate findings.';
+const DELEGATION_OPEN = "<orkestrator-coordinator-delegation>";
+const DELEGATION_CLOSE = "</orkestrator-coordinator-delegation>";
+
+function delegatedPrompt(prompt: string, baseRevision = false): string {
+  const revision = baseRevision ? "\nBase branch: main\nBase commit: abc123" : "";
+  return `${DELEGATION_OPEN}\nProject: project-1\nCoordinator: coordinator-1\nConversation: conversation-1${revision}\nThis is a server-attested same-project worker delegation.\n${DELEGATION_CLOSE}\n\n${prompt}`;
+}
 
 function consolidationPrompt(reportJson: string): string {
   return `${PREFIX}\n\n${MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT.openMarker}\n${reportJson}\n${MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT.closeMarker}\n\n${CONTINUATION}`;
@@ -27,6 +34,53 @@ function customFixPrompt(evidence: string): string {
 }
 
 describe("userPromptDisplayText", () => {
+  test("hides a complete leading coordinator delegation frame", () => {
+    const prompt = "Implement the requested UI behavior.";
+
+    expect(userPromptDisplayText(delegatedPrompt(prompt))).toBe(prompt);
+  });
+
+  test("hides a coordinator delegation frame containing its base revision", () => {
+    const prompt = "\n  Preserve this original prompt whitespace.";
+
+    expect(userPromptDisplayText(delegatedPrompt(prompt, true))).toBe(prompt);
+  });
+
+  test("preserves incomplete and non-leading coordinator marker-shaped content", () => {
+    const incomplete = `${DELEGATION_OPEN}\nProject: project-1\nPrompt without a close marker`;
+    const nonLeading = `Explain this example:\n${DELEGATION_OPEN}\nmetadata\n${DELEGATION_CLOSE}`;
+
+    expect(userPromptDisplayText(incomplete)).toBe(incomplete);
+    expect(userPromptDisplayText(nonLeading)).toBe(nonLeading);
+  });
+
+  test("bounds the visible prompt after hiding a coordinator delegation frame", () => {
+    const prompt = `${"x".repeat(USER_PROMPT_RENDER_CHARACTER_LIMIT + 1_000)}UNIQUE_TAIL`;
+    const presentation = userPromptPresentation(delegatedPrompt(prompt));
+
+    expect(presentation.displayText).toContain(
+      "[1011 additional characters omitted from the transcript view",
+    );
+    expect(presentation.displayText).not.toContain(DELEGATION_OPEN);
+    expect(presentation.displayText).not.toContain("UNIQUE_TAIL");
+  });
+
+  test("still presents review evidence inside the delegated user prompt", () => {
+    const presentation = userPromptPresentation(
+      delegatedPrompt(customFixPrompt('{"issues":[{"title":"Delegated finding"}]}')),
+    );
+
+    expect(presentation.displayText).toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix,
+    );
+    expect(presentation.displayText).not.toContain(DELEGATION_OPEN);
+    expect(presentation.displayText).not.toContain("Delegated finding");
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: { issues: [{ title: "Delegated finding" }] },
+    });
+  });
+
   test("bounds legacy inline prompts before Markdown rendering", () => {
     const source = `Review package:\n${"x".repeat(USER_PROMPT_RENDER_CHARACTER_LIMIT + 1_000)}UNIQUE_TAIL`;
     const omitted = source.length - USER_PROMPT_RENDER_CHARACTER_LIMIT;

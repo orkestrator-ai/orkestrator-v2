@@ -754,11 +754,12 @@ describe("NativeMessage task list rendering", () => {
     });
   });
 
-  test("long-press copies evidence omitted from the visible user prompt", async () => {
+  test("long-press copies the full source of a filtered delegated user prompt", async () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
     const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
-    const source = `${contract.promptPrefix} Backend context follows.\n\n${contract.openMarker}\n[{"summary":"Hidden copy evidence"}]\n${contract.closeMarker}\n\n${contract.continuationPrefix}"main".`;
+    const visibleSource = `${contract.promptPrefix} Backend context follows.\n\n${contract.openMarker}\n[{"summary":"Hidden copy evidence"}]\n${contract.closeMarker}\n\n${contract.continuationPrefix}"main".`;
+    const source = `<orkestrator-coordinator-delegation>\nProject: project-1\nCoordinator: coordinator-1\nConversation: conversation-1\nThis is a server-attested same-project worker delegation.\n</orkestrator-coordinator-delegation>\n\n${visibleSource}`;
     const message = makeMessage([{ type: "text", content: source }], {
       role: "user",
       id: "user-filtered-copy",

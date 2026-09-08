@@ -21,6 +21,25 @@ export interface UserPromptPresentation {
 /** Keep legacy inline evidence from monopolising the renderer's Markdown pass. */
 export const USER_PROMPT_RENDER_CHARACTER_LIMIT = 24_000;
 
+const COORDINATOR_DELEGATION_OPEN_MARKER = "<orkestrator-coordinator-delegation>";
+const COORDINATOR_DELEGATION_CLOSE_MARKER = "</orkestrator-coordinator-delegation>";
+const COORDINATOR_DELEGATION_SEPARATOR = "\n\n";
+
+/** Remove only the complete backend frame prepended to a delegated prompt. */
+function withoutLeadingCoordinatorDelegation(source: string): string {
+  const frameStart = `${COORDINATOR_DELEGATION_OPEN_MARKER}\n`;
+  if (!source.startsWith(frameStart)) return source;
+
+  const framedClose = `\n${COORDINATOR_DELEGATION_CLOSE_MARKER}`;
+  const close = source.indexOf(framedClose, frameStart.length);
+  if (close < 0) return source;
+
+  const afterClose = close + framedClose.length;
+  if (!source.startsWith(COORDINATOR_DELEGATION_SEPARATOR, afterClose)) return source;
+
+  return source.slice(afterClose + COORDINATOR_DELEGATION_SEPARATOR.length);
+}
+
 function boundedPromptDisplay(source: string): UserPromptPresentation {
   if (source.length <= USER_PROMPT_RENDER_CHARACTER_LIMIT) {
     return { displayText: source, evidencePayload: null };
@@ -80,11 +99,12 @@ function presentationForContract(
 
 /** Build the visible prompt and any structured evidence rendered beneath it. */
 export function userPromptPresentation(source: string): UserPromptPresentation {
+  const displaySource = withoutLeadingCoordinatorDelegation(source);
   for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
-    const presentation = presentationForContract(source, contract);
+    const presentation = presentationForContract(displaySource, contract);
     if (presentation !== null) return presentation;
   }
-  return boundedPromptDisplay(source);
+  return boundedPromptDisplay(displaySource);
 }
 
 /** Hide the reviewer-report JSON that already has a structured presentation. */

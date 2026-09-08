@@ -20,7 +20,7 @@
   "dependencies": {
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@opencode-ai/sdk": "1.18.28",
+    "@opencode-ai/sdk": "1.18.29",
     "@orkestrator/protocol": "workspace:*",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",

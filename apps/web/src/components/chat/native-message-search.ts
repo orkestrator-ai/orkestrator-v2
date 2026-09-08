@@ -148,8 +148,11 @@ function textPartSearchText(source: string, foldJsonPayload: boolean): string {
   return markdownToAgentSearchText(source);
 }
 
-function userTextPartSearchText(source: string): string {
-  const presentation = userPromptPresentation(source);
+function userTextPartSearchText(
+  source: string,
+  promptPresentation?: NativeMessage["promptPresentation"],
+): string {
+  const presentation = userPromptPresentation(source, promptPresentation);
   return [
     textPartSearchText(presentation.displayText, false),
     presentation.evidencePayload ? jsonPayloadSearchText(presentation.evidencePayload) : "",
@@ -182,15 +185,19 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
     // through MessageMarkdown, so normalize it exactly like a user text part.
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
     if (payload) return jsonPayloadSearchText(payload);
-    return message.role === "user" ? userTextPartSearchText(message.content) : message.content;
+    return message.role === "user"
+      ? userTextPartSearchText(message.content, message.promptPresentation)
+      : message.content;
   }
 
+  let promptPresentationAvailable = message.promptPresentation;
   return sources
-    .map((source) =>
-      message.role === "user"
-        ? userTextPartSearchText(source)
-        : textPartSearchText(source, foldJsonPayload),
-    )
+    .map((source) => {
+      if (message.role !== "user") return textPartSearchText(source, foldJsonPayload);
+      const promptPresentation = promptPresentationAvailable;
+      promptPresentationAvailable = undefined;
+      return userTextPartSearchText(source, promptPresentation);
+    })
     .filter(Boolean)
     .join("\n\n");
 }

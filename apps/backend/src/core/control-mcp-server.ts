@@ -10,7 +10,13 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 import { z } from "zod";
+import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
 const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
@@ -1170,16 +1176,29 @@ async function createControlMcp(
         modelId: input.modelId,
         reasoningId: input.reasoningId,
       });
-      const job = await invoke<unknown>("launch_control_job", {
-        ...input,
-        ...(coordinatorScope
-          ? {
-              prompt:
-                `<orkestrator-coordinator-delegation>\nProject: ${coordinatorScope.projectId}\nCoordinator: ${coordinatorScope.coordinatorId}\nConversation: ${coordinatorScope.conversationId}\nThis is a server-attested same-project worker delegation. Work only inside this disposable environment under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.\n${workerAsyncContract(coordinatorScope)}\n</orkestrator-coordinator-delegation>\n\n` +
-                input.prompt,
-            }
-          : {}),
-      });
+      const delegation = coordinatorScope
+        ? createCoordinatorDelegatedPrompt(
+            {
+              projectId: coordinatorScope.projectId,
+              coordinatorId: coordinatorScope.coordinatorId,
+              conversationId: coordinatorScope.conversationId,
+              instruction:
+                `${COORDINATOR_JOB_DELEGATION_INSTRUCTION}\n` +
+                workerAsyncContract(coordinatorScope),
+            },
+            input.prompt,
+          )
+        : null;
+      const launchArgs = delegation
+        ? withCoordinatorDelegationPresentation(
+            { ...input, prompt: delegation.source },
+            {
+              kind: COORDINATOR_DELEGATION_PRESENTATION,
+              frame: delegation.frame,
+            },
+          )
+        : input;
+      const job = await invoke<unknown>("launch_control_job", launchArgs);
       if (!isRecord(job)) throw new Error("Job launch returned no result");
       // Only against the tab the job actually landed in. A guessed tab id would
       // open a delegation nothing can ever close, leaving the conversation

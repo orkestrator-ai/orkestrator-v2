@@ -16,6 +16,7 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 
 export type {
   AgentActivitySource,
@@ -321,6 +322,8 @@ export interface Environment {
   /** One-shot conversation mode for the agent tab created from pendingAgentLaunch. */
   initialConversationMode?: "plan" | "build";
   initialPrompt?: string;
+  /** Backend-authenticated display treatment for the initial provider echo. */
+  initialPromptPresentation?: TrustedUserPromptPresentation;
   /** Attachments waiting to be delivered or written before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
   /** Backend-owned result of consuming pendingAgentLaunch. */
@@ -336,6 +339,7 @@ export type ClientEnvironment = Omit<
   | "frontendAgentActivityObservers"
   | "prRecheckAfterAgentCompletionArmedAt"
   | "initialPromptAttachments"
+  | "initialPromptPresentation"
   | "initialConversationMode"
   | "claudeModelCatalog"
   | "opencodePid"
@@ -527,6 +531,8 @@ export interface PersistedNativeAgentSession {
   interactionPolicy: AgentInteractionPolicy;
   /** Provider-neutral interactive choices that survive renderer/backend restarts. */
   controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
+  /** Exact backend-authored frame that may be hidden on the first matching user echo. */
+  initialPromptPresentation?: TrustedUserPromptPresentation;
   dispatchedRequestIds?: string[];
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch?: PersistedNativeAgentPendingDispatch;

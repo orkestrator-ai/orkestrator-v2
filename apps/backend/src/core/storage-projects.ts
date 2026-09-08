@@ -10,6 +10,7 @@ import {
 } from "./storage-agent-settings.js";
 import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -649,6 +650,15 @@ export abstract class StorageProjects extends StorageBase {
           );
         } else {
           throw new Error("Initial prompt attachments are malformed");
+        }
+      }
+      if ("initialPromptPresentation" in updates) {
+        if (updates.initialPromptPresentation == null) {
+          environment.initialPromptPresentation = undefined;
+        } else if (isTrustedUserPromptPresentation(updates.initialPromptPresentation)) {
+          environment.initialPromptPresentation = updates.initialPromptPresentation;
+        } else {
+          throw new Error("Initial prompt presentation metadata is malformed");
         }
       }
       if ("startupAgentSession" in updates) {

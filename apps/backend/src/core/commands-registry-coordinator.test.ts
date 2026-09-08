@@ -10,6 +10,10 @@ import { runCommand } from "./shell.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  COORDINATOR_DELEGATION_FRAME_OPEN,
+  COORDINATOR_DELEGATION_PRESENTATION,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -108,8 +112,14 @@ describe("coordinator command registry", () => {
     await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
     expect(create).toHaveBeenCalledTimes(1);
     expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
-      "<orkestrator-coordinator-delegation>",
+      COORDINATOR_DELEGATION_FRAME_OPEN,
     );
+    expect(await storage.getEnvironment("worker-1")).toMatchObject({
+      initialPromptPresentation: {
+        kind: COORDINATOR_DELEGATION_PRESENTATION,
+        frame: expect.stringContaining(COORDINATOR_DELEGATION_FRAME_OPEN),
+      },
+    });
     await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
     expect(create).toHaveBeenCalledTimes(1);
     await expect(

@@ -1311,6 +1311,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           initialReasoningEffort: undefined,
           initialConversationMode: undefined,
           initialPromptAttachments: undefined,
+          initialPromptPresentation: undefined,
           startupAgentSession: undefined,
         });
         this.launchRetryAt.delete(environment.id);
@@ -1394,6 +1395,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
         requestId: `initial-prompt:${environment.id}:startup-agent`,
         images,
+        ...(environment.initialPromptPresentation
+          ? { initialPromptPresentation: environment.initialPromptPresentation }
+          : {}),
       };
       const session =
         prompt || images.length > 0 || files.length > 0
@@ -1444,6 +1448,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         initialReasoningEffort: undefined,
         initialConversationMode: undefined,
         initialPromptAttachments: undefined,
+        initialPromptPresentation: undefined,
         // Once the durable pane carries the provider session id, the snapshot
         // has no remaining reader and must reach a terminal state. Leaving it
         // set is not inert: every renderer keeps polling this environment for
@@ -1484,6 +1489,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               initialReasoningEffort: undefined,
               initialConversationMode: undefined,
               initialPromptAttachments: undefined,
+              initialPromptPresentation: undefined,
             }
           : {}),
         startupAgentSession: {

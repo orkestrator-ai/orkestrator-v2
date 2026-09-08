@@ -7,12 +7,7 @@
  * outcome a previous bridge process could not record.
  */
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import {
-  getLastAssistantUsage,
-  type AgentSession,
-  type ContextUsage,
-  type SessionStats,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ContextUsage, SessionStats } from "@earendil-works/pi-coding-agent";
 import {
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
@@ -21,6 +16,7 @@ import {
   PROVIDER,
 } from "./config.js";
 import { denyAllApprovals } from "./interactions.js";
+import { getLastAssistantUsage } from "./pi-sdk.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
 import { withTimeout } from "./timeout.js";

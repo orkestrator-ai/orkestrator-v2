@@ -70,6 +70,7 @@ import type {
   PersistedNativeAgentPendingSteer,
 } from "./models.js";
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
+import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import type { StorageService } from "./storage.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
@@ -140,6 +141,8 @@ export interface EnsureNativeAgentSessionInput {
   executionPolicy?: "coordinator-read-only";
   /** Backend-computed policy. Caller values are replaced at the trust boundary. */
   policy?: NativeAgentExecutionPolicy;
+  /** Backend-authenticated presentation metadata for the session's initial prompt. */
+  initialPromptPresentation?: TrustedUserPromptPresentation;
 }
 
 export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {

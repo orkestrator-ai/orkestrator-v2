@@ -7,6 +7,11 @@ import {
   readControlMcpDescriptor,
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
+import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 type RpcBody = {
   result?: {
@@ -244,6 +249,34 @@ describe("Orkestrator control MCP server", () => {
     expect(environments.body.result?.structuredContent).toMatchObject({
       total: 1,
       environments: [{ id: "env-project-1", projectId: "project-1" }],
+    });
+
+    overrides.set("get_environment", () => ({ id: "env-project-1", projectId: "project-1" }));
+    overrides.set("launch_control_job", () => ({
+      jobId: "job-1",
+      environmentId: "env-project-1",
+      tabId: "agent-job-1",
+      status: "accepted",
+    }));
+    const launched = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_job",
+      arguments: {
+        requestId: "coordinator-job-1",
+        environmentId: "env-project-1",
+        agent: "codex",
+        prompt: "Implement the delegated task.",
+      },
+    });
+    expect(launched.body.result?.isError).not.toBe(true);
+    const launchArgs = invocations.find(
+      ({ command, args }) =>
+        command === "launch_control_job" && args.requestId === "coordinator-job-1",
+    )?.args;
+    const parsedDelegation = parseCoordinatorDelegatedPrompt(String(launchArgs?.prompt));
+    expect(parsedDelegation?.source).toBe("Implement the delegated task.");
+    expect(launchArgs && coordinatorDelegationPresentationFrom(launchArgs)).toEqual({
+      kind: COORDINATOR_DELEGATION_PRESENTATION,
+      frame: parsedDelegation?.frame,
     });
 
     const denied = await rpc(credential.url, credential.token, "tools/call", {

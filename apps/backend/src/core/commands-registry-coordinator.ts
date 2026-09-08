@@ -13,6 +13,11 @@ import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coord
 import { createHash, randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput, isStartMultiReviewInput } from "./commands-dependencies.js";
 import { runCommand } from "./shell.js";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 function actionHash(value: unknown): string {
   const canonicalize = (item: unknown): unknown => {
@@ -476,26 +481,51 @@ export function registerCoordinatorCommands(
       if (!receipt.claimed) {
         throw new Error("Environment creation is already in progress; retry this requestId");
       }
-      const delegatedPrompt =
+      const delegation =
         typeof input.initialPrompt === "string"
-          ? `<orkestrator-coordinator-delegation>\nProject: ${projectId}\nCoordinator: ${coordinatorId}\nConversation: ${conversationId}\nBase branch: ${input.delegationBaseBranch}\nBase commit: ${input.delegationBaseCommit}\nThis is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.\nThe coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to environment ${coordinatorRuntimeId(coordinatorId, conversationId)}, then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.\n</orkestrator-coordinator-delegation>\n\n${input.initialPrompt}`
-          : input.initialPrompt;
-      const environment = await dependencies.commands.get("create_environment")?.(
-        { ...input, initialPrompt: delegatedPrompt, controlRequestId: stableRequestId },
+          ? createCoordinatorDelegatedPrompt(
+              {
+                projectId,
+                coordinatorId,
+                conversationId,
+                baseBranch: delegationBaseBranch,
+                baseCommit: delegationBaseCommit,
+                instruction:
+                  `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
+                  `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to environment ${coordinatorRuntimeId(coordinatorId, conversationId)}, then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`,
+              },
+              input.initialPrompt,
+            )
+          : null;
+      const createdEnvironment = await dependencies.commands.get("create_environment")?.(
+        {
+          ...input,
+          initialPrompt: delegation?.source ?? input.initialPrompt,
+          controlRequestId: stableRequestId,
+        },
         context,
       );
-      if (!record(environment) || typeof environment.id !== "string") {
+      if (!record(createdEnvironment) || typeof createdEnvironment.id !== "string") {
         throw new Error("Environment creation returned no environment");
       }
+      const environmentId = createdEnvironment.id;
+      const environment = delegation
+        ? await context.storage.updateEnvironment(environmentId, {
+            initialPromptPresentation: {
+              kind: COORDINATOR_DELEGATION_PRESENTATION,
+              frame: delegation.frame,
+            },
+          })
+        : createdEnvironment;
       await context.storage.completeCoordinatorWorkflowAssociation(
         receipt.association.id,
-        environment.id,
+        environmentId,
       );
       let startError: string | undefined;
       if (environment.status !== "running" && environment.status !== "creating") {
         try {
           await dependencies.commands.get("start_environment_background")?.(
-            { environmentId: environment.id },
+            { environmentId },
             context,
           );
         } catch (error) {

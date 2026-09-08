@@ -11,6 +11,93 @@ export interface ReviewEvidenceFrameDisplayContract {
   omissionText: string;
 }
 
+export const COORDINATOR_DELEGATION_FRAME_OPEN = "<orkestrator-coordinator-delegation>";
+export const COORDINATOR_DELEGATION_FRAME_CLOSE = "</orkestrator-coordinator-delegation>";
+export const COORDINATOR_DELEGATION_FRAME_SEPARATOR = "\n\n";
+export const COORDINATOR_DELEGATION_PRESENTATION = "coordinator-delegation" as const;
+export const COORDINATOR_DELEGATION_OMISSION_TEXT =
+  "(Coordinator delegation metadata omitted from this view; copy this message to inspect the complete prompt.)";
+export const COORDINATOR_JOB_DELEGATION_INSTRUCTION =
+  "This is a server-attested same-project worker delegation. Work only inside this disposable environment under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.";
+export const COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION =
+  "This is a server-attested same-project worker delegation. Perform it inside this disposable worker under its normal sandbox and approval policy, then report meaningful completion, failure, or blocking details through Orkestrator mail.";
+
+export type UserPromptPresentationKind = typeof COORDINATOR_DELEGATION_PRESENTATION;
+
+/** Backend-owned metadata retained until the matching provider echo is projected. */
+export interface TrustedUserPromptPresentation {
+  kind: UserPromptPresentationKind;
+  frame: string;
+}
+
+export interface CoordinatorDelegationFrameInput {
+  projectId: string;
+  coordinatorId: string;
+  conversationId: string;
+  baseBranch?: string;
+  baseCommit?: string;
+  instruction: string;
+}
+
+export interface CoordinatorDelegatedPrompt {
+  source: string;
+  frame: string;
+}
+
+/** Serialize the one delegation grammar consumed by backend producers and transcript display. */
+export function createCoordinatorDelegatedPrompt(
+  input: CoordinatorDelegationFrameInput,
+  prompt: string,
+): CoordinatorDelegatedPrompt {
+  const frame = [
+    COORDINATOR_DELEGATION_FRAME_OPEN,
+    `Project: ${input.projectId}`,
+    `Coordinator: ${input.coordinatorId}`,
+    `Conversation: ${input.conversationId}`,
+    ...(input.baseBranch === undefined ? [] : [`Base branch: ${input.baseBranch}`]),
+    ...(input.baseCommit === undefined ? [] : [`Base commit: ${input.baseCommit}`]),
+    input.instruction,
+    COORDINATOR_DELEGATION_FRAME_CLOSE,
+  ].join("\n");
+  return { frame, source: `${frame}${COORDINATOR_DELEGATION_FRAME_SEPARATOR}${prompt}` };
+}
+
+/** Parse only a complete frame at offset zero, preserving every byte of the caller's prompt. */
+export function parseCoordinatorDelegatedPrompt(source: string): CoordinatorDelegatedPrompt | null {
+  const frameStart = `${COORDINATOR_DELEGATION_FRAME_OPEN}\n`;
+  if (!source.startsWith(frameStart)) return null;
+
+  const framedClose = `\n${COORDINATOR_DELEGATION_FRAME_CLOSE}`;
+  const close = source.indexOf(framedClose, frameStart.length);
+  if (close < 0) return null;
+
+  const afterClose = close + framedClose.length;
+  if (!source.startsWith(COORDINATOR_DELEGATION_FRAME_SEPARATOR, afterClose)) return null;
+
+  return {
+    frame: source.slice(0, afterClose),
+    source: source.slice(afterClose + COORDINATOR_DELEGATION_FRAME_SEPARATOR.length),
+  };
+}
+
+export function isTrustedUserPromptPresentation(
+  value: unknown,
+): value is TrustedUserPromptPresentation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.kind !== COORDINATOR_DELEGATION_PRESENTATION ||
+    typeof candidate.frame !== "string" ||
+    candidate.frame.length > 16_384
+  ) {
+    return false;
+  }
+  const parsed = parseCoordinatorDelegatedPrompt(
+    `${candidate.frame}${COORDINATOR_DELEGATION_FRAME_SEPARATOR}`,
+  );
+  return parsed?.frame === candidate.frame && parsed.source === "";
+}
+
 export const MULTI_REVIEW_CONSOLIDATION_PROMPT_PREFIX =
   "You are the consolidation and fix model for a Multi Review.";
 export const MULTI_REVIEW_REPORTS_FRAME_OPEN = "<multi-review-reports-json>";

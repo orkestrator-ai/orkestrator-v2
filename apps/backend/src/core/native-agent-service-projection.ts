@@ -6,6 +6,7 @@ import {
   type NativeAgentAsyncQuestionResponse,
   type NativeAgentContextUsage,
 } from "@orkestrator/protocol/native-agent";
+import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_AUTH_STATUS_CACHE_LIMIT,
@@ -409,8 +410,17 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     messages: unknown[],
     limit: number,
     maximumBytes = NATIVE_PROJECTION_MAX_BYTES,
+    initialPromptPresentation?: PersistedNativeAgentSession["initialPromptPresentation"],
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
-    const requested = messages.slice(-limit).map((raw) => {
+    const firstUserMessageIndex = messages.findIndex(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        (candidate as Record<string, unknown>).role === "user",
+    );
+    const requestedStart = Math.max(0, messages.length - limit);
+    const requested = messages.slice(requestedStart).map((raw, requestedIndex) => {
       const message =
         raw && typeof raw === "object" && !Array.isArray(raw)
           ? (raw as Record<string, unknown>)
@@ -426,6 +436,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ) {
         throw new ProviderUnavailableError("Provider returned a non-normalized native transcript");
       }
+      const parsedDelegation =
+        requestedStart + requestedIndex === firstUserMessageIndex && initialPromptPresentation
+          ? parseCoordinatorDelegatedPrompt(message.content)
+          : null;
+      const promptPresentation =
+        initialPromptPresentation && parsedDelegation?.frame === initialPromptPresentation.frame
+          ? initialPromptPresentation.kind
+          : undefined;
       return {
         id: message.id,
         role,
@@ -439,6 +457,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
         ...(typeof message.turnId === "string" ? { turnId: message.turnId } : {}),
         ...(typeof message.planReview === "boolean" ? { planReview: message.planReview } : {}),
+        ...(promptPresentation ? { promptPresentation } : {}),
       };
     });
     let boundedTranscript;
@@ -1560,6 +1579,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         sessionKey,
         snapshot.messages,
         input.representation === "sync-v1" ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : messageLimit,
+        NATIVE_PROJECTION_MAX_BYTES,
+        resolved.session.initialPromptPresentation,
       );
       const transcript =
         input.representation === "sync-v1"

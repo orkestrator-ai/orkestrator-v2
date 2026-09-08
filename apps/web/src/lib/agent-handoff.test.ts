@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { buildPromptWithTranscriptAnnotations } from "@/lib/chat/transcript-annotations";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import * as realBackend from "@/lib/backend";
 
@@ -189,6 +191,34 @@ describe("agent handoff serialization", () => {
       "Briefly acknowledge the handoff, state the next concrete action implied by the transcript",
     );
     expect(handoff.bootstrapPrompt).not.toContain("private intermediate reasoning");
+    expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
+  });
+
+  test("preserves transcript references in the snapshot and destination prompt", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("Confirm the deployment", [
+      {
+        id: "reference-1",
+        text: "The trigger is configured in europe-west2.",
+        comment: "Check whether it still exists.",
+      },
+    ]);
+    const annotated = normalizeNativeMessage({
+      id: "annotated-user",
+      role: "user",
+      content: rawContent,
+      parts: [{ type: "text", content: rawContent }],
+      createdAt: "2026-07-27T10:00:00.000Z",
+    });
+    const handoff = createHandoff({ messages: [annotated, messages[1]!] });
+
+    expect(handoff.messages.map((message) => message.id)).toEqual([
+      "annotated-user",
+      "assistant-1",
+    ]);
+    expect(handoff.stats.droppedMessageCount).toBe(0);
+    expect(handoff.bootstrapPrompt).toContain("[REFERENCE 1]");
+    expect(handoff.bootstrapPrompt).toContain("The trigger is configured in europe-west2.");
+    expect(handoff.bootstrapPrompt).toContain("comment: Check whether it still exists.");
     expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
   });
 
@@ -745,6 +775,24 @@ describe("agent handoff validation and tool counting", () => {
       [{ ...messages[0], parts: null }],
       [{ ...messages[0], parts: [{ type: "unknown", content: "" }] }],
       [{ ...messages[0], parts: [{ type: "text", content: 1 }] }],
+      [
+        {
+          ...messages[0],
+          parts: [{ type: "transcript-reference", content: "quoted", reference: "1" }],
+        },
+      ],
+      [
+        {
+          ...messages[0],
+          parts: [{ type: "transcript-reference", content: "quoted", reference: 0 }],
+        },
+      ],
+      [
+        {
+          ...messages[0],
+          parts: [{ type: "transcript-reference", content: "quoted", reference: 1, comment: 42 }],
+        },
+      ],
       [
         {
           ...messages[0],

@@ -127,8 +127,19 @@ export function parsePromptTranscriptReferences(prompt: string): {
       continue;
     }
 
-    references.push(...parsed);
-    cleanPrompt = cleanPrompt.replace(match[0], "").trim();
+    if (references.length + parsed.length > MAX_TRANSCRIPT_ANNOTATIONS) continue;
+
+    const referenceOffset = references.length;
+    references.push(
+      ...parsed.map((reference, index) => ({
+        ...reference,
+        reference: referenceOffset + index + 1,
+      })),
+    );
+    const separatedBlock = `\n\n${match[0]}`;
+    cleanPrompt = cleanPrompt
+      .replace(cleanPrompt.includes(separatedBlock) ? separatedBlock : match[0], "")
+      .trim();
   }
 
   return { cleanPrompt, references };

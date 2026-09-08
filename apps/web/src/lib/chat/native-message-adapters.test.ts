@@ -2072,6 +2072,32 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("normalizes an annotation-only prompt without losing its reference", () => {
+    const rawContent = buildPromptWithTranscriptAnnotations("", [
+      { id: "reference-1", text: "Only quoted context", comment: "Explain this" },
+    ]);
+
+    expect(
+      normalizeNativeMessage({
+        id: "native-reference-only",
+        role: "user",
+        content: rawContent,
+        createdAt: "2026-09-08T14:00:00.000Z",
+        parts: [{ type: "text", content: rawContent }],
+      }),
+    ).toMatchObject({
+      content: "",
+      parts: [
+        {
+          type: "transcript-reference",
+          content: "Only quoted context",
+          reference: 1,
+          comment: "Explain this",
+        },
+      ],
+    });
+  });
+
   test("renders Claude transcript annotations as structured reference parts", () => {
     const rawContent = buildPromptWithTranscriptAnnotations("Explain", [
       { id: "reference-1", text: "Quoted Claude output", comment: "Why?" },

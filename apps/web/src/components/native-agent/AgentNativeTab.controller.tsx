@@ -74,6 +74,7 @@ import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   buildMessageForkPlan,
   forkAttachmentNotice,
+  reconcileForkPromptDraft,
   type MessageForkKind,
 } from "@/components/chat/message-fork";
 import {
@@ -1299,10 +1300,12 @@ export function SharedNativeAgentController({
           });
         }
         if (planned.kind === "prompt") {
+          const restoredDraft = reconcileForkPromptDraft(planned, outcome?.draft);
           updateDraft(forkSessionKey, {
-            text: outcome?.draft ?? planned.draftText,
+            text: restoredDraft.text,
             mentions: [],
             attachments: [],
+            annotations: restoredDraft.annotations,
           });
         }
         const panes = usePaneLayoutStore.getState();

@@ -118,6 +118,43 @@ describe("transcript annotations", () => {
     });
   });
 
+  test("renumbers references across multiple valid annotation envelopes", () => {
+    const first = buildPromptWithTranscriptAnnotations("First prompt", [
+      { id: "first", text: "First excerpt", comment: "" },
+    ]);
+    const second = buildPromptWithTranscriptAnnotations("Second prompt", [
+      { id: "second", text: "Second excerpt", comment: "Compare these" },
+    ]);
+
+    expect(parsePromptTranscriptReferences(`${first}\n\n${second}`)).toEqual({
+      cleanPrompt: "First prompt\n\nSecond prompt",
+      references: [
+        { reference: 1, selectedText: "First excerpt", userComment: null },
+        { reference: 2, selectedText: "Second excerpt", userComment: "Compare these" },
+      ],
+    });
+  });
+
+  test("leaves an envelope visible when it would exceed the total reference bound", () => {
+    const full = buildPromptWithTranscriptAnnotations(
+      "Bounded prompt",
+      Array.from({ length: MAX_TRANSCRIPT_ANNOTATIONS }, (_, index) => ({
+        id: String(index),
+        text: `excerpt-${index}`,
+        comment: "",
+      })),
+    );
+    const overflow = buildPromptWithTranscriptAnnotations("Overflow prompt", [
+      { id: "overflow", text: "must remain visible", comment: "" },
+    ]);
+
+    const parsed = parsePromptTranscriptReferences(`${full}\n\n${overflow}`);
+    expect(parsed.references).toHaveLength(MAX_TRANSCRIPT_ANNOTATIONS);
+    expect(parsed.cleanPrompt).toContain("Overflow prompt");
+    expect(parsed.cleanPrompt).toContain("must remain visible");
+    expect(parsed.cleanPrompt).toContain("<orkestrator_transcript_annotations>");
+  });
+
   test("leaves malformed or hand-written annotation envelopes visible", () => {
     const malformed = [
       "Visible prompt",

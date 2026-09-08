@@ -36,6 +36,14 @@ export interface BridgeMessage {
   modelId?: string;
   /** Exact SDK run that originated this user turn, used by destructive rewind. */
   runId?: string;
+  /**
+   * Typed plan-review marker used by the shared presentation slot.
+   *
+   * Set on assistant messages produced while the composer is in plan mode, and
+   * on historic turns that already called `createPlan`. The renderer shows
+   * approve/dismiss controls for the latest such message.
+   */
+  planReview?: boolean;
 }
 
 export interface BridgeTextPart {

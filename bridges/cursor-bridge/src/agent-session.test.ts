@@ -438,6 +438,41 @@ describe("resumeSession", () => {
       "tool-invocation",
     ]);
     expect(assistant.parts[2]).toMatchObject({ toolName: "read", toolState: "success" });
+    expect(assistant.planReview).toBeUndefined();
+  });
+
+  test("historic createPlan turns are marked for plan review", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "plan the split" },
+              steps: [
+                {
+                  type: "toolCall",
+                  message: {
+                    type: "createPlan",
+                    args: { plan: "# Split\n\nDo it." },
+                    result: { status: "success", value: {} },
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    expect(assistant).toMatchObject({ planReview: true });
+    expect(assistant?.parts[0]).toMatchObject({
+      toolName: "createPlan",
+      toolOutput: "# Split\n\nDo it.",
+    });
+    expect(assistant?.parts[0]).not.toMatchObject({ toolArgs: { plan: expect.anything() } });
   });
 
   test("settles replayed sub-agents rather than showing them as running", async () => {

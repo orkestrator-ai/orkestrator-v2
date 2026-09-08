@@ -142,6 +142,29 @@ describe("renderToolCall", () => {
     ]);
   });
 
+  test("createPlan keeps markdown in output and a short title, not escaped args", () => {
+    const rendered = renderToolCall({
+      type: "createPlan",
+      args: {
+        name: "Split discovery",
+        plan: "# Split discovery\n\nDo the work.",
+      },
+    });
+    expect(rendered.toolTitle).toBe("Split discovery");
+    expect(rendered.toolArgs).toEqual({ name: "Split discovery" });
+    expect(rendered.toolOutput).toBe("# Split discovery\n\nDo the work.");
+  });
+
+  test("createPlan uses the first heading when the tool omitted a name", () => {
+    const rendered = renderToolCall({
+      type: "createPlan",
+      args: { plan: "## Review package\n\nSteps." },
+    });
+    expect(rendered.toolTitle).toBe("Review package");
+    expect(rendered.toolArgs).toBeUndefined();
+    expect(rendered.toolOutput).toBe("## Review package\n\nSteps.");
+  });
+
   test("an unknown tool degrades to a plain card instead of throwing", () => {
     const rendered = renderToolCall({ type: "somethingNew", args: { a: 1 } });
     expect(rendered.toolName).toBe("somethingNew");

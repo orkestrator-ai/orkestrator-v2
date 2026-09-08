@@ -6186,5 +6186,93 @@ describe("AgentNativeTab", () => {
       expect(await screen.findByText(/Resolve the unconfirmed message above/)).toBeTruthy();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
+
+    test.each(["codex", "cursor"] as const)(
+      "shows a plan review card for an idle %s plan-mode turn",
+      async (platform) => {
+        seedProjection({
+          composer: { selectedModeId: "plan" },
+          messages: [
+            {
+              id: "assistant-plan",
+              role: "assistant",
+              content: "Here is the plan",
+              planReview: true,
+              parts: [],
+              createdAt: "2026-09-08T10:00:00.000Z",
+            },
+          ],
+        });
+        render(<AgentNativeTab tabId={`tab-plan-${platform}`} data={identity(platform)} isActive />);
+
+        expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Switch To Build" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+      },
+    );
+
+    test("Cursor createPlan without planReview still offers approve and dismiss", async () => {
+      renderVirtualizedMessages = true;
+      seedProjection({
+        composer: { selectedModeId: "plan" },
+        messages: [
+          {
+            id: "assistant-create-plan",
+            role: "assistant",
+            content: "Here is the approach.",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Plan",
+                toolName: "createPlan",
+                toolState: "success",
+                toolOutput: "# Split discovery\n\nDo the work.",
+              },
+            ],
+            createdAt: "2026-09-08T10:00:00.000Z",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId="tab-cursor-create-plan" data={identity("cursor")} isActive />);
+
+      expect(await screen.findByRole("button", { name: "Approve Plan" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
+      expect(screen.getByText("Do the work.")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Approve Plan" })).toBeNull(),
+      );
+      expect(screen.getByRole("heading", { name: "Split discovery" })).toBeTruthy();
+    });
+
+    test("approving a Cursor plan switches to build and asks the agent to implement", async () => {
+      seedProjection({
+        composer: { selectedModeId: "plan" },
+        messages: [
+          {
+            id: "assistant-plan",
+            role: "assistant",
+            content: "Ready",
+            planReview: true,
+            parts: [],
+            createdAt: "2026-09-08T10:00:00.000Z",
+          },
+        ],
+      });
+      render(<AgentNativeTab tabId="tab-cursor-approve" data={identity("cursor")} isActive />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Approve Plan" }));
+
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { mode: "build" },
+      });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        prompt: "The plan is approved. Exit plan mode and implement it.",
+        mode: "build",
+      });
+    });
   });
 });

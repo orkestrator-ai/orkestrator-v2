@@ -167,6 +167,23 @@ describe("tool call lifecycle", () => {
     });
   });
 
+  test("plan mode stamps planReview on the assistant message", () => {
+    const state = running();
+    state.composer.selectedModeId = "plan";
+    applyInteractionUpdate(state, { type: "text-delta", text: "Here is the plan." });
+    expect(state.messages[0]).toMatchObject({
+      role: "assistant",
+      planReview: true,
+      content: "Here is the plan.",
+    });
+  });
+
+  test("build mode does not stamp planReview", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Implementing." });
+    expect(state.messages[0]!.planReview).toBeUndefined();
+  });
+
   test("a failed call settles as a failure", () => {
     const state = running();
     applyInteractionUpdate(state, {

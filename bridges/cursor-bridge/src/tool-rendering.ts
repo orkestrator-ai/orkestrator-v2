@@ -337,9 +337,20 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
 
 function renderCreatePlan(rendered: RenderedToolCall, args: JsonObject, _result: ToolResult): void {
   const plan = readRawText(args.plan) ?? "";
-  rendered.toolTitle = "Plan";
-  rendered.toolArgs = compact({ plan: boundText(plan, MAX_TOOL_ARGUMENT_BYTES) });
+  const name = readString(args.name);
+  rendered.toolTitle = name ?? firstMarkdownHeading(plan) ?? "Plan";
+  // The generic tool card JSON.stringifies `toolArgs`, so the markdown body
+  // lives only in `toolOutput`. A short name is the one argument worth
+  // keeping for the collapsed row.
+  rendered.toolArgs = compact({ name });
   rendered.toolOutput = boundText(plan, MAX_TOOL_OUTPUT_BYTES);
+}
+
+/** First ATX heading, used as the card title when the tool omitted `name`. */
+function firstMarkdownHeading(plan: string): string | undefined {
+  const match = /^#{1,6}\s+(.+)$/m.exec(plan);
+  const heading = match?.[1]?.trim();
+  return heading ? heading : undefined;
 }
 
 function renderUpdateTodos(rendered: RenderedToolCall, args: JsonObject, result: ToolResult): void {

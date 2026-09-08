@@ -3607,6 +3607,44 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).not.toContain("Unknown tool");
   });
 
+  test("routes createPlan to a markdown plan card instead of raw JSON", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "Plan",
+        toolName: "createPlan",
+        toolTitle: "Split discovery",
+        toolState: "success",
+        toolOutput: "# Split discovery\n\nDo the **work**.",
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Split discovery");
+    expect(container.textContent).toContain("work");
+    expect(container.textContent).not.toContain('{"plan"');
+    expect(container.querySelector("pre")?.textContent ?? "").not.toContain("# Split discovery");
+  });
+
+  test("unwraps a legacy createPlan JSON dump into markdown", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "Plan",
+        toolName: "createPlan",
+        toolState: "success",
+        toolArgs: { plan: "# Legacy\n\nRecovered body." },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Legacy");
+    expect(container.textContent).toContain("Recovered body.");
+    expect(container.textContent).not.toContain('\\n');
+  });
+
   test("does not route ACP tool kind plan to TodoToolPart", () => {
     const message = makeMessage([
       {

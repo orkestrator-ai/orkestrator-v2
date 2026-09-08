@@ -623,7 +623,7 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
     isObject(body.userMessage) && nonBlank(body.userMessage.text)
       ? body.userMessage.text
       : undefined;
-  if (userText) pushMessage(state, "user", userText, [], undefined, runId);
+  if (userText) pushMessage(state, "user", userText, [], undefined, { runId });
   if (!Array.isArray(body.steps) || body.steps.length === 0) return;
 
   const parts: BridgeMessagePart[] = [];
@@ -669,7 +669,12 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
       });
     }
   }
-  if (parts.length > 0) pushMessage(state, "assistant", content, parts, messageId);
+  if (parts.length > 0) {
+    const planReview = parts.some(
+      (part) => part.type === "tool-invocation" && part.toolName === "createPlan",
+    );
+    pushMessage(state, "assistant", content, parts, messageId, { planReview });
+  }
 }
 
 function appendHistoricShellTurn(state: SessionState, body: Record<string, unknown>): void {
@@ -714,7 +719,7 @@ function pushMessage(
   content: string,
   parts: BridgeMessagePart[],
   messageId = randomBytes(12).toString("hex"),
-  runId?: string,
+  extras?: { runId?: string; planReview?: boolean },
 ): void {
   const message: BridgeMessage = {
     id: messageId,
@@ -732,7 +737,8 @@ function pushMessage(
             },
           ],
     createdAt: new Date().toISOString(),
-    ...(runId ? { runId } : {}),
+    ...(extras?.runId ? { runId: extras.runId } : {}),
+    ...(extras?.planReview ? { planReview: true } : {}),
   };
   state.messages.push(message);
   chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));

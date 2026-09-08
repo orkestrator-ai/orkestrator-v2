@@ -685,6 +685,7 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
     parts: [],
     createdAt: new Date().toISOString(),
     ...(state.composer.selectedModelId ? { modelId: state.composer.selectedModelId } : {}),
+    ...(state.composer.selectedModeId === "plan" ? { planReview: true } : {}),
   };
   state.messages.push(message);
   state.currentAssistantMessageId = message.id;

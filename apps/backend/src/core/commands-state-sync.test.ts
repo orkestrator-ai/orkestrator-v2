@@ -27,6 +27,7 @@ import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { createProviderStub } from "./native-agent-service-projection-test-support.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -4773,10 +4774,9 @@ describe("build pipeline commands", () => {
     },
   } as const;
 
-  test("resolves a validated build stage through the native agent projection", async () => {
-    const adoptSession = mock(async () => ({ providerSessionId: "provider-session" }));
-    const getProjection = mock(async () => ({ sessionId: "provider-session", revision: 7 }));
-    const nativeAgents = { adoptSession, getProjection } as unknown as NonNullable<
+  test("resolves a validated build stage through transient native agent inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "provider-session", revision: 7 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
       CommandContext["nativeAgents"]
     >;
 
@@ -4819,7 +4819,7 @@ describe("build pipeline commands", () => {
             refreshUsage: true,
           }),
         ).resolves.toEqual({ sessionId: "provider-session", revision: 7 });
-        expect(adoptSession).toHaveBeenCalledWith({
+        expect(inspectSession).toHaveBeenCalledWith({
           environmentId: "e1",
           agent: "codex",
           logicalSessionKey: "pipeline-session-key",
@@ -4828,11 +4828,6 @@ describe("build pipeline commands", () => {
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: "Build Session",
           phase: "build",
-        });
-        expect(getProjection).toHaveBeenCalledWith({
-          environmentId: "e1",
-          agent: "codex",
-          logicalSessionKey: "pipeline-session-key",
           refreshUsage: true,
         });
 
@@ -4842,9 +4837,166 @@ describe("build pipeline commands", () => {
             sessionKey: "another-session",
           }),
         ).rejects.toThrow("Build pipeline session is unavailable");
-        expect(adoptSession).toHaveBeenCalledTimes(1);
+        expect(inspectSession).toHaveBeenCalledTimes(1);
       },
       { nativeAgents },
+    );
+  });
+
+  test("rejects invalid build-stage projection requests before inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "provider-session", revision: 1 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.saveBuildPipeline("malformed", "proj-1", "e1", 1, {});
+        await storage.saveBuildPipeline("missing-sdk", "proj-1", "e1", 1, {
+          id: "missing-sdk",
+          taskId: "task-1",
+          projectId: "proj-1",
+          environmentId: "e1",
+          environmentType: "local",
+          agentType: "codex",
+          phase: "building",
+          sessions: [
+            {
+              phase: "build",
+              agent: "codex",
+              iteration: 0,
+              sessionKey: "session-key",
+              status: "idle",
+              startedAt: "2026-09-08T10:00:00.000Z",
+              label: "Build Session",
+            },
+          ],
+          currentSessionIndex: 0,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: "2026-09-08T10:00:00.000Z",
+          taskTitle: "Implement the feature",
+          taskSnapshot: startInput.taskSnapshot,
+        });
+
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "missing",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "malformed",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "missing-sdk",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "malformed",
+            sessionKey: "session-key",
+            refreshUsage: "yes",
+          }),
+        ).rejects.toThrow("refreshUsage");
+        expect(inspectSession).not.toHaveBeenCalled();
+      },
+      { nativeAgents },
+    );
+
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_build_pipeline_session_projection", {
+          pipelineId: "pipeline-1",
+          sessionKey: "session-key",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+    });
+  });
+
+  test("does not persist inspected build stages or enroll them in activity reconciliation", async () => {
+    const stub = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    let service: NativeAgentService | undefined;
+
+    await withCommands(
+      async (invoke, storage) => {
+        try {
+          await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+            id: "pipeline-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            environmentId: "e1",
+            environmentType: "local",
+            agentType: "codex",
+            phase: "building",
+            sessions: [
+              {
+                phase: "build",
+                agent: "codex",
+                origin: "build-pipeline",
+                interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+                iteration: 0,
+                sessionKey: "pipeline-session-key",
+                sdkSessionId: "provider-session",
+                status: "idle",
+                startedAt: "2026-09-08T10:00:00.000Z",
+                label: "Build Session",
+              },
+            ],
+            currentSessionIndex: 0,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: "2026-09-08T10:00:00.000Z",
+            taskTitle: "Implement the feature",
+            taskSnapshot: startInput.taskSnapshot,
+          });
+          const projectionChanges: string[] = [];
+          storage.setResourceChangeListener((change) => {
+            if (change.resource === "native-agent-session") {
+              projectionChanges.push(change.id);
+            }
+          });
+
+          await expect(
+            invoke("get_build_pipeline_session_projection", {
+              pipelineId: "pipeline-1",
+              sessionKey: "pipeline-session-key",
+            }),
+          ).resolves.toMatchObject({ sessionId: "provider-session", connection: "connected" });
+          await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
+          expect(projectionChanges).toEqual([]);
+
+          await (
+            service as unknown as { reconcileAgentActivityOnce(): Promise<void> }
+          ).reconcileAgentActivityOnce();
+          expect(stub.activity).not.toHaveBeenCalled();
+
+          await invoke("delete_build_pipeline", { pipelineId: "pipeline-1" });
+          await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
+        } finally {
+          await service?.shutdown();
+        }
+      },
+      {
+        nativeAgentsFactory: (storage) => {
+          service = new NativeAgentService(
+            storage,
+            async <T>(command: string): Promise<T> => {
+              if (command === "get_native_agent_model_catalog") return [] as T;
+              throw new Error(`Unexpected backend command: ${command}`);
+            },
+            { provider: async () => stub.provider },
+          );
+          return service;
+        },
+      },
     );
   });
 

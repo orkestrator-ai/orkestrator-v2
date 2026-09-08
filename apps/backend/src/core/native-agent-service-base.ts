@@ -21,6 +21,7 @@ import {
   nonBlank,
   readProviderStatus,
 } from "./native-agent-service-shared.js";
+import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -61,6 +62,7 @@ type CommandInvoker = shared.CommandInvoker;
 type EnsureNativeAgentSessionInput = shared.EnsureNativeAgentSessionInput;
 type DispatchNativeAgentPromptInput = shared.DispatchNativeAgentPromptInput;
 type AdoptNativeAgentSessionInput = shared.AdoptNativeAgentSessionInput;
+type InspectNativeAgentSessionInput = shared.InspectNativeAgentSessionInput;
 type NativeAgentProjectionInput = shared.NativeAgentProjectionInput;
 type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentSyncState = shared.NativeAgentSyncState;
@@ -110,6 +112,7 @@ export type NativeAgentServiceLayerTypes = [
   EnsureNativeAgentSessionInput,
   DispatchNativeAgentPromptInput,
   AdoptNativeAgentSessionInput,
+  InspectNativeAgentSessionInput,
   NativeAgentProjectionInput,
   NativeAgentProjectionCacheEntry,
   NativeAgentActivityTransition,
@@ -259,6 +262,12 @@ export abstract class NativeAgentServiceBase {
   protected abstract refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
+    resolvedSession?: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+      transient: true;
+    },
   ): Promise<NativeAgentSessionProjection | null>;
   protected abstract dispatchIntentInternal(
     input: DispatchNativeAgentPromptInput,
@@ -704,6 +713,80 @@ export abstract class NativeAgentServiceBase {
     });
     void this.reconcileAgentInteractions().catch(() => undefined);
     return session;
+  }
+
+  /**
+   * Render a backend-owned provider session without persisting a native-agent
+   * mapping. Build pipelines retain the authoritative identity and lifecycle,
+   * so persisting this inspection would make historical stages participate in
+   * the native-session activity and interaction sweeps forever.
+   */
+  async inspectSession(
+    input: InspectNativeAgentSessionInput,
+  ): Promise<NativeAgentSessionProjection | null> {
+    input = await this.trustedSessionInput(input);
+    this.assertAcceptingWork();
+    if (
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !nonBlank(input.providerSessionId) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input) ||
+      (input.refreshUsage !== undefined && typeof input.refreshUsage !== "boolean")
+    ) {
+      throw new Error("Invalid native agent session inspection request");
+    }
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    await this.assertEnvironmentLive(input.environmentId);
+    const provider = await this.provider(input);
+    const origin = input.origin ?? "interactive-native";
+    const interactionPolicy =
+      input.interactionPolicy ??
+      (origin === "build-pipeline" || origin === "looped-review"
+        ? UNATTENDED_AGENT_INTERACTION_POLICY
+        : INTERACTIVE_AGENT_INTERACTION_POLICY);
+    provider.registerSession?.(input.providerSessionId, {
+      origin,
+      interactionPolicy,
+      phase: input.phase,
+    });
+    const { status } = await readProviderStatus(provider, input.providerSessionId);
+    await this.assertEnvironmentLive(input.environmentId);
+    if (status === "missing") {
+      throw new NativeAgentProviderSessionMissingError();
+    }
+    const timestamp = new Date(this.now()).toISOString();
+    const session: PersistedNativeAgentSession = {
+      version: NATIVE_AGENT_SESSION_VERSION,
+      key,
+      environmentId: input.environmentId,
+      agent: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      providerSessionId: input.providerSessionId,
+      origin,
+      interactionPolicy,
+      controls: input.controls ?? controlsFromSessionInput(input),
+      owner: input.owner,
+      executionPolicy: input.executionPolicy,
+      policy: input.policy,
+      initialPromptPresentation: input.initialPromptPresentation,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    return this.refreshProjection(
+      {
+        environmentId: input.environmentId,
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+        refreshUsage: input.refreshUsage,
+      },
+      true,
+      { key, session, provider, transient: true },
+    );
   }
 
   async getProjection(

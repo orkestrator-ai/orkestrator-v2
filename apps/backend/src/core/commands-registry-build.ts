@@ -162,6 +162,8 @@ export function registerBuildPipelineCommands(
       if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
       const id = asNonBlankString(pipelineId, "pipelineId");
       const key = asNonBlankString(sessionKey, "sessionKey");
+      const shouldRefreshUsage =
+        refreshUsage === undefined ? undefined : asRequiredBoolean(refreshUsage, "refreshUsage");
       const record = await context.storage.getBuildPipeline(id);
       const snapshot = record?.snapshot;
       const pipeline =
@@ -179,18 +181,14 @@ export function registerBuildPipelineCommands(
         agent,
         logicalSessionKey: session.sessionKey,
       };
-      await context.nativeAgents.adoptSession({
+      return context.nativeAgents.inspectSession({
         ...identity,
         providerSessionId: session.sdkSessionId,
         origin: session.origin ?? "build-pipeline",
         interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
         title: session.label,
         phase: session.phase,
-      });
-      return context.nativeAgents.getProjection({
-        ...identity,
-        refreshUsage:
-          refreshUsage === undefined ? undefined : asRequiredBoolean(refreshUsage, "refreshUsage"),
+        refreshUsage: shouldRefreshUsage,
       });
     },
   );

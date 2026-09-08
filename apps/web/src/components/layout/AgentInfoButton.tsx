@@ -20,7 +20,7 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
-import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
   compactClaudeSession,
   forkClaudeSession,
@@ -135,8 +135,11 @@ function nativeProviderLabel(provider: AgentPlatform): string {
 
 function resolveActiveNativeSession(
   tab: TabInfo | null,
-  buildPipeline: BuildPipeline | undefined,
-  viewedBuildSessionId: string | undefined,
+  pipelineId: string | undefined,
+  pipelineAgent: AgentPlatform | undefined,
+  sessionAgent: AgentPlatform | undefined,
+  sessionKey: string | undefined,
+  providerSessionId: string | undefined,
 ): ActiveNativeSession | null {
   if (!tab) return null;
   const data = getNativeAgentData(tab);
@@ -149,21 +152,16 @@ function resolveActiveNativeSession(
       providerSessionId: data.sessionId,
     };
   }
-  if (tab.type !== "claude-build" || !tab.buildTabData || !buildPipeline) return null;
-  const session =
-    buildPipeline.sessions.find((candidate) => candidate.sdkSessionId === viewedBuildSessionId) ??
-    buildPipeline.sessions[buildPipeline.currentSessionIndex] ??
-    buildPipeline.sessions.at(-1);
-  if (!session) return null;
-  const provider = session.agent ?? buildPipeline.agentType;
-  if (!AGENT_PLATFORMS.includes(provider)) return null;
+  if (tab.type !== "claude-build" || !tab.buildTabData || !pipelineId || !sessionKey) return null;
+  const provider = sessionAgent ?? pipelineAgent;
+  if (!provider || !AGENT_PLATFORMS.includes(provider)) return null;
   return {
     provider,
     providerLabel: nativeProviderLabel(provider),
     environmentId: tab.buildTabData.environmentId,
-    sessionKey: session.sessionKey,
-    providerSessionId: session.sdkSessionId,
-    buildPipelineId: buildPipeline.id,
+    sessionKey,
+    providerSessionId,
+    buildPipelineId: pipelineId,
   };
 }
 
@@ -219,10 +217,30 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const viewedBuildSessionId = useBuildPipelineStore((state) =>
     buildPipelineId ? state.viewedSessionIds.get(buildPipelineId) : undefined,
   );
+  const viewedBuildSession =
+    buildPipeline?.sessions.find((candidate) => candidate.sdkSessionId === viewedBuildSessionId) ??
+    buildPipeline?.sessions[buildPipeline.currentSessionIndex] ??
+    buildPipeline?.sessions.at(-1);
   const activeSession = useMemo(
-    () => resolveActiveNativeSession(activeTab, buildPipeline, viewedBuildSessionId),
-    [activeTab, buildPipeline, viewedBuildSessionId],
+    () =>
+      resolveActiveNativeSession(
+        activeTab,
+        buildPipeline?.id,
+        buildPipeline?.agentType,
+        viewedBuildSession?.agent,
+        viewedBuildSession?.sessionKey,
+        viewedBuildSession?.sdkSessionId,
+      ),
+    [
+      activeTab,
+      buildPipeline?.agentType,
+      buildPipeline?.id,
+      viewedBuildSession?.agent,
+      viewedBuildSession?.sdkSessionId,
+      viewedBuildSession?.sessionKey,
+    ],
   );
+  const isBuildStage = Boolean(activeSession?.buildPipelineId);
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
@@ -250,7 +268,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const updateNeutralControls = useCallback(
     async (update: NativeAgentControlUpdate) => {
       const session = activeSession;
-      if (!session) return;
+      if (!session || session.buildPipelineId) return;
       if (controlUpdateInFlightRef.current?.sessionIdentity === session.sessionKey) return;
 
       const pending = {
@@ -306,14 +324,14 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     [neutralProjection?.messages],
   );
   const canFork =
-    neutralProjection?.capabilities.fork ??
-    (!activeSession?.buildPipelineId &&
+    !isBuildStage &&
+    (neutralProjection?.capabilities.fork ??
       (activeSession?.provider === "claude" ||
         activeSession?.provider === "codex" ||
         activeSession?.provider === "opencode"));
   const canCompact =
-    neutralProjection?.capabilities.actions?.compact ??
-    (!activeSession?.buildPipelineId &&
+    !isBuildStage &&
+    (neutralProjection?.capabilities.actions?.compact ??
       (activeSession?.provider === "claude" ||
         activeSession?.provider === "codex" ||
         activeSession?.provider === "opencode"));
@@ -1142,9 +1160,11 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 />
               </div>
 
-              {(activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
-              (activeSession.provider === "opencode" && (openCodeHealth?.agents.length ?? 0) > 0) ||
-              (neutralProjection?.composer?.executionProfiles?.length ?? 0) > 0 ? (
+              {!isBuildStage &&
+              ((activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
+                (activeSession.provider === "opencode" &&
+                  (openCodeHealth?.agents.length ?? 0) > 0) ||
+                (neutralProjection?.composer?.executionProfiles?.length ?? 0) > 0) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Execution profile
@@ -1204,7 +1224,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 gates the feature — for any Claude session whose init payload
                 omitted agents.
               */}
-              {activeSession.provider === "claude" ? (
+              {!isBuildStage && activeSession.provider === "claude" ? (
                 <div className="space-y-1.5 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Session options
@@ -1257,7 +1277,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 </div>
               ) : null}
 
-              {canFork || canCompact || canHandoff ? (
+              {!isBuildStage && (canFork || canCompact || canHandoff) ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Session actions
@@ -1338,7 +1358,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       </div>
                     ) : null}
 
-                    {activeSession.provider === "claude" && currentSessionId ? (
+                    {!isBuildStage && activeSession.provider === "claude" && currentSessionId ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1422,7 +1442,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       </Button>
                     ) : null}
 
-                    {activeSession.provider === "opencode" && currentSessionId ? (
+                    {!isBuildStage && activeSession.provider === "opencode" && currentSessionId ? (
                       <>
                         <Button
                           variant="outline"
@@ -1587,7 +1607,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       </>
                     ) : null}
 
-                    {activeSession.provider === "codex" && currentSessionId ? (
+                    {!isBuildStage && activeSession.provider === "codex" && currentSessionId ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1621,7 +1641,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 </div>
               ) : null}
 
-              {neutralProjection?.capabilities.actions?.steer &&
+              {!isBuildStage &&
+              neutralProjection?.capabilities.actions?.steer &&
               neutralProjection.turn.phase === "running" &&
               !neutralProjection.recoverableDispatch ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
@@ -1688,7 +1709,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 </div>
               ) : null}
 
-              {activeSession.provider === "claude" &&
+              {!isBuildStage &&
+              activeSession.provider === "claude" &&
               currentSessionId &&
               liveClaudeTasks.some(
                 (task) =>

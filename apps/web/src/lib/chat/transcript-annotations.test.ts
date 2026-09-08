@@ -7,6 +7,7 @@ import {
   isTranscriptAnnotation,
   normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
+  parsePromptTranscriptReferences,
 } from "./transcript-annotations";
 
 describe("transcript annotations", () => {
@@ -100,5 +101,35 @@ describe("transcript annotations", () => {
 
     expect(prompt).toContain('"userComment": "first line second line"');
     expect(prompt.includes("first line\\nsecond line")).toBe(false);
+  });
+
+  test("recovers references and removes their transport envelope from display text", () => {
+    const prompt = buildPromptWithTranscriptAnnotations("Please fix this", [
+      { id: "first", text: "The quoted answer", comment: "Keep this wording" },
+      { id: "second", text: "Another excerpt", comment: "" },
+    ]);
+
+    expect(parsePromptTranscriptReferences(prompt)).toEqual({
+      cleanPrompt: "Please fix this",
+      references: [
+        { reference: 1, selectedText: "The quoted answer", userComment: "Keep this wording" },
+        { reference: 2, selectedText: "Another excerpt", userComment: null },
+      ],
+    });
+  });
+
+  test("leaves malformed or hand-written annotation envelopes visible", () => {
+    const malformed = [
+      "Visible prompt",
+      "<orkestrator_transcript_annotations>",
+      "not an Orkestrator payload",
+      '[{"reference":1,"selectedText":"hidden?","userComment":null}]',
+      "</orkestrator_transcript_annotations>",
+    ].join("\n");
+
+    expect(parsePromptTranscriptReferences(malformed)).toEqual({
+      cleanPrompt: malformed,
+      references: [],
+    });
   });
 });

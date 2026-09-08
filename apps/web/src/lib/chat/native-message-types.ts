@@ -167,6 +167,13 @@ export interface NativeTextPart extends NativeBasePart {
   type: "text";
 }
 
+/** A transcript excerpt the user attached as context for this prompt. */
+export interface NativeTranscriptReferencePart extends NativeBasePart {
+  type: "transcript-reference";
+  reference: number;
+  comment?: string;
+}
+
 export interface NativeAsyncQuestionPart extends NativeBasePart {
   type: "async-question";
   asyncQuestion: {
@@ -261,6 +268,7 @@ export interface NativeAgentGroupPart extends NativeBasePart {
 
 export type NativeMessagePart =
   | NativeTextPart
+  | NativeTranscriptReferencePart
   | NativeAsyncQuestionPart
   | NativeThinkingPart
   | NativeFilePart

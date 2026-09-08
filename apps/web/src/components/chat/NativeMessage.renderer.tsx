@@ -18,7 +18,7 @@ import {
   ToolPart,
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
-import { FilePart, TextPart } from "./NativeMessage.file-parts";
+import { FilePart, TextPart, TranscriptReferencePart } from "./NativeMessage.file-parts";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import {
   AgentGroupPart,
@@ -191,6 +191,8 @@ export function MessagePart({
           expansionKey={`${partKey}/json`}
         />
       );
+    case "transcript-reference":
+      return <TranscriptReferencePart part={part} />;
     case "async-question":
       return <NativeAsyncQuestionCard part={part} />;
     case "tool-invocation":

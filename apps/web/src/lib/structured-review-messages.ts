@@ -1,5 +1,9 @@
 import { parseJsonPayload, type JsonPayload } from "@/lib/chat/json-payload";
-import { isWithheldMachineOutput, lastMachineJsonDocument } from "@/lib/chat/machine-output-text";
+import {
+  isWithheldMachineOutput,
+  jsonDocumentState,
+  lastMachineJsonDocument,
+} from "@/lib/chat/machine-output-text";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 function isPayloadKind(value: string, kind: JsonPayload["kind"]): boolean {
@@ -127,21 +131,43 @@ function showOnlyFinalPayloadMessage(
  */
 export function hideMachineOutputText(
   messages: NativeMessage[],
-  options: { retainPayloadKind?: JsonPayload["kind"] } = {},
+  options: {
+    retainPayloadKind?: JsonPayload["kind"];
+    /** ACP-style providers can append the final dataset to a prose text part. */
+    stripTrailingPayload?: boolean;
+  } = {},
 ): NativeMessage[] {
-  const { retainPayloadKind } = options;
+  const { retainPayloadKind, stripTrailingPayload = false } = options;
   const isWithheld = (text: string): boolean => {
     if (!isWithheldMachineOutput(text)) return false;
     return retainPayloadKind === undefined || !isPayloadKind(text, retainPayloadKind);
   };
+  const visibleText = (text: string): string => {
+    if (isWithheld(text)) return "";
+    return stripTrailingPayload ? withoutTrailingJsonPayload(text) : text;
+  };
   return messages.flatMap((message) => {
     if (message.role !== "assistant") return [message];
-    const parts = message.parts.filter((part) => part.type !== "text" || !isWithheld(part.content));
+    let partsChanged = false;
+    const parts: NativeMessage["parts"] = [];
+    for (const part of message.parts) {
+      if (part.type !== "text") {
+        parts.push(part);
+        continue;
+      }
+      const content = visibleText(part.content);
+      if (content === part.content) {
+        parts.push(part);
+        continue;
+      }
+      partsChanged = true;
+      if (content) parts.push({ ...part, content });
+    }
     // `content` mirrors the provider's last text part, so it is withheld on the
     // same terms; a message rendered from `content` alone would otherwise put
     // the document straight back on screen.
-    let content = isWithheld(message.content) ? "" : message.content;
-    if (parts.length !== message.parts.length && content === message.content) {
+    let content = visibleText(message.content);
+    if (partsChanged && content === message.content) {
       // Persisted pipeline adapters can concatenate every text part into
       // `content`, so a prose update followed by machine output is neither a
       // standalone document nor safe to retain verbatim. Once a part was
@@ -151,12 +177,93 @@ export function hideMachineOutputText(
         .map((part) => part.content)
         .join("");
     }
-    if (parts.length === message.parts.length && content === message.content) {
+    if (!partsChanged && content === message.content) {
       return [message];
     }
     const filtered = { ...message, content, parts };
     return hasMessageContent(filtered) ? [filtered] : [];
   });
+}
+
+const TRAILING_PAYLOAD_SCAN_CHARS = 1024 * 1024;
+const TRAILING_PAYLOAD_SCAN_CANDIDATES = 256;
+const KNOWN_REVIEW_PAYLOAD_ROOT_KEYS = new Set([
+  "complete",
+  "headRef",
+  "issues",
+  "reportIndex",
+  "reviewScope",
+  "status",
+  "validation",
+  "verdict",
+]);
+
+function unfencedJsonCandidate(candidate: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+  return trimmed
+    .replace(/^```(?:json[5c]?)?[ \t]*\r?\n/i, "")
+    .replace(/\r?\n?```$/, "")
+    .trim();
+}
+
+function hasKnownReviewPayloadRoot(candidate: string): boolean {
+  const json = unfencedJsonCandidate(candidate);
+  const firstKey = /^\{\s*"([^"]+)"\s*:/.exec(json)?.[1];
+  return firstKey !== undefined && KNOWN_REVIEW_PAYLOAD_ROOT_KEYS.has(firstKey);
+}
+
+function hasLineBreakBefore(text: string, index: number): boolean {
+  let cursor = index - 1;
+  while (cursor >= 0 && /[ \t\r\n]/.test(text[cursor]!)) cursor -= 1;
+  return /[\r\n]/.test(text.slice(cursor + 1, index));
+}
+
+function isNonEmptyJsonDocument(candidate: string): boolean {
+  const document = lastMachineJsonDocument(candidate);
+  if (!document) return false;
+  try {
+    const value: unknown = JSON.parse(document);
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== null && typeof value === "object" && Object.keys(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove a structured JSON value appended to prose in the same provider text
+ * part, including an incomplete streaming draft. Ordinary sentence-ending
+ * values stay visible: a candidate must either begin on a new line or expose a
+ * known review-workflow root key. Complete values must also be non-empty.
+ *
+ * The scan is bounded and fails open. Streaming candidates are classified by
+ * delimiter state and never sent through JSON.parse.
+ */
+function withoutTrailingJsonPayload(text: string): string {
+  const trimmed = text.trimEnd();
+  const firstCandidate = Math.max(0, trimmed.length - TRAILING_PAYLOAD_SCAN_CHARS);
+  let candidates = 0;
+  for (let index = firstCandidate; index < trimmed.length; index += 1) {
+    const character = trimmed[index];
+    const isFence =
+      character === "`" &&
+      trimmed.startsWith("```", index) &&
+      (index === 0 || trimmed[index - 1] === "\n");
+    if (character !== "{" && character !== "[" && !isFence) continue;
+    if (index > 0 && !/\s/.test(trimmed[index - 1]!)) continue;
+    candidates += 1;
+    if (candidates > TRAILING_PAYLOAD_SCAN_CANDIDATES) return text;
+    const candidate = trimmed.slice(index);
+    const state = jsonDocumentState(candidate);
+    if (state === "not-json") continue;
+    if (!hasLineBreakBefore(trimmed, index) && !hasKnownReviewPayloadRoot(candidate)) continue;
+    if (state === "complete" && !isNonEmptyJsonDocument(candidate)) continue;
+    const unfinished = unfencedJsonCandidate(candidate);
+    if (state === "incomplete" && unfinished.slice(1).trim().length === 0) continue;
+    return trimmed.slice(0, index).trimEnd();
+  }
+  return text;
 }
 
 /**

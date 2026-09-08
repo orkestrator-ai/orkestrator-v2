@@ -631,6 +631,82 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
+  test("hides streaming and completed datasets through the legacy workflow-tab fallback", async () => {
+    renderVirtualizedMessages = true;
+    const commentary = "The tree is clean. Validation will run as separate commands.";
+    const dataset = JSON.stringify({ headRef: "a".repeat(40), commands: [{ id: "check" }] });
+    const draft = '{"headRef":"abc';
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "preparation-result",
+          role: "assistant" as const,
+          content: `${commentary} ${draft}`,
+          parts: [{ type: "text" as const, content: `${commentary} ${draft}` }],
+          createdAt: "2026-09-08T20:00:00.000Z",
+        },
+      ],
+    }));
+
+    const tabId = "multi-review-review:workflow-1";
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+
+    expect(await screen.findByText(commentary)).toBeTruthy();
+    expect(screen.getByTestId("native-agent-transcript-test-list").textContent).not.toContain(
+      '"headRef"',
+    );
+
+    const sessionKey = createSessionKey("env-1", tabId);
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "preparation-result",
+            role: "assistant",
+            content: `${commentary} ${dataset}`,
+            parts: [{ type: "text", content: `${commentary} ${dataset}` }],
+            createdAt: "2026-09-08T20:00:00.000Z",
+          },
+        ],
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("native-agent-transcript-test-list").textContent).not.toContain(
+        '"headRef"',
+      ),
+    );
+    expect(screen.getByText(commentary)).toBeTruthy();
+  });
+
+  test("keeps provider JSON visible in a non-review native tab", async () => {
+    renderVirtualizedMessages = true;
+    const combined = 'This is ordinary provider output. {"headRef":"abc';
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "ordinary-result",
+          role: "assistant" as const,
+          content: combined,
+          parts: [{ type: "text" as const, content: combined }],
+          createdAt: "2026-09-08T20:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId="ordinary-tab" data={identity("cursor")} isActive />);
+
+    expect(await screen.findByText(combined)).toBeTruthy();
+    expect(screen.getByTestId("native-agent-transcript-test-list").textContent).toContain(
+      '"headRef"',
+    );
+  });
+
   test("routes questions and plan reviews into the transcript while action approvals stay pinned", async () => {
     renderVirtualizedMessages = true;
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({

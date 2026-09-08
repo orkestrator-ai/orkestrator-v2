@@ -210,6 +210,7 @@ export function BuildChatTab({
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
   const [sendPending, setSendPending] = useState(false);
+  const [validationNow, setValidationNow] = useState(() => Date.now());
   const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   // The transcript, not the stage list, is what a build tab is opened to read —
   // it runs unattended, so the useful thing on arrival is what the agent is
@@ -292,6 +293,15 @@ export function BuildChatTab({
       console.warn("[BuildChatTab] Failed to hydrate build pipeline:", error);
     });
   }, [data.pipelineId, pipeline]);
+
+  const hasRunningValidation =
+    pipeline?.validationRun?.status === "planned" || pipeline?.validationRun?.status === "running";
+  useEffect(() => {
+    if (!isActive || !hasRunningValidation) return;
+    setValidationNow(Date.now());
+    const interval = window.setInterval(() => setValidationNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasRunningValidation, isActive]);
 
   useEffect(() => {
     if (!pipeline?.sessions.length) {
@@ -725,7 +735,7 @@ export function BuildChatTab({
       <BuildCompletionStatus pipeline={pipeline} />
       {pipeline.validationRun && (
         <div className="max-h-64 overflow-auto px-4 py-2">
-          <ReviewValidationStatus run={pipeline.validationRun} />
+          <ReviewValidationStatus run={pipeline.validationRun} now={validationNow} />
         </div>
       )}
 

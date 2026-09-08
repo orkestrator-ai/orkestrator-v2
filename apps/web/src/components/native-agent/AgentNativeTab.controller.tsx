@@ -63,6 +63,7 @@ import {
   rowlessBackgroundTaskMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { hideMachineOutputText } from "@/lib/structured-review-messages";
 import {
   createPeerMailNativeMessageFromCarrier,
   createOptimisticNativeMessage,
@@ -173,6 +174,7 @@ export function SharedNativeAgentController({
   initialResumeOpen,
   ownsGlobalShortcuts,
   isReviewTab,
+  hideStructuredOutput,
   agentHandoffId,
   consumedAgentHandoffId,
   refreshRequestId = 0,
@@ -462,11 +464,22 @@ export function SharedNativeAgentController({
       }),
     [decoratedMessages],
   );
+  // Tabs persisted before the presentation flag existed still carry this
+  // workflow-owned ID. Keep their backend structured result out of view too.
+  const withholdStructuredOutput =
+    hideStructuredOutput === true || tabId.startsWith("multi-review-review:");
+  const presentedProviderMessages = useMemo(
+    () =>
+      withholdStructuredOutput
+        ? hideMachineOutputText(normalizedMessages, { stripTrailingPayload: true })
+        : normalizedMessages,
+    [normalizedMessages, withholdStructuredOutput],
+  );
   const handoff = useAgentHandoff(
     agentHandoffId,
     platform,
     data.environmentId,
-    normalizedMessages,
+    presentedProviderMessages,
     consumedAgentHandoffId,
   );
   /**

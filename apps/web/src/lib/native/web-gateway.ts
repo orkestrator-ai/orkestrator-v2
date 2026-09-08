@@ -1324,7 +1324,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return navigator.clipboard?.readText() ?? Promise.resolve("");
       },
       writeText(text: string): Promise<void> {
-        return navigator.clipboard?.writeText(text) ?? Promise.resolve();
+        const clipboard = navigator.clipboard;
+        if (!clipboard?.writeText) {
+          return Promise.reject(
+            new Error("Clipboard text writes are not supported by this browser"),
+          );
+        }
+        return clipboard.writeText(text);
       },
       readImage(): Promise<{ width: number; height: number; blob: Blob } | null> {
         return readBrowserClipboardImage();

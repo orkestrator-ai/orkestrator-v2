@@ -554,6 +554,26 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  test("root lockfile workspace versions agree with their package manifests", () => {
+    // Bun rewrites stale workspace metadata as soon as a validation command
+    // resolves the install. That turns a previously clean build worktree dirty
+    // and prevents the review package from being anchored to a commit.
+    const lock = JSON.parse(read("bun.lock").replace(/,(\s*[}\]])/g, "$1")) as {
+      workspaces?: Record<string, { version?: string }>;
+    };
+
+    for (const manifestPath of packageManifestPaths()) {
+      if (manifestPath === "package.json") continue;
+      const workspacePath = manifestPath.replace(/\/package\.json$/, "");
+      const manifest = JSON.parse(read(manifestPath)) as { version?: string };
+
+      expect(
+        lock.workspaces?.[workspacePath]?.version,
+        `bun.lock workspace ${workspacePath} disagrees with ${manifestPath}`,
+      ).toBe(manifest.version);
+    }
+  });
+
   test("Codex: config/codex-version.json is the single source of truth for every pin", () => {
     // The app-server binary and the generated protocol bindings are only valid
     // as a matched pair, so every place that names a Codex version has to agree

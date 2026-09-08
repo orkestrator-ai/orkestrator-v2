@@ -233,11 +233,13 @@ function formatNoticeTime(value: string | undefined): string | null {
 function RuntimeNoticeCard({
   notice,
   noticeId,
+  providerLabel,
   openNoticeId,
   onOpenNoticeChange,
 }: {
   notice: NativeAgentRuntimeNotice;
   noticeId: string;
+  providerLabel: string;
   openNoticeId: string | null;
   onOpenNoticeChange: (noticeId: string | null) => void;
 }) {
@@ -263,7 +265,7 @@ function RuntimeNoticeCard({
       </DialogTrigger>
       <DialogContent className="max-w-xl border-amber-500/20 sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Codex runtime notice</DialogTitle>
+          <DialogTitle>{providerLabel} runtime notice</DialogTitle>
           <DialogDescription>
             {count === 1 ? "One occurrence" : `${count} occurrences`}. Sensitive values and local
             paths are redacted.
@@ -294,7 +296,7 @@ function RuntimeNoticeCard({
                       </time>
                     ) : null}
                     <div className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/85">
-                      {occurrence.detail ?? "Codex did not provide additional detail."}
+                      {occurrence.detail ?? `${providerLabel} did not provide additional detail.`}
                     </div>
                   </div>
                 );
@@ -302,7 +304,7 @@ function RuntimeNoticeCard({
             </div>
           ) : (
             <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-sm text-muted-foreground">
-              Codex did not provide additional detail for this notice.
+              {providerLabel} did not provide additional detail for this notice.
             </div>
           )}
           {count > occurrences.length && occurrences.length > 0 ? (
@@ -584,6 +586,7 @@ export function AgentRuntimePanel({
                 key={noticeId}
                 notice={notice}
                 noticeId={noticeId}
+                providerLabel={providerLabel}
                 openNoticeId={openNoticeId ?? null}
                 onOpenNoticeChange={onOpenNoticeChange ?? (() => undefined)}
               />

@@ -4,6 +4,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } from "./acp-http.js";
 import {
   HttpError,
@@ -73,6 +74,10 @@ export function shutdown(): Promise<void> {
   })();
   return shutdownPromise;
 }
+
+// A dropped promise must not take this bridge — and every session it is
+// serving — down with it.
+installFatalRejectionGuard({ label: "[acp-bridge]" });
 
 export const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {

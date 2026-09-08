@@ -116,32 +116,143 @@ export function multiReviewFixSessionTabOptions(
 }
 
 /**
- * What the fix model is doing right now, from the workflow's point of view.
- * The supervisor drives this session through several phases (package
- * preparation, consolidation, fixing), so the phase is a better label than
- * the session's own status while the workflow is active.
+ * The supervisor drives one provider session through three steps — preparation,
+ * consolidation, and the fix turn — so each card needs both a label and the
+ * state that decides its icon and whether its session can be opened.
  */
-export function fixSessionActivity(workflow: MultiReviewWorkflow): string {
+export type MultiReviewStepState =
+  | "not-started"
+  | "running"
+  | "complete"
+  | "failed"
+  | "cancelling"
+  | "cancelled";
+
+export interface MultiReviewStepStatus {
+  label: string;
+  state: MultiReviewStepState;
+}
+
+const PACKAGE_PRODUCED_PHASES: ReadonlySet<MultiReviewPhase> = new Set<MultiReviewPhase>([
+  "reviewing",
+  "consolidating",
+  "ready",
+  "fixing",
+  "interactive",
+  "completed",
+]);
+
+function step(label: string, state: MultiReviewStepState): MultiReviewStepStatus {
+  return { label, state };
+}
+
+/**
+ * A cancelled workflow cancels every step it had not already finished. Settling
+ * to `cancelled` clears the active request, so there is no per-step record left
+ * to attribute the stop to, and reporting the steps individually would be a
+ * guess rather than a reading.
+ */
+function cancellationStep(phase: MultiReviewPhase): MultiReviewStepStatus | null {
+  if (phase === "cancelling") return step("Cancelling", "cancelling");
+  if (phase === "cancelled") return step("Cancelled", "cancelled");
+  return null;
+}
+
+/** Keep preparation visible as a completed step after the workflow moves on. */
+export function reviewPackageGenerationStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
+  if (workflow.phase === "preparing") return step("Generating package", "running");
+  // Workflows persisted before file-backed packages were introduced can have
+  // advanced beyond preparation without carrying a reviewPackage pointer, so a
+  // phase or a dispatched reviewer stands in as the evidence. A reviewer only
+  // receives a session once the package it reads exists.
+  const produced =
+    workflow.reviewPackage !== undefined ||
+    PACKAGE_PRODUCED_PHASES.has(workflow.phase) ||
+    workflow.reviewers.some(
+      (reviewer) => reviewer.providerSessionId !== undefined || reviewer.report !== undefined,
+    );
+  if (produced) return step("Package ready", "complete");
+  const cancelled = cancellationStep(workflow.phase);
+  if (cancelled) return cancelled;
+  // Nothing was produced and nothing downstream ever started, so preparation is
+  // the only step this workflow can have been running when it failed.
+  if (workflow.phase === "failed") return step("Failed", "failed");
+  return step("Not started", "not-started");
+}
+
+/** Consolidation is a separate step which waits for the independent reviewers. */
+export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
+  if (workflow.consolidatedReport !== undefined) return step("Complete", "complete");
+  if (workflow.phase === "consolidating") return step("Consolidating findings", "running");
+  if (workflow.phase === "reviewing") return step("Waiting for reviews", "not-started");
+  if (workflow.phase === "preparing") return step("Waiting for review package", "not-started");
+  const cancelled = cancellationStep(workflow.phase);
+  if (cancelled) return cancelled;
+  // `fail` preserves the request that was in flight, and only a consolidation
+  // turn can fail here. A preparation or reviewer failure leaves this step
+  // unrun, so claiming it failed would contradict the card and the panel that
+  // show the real cause.
+  if (workflow.phase === "failed" && workflow.activeRequest?.kind === "consolidate") {
+    return step("Failed", "failed");
+  }
+  return step("Not started", "not-started");
+}
+
+/** The fix turn is the last step, and only the user can start it. */
+export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
+  if (workflow.phase === "completed") return step("Complete", "complete");
+  if (workflow.phase === "fixing") return step("Addressing findings", "running");
+  if (workflow.phase === "interactive") return step("Interactive fix session", "running");
+  const cancelled = cancellationStep(workflow.phase);
+  if (cancelled) return cancelled;
+  const dispatched =
+    workflow.activeRequest?.kind === "fix" ||
+    workflow.fixResult !== undefined ||
+    workflow.addressPromptPending === true;
+  if (workflow.phase === "failed" && dispatched) return step("Failed", "failed");
+  if (workflow.phase === "ready") return step("Ready to start", "not-started");
+  return step("Not started", "not-started");
+}
+
+export type MultiReviewStepKey = "package" | "consolidation" | "fix";
+
+/**
+ * Which step owns the fix session's clock. The three steps share one provider
+ * session and every dispatch resets `startedAt`, so a runtime shown against the
+ * wrong card would be the next step's elapsed time under a settled step's name.
+ */
+export function fixSessionRuntimeStep(workflow: MultiReviewWorkflow): MultiReviewStepKey | null {
   switch (workflow.phase) {
+    // The reviewers run without the fix session, so it still holds preparation's
+    // finished timings for the whole review stage.
     case "preparing":
-      return "Preparing review package";
+    case "reviewing":
+      return "package";
     case "consolidating":
-      return "Consolidating findings";
+    case "ready":
+      return "consolidation";
     case "fixing":
-      return "Addressing findings";
+    case "completed":
+      return "fix";
+    // The address turn has not been dispatched yet, so the session still carries
+    // consolidation's timings and no step may claim them.
     case "interactive":
-      return "Interactive fix session";
-    case "cancelling":
-      return "Cancelling";
+      return workflow.addressPromptPending === true ? null : "fix";
     default:
       break;
   }
-  const session = workflow.fixSession;
-  if (!session) return "Not started";
-  if (session.status === "running") return "Running";
-  if (session.status === "failed") return "Failed";
-  if (session.status === "cancelled") return "Cancelled";
-  return "Idle";
+  // Cancellation clears the active request, so only a failure still says which
+  // turn was in flight.
+  switch (workflow.activeRequest?.kind) {
+    case "prepare":
+      return "package";
+    case "consolidate":
+      return "consolidation";
+    case "fix":
+      return "fix";
+    default:
+      return null;
+  }
 }
 
 export function fixSessionRuntimeSummary(
@@ -243,6 +354,113 @@ function reviewerTranscriptLabel(
   const action = `Open Reviewer ${index + 1} transcript`;
   if (!reviewer.report) return action;
   return `${action}, ${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`;
+}
+
+const STEP_ICON_CLASS = "size-4 shrink-0";
+
+function MultiReviewStepIcon({
+  state,
+  stalled,
+}: {
+  state: MultiReviewStepState;
+  stalled: boolean;
+}) {
+  if (stalled) return <AlertTriangle className={`${STEP_ICON_CLASS} text-amber-500`} />;
+  switch (state) {
+    case "running":
+      return <Loader2 className={`${STEP_ICON_CLASS} animate-spin text-primary`} />;
+    case "failed":
+      return <AlertCircle className={`${STEP_ICON_CLASS} text-destructive`} />;
+    case "cancelling":
+    case "cancelled":
+      return <Square className={`${STEP_ICON_CLASS} text-muted-foreground`} />;
+    case "complete":
+      return <CheckCircle2 className={`${STEP_ICON_CLASS} text-emerald-500`} />;
+    default:
+      return <Circle className={`${STEP_ICON_CLASS} text-muted-foreground`} />;
+  }
+}
+
+/**
+ * The three steps share one provider session, so a step that has been reached
+ * stays openable after it settles. Failure is the case that matters: it is the
+ * only way to read why a preparation or consolidation turn stopped, and the tab
+ * is the only surface offering it.
+ */
+function stepOpenTitle(
+  status: MultiReviewStepStatus,
+  hasSession: boolean,
+  sessionName: string,
+  notStartedTitle: string,
+): string {
+  if (status.state === "not-started") return notStartedTitle;
+  if (!hasSession) return `The ${sessionName} session has not opened yet`;
+  if (status.state === "failed") return `Open the failed ${sessionName} session in a new tab`;
+  return `Open the ${sessionName} session in a new tab`;
+}
+
+function MultiReviewStepSection({
+  heading,
+  name,
+  status,
+  stalled,
+  fixModel,
+  runtime,
+  runtimeLabel,
+  openLabel,
+  openTitle,
+  canOpen,
+  onOpen,
+}: {
+  heading: string;
+  name: string;
+  status: MultiReviewStepStatus;
+  stalled: boolean;
+  fixModel: MultiReviewWorkflow["fixModel"];
+  runtime: string | null;
+  runtimeLabel: string;
+  openLabel: string;
+  openTitle: string;
+  canOpen: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-card/35 p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">{heading}</h2>
+        <span className="text-xs text-muted-foreground">{status.label}</span>
+      </div>
+      <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
+        <button
+          type="button"
+          disabled={!canOpen}
+          aria-label={openLabel}
+          title={openTitle}
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+          onClick={onOpen}
+        >
+          <MultiReviewStepIcon state={status.state} stalled={stalled} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium">
+              {name} · {fixModel.agent}
+            </p>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {fixModel.model}
+              {fixModel.reasoningEffort ? ` · ${fixModel.reasoningEffort}` : ""}
+            </p>
+            {runtime ? (
+              <p
+                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
+                aria-label={runtimeLabel}
+              >
+                {runtime}
+              </p>
+            ) : null}
+          </div>
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function MultiReviewOverviewTab({
@@ -498,6 +716,16 @@ function MultiReviewOverviewTab({
   const fixRuntimeSummary = workflow.fixSession
     ? fixSessionRuntimeSummary(workflow.fixSession, reviewPanelNow)
     : null;
+  const packageStatus = reviewPackageGenerationStep(workflow);
+  const consolidationStatus = consolidationStep(workflow);
+  const fixStatus = fixStep(workflow);
+  const runtimeStep = fixSessionRuntimeStep(workflow);
+  // Every step reuses the one provider session, so a step that has been reached
+  // can be opened for as long as that session exists — including after it failed
+  // or was cancelled, which is exactly when its transcript is worth reading.
+  const hasFixSession = Boolean(workflow.fixSession?.providerSessionId);
+  const canOpenStep = (status: MultiReviewStepStatus): boolean =>
+    status.state !== "not-started" && hasFixSession && Boolean(createTab);
   const canCancel =
     workflow.phase !== "completed" &&
     workflow.phase !== "cancelled" &&
@@ -543,59 +771,24 @@ function MultiReviewOverviewTab({
               </div>
             </section>
           )}
-          <section className="rounded-xl border border-border/60 bg-card/35 p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Fix model</h2>
-              <span className="text-xs text-muted-foreground">{fixSessionActivity(workflow)}</span>
-            </div>
-            <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
-              <button
-                type="button"
-                disabled={!workflow.fixSession?.providerSessionId || !createTab}
-                aria-label="Open fix model session"
-                title={
-                  workflow.fixSession?.providerSessionId
-                    ? "Open the fix model's session in a new tab"
-                    : "The fix model has not opened a session yet"
-                }
-                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-                onClick={() => presentFixSession(workflow, "manual")}
-              >
-                {fixSessionStalled ? (
-                  <AlertTriangle className="size-4 shrink-0 text-amber-500" />
-                ) : workflow.fixSession?.status === "running" ? (
-                  <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
-                ) : workflow.fixSession?.status === "failed" ? (
-                  <AlertCircle className="size-4 shrink-0 text-destructive" />
-                ) : workflow.fixSession?.status === "cancelled" ? (
-                  <Square className="size-4 shrink-0 text-muted-foreground" />
-                ) : workflow.fixSession?.status === "idle" ? (
-                  <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-                ) : (
-                  <Circle className="size-4 shrink-0 text-muted-foreground" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium">
-                    Fix model · {workflow.fixModel.agent}
-                  </p>
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {workflow.fixModel.model}
-                    {workflow.fixModel.reasoningEffort
-                      ? ` · ${workflow.fixModel.reasoningEffort}`
-                      : ""}
-                  </p>
-                  {fixRuntimeSummary ? (
-                    <p
-                      className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                      aria-label="Fix model runtime"
-                    >
-                      {fixRuntimeSummary}
-                    </p>
-                  ) : null}
-                </div>
-              </button>
-            </div>
-          </section>
+          <MultiReviewStepSection
+            heading="Review package generation"
+            name="Preparation"
+            status={packageStatus}
+            stalled={workflow.phase === "preparing" && fixSessionStalled}
+            fixModel={workflow.fixModel}
+            runtime={runtimeStep === "package" ? fixRuntimeSummary : null}
+            runtimeLabel="Review package generation runtime"
+            openLabel="Open review package generation session"
+            openTitle={stepOpenTitle(
+              packageStatus,
+              hasFixSession,
+              "review package generation",
+              "Review package generation has not started yet",
+            )}
+            canOpen={canOpenStep(packageStatus)}
+            onOpen={() => presentFixSession(workflow, "manual")}
+          />
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>
@@ -772,6 +965,44 @@ function MultiReviewOverviewTab({
               })}
             </div>
           </section>
+
+          <MultiReviewStepSection
+            heading="Consolidation"
+            name="Consolidation"
+            status={consolidationStatus}
+            stalled={workflow.phase === "consolidating" && fixSessionStalled}
+            fixModel={workflow.fixModel}
+            runtime={runtimeStep === "consolidation" ? fixRuntimeSummary : null}
+            runtimeLabel="Consolidation runtime"
+            openLabel="Open consolidation session"
+            openTitle={stepOpenTitle(
+              consolidationStatus,
+              hasFixSession,
+              "consolidation",
+              "Consolidation starts after the independent reviews finish",
+            )}
+            canOpen={canOpenStep(consolidationStatus)}
+            onOpen={() => presentFixSession(workflow, "manual")}
+          />
+
+          <MultiReviewStepSection
+            heading="Fix"
+            name="Fix"
+            status={fixStatus}
+            stalled={workflow.phase === "fixing" && fixSessionStalled}
+            fixModel={workflow.fixModel}
+            runtime={runtimeStep === "fix" ? fixRuntimeSummary : null}
+            runtimeLabel="Fix runtime"
+            openLabel="Open fix model session"
+            openTitle={stepOpenTitle(
+              fixStatus,
+              hasFixSession,
+              "fix",
+              "The fix session starts once the consolidated findings are sent to the fix model",
+            )}
+            canOpen={canOpenStep(fixStatus)}
+            onOpen={() => presentFixSession(workflow, "manual")}
+          />
 
           {workflow.consolidatedReport && (
             <StructuredReviewReportView

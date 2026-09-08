@@ -42,11 +42,10 @@ export function codexProtocolDrift(value: unknown): unknown {
  * The notices one interactive snapshot carries.
  *
  * Two sources, both bounded. The transport-limit warning is Orkestrator's own
- * and is about the transcript the user is looking at. Provider advisories —
- * deprecations, rerouted models, configuration warnings — are promoted out of
- * the health panel into the tab because that is where the user is when the
- * thing they are about happens; only `warning` and `error` cross, since an
- * `info` notice is inventory.
+ * and is about the transcript the user is looking at. Provider advisories are
+ * promoted out of the health panel into the tab only when they are errors:
+ * warnings and inventory — deprecations, rerouted models, MCP servers that did
+ * not start — stay in the health panel, which is where they can be expanded.
  */
 export function snapshotNotices(options: {
   transcriptTruncated: boolean;

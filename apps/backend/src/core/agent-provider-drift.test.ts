@@ -178,29 +178,26 @@ describe("normalizeProviderRuntimeSummary", () => {
 });
 
 describe("providerAdvisoryNotices", () => {
-  test("promotes only warning and error notices into the tab", () => {
+  test("promotes only error notices into the tab", () => {
     expect(
       providerAdvisoryNotices([
         { message: "inventory", severity: "info" },
         { message: "deprecated", severity: "warning" },
         { message: "broken", severity: "error" },
       ]),
-    ).toEqual([
-      { kind: "advisory", message: "deprecated", severity: "warning" },
-      { kind: "advisory", message: "broken", severity: "error" },
-    ]);
+    ).toEqual([{ kind: "advisory", message: "broken", severity: "error" }]);
   });
 
-  test("a notice with no severity is treated as the warning it used to be", () => {
-    expect(providerAdvisoryNotices([{ message: "legacy" }])).toEqual([
-      { kind: "advisory", message: "legacy", severity: "warning" },
-    ]);
+  test("a legacy notice normalized to warning stays in the health panel", () => {
+    const normalized = normalizeProviderRuntimeNotices([{ message: "legacy" }]);
+    expect(normalized).toEqual([{ message: "legacy", severity: "warning", source: "bridge" }]);
+    expect(providerAdvisoryNotices(normalized)).toEqual([]);
   });
 
-  test("deduplicates by message while preserving the highest severity", () => {
+  test("deduplicates by message", () => {
     expect(
       providerAdvisoryNotices([
-        { message: "same", severity: "warning", method: "a" },
+        { message: "same", severity: "error", method: "a" },
         { message: "same", severity: "error", method: "b" },
       ]),
     ).toEqual([{ kind: "advisory", message: "same", severity: "error" }]);
@@ -211,8 +208,8 @@ describe("providerAdvisoryNotices", () => {
       providerAdvisoryNotices([
         {
           message: "same",
-          method: "warning",
-          severity: "warning",
+          method: "failed",
+          severity: "error",
           source: "provider",
           count: 2,
           occurrences: [
@@ -225,8 +222,8 @@ describe("providerAdvisoryNotices", () => {
       {
         kind: "advisory",
         message: "same",
-        severity: "warning",
-        occurrenceId: "provider\u0000warning\u00002026-09-07T10:01:00.000Z\u00002",
+        severity: "error",
+        occurrenceId: "provider\u0000failed\u00002026-09-07T10:01:00.000Z\u00002",
       },
     ]);
   });
@@ -235,14 +232,37 @@ describe("providerAdvisoryNotices", () => {
     const advisories = providerAdvisoryNotices(
       Array.from({ length: 9 }, (_, index) => ({
         message: `advisory-${index}`,
-        severity: "warning" as const,
+        severity: "error" as const,
       })),
     );
     expect(advisories).toHaveLength(MAX_PROJECTION_ADVISORIES);
     expect(advisories.at(-1)?.message).toBe("advisory-8");
   });
 
+  test("a repeated error moves to the newest position before bounding", () => {
+    const advisories = providerAdvisoryNotices([
+      ...Array.from({ length: MAX_PROJECTION_ADVISORIES + 1 }, (_, index) => ({
+        message: `advisory-${index}`,
+        severity: "error" as const,
+      })),
+      { message: "advisory-0", severity: "error" },
+    ]);
+
+    expect(advisories.map((notice) => notice.message)).toEqual([
+      "advisory-2",
+      "advisory-3",
+      "advisory-4",
+      "advisory-5",
+      "advisory-0",
+    ]);
+  });
+
   test("no qualifying notices means no advisories, not an empty row", () => {
-    expect(providerAdvisoryNotices([{ message: "quiet", severity: "info" }])).toEqual([]);
+    expect(
+      providerAdvisoryNotices([
+        { message: "quiet", severity: "info" },
+        { message: "reported", severity: "warning" },
+      ]),
+    ).toEqual([]);
   });
 });

@@ -12,6 +12,7 @@ import {
   MAX_EXECUTION_PROFILE_ID_LENGTH,
   asDispatchNativeAgentPromptInput,
   asNativeAgentControlUpdate,
+  asNativeAgentParameterValues,
   asNativeAgentSessionAction,
 } from "./commands-helpers.js";
 
@@ -49,6 +50,10 @@ export function registerNativeAgentCommands(
               "executionProfileId",
               MAX_EXECUTION_PROFILE_ID_LENGTH,
             ),
+      parameterValues:
+        args.parameterValues === undefined
+          ? undefined
+          : asNativeAgentParameterValues(args.parameterValues),
     });
   });
 

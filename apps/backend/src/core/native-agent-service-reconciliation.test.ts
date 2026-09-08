@@ -2811,6 +2811,58 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test.each([
+      ["initial-prompt dispatch", "Start with the configured defaults"],
+      ["prompt-less ensure", undefined],
+    ] as const)(
+      "applies inherited Claude SDK defaults during %s",
+      async (_label, initialPrompt) => {
+        const { provider, send } = createProviderStub("claude");
+        await withService(
+          {
+            prefix: "orkestrator-native-launch-claude-defaults-",
+            environment: {
+              pendingAgentLaunch: true,
+              initialPrompt,
+              agentSettings: {
+                defaultAgent: "claude",
+                platforms: {
+                  claude: {
+                    mode: "native",
+                    claudeThinkingMode: "budget-16384",
+                    claudeContext1m: true,
+                  },
+                },
+              },
+            },
+            provider: async () => provider,
+          },
+          async ({ storage, service }) => {
+            await service.reconcileInitialLaunch("env-1");
+
+            const stored = await storage.getNativeAgentSession(
+              nativeAgentSessionStorageKey("env-1", "claude", "env-env-1:startup-agent"),
+            );
+            expect(stored?.controls?.parameterValues).toEqual({
+              thinking: "budget-16384",
+              context1m: true,
+            });
+            if (initialPrompt) {
+              expect(send).toHaveBeenCalledWith(
+                "provider-session",
+                initialPrompt,
+                expect.objectContaining({
+                  parameterValues: { thinking: "budget-16384", context1m: true },
+                }),
+              );
+            } else {
+              expect(send).not.toHaveBeenCalled();
+            }
+          },
+        );
+      },
+    );
+
     test("prefers the environment's own agent, model and effort", async () => {
       const { provider, createSession } = createProviderStub("codex");
       await withService(

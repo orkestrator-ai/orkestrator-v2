@@ -523,8 +523,16 @@ export abstract class StorageNative extends StorageReviews {
       }
       const modelChanged =
         update.modelId !== undefined && update.modelId !== existing.controls?.modelId;
+      // Most parameter values are model-scoped and must be cleared when their
+      // model changes. Claude's settings-backed values are session defaults:
+      // unsupported models ignore context1m, and switching back must restore
+      // the value the session started with rather than losing it permanently.
       const retainedParameterValues = modelChanged
-        ? {}
+        ? Object.fromEntries(
+            Object.entries(existing.controls?.parameterValues ?? {}).filter(
+              ([id]) => existing.agent === "claude" && (id === "thinking" || id === "context1m"),
+            ),
+          )
         : Object.fromEntries(
             Object.entries(existing.controls?.parameterValues ?? {}).filter(
               ([id]) => id !== "permissionMode" || update.mode === undefined,

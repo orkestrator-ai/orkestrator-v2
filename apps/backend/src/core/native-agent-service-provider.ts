@@ -257,8 +257,10 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
    * controller whose signal is attached to *every* request that provider makes,
    * including a `promptAsync` the user is waiting on — so disposing here would
    * let a failed background health read cancel a live prompt and report it as
-   * an ambiguous dispatch. Eviction alone is enough: these providers are built
-   * with `autoAnswerRequests: false`, so they hold no event stream, and
+   * an ambiguous dispatch. It would also tear down the provider's event
+   * subscription: `autoAnswerRequests: false` suppresses only the answering of
+   * permission and question events, not the stream itself, which every provider
+   * runs to feed transcript, status and notice state. Eviction alone is enough;
    * `pruneProviders` still disposes a provider whose environment has gone away,
    * where nothing can be in flight.
    */

@@ -91,7 +91,8 @@ Backend:
 - [x] Surface `warning`, `guardianWarning`, `deprecationNotice`,
   `configWarning` and `model/rerouted` (currently runtime-health only,
   `engine/app-server-engine.ts:573-603`) as `advisory` notices with
-  `severity: "warning"` so they reach the tab.
+  `severity: "warning"` so they remain visible in runtime health without
+  interrupting the tab.
 - [x] Expose `protocol.unknownNotifications` and the last kinds through the
   new `drift` field.
 

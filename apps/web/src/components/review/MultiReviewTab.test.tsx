@@ -16,9 +16,12 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
-  fixSessionActivity,
+  consolidationStep,
+  fixSessionRuntimeStep,
   fixSessionRuntimeSummary,
+  fixStep,
   multiReviewFixSessionTabOptions,
+  reviewPackageGenerationStep,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
   reviewerStatusNote,
@@ -1701,7 +1704,7 @@ test("renders backend-owned package preparation after remount with cancel availa
   expect(screen.getByText("The fix model is preparing the review package")).toBeTruthy();
 });
 
-describe("MultiReviewTab fix model card", () => {
+describe("MultiReviewTab pipeline step cards", () => {
   function preparingWorkflow(): MultiReviewWorkflow {
     const workflow = reviewingWorkflow();
     workflow.phase = "preparing";
@@ -1745,9 +1748,9 @@ describe("MultiReviewTab fix model card", () => {
       </TerminalProvider>,
     );
 
-    expect(screen.getByText("Preparing review package")).toBeTruthy();
-    expect(screen.getByLabelText("Fix model runtime")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(screen.getByText("Generating package")).toBeTruthy();
+    expect(screen.getByLabelText("Review package generation runtime")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(false);
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
@@ -1778,28 +1781,424 @@ describe("MultiReviewTab fix model card", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", { name: "Open fix model session" });
+    const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(true);
     fireEvent.click(card);
     expect(createTab).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Fix model runtime") === null).toBe(true);
+    expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
   });
 
-  test("labels the fix model by workflow phase, then by session status once settled", () => {
+  function packagedWorkflow(): MultiReviewWorkflow {
+    const workflow = reviewingWorkflow();
+    workflow.reviewPackage = {
+      kind: "file",
+      id: "package-1",
+      round: 1,
+      preparedAt: "2026-08-14T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "origin/main",
+      headRef: "HEAD",
+      filePath: ".orkestrator/review-packages/package-1.json",
+      sha256: "a".repeat(64),
+      bytes: 2048,
+      changedFileCount: 2,
+      limitations: [],
+    };
+    return workflow;
+  }
+
+  test("reports preparation from the package pointer, not only from the phase", () => {
+    const packaged = packagedWorkflow();
+    expect(reviewPackageGenerationStep(packaged)).toEqual({
+      label: "Package ready",
+      state: "complete",
+    });
+    // A settled workflow still carries the pointer, so the finished step keeps
+    // reading as finished rather than as the failure that stopped the workflow.
+    expect(reviewPackageGenerationStep({ ...packaged, phase: "failed" })).toEqual({
+      label: "Package ready",
+      state: "complete",
+    });
+    expect(reviewPackageGenerationStep({ ...packaged, phase: "cancelled" })).toEqual({
+      label: "Package ready",
+      state: "complete",
+    });
+  });
+
+  test("falls back to phase and reviewer evidence for pre-package workflows", () => {
     const ready = readyWorkflow();
-    expect(fixSessionActivity({ ...ready, phase: "preparing" })).toBe("Preparing review package");
-    expect(fixSessionActivity({ ...ready, phase: "consolidating" })).toBe("Consolidating findings");
-    expect(fixSessionActivity({ ...ready, phase: "fixing" })).toBe("Addressing findings");
-    expect(fixSessionActivity(ready)).toBe("Idle");
+    const preparing = preparingWorkflow();
+    expect(reviewPackageGenerationStep(preparing)).toEqual({
+      label: "Generating package",
+      state: "running",
+    });
+    expect(reviewPackageGenerationStep({ ...ready, phase: "consolidating" })).toEqual({
+      label: "Package ready",
+      state: "complete",
+    });
+    // A reviewer only receives a provider session once the package it reads
+    // exists, so preparation finished even though the phase no longer says so.
+    expect(reviewPackageGenerationStep({ ...ready, phase: "failed" })).toEqual({
+      label: "Package ready",
+      state: "complete",
+    });
+  });
+
+  test("blames preparation only when nothing downstream ever started", () => {
+    const preparing = preparingWorkflow();
     expect(
-      fixSessionActivity({
+      reviewPackageGenerationStep({
+        ...preparing,
+        phase: "failed",
+        fixSession: { ...preparing.fixSession!, status: "failed" },
+      }),
+    ).toEqual({ label: "Failed", state: "failed" });
+    expect(reviewPackageGenerationStep({ ...preparing, phase: "cancelling" })).toEqual({
+      label: "Cancelling",
+      state: "cancelling",
+    });
+    // Cancelling retires every pending reviewer, which must not be mistaken for
+    // reviewers that were dispatched against a finished package.
+    expect(
+      reviewPackageGenerationStep({
+        ...preparing,
+        phase: "cancelled",
+        reviewers: preparing.reviewers.map((reviewer) => ({
+          ...reviewer,
+          status: "cancelled" as const,
+        })),
+      }),
+    ).toEqual({ label: "Cancelled", state: "cancelled" });
+  });
+
+  test("tracks consolidation from waiting through to its own outcome", () => {
+    const ready = readyWorkflow();
+    const preparing = preparingWorkflow();
+    const unconsolidated = { ...ready, consolidatedReport: undefined };
+    expect(consolidationStep(preparing)).toEqual({
+      label: "Waiting for review package",
+      state: "not-started",
+    });
+    expect(consolidationStep({ ...unconsolidated, phase: "reviewing" })).toEqual({
+      label: "Waiting for reviews",
+      state: "not-started",
+    });
+    expect(consolidationStep({ ...unconsolidated, phase: "consolidating" })).toEqual({
+      label: "Consolidating findings",
+      state: "running",
+    });
+    expect(consolidationStep(ready)).toEqual({ label: "Complete", state: "complete" });
+    expect(
+      consolidationStep({
+        ...unconsolidated,
+        phase: "failed",
+        activeRequest: {
+          kind: "consolidate",
+          requestId: "consolidate-1",
+          state: "sent",
+          createdAt: "2026-08-14T00:00:00.000Z",
+        },
+      }),
+    ).toEqual({ label: "Failed", state: "failed" });
+    expect(consolidationStep({ ...unconsolidated, phase: "cancelling" })).toEqual({
+      label: "Cancelling",
+      state: "cancelling",
+    });
+    expect(consolidationStep({ ...unconsolidated, phase: "cancelled" })).toEqual({
+      label: "Cancelled",
+      state: "cancelled",
+    });
+  });
+
+  test("never blames consolidation for a failure that happened before it ran", () => {
+    const ready = readyWorkflow();
+    const unconsolidated = { ...ready, consolidatedReport: undefined };
+    // Preparation failed: its own card reports that, and consolidation never ran.
+    expect(
+      consolidationStep({
+        ...preparingWorkflow(),
+        phase: "failed",
+        activeRequest: {
+          kind: "prepare",
+          requestId: "prepare-1",
+          state: "sent",
+          createdAt: "2026-08-14T00:00:00.000Z",
+        },
+      }),
+    ).toEqual({ label: "Not started", state: "not-started" });
+    // A reviewer failure clears no request at all, because the reviewers do not
+    // use one; consolidation is still unrun.
+    expect(
+      consolidationStep({
+        ...unconsolidated,
+        phase: "failed",
+        activeRequest: undefined,
+        reviewers: unconsolidated.reviewers.map((reviewer) => ({
+          ...reviewer,
+          status: "failed" as const,
+          report: undefined,
+        })),
+      }),
+    ).toEqual({ label: "Not started", state: "not-started" });
+  });
+
+  test("tracks the fix turn separately from the steps that feed it", () => {
+    const ready = readyWorkflow();
+    expect(fixStep(ready)).toEqual({ label: "Ready to start", state: "not-started" });
+    expect(fixStep({ ...ready, phase: "reviewing" })).toEqual({
+      label: "Not started",
+      state: "not-started",
+    });
+    expect(fixStep({ ...ready, phase: "fixing" })).toEqual({
+      label: "Addressing findings",
+      state: "running",
+    });
+    expect(fixStep({ ...ready, phase: "interactive" })).toEqual({
+      label: "Interactive fix session",
+      state: "running",
+    });
+    expect(fixStep({ ...ready, phase: "completed" })).toEqual({
+      label: "Complete",
+      state: "complete",
+    });
+    expect(
+      fixStep({
         ...ready,
         phase: "failed",
-        fixSession: { ...ready.fixSession!, status: "failed" },
+        fixResult: {
+          complete: false,
+          summary: "Two findings remain",
+          filesChanged: [],
+          commandsRun: [],
+          notes: [],
+          limitations: [],
+        },
       }),
-    ).toBe("Failed");
-    const { fixSession: _none, ...withoutSession } = ready;
-    expect(fixSessionActivity({ ...withoutSession, phase: "completed" })).toBe("Not started");
+    ).toEqual({ label: "Failed", state: "failed" });
+    // The workflow failed before the fix request was ever dispatched.
+    expect(fixStep({ ...ready, phase: "failed" })).toEqual({
+      label: "Not started",
+      state: "not-started",
+    });
+    expect(fixStep({ ...ready, phase: "cancelled" })).toEqual({
+      label: "Cancelled",
+      state: "cancelled",
+    });
+  });
+
+  test("attributes the shared session clock to the step that is holding it", () => {
+    const ready = readyWorkflow();
+    expect(fixSessionRuntimeStep({ ...ready, phase: "preparing" })).toBe("package");
+    // The reviewers run without this session, so it still holds preparation's
+    // finished timings for the whole review stage.
+    expect(fixSessionRuntimeStep({ ...ready, phase: "reviewing" })).toBe("package");
+    expect(fixSessionRuntimeStep({ ...ready, phase: "consolidating" })).toBe("consolidation");
+    expect(fixSessionRuntimeStep(ready)).toBe("consolidation");
+    expect(fixSessionRuntimeStep({ ...ready, phase: "fixing" })).toBe("fix");
+    expect(fixSessionRuntimeStep({ ...ready, phase: "completed" })).toBe("fix");
+    // Until the address turn is dispatched the session still carries
+    // consolidation's timings, so no step may show them as its own.
+    expect(
+      fixSessionRuntimeStep({ ...ready, phase: "interactive", addressPromptPending: true }),
+    ).toBeNull();
+    expect(fixSessionRuntimeStep({ ...ready, phase: "interactive" })).toBe("fix");
+    // Cancelling clears the active request, so nothing can claim the clock.
+    expect(fixSessionRuntimeStep({ ...ready, phase: "cancelled" })).toBeNull();
+    expect(
+      fixSessionRuntimeStep({
+        ...ready,
+        phase: "failed",
+        activeRequest: {
+          kind: "prepare",
+          requestId: "prepare-1",
+          state: "sent",
+          createdAt: "2026-08-14T00:00:00.000Z",
+        },
+      }),
+    ).toBe("package");
+  });
+
+  test("renders the three steps around the reviewer panel in pipeline order", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "consolidating",
+      consolidatedReport: undefined,
+      fixSession: { ...ready.fixSession!, status: "running" },
+      activeRequest: {
+        kind: "consolidate",
+        requestId: "consolidate-1",
+        state: "sent",
+        createdAt: "2026-08-14T00:00:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    const workflowHeadings = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(workflowHeadings.slice(0, 4)).toEqual([
+      "Review package generation",
+      "Review panel",
+      "Consolidation",
+      "Fix",
+    ]);
+    expect(screen.queryByRole("heading", { name: "Fix model" }) === null).toBe(true);
+    expect(screen.getByText("Package ready")).toBeTruthy();
+    expect(screen.getByText("Consolidating findings")).toBeTruthy();
+    expect(screen.getByText("Not started")).toBeTruthy();
+  });
+
+  test("keeps a failed preparation session openable so its transcript can be read", () => {
+    const preparing = preparingWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...preparing,
+      phase: "failed",
+      error: "The preparation session produced no activity for 20 minutes",
+      fixSession: { ...preparing.fixSession!, status: "failed" },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("Failed")).toBeTruthy();
+    const card = screen.getByRole("button", { name: "Open review package generation session" });
+    expect(card.hasAttribute("disabled")).toBe(false);
+    expect(card.getAttribute("title")).toBe(
+      "Open the failed review package generation session in a new tab",
+    );
+    fireEvent.click(card);
+    expect(createTab).toHaveBeenCalledTimes(1);
+    // Consolidation never ran, so it stays unopenable and does not claim to have
+    // failed alongside preparation.
+    const consolidation = screen.getByRole("button", { name: "Open consolidation session" });
+    expect(consolidation.hasAttribute("disabled")).toBe(true);
+  });
+
+  test("keeps a failed consolidation session openable", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "failed",
+      consolidatedReport: undefined,
+      fixSession: { ...ready.fixSession!, status: "failed" },
+      activeRequest: {
+        kind: "consolidate",
+        requestId: "consolidate-1",
+        state: "sent",
+        createdAt: "2026-08-14T00:00:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    const card = screen.getByRole("button", { name: "Open consolidation session" });
+    expect(card.hasAttribute("disabled")).toBe(false);
+    expect(card.getAttribute("title")).toBe("Open the failed consolidation session in a new tab");
+    fireEvent.click(card);
+    expect(createTab).toHaveBeenCalledTimes(1);
+    // Preparation finished, so it stays openable and keeps reading as finished.
+    const preparation = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    expect(preparation.hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("Package ready")).toBeTruthy();
+  });
+
+  test("shows the fix turn as live while it addresses findings", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "fixing",
+      fixSession: { ...ready.fixSession!, status: "running", completedAt: undefined },
+      activeRequest: {
+        kind: "fix",
+        requestId: "fix-1",
+        state: "sent",
+        createdAt: "2026-08-14T00:00:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("Addressing findings")).toBeTruthy();
+    expect(screen.getByLabelText("Fix runtime")).toBeTruthy();
+    // The finished steps must not show the fix turn's clock as their own.
+    expect(screen.queryByLabelText("Consolidation runtime") === null).toBe(true);
+    expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
+    const card = screen.getByRole("button", { name: "Open fix model session" });
+    expect(card.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(card);
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("warns on the card owning the stalled turn", () => {
+    const ready = readyWorkflow();
+    const workflow: MultiReviewWorkflow = {
+      ...ready,
+      phase: "fixing",
+      fixSession: {
+        ...ready.fixSession!,
+        status: "running",
+        completedAt: undefined,
+        stalledSince: "2026-08-14T00:10:00.000Z",
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+
+    expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
+    const fixCard = screen.getByRole("button", { name: "Open fix model session" });
+    expect(fixCard.querySelector(".text-amber-500")).toBeTruthy();
+    const preparation = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    expect(preparation.querySelector(".text-amber-500") === null).toBe(true);
   });
 
   test("formats fix session runtime for live and settled sessions", () => {

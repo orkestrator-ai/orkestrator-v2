@@ -788,13 +788,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const interactionKinds = Array.isArray(reportedKinds)
         ? reportedKinds.filter((kind): kind is string => typeof kind === "string")
         : undefined;
-      const statusNotices = snapshotNotices({
+      const noticeOptions: Parameters<typeof snapshotNotices>[0] = {
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
-        ...(Array.isArray(bridgeQueue?.items)
-          ? { providerQueue: { items: bridgeQueue.items.slice(0, 512) } }
-          : {}),
-      });
+      };
+      const statusNotices = snapshotNotices(noticeOptions);
       return {
         status,
         messages,
@@ -808,6 +806,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(contextUsage ? { contextUsage } : {}),
         ...(policy ? { policy } : {}),
         ...(runtime ? { runtime } : {}),
+        ...(Array.isArray(bridgeQueue?.items)
+          ? { providerQueue: { items: bridgeQueue.items.slice(0, 512) } }
+          : {}),
         // The bridge's own answer for this session, which overrides the
         // platform table. Pi reports it; the others do not, and absent leaves
         // the table standing.

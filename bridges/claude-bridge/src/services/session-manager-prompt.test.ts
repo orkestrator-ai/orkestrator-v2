@@ -81,6 +81,23 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test.each([undefined, "default", "claude-sonnet-test"])(
+    "applies the 1M-context parameter to the supported model selection %s",
+    async (model) => {
+      const session = createSession();
+      track(session.id);
+      const prompt = sendPrompt(session.id, "Use the configured context", {
+        ...(model ? { model } : {}),
+        parameterValues: { context1m: true },
+      });
+      const call = await nextQueryCall();
+      expect(call.options.betas).toEqual(["context-1m-2025-08-07"]);
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+    },
+  );
+
   test("passes the current managed GitHub credential only to the SDK query", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-query-github-env-"));
     const credentialFile = join(directory, "github-token");
@@ -3249,12 +3266,13 @@ describe("sendPrompt", () => {
     expect(notices[0]).toMatchObject({
       message: "Claude reported api retry",
       method: "system/api_retry",
-      // Retrying an overloaded API changes what the user is reading, so it is
-      // promoted into the tab rather than left in the health panel.
+      // The dedicated retry row makes progress visible in the transcript;
+      // this provider warning itself remains health-panel inventory.
       severity: "warning",
       source: "provider",
     });
     expect(notices[0]?.occurrences?.[0]?.detail).toBe("Overloaded, retrying");
+    expect(getSession(session.id)?.health?.advisories()).toEqual([]);
   });
 
   test("a merely informational system subtype stays out of the tab", async () => {

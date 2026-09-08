@@ -2849,6 +2849,72 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("applies configured Claude SDK parameters to a new session", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      agentSettings: {
+        platforms: {
+          claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+        },
+      },
+    });
+
+    render(<AgentNativeTab tabId="tab-claude-sdk-defaults" data={freshTab("claude")} isActive />);
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "claude",
+      parameterValues: { thinking: "budget-16384", context1m: true },
+    });
+  });
+
+  test("renders an unrelated Claude parameter supplied by the projection", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "toggle" as const,
+          id: "parameter:audit",
+          label: "Audit mode",
+          value: false,
+        },
+      ],
+    }));
+
+    render(
+      <AgentNativeTab tabId="tab-claude-hidden-parameters" data={freshTab("claude")} isActive />,
+    );
+
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.getByText(/Audit mode: Off/)).toBeTruthy();
+  });
+
+  test("renders model parameters supplied for a non-Claude platform", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "select" as const,
+          id: "parameter:thinking",
+          label: "Thinking",
+          value: "adaptive",
+          options: [{ id: "adaptive", label: "Adaptive" }],
+        },
+        {
+          kind: "toggle" as const,
+          id: "parameter:context1m",
+          label: "1M context beta",
+          value: false,
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId="tab-cursor-parameters" data={freshTab("cursor")} isActive />);
+
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.getByText(/Thinking: Adaptive/)).toBeTruthy();
+    expect(screen.getByText(/1M context beta: Off/)).toBeTruthy();
+  });
+
   test("drops a configured speed default for a model that does not support it", async () => {
     useAgentModelCatalogStore.setState({
       cursorModels: [

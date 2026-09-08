@@ -99,6 +99,22 @@ describe("resolveAgentPlatformSettings", () => {
     });
   });
 
+  test("resolves Claude SDK parameters independently, including an explicit false", () => {
+    const global = platformTier("claude", {
+      claudeThinkingMode: "budget-8192",
+      claudeContext1m: true,
+    });
+    const repository = platformTier("claude", { claudeThinkingMode: "disabled" });
+    const environment = platformTier("claude", { claudeContext1m: false });
+
+    expect(
+      resolveAgentPlatformSettings({ environment, repository, global }, "claude"),
+    ).toMatchObject({
+      claudeThinkingMode: "disabled",
+      claudeContext1m: false,
+    });
+  });
+
   test("resolves fastMode independently, including an explicit false", () => {
     // Normal is a stored choice, not "unset". A repository that pins Normal
     // must not fall through to the app's Fast.
@@ -258,6 +274,21 @@ describe("normalizeAgentSettings", () => {
     expect(
       normalizeAgentSettings({ platforms: { cursor: { fastMode: false } } }).platforms?.cursor,
     ).toEqual({ fastMode: false });
+  });
+
+  test("keeps valid Claude SDK defaults and drops them from other platforms", () => {
+    const normalized = normalizeAgentSettings({
+      platforms: {
+        claude: { claudeThinkingMode: "budget-16384", claudeContext1m: true },
+        codex: { claudeThinkingMode: "adaptive", claudeContext1m: true },
+      },
+    });
+
+    expect(normalized.platforms?.claude).toEqual({
+      claudeThinkingMode: "budget-16384",
+      claudeContext1m: true,
+    });
+    expect(normalized.platforms?.codex).toBeUndefined();
   });
 
   test("bounds and normalizes the extra Multi Review reviewer defaults", () => {

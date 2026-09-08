@@ -241,12 +241,21 @@ function appendTranscriptNotice(
  *
  * These are the SDK's own diagnostics, so they are recorded as `provider`
  * notices. The severity split is what decides whether the tab shows the notice
- * at all: `info` stays in the health panel, `warning` and `error` are promoted
- * into the transcript by the backend, because a refused model or an exhausted
- * retry changes what the user is reading and a hook that started does not.
+ * at all: `info` and `warning` stay in the health panel, while `error` is
+ * promoted into the transcript by the backend. Dedicated transcript rows,
+ * such as API retry progress, remain independent of this health severity.
  */
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
 const MAX_SDK_CAPABILITIES = 64;
+
+function supportsClaudeContext1m(model: string | undefined): boolean {
+  const selected = model?.trim();
+  // The SDK catalogue's `default` entry, and an omitted model on backend-owned
+  // startup turns, both resolve to the provider's recommended Opus model. They
+  // must not disable an explicitly requested session default merely because
+  // the alias is not itself named "opus".
+  return !selected || selected === "default" || /opus|sonnet/i.test(selected);
+}
 
 const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
   status: "info",
@@ -645,7 +654,18 @@ export async function sendPrompt(
       testHooks?.afterAttachmentInitialValidation,
     );
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
-    closeSdkInput = heldSdkPrompt.close;
+    /**
+     * Closing stdin starts the CLI's exit. `session.queryControl` stays set
+     * until this turn's `finally`, so without this marker a read-only control
+     * request issued in between races the exit and comes back as
+     * "Query closed before response received". Wrapping the close in one place
+     * means a future close site cannot forget to mark it.
+     */
+    const closeTurnInput = () => {
+      if (queryIteratorControl) session.queryControlDraining = queryIteratorControl;
+      heldSdkPrompt.close();
+    };
+    closeSdkInput = closeTurnInput;
     let receivedResult = false;
     const ownsActiveTurn = () =>
       !abortController.signal.aborted &&
@@ -690,6 +710,9 @@ export async function sendPrompt(
       session.completionBlockedByBackgroundTasks = false;
       if (session.queryControl === queryIteratorControl) {
         session.queryControl = undefined;
+      }
+      if (session.queryControlDraining === queryIteratorControl) {
+        session.queryControlDraining = undefined;
       }
       if (dispatchRequestId) {
         recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
@@ -742,7 +765,7 @@ export async function sendPrompt(
         // parked snapshots are already absent from the live set, so dropping
         // them only releases metadata that now has nothing to attach to.
         forgetSettlingBackgroundTasksOwnedBy(session, queryIteratorControl);
-        heldSdkPrompt.close();
+        closeTurnInput();
         closeQueryControlIfUnused(session, queryIteratorControl);
       }, testHooks?.retainedContinuationTimeoutMs ?? RETAINED_CONTINUATION_TIMEOUT_MS);
     };
@@ -815,7 +838,7 @@ export async function sendPrompt(
       // Nothing is owed to this query any more, so it must stop being retained
       // or `closeQueryControlIfUnused` would keep treating it as referenced.
       stopWaitingForContinuation();
-      heldSdkPrompt.close();
+      closeTurnInput();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
@@ -956,7 +979,7 @@ export async function sendPrompt(
                   display: "summarized",
                 }
               : { type: "adaptive", display: "summarized" },
-        ...(options?.parameterValues?.context1m === true && /opus|sonnet/i.test(options.model ?? "")
+        ...(options?.parameterValues?.context1m === true && supportsClaudeContext1m(options.model)
           ? { betas: ["context-1m-2025-08-07" as const] }
           : {}),
         ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
@@ -1819,7 +1842,8 @@ export async function sendPrompt(
         // frame carrying the whole SDK message — which nothing consumed, and
         // which put arbitrary provider payload on the wire. Record them as
         // runtime notices instead, where they are bounded, redacted, carry a
-        // severity, and reach the health panel and the tab.
+        // severity, and reach the health panel. Only errors are additionally
+        // promoted into the tab by the backend.
         if (sysMsg.subtype === "api_retry") {
           // A retry the user can see, rather than a silent stall. Recorded as a
           // pending row and settled by the next assistant message or by the
@@ -2124,7 +2148,7 @@ export async function sendPrompt(
             // before taking ownership; never let this old turn overwrite it.
             recordInterruptedStructuredOutputIfCurrent();
           }
-          heldSdkPrompt.close();
+          closeTurnInput();
           return;
         }
         const streamedUsage =
@@ -2505,6 +2529,9 @@ export async function sendPrompt(
       );
       if (session.queryControl === queryIteratorControl) {
         session.queryControl = undefined;
+      }
+      if (session.queryControlDraining === queryIteratorControl) {
+        session.queryControlDraining = undefined;
       }
       closeQueryControlIfUnused(session, queryIteratorControl);
       if (settled) emitBackgroundTaskSnapshot(session);

@@ -97,7 +97,9 @@ export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTrans
   // half-written drafts a provider streams while composing its answer, which
   // validate as nothing and would otherwise render verbatim. Whatever survives
   // is prose: the reviewer's actual commentary.
-  return hideMachineOutputText(showOnlyFinalStructuredReviewMessage(output, false));
+  return hideMachineOutputText(showOnlyFinalStructuredReviewMessage(output, false), {
+    stripTrailingPayload: true,
+  });
 }
 
 export function MultiReviewReviewerTab({

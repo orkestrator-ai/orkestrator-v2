@@ -133,6 +133,7 @@ describe("pane layout persistence", () => {
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
         initialExecutionProfileId: "plan",
+        hideStructuredOutput: true,
         initialCommands: ["do not persist"],
         nativeAgentData: {
           environmentId: "env-1",
@@ -151,6 +152,7 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
     expect(JSON.stringify(persisted)).toContain('"initialExecutionProfileId":"plan"');
+    expect(JSON.stringify(persisted)).toContain('"hideStructuredOutput":true');
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(JSON.stringify(persisted)).toContain("session-1");
@@ -170,6 +172,7 @@ describe("pane layout persistence", () => {
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
     expect(rehydratedTab?.initialExecutionProfileId).toBe("plan");
+    expect(rehydratedTab?.hideStructuredOutput).toBe(true);
     expect(rehydratedTab?.initialPrompt).toBeUndefined();
     expect(rehydratedTab?.agentHandoffId).toBe("handoff-1");
 
@@ -180,6 +183,38 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
     expect(JSON.stringify(consumed)).not.toContain("initialExecutionProfileId");
     stop();
+  });
+
+  test("drops a non-boolean persisted structured-output presentation flag", () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "review",
+            type: "agent-native",
+            hideStructuredOutput: true,
+            nativeAgentData: { environmentId: "env-1", sessionId: "session-1" },
+          },
+        ],
+        activeTabId: "review",
+      },
+    });
+    const saved = createSaved("env-1", input) as unknown as {
+      root: { tabs: Array<Record<string, unknown>> };
+    };
+    saved.root.tabs[0]!.hideStructuredOutput = "true";
+
+    const restored = reconcilePersistedLayout(saved as unknown as PersistedPaneLayout, {
+      environmentId: "env-1",
+      containerId: "container-1",
+      isLocal: false,
+    });
+    const [tab] = (restored!.root as { tabs: TabInfo[] }).tabs;
+    expect(tab?.hideStructuredOutput).toBeUndefined();
   });
 
   test("debounces changes and retries a failed snapshot after the next shared change", async () => {

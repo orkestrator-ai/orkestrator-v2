@@ -1,7 +1,9 @@
-import { describe, expect, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "bun:test";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
+
+afterEach(cleanup);
 
 function runningValidation(): ReviewValidationRun {
   return {
@@ -80,19 +82,23 @@ describe("ReviewValidationStatus", () => {
     expect(screen.getByText("running · 8.0s")).toBeTruthy();
   });
 
-  test("folds limitations into a neutral Notes disclosure", () => {
-    render(
-      <ReviewValidationStatus
-        run={runningValidation()}
-        now={Date.parse("2026-09-08T20:00:10.000Z")}
-      />,
-    );
+  test("keeps per-command limitations attributed and plan limitations in Notes", () => {
+    const run = runningValidation();
+    run.results[0]!.limitation = "A prerequisite did not pass.";
+    run.results[1]!.limitation = "A prerequisite did not pass.";
+    render(<ReviewValidationStatus run={run} now={Date.parse("2026-09-08T20:00:10.000Z")} />);
 
+    expect(screen.getByText("bun run check").closest("li")?.textContent).toContain(
+      "A prerequisite did not pass.",
+    );
+    expect(screen.getByText("bun run build").closest("li")?.textContent).toContain(
+      "A prerequisite did not pass.",
+    );
+    expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
     expect(notes.hasAttribute("open")).toBe(false);
     expect(notes.querySelector(".text-amber-500")).toBeNull();
     fireEvent.click(screen.getByText("Notes"));
-    expect(screen.getByText("Build runner was unavailable.")).toBeTruthy();
     expect(screen.getByText("No CI workflows are present.")).toBeTruthy();
   });
 });

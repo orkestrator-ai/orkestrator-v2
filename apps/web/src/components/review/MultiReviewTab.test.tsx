@@ -465,6 +465,78 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
+  test("keeps a running validation clock live while the workflow is cancelling", () => {
+    const originalNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    let now = Date.parse("2026-09-08T20:00:10.000Z");
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    window.setInterval = ((callback: TimerHandler) => {
+      tick = callback as () => void;
+      return 43;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+
+    const workflow = readyWorkflow();
+    workflow.phase = "cancelling";
+    workflow.validationRun = {
+      id: "validation-cancelling",
+      status: "running",
+      startedAt: "2026-09-08T20:00:04.000Z",
+      plan: {
+        headRef: "a".repeat(40),
+        commands: [
+          {
+            id: "check",
+            command: "bun run check",
+            cwd: ".",
+            dependsOn: [],
+            resources: ["*"],
+            weight: 2,
+            timeoutMs: 1_200_000,
+          },
+        ],
+        limitations: [],
+      },
+      results: [
+        {
+          id: "check",
+          command: "bun run check",
+          status: "running",
+          exitCode: null,
+          stdoutPath: ".orkestrator/check.stdout",
+          stderrPath: ".orkestrator/check.stderr",
+          stdoutBytes: 0,
+          stderrBytes: 0,
+          startedAt: "2026-09-08T20:00:05.000Z",
+          durationMs: 0,
+          limitation: null,
+        },
+      ],
+    };
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+
+    const view = render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => workflow)}
+      />,
+    );
+    try {
+      expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
+      now = Date.parse("2026-09-08T20:00:13.000Z");
+      act(() => tick?.());
+      expect(screen.getByText(/Validation: 9\.0s\./)).toBeTruthy();
+    } finally {
+      view.unmount();
+      Date.now = originalNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
   test("opens a reviewer transcript in a separate tab intent", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
@@ -1345,6 +1417,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       resumeSessionId: "provider-fix",
       displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
       isReviewTab: true,
+      hideStructuredOutput: true,
       initialAgentModel: "gpt-5.6",
       initialReasoningEffort: "high",
       initialConversationMode: "build",
@@ -1948,6 +2021,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       initialAgentModel: "gpt-5.6",
       initialReasoningEffort: "high",
       initialConversationMode: "build",
+      hideStructuredOutput: true,
     });
   });
 

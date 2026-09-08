@@ -38,10 +38,7 @@ export function ReviewValidationStatus({
   now?: number;
 }) {
   const validationElapsedMs = reviewValidationElapsedMs(run, now);
-  const notes = [
-    ...run.results.flatMap((result) => (result.limitation ? [result.limitation] : [])),
-    ...run.plan.limitations,
-  ];
+  const notes = run.plan.limitations;
 
   return (
     <section
@@ -74,6 +71,12 @@ export function ReviewValidationStatus({
                   {resultElapsedMs !== null ? ` · ${(resultElapsedMs / 1000).toFixed(1)}s` : ""}
                 </span>
               </div>
+              {result.limitation && (
+                <p className="mt-1 text-muted-foreground">
+                  <span className="sr-only">{result.command}: </span>
+                  {result.limitation}
+                </p>
+              )}
             </li>
           );
         })}

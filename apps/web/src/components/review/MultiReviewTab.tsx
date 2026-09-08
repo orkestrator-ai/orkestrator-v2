@@ -108,6 +108,7 @@ export function multiReviewFixSessionTabOptions(
     resumeSessionId: session.providerSessionId,
     displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
+    hideStructuredOutput: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
     initialReasoningEffort: workflow.fixModel.reasoningEffort,
     initialConversationMode: "build",
@@ -572,8 +573,7 @@ function MultiReviewOverviewTab({
       workflow.stepRuntimes?.fix !== undefined &&
       workflow.stepRuntimes.fix.completedAt === undefined);
   const hasRunningValidation =
-    workflow?.phase === "preparing" &&
-    (workflow.validationRun?.status === "planned" || workflow.validationRun?.status === "running");
+    workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
   const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession || hasRunningValidation);
 
   useEffect(() => {

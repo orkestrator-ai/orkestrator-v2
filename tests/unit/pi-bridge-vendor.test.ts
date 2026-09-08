@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { stageRuntimeClosure } from "../../bridges/pi-bridge/scripts/vendor";
 
@@ -18,7 +17,7 @@ type FixturePackage = {
 };
 
 describe("Pi bridge runtime vendoring", () => {
-  test("loads Pi's undeclared server import from the staged runtime closure", async () => {
+  test("loads Pi's supported SDK from the staged runtime closure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pi-vendor-live-test-"));
     const packageRoot = path.resolve(import.meta.dir, "../../bridges/pi-bridge");
     const stagedModules = path.join(root, "node_modules");
@@ -32,16 +31,27 @@ describe("Pi bridge runtime vendoring", () => {
     try {
       await stageRuntimeClosure({ packageRoot, destination: stagedModules, entryPackages });
 
-      const workerModule = path.join(
-        stagedModules,
-        "@earendil-works/pi-coding-agent/dist/experimental/session-worker-manager.js",
+      const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+      for (const name of entryPackages) {
+        const staged = JSON.parse(
+          await readFile(path.join(stagedModules, name, "package.json"), "utf8"),
+        );
+        expect(staged.version).toBe(manifest.dependencies[name]);
+      }
+
+      // Pi 0.85.1 removes the accidentally published experimental worker.
+      // Probe the public entrypoint the bridge uses, resolving only from the
+      // staged tree, without creating a session or making a model request.
+      await execFileAsync(
+        process.execPath,
+        [
+          "--eval",
+          'const sdk = await import("@earendil-works/pi-coding-agent"); ' +
+            'for (const name of ["createAgentSession", "SessionManager", "AgentSession"]) ' +
+            'if (typeof sdk[name] !== "function") throw new Error(`Missing SDK export: ${name}`);',
+        ],
+        { cwd: root, timeout: 15_000, maxBuffer: 128 * 1024 },
       );
-      const moduleUrl = pathToFileURL(workerModule).href;
-      await execFileAsync("node", [
-        "--input-type=module",
-        "--eval",
-        `const loaded = await import(${JSON.stringify(moduleUrl)}); if (typeof loaded.SessionWorkerManager !== "function") process.exit(2);`,
-      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

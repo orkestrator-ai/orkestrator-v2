@@ -1057,7 +1057,7 @@ export async function sendPrompt(
         // events a failed lifecycle hook would silently leave task or
         // compaction projection stale.
         includeHookEvents: true,
-        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.261: although the
+        // Pinned against @anthropic-ai/claude-agent-sdk 0.3.263: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
         // contract probe confirmed it still reaches this callback and the SDK

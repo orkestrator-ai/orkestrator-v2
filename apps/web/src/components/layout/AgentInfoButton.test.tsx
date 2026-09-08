@@ -2568,8 +2568,8 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(within(account).getByText("10% used")).toBeTruthy();
     expect(within(account).getByText("0.00")).toBeTruthy();
     expect(screen.getAllByText("Credits")).toHaveLength(1);
-    expect(screen.queryByText("Limits")).toBeNull();
-    expect(screen.queryByText("99% used")).toBeNull();
+    expect(screen.queryByText("Limits") === null).toBe(true);
+    expect(screen.queryByText("99% used") === null).toBe(true);
   });
 
   test("drops malformed rate-limit numbers without discarding valid fields", async () => {

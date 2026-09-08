@@ -34,8 +34,9 @@ export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
 export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
-export const MULTI_REVIEW_ADDRESS_PROMPT =
-  "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
+export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION =
+  "You are already in build mode. Remain in build mode and implement the fixes now. Do not enter, propose, or switch to plan mode. Do not invoke EnterPlanMode or any equivalent plan-mode tool, and do not ask the user to switch modes. Do not stop after describing a plan: make the necessary edits and run relevant validation.";
+export const MULTI_REVIEW_ADDRESS_PROMPT = `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
@@ -68,7 +69,9 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 
 ${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
-${instruction}`;
+${instruction}
+
+${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
 }
 
 /**

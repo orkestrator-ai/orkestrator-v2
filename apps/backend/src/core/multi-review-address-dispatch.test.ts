@@ -1,5 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import {
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -45,8 +46,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt:
-        "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+      prompt: `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -139,6 +139,11 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     expect.objectContaining({
       requestId: "multi-review-address:multi-1:launch-1",
       prompt: expect.stringContaining("Fix the reported regression"),
+    }),
+  );
+  expect(dispatchIntent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: expect.stringContaining(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
     }),
   );
   expect(events).toEqual(["dispatch", "publish"]);

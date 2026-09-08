@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-actions";
 
@@ -11,8 +12,10 @@ const report = {
 describe("multiReviewCustomFixPrompt", () => {
   test("keeps the Address all prompt stable", () => {
     expect(ADDRESS_ALL_REVIEW_PROMPT).toBe(
-      "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+      `Please address all the issues and coverage gaps.\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
     );
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("Do not invoke EnterPlanMode");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("make the necessary edits");
   });
 
   test("frames actionable report evidence and appends the custom instruction", () => {
@@ -23,6 +26,7 @@ describe("multiReviewCustomFixPrompt", () => {
     expect(prompt).toContain("Failure feedback");
     expect(prompt).toContain("Complete consolidated report");
     expect(prompt).toContain("User-provided fix instructions:\nPreserve the existing API");
+    expect(prompt).toEndWith(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION);
   });
 
   test("escapes marker-shaped strings inside untrusted evidence", () => {

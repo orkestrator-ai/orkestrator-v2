@@ -723,6 +723,7 @@ describe("AgentMailButton", () => {
     const sent = {
       ...message("stored"),
       id: "sent-to-peer",
+      subject: "Delivery update",
       from: {
         kind: "tab" as const,
         environmentId: "env-1",
@@ -741,8 +742,103 @@ describe("AgentMailButton", () => {
     render(<AgentMailButton />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sent" }));
-    expect(await screen.findByText("To Claude 2 · Peer")).toBeTruthy();
+    expect(await screen.findByText("Delivery update")).toBeTruthy();
     expect(screen.getByText("From Claude 1 · Agent → To Claude 2 · Peer")).toBeTruthy();
+  });
+
+  test("uses the full route as the sole heading for subject-less user Sent mail", async () => {
+    installTabMailbox();
+    const sent = {
+      ...message("stored"),
+      id: "user-sent-to-peer",
+      toEnvironmentId: "env-2",
+      toTabId: "tab-2",
+      toIncarnationId: "incarnation-2",
+    };
+    const { body: _body, ...summary } = sent;
+    listAgentMailSent.mockImplementation(async () => [summary]);
+    render(<AgentMailButton />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sent" }));
+
+    expect(await screen.findAllByText("From You → To Claude 2 · Peer")).toHaveLength(1);
+    expect(screen.queryByText("To Claude 2 · Peer") === null).toBe(true);
+  });
+
+  test("labels every inbound sender kind in the complete route", async () => {
+    const senderCases: Array<{ from: AgentMailMessage["from"]; expected: string }> = [
+      {
+        from: {
+          kind: "tab",
+          environmentId: "env-2",
+          projectId: "project-1",
+          tabId: "tab-2",
+          incarnationId: "incarnation-2",
+          agent: "claude",
+          title: "Claude 2 · Peer",
+        },
+        expected: "From Claude 2 · Peer → To Claude 1 · Agent",
+      },
+      {
+        from: {
+          kind: "tab",
+          environmentId: "fallback-env",
+          projectId: "project-1",
+          tabId: "fallback-tab",
+          incarnationId: "fallback-incarnation",
+          agent: null,
+          title: null,
+        },
+        expected: "From fallback-env / fallback-tab → To Claude 1 · Agent",
+      },
+      {
+        from: {
+          kind: "coordinator",
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          environmentId: "coordinator-env",
+          tabId: "coordinator-tab",
+          incarnationId: "coordinator-incarnation",
+          agent: "codex",
+          title: null,
+        },
+        expected: "From Project coordinator → To Claude 1 · Agent",
+      },
+      {
+        from: {
+          kind: "system",
+          projectId: "project-1",
+          source: "workflow",
+          resourceId: "pipeline-1",
+        },
+        expected: "From Orkestrator workflow → To Claude 1 · Agent",
+      },
+      {
+        from: { kind: "external" },
+        expected: "From External client → To Claude 1 · Agent",
+      },
+    ];
+    const messages = senderCases.map(({ from }, index) => {
+      const { body: _body, ...summary } = {
+        ...message("stored"),
+        id: `sender-kind-${index}`,
+        threadId: `sender-kind-${index}`,
+        subject: `Sender kind ${index}`,
+        from,
+      };
+      return summary;
+    });
+    installTabMailbox(messages);
+    render(<AgentMailButton />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 5 unseen/ }));
+
+    expect(await screen.findByText(senderCases[0]!.expected)).toBeTruthy();
+    for (const { expected } of senderCases.slice(1)) {
+      expect(screen.getByText(expected)).toBeTruthy();
+    }
   });
 
   test("explains a recipient compose draft in the sender status line", async () => {
@@ -870,7 +966,7 @@ describe("AgentMailButton", () => {
     getAgentMailMessage.mockImplementation(async () => incoming);
     render(<AgentMailButton />);
     fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 1 unseen/ }));
-    fireEvent.click(await screen.findByText("From Claude 2 · Peer"));
+    fireEvent.click(await screen.findByText("From Claude 2 · Peer → To Claude 1 · Agent"));
     fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
     fireEvent.change(screen.getByPlaceholderText("Markdown message"), {
       target: { value: "Acknowledged" },
@@ -901,7 +997,7 @@ describe("AgentMailButton", () => {
     getAgentMailMessage.mockImplementation(async () => incoming);
     render(<AgentMailButton />);
     fireEvent.pointerDown(screen.getByRole("button", { name: "Agent inbox" }));
-    fireEvent.click(await screen.findByText("From You"));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
     expect(await screen.findByText("authoritative body")).toBeTruthy();
 
     act(() =>
@@ -928,7 +1024,7 @@ describe("AgentMailButton", () => {
     });
     const view = render(<AgentMailButton />);
     fireEvent.pointerDown(screen.getByRole("button", { name: /Agent inbox, 1 unseen/ }));
-    fireEvent.click(await screen.findByText("From You"));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
     fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
     expect((await screen.findByRole("alert")).textContent).toContain("submission won");
 
@@ -942,7 +1038,7 @@ describe("AgentMailButton", () => {
     act(() => installTabMailbox([submittingSummary]));
     getAgentMailMessage.mockImplementation(async () => submitting);
     view.rerender(<AgentMailButton />);
-    fireEvent.click(await screen.findByText("From You"));
+    fireEvent.click(await screen.findByText("From You → To Claude 1 · Agent"));
     expect(screen.queryByRole("button", { name: "Discard" }) === null).toBe(true);
   });
 

@@ -694,15 +694,17 @@ export function AgentMailButton() {
                           />
                         )}
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-medium">
-                            {message.subject ||
-                              (isSent
-                                ? `To ${mailbox.displayName}`
-                                : `From ${senderLabel(message)}`)}
+                          <p
+                            className="truncate text-xs font-medium"
+                            title={message.subject ? undefined : routeLabel}
+                          >
+                            {message.subject || routeLabel}
                           </p>
-                          <p className="truncate text-[11px] text-zinc-300" title={routeLabel}>
-                            {routeLabel}
-                          </p>
+                          {message.subject && (
+                            <p className="truncate text-[11px] text-zinc-300" title={routeLabel}>
+                              {routeLabel}
+                            </p>
+                          )}
                           <p className="truncate text-[11px] text-muted-foreground">
                             {mailbox.environmentName} ·{" "}
                             {messageStatusLabel(mailbox, message, isSent)}

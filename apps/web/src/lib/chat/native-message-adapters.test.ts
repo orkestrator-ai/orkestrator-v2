@@ -2213,6 +2213,78 @@ describe("native message adapters", () => {
     ]);
   });
 
+  test("preserves initial-prompt path references without a structured file part", () => {
+    const rawContent =
+      "Use the requirements\n\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- requirements.md: /workspace/.orkestrator/initial-prompt/requirements.md";
+    const message: NativeMessage = {
+      id: "native-initial-prompt-path-only",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T16:25:00.000Z",
+      parts: [{ type: "text", content: rawContent }],
+    };
+
+    const attachmentOnlyContent =
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- requirements.md: /workspace/.orkestrator/initial-prompt/requirements.md";
+    const attachmentOnlyMessage: NativeMessage = {
+      id: "native-initial-prompt-file-only",
+      role: "user",
+      content: attachmentOnlyContent,
+      createdAt: "2026-09-08T16:25:00.000Z",
+      parts: [{ type: "text", content: attachmentOnlyContent }],
+    };
+
+    expect(normalizeNativeMessage(message)).toEqual(message);
+    expect(normalizeNativeMessage(attachmentOnlyMessage)).toEqual(attachmentOnlyMessage);
+    expect(
+      normalizeClaudeMessage({
+        ...attachmentOnlyMessage,
+        id: "claude-initial-prompt-file-only",
+      }),
+    ).toMatchObject({
+      content: attachmentOnlyContent,
+      parts: [{ type: "text", content: attachmentOnlyContent }],
+    });
+  });
+
+  test("preserves user-authored reference-shaped prose without a matching file part", () => {
+    const rawContent =
+      "Document this format:\n\n" +
+      "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+      "- name: value";
+    const message: NativeMessage = {
+      id: "native-user-authored-path-reference",
+      role: "user",
+      content: rawContent,
+      createdAt: "2026-09-08T16:25:00.000Z",
+      parts: [
+        { type: "text", content: rawContent },
+        {
+          type: "file",
+          content: "/workspace/unrelated.txt",
+          filename: "unrelated.txt",
+        },
+      ],
+    };
+
+    expect(normalizeNativeMessage(message)).toEqual(message);
+  });
+
+  test("preserves whitespace-only text parts when no reference block exists", () => {
+    const message: NativeMessage = {
+      id: "native-whitespace-only-part",
+      role: "user",
+      content: "Fallback copy content",
+      createdAt: "2026-09-08T16:25:00.000Z",
+      parts: [{ type: "text", content: "  \n\t " }],
+    };
+
+    expect(normalizeNativeMessage(message)).toEqual(message);
+  });
+
   test("decodes numeric attribute entities and leaves undecodable ones verbatim", () => {
     const attachments = [
       // Decimal, uppercase hex, and lowercase hex all round-trip.

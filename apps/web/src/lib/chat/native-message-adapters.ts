@@ -98,14 +98,33 @@ export function parseNativeAttachmentsFromContent(content: string): {
   return { cleanContent, attachments };
 }
 
-function parseNativeUserContent(content: string): {
+function attachmentReference(part: NativeFilePart): { name: string; path: string } {
+  const path = fileAttachmentIdentity(part);
+  const pathWithoutTrailingSeparators = path.replace(/[\\/]+$/, "");
+  const separatorIndex = Math.max(
+    pathWithoutTrailingSeparators.lastIndexOf("/"),
+    pathWithoutTrailingSeparators.lastIndexOf("\\"),
+  );
+  return {
+    name: part.filename || pathWithoutTrailingSeparators.slice(separatorIndex + 1),
+    path,
+  };
+}
+
+function parseNativeUserContent(
+  content: string,
+  structuredAttachments: readonly NativeFilePart[] = [],
+): {
   cleanContent: string;
   parts: NativeMessagePart[];
 } {
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
   return {
-    cleanContent: stripInitialPromptAttachmentReferences(parsedAttachments.cleanContent),
+    cleanContent: stripInitialPromptAttachmentReferences(
+      parsedAttachments.cleanContent,
+      [...structuredAttachments, ...parsedAttachments.attachments].map(attachmentReference),
+    ),
     parts: [
       ...parsedAttachments.attachments,
       ...parsedReferences.references.map((reference) => ({
@@ -493,12 +512,15 @@ function fileAttachmentIdentity(part: NativeFilePart): string {
 function normalizeNativeUserPresentation(message: NativeMessage): NativeMessage {
   if (message.role !== "user") return message;
 
-  const parsedContent = parseNativeUserContent(message.content);
+  const structuredAttachments = message.parts.filter(
+    (part): part is NativeFilePart => part.type === "file",
+  );
+  const parsedContent = parseNativeUserContent(message.content, structuredAttachments);
   let parsedPresentationPart = false;
   const parsedParts = message.parts.flatMap((part): NativeMessagePart[] => {
     if (part.type !== "text") return [part];
 
-    const parsed = parseNativeUserContent(part.content);
+    const parsed = parseNativeUserContent(part.content, structuredAttachments);
     if (parsed.cleanContent === part.content) return [part];
 
     parsedPresentationPart = true;

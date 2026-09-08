@@ -13,7 +13,9 @@
  *              Codex picker shows, so an app-level effort default carries over
  *   `fast`   → the speed toggle
  *
- * `thinking`, `context`, `cyber`, and variants are generic model parameters.
+ * `thinking`, `context`, and `cyber` are generic model parameters. The
+ * pre-combined variants stay off the input bar — they are only used to read
+ * vendor defaults such as the starting effort.
  */
 import { Cursor, type ModelListItem, type ModelSelection } from "@cursor/sdk";
 import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
@@ -117,22 +119,6 @@ function normalizeModel(item: ModelListItem): AgentModel {
         scope: "turn" as const,
       };
     });
-  if ((item.variants?.length ?? 0) > 1) {
-    parameters.push({
-      id: "variant",
-      label: "Variant",
-      kind: "select",
-      options: item.variants!.map((variant) => ({
-        id: encodeVariant(variant.params),
-        label: variant.displayName,
-        ...(variant.description ? { description: variant.description } : {}),
-      })),
-      defaultValue: encodeVariant(
-        item.variants!.find((variant) => variant.isDefault)?.params ?? item.variants![0]!.params,
-      ),
-      scope: "turn",
-    });
-  }
   return {
     platform: "cursor",
     id: boundId(item.id),
@@ -196,21 +182,11 @@ export function modelSelection(composer: NativeAgentComposerState): ModelSelecti
   if (typeof composer.fastModeEnabled === "boolean" && model?.supportsSpeed) {
     params.push({ id: FAST_PARAMETER, value: String(composer.fastModeEnabled) });
   }
-  const variant = composer.parameterValues?.variant;
-  if (typeof variant === "string") {
-    params.splice(0, params.length, ...decodeVariant(variant));
-  } else {
-    for (const parameter of model?.parameters ?? []) {
-      if (
-        parameter.id === "variant" ||
-        parameter.id === EFFORT_PARAMETER ||
-        parameter.id === FAST_PARAMETER
-      )
-        continue;
-      const value = composer.parameterValues?.[parameter.id];
-      if (typeof value === "string" || typeof value === "boolean") {
-        params.push({ id: parameter.id, value: String(value) });
-      }
+  for (const parameter of model?.parameters ?? []) {
+    if (parameter.id === EFFORT_PARAMETER || parameter.id === FAST_PARAMETER) continue;
+    const value = composer.parameterValues?.[parameter.id];
+    if (typeof value === "string" || typeof value === "boolean") {
+      params.push({ id: parameter.id, value: String(value) });
     }
   }
   return params.length > 0 ? { id, params } : { id };
@@ -229,6 +205,9 @@ export async function hydrateComposer(
   const models = await listModels();
   const selectedModelId = composer.selectedModelId ?? models[0]?.id ?? FALLBACK_MODEL_ID;
   const selected = models.find((model) => model.id === selectedModelId);
+  const parameterValues = { ...composer.parameterValues };
+  // Drop a leftover encoded cross-product so it cannot revive the picker.
+  delete parameterValues.variant;
   return {
     ...composer,
     models,
@@ -239,31 +218,11 @@ export async function hydrateComposer(
     // would show a control the provider cannot honour.
     fastModeAvailable: selected?.supportsSpeed === true,
     parameterValues: {
-      ...composer.parameterValues,
+      ...parameterValues,
       ...(composer.selectedReasoningId ? { effort: composer.selectedReasoningId } : {}),
       ...(typeof composer.fastModeEnabled === "boolean" ? { fast: composer.fastModeEnabled } : {}),
     },
   };
-}
-
-function encodeVariant(params: ModelSelection["params"] = []): string {
-  return JSON.stringify(params);
-}
-
-function decodeVariant(value: string): NonNullable<ModelSelection["params"]> {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((candidate) => {
-      if (!candidate || typeof candidate !== "object") return [];
-      const { id, value: parameterValue } = candidate as { id?: unknown; value?: unknown };
-      return typeof id === "string" && typeof parameterValue === "string"
-        ? [{ id, value: parameterValue }]
-        : [];
-    });
-  } catch {
-    return [];
-  }
 }
 
 function boundId(value: string): string {

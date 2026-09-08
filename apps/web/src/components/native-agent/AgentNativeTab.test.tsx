@@ -2915,6 +2915,37 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText(/1M context beta: Off/)).toBeTruthy();
   });
 
+  test("does not render Cursor's pre-combined variant picker", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "select" as const,
+          id: "parameter:thinking",
+          label: "Thinking",
+          value: "adaptive",
+          options: [{ id: "adaptive", label: "Adaptive" }],
+        },
+        {
+          kind: "select" as const,
+          id: "parameter:variant",
+          label: "Variant",
+          value: "grok",
+          options: [
+            { id: "a", label: "Cursor Grok 4.6" },
+            { id: "b", label: "Cursor Grok 4.6" },
+          ],
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId="tab-cursor-no-variants" data={freshTab("cursor")} isActive />);
+
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.getByText(/Thinking: Adaptive/)).toBeTruthy();
+    expect(screen.queryByText(/Variant:/)).toBeNull();
+  });
+
   test("drops a configured speed default for a model that does not support it", async () => {
     useAgentModelCatalogStore.setState({
       cursorModels: [

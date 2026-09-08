@@ -102,6 +102,45 @@ describe("modelSelection", () => {
     const blind = { ...emptyComposer(), selectedModelId: "x", selectedReasoningId: "high" };
     expect(modelSelection(blind)).toEqual({ id: "x" });
   });
+
+  test("sends remaining model parameters without a variant bundle", () => {
+    const grok: AgentModel = {
+      ...opus,
+      id: "grok-4-6",
+      label: "Cursor Grok 4.6",
+      parameters: [
+        {
+          id: "thinking",
+          label: "Thinking",
+          kind: "select",
+          options: [{ id: "high", label: "High" }],
+          scope: "turn",
+        },
+      ],
+    };
+    expect(
+      modelSelection({
+        ...emptyComposer(),
+        models: [grok],
+        selectedModelId: "grok-4-6",
+        selectedReasoningId: "high",
+        fastModeEnabled: true,
+        // A leftover encoded variant used to replace every other axis. It must
+        // stay ignored now that the cross-product picker is gone.
+        parameterValues: {
+          thinking: "high",
+          variant: JSON.stringify([{ id: "effort", value: "low" }]),
+        },
+      }),
+    ).toEqual({
+      id: "grok-4-6",
+      params: [
+        { id: "effort", value: "high" },
+        { id: "fast", value: "true" },
+        { id: "thinking", value: "high" },
+      ],
+    });
+  });
 });
 
 describe("emptyComposer", () => {

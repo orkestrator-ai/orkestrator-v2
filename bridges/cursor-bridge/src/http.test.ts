@@ -41,6 +41,13 @@ afterEach(async () => {
  * native client is the same escape hatch the ACP bridge's harness uses.
  */
 const nativeFetch = Bun.fetch;
+const defaultPolicy = {
+  id: "interactive-host",
+  sandbox: "none",
+  approvals: "auto-approve",
+  projectResources: false,
+  networkAccess: "full",
+} as const;
 
 async function call(
   path: string,
@@ -58,7 +65,10 @@ async function call(
 }
 
 async function createSession(body: Record<string, unknown> = {}): Promise<SessionState> {
-  const response = await call("/session/create", { method: "POST", body: JSON.stringify(body) });
+  const response = await call("/session/create", {
+    method: "POST",
+    body: JSON.stringify({ policy: defaultPolicy, ...body }),
+  });
   expect(response.status).toBe(201);
   const payload = (await response.json()) as { sessionId: string };
   return sessions.get(payload.sessionId)!;
@@ -147,7 +157,12 @@ describe("session creation", () => {
   test("returns the shared session projection", async () => {
     const response = await call("/session/create", {
       method: "POST",
-      body: JSON.stringify({ clientSessionKey: "k", model: "composer-2", mode: "plan" }),
+      body: JSON.stringify({
+        clientSessionKey: "k",
+        model: "composer-2",
+        mode: "plan",
+        policy: defaultPolicy,
+      }),
     });
     expect(response.status).toBe(201);
     const payload = (await response.json()) as Record<string, unknown>;
@@ -200,6 +215,24 @@ describe("session creation", () => {
       body: JSON.stringify({ clientSessionKey: "k".repeat(600) }),
     });
     expect(response.status).toBe(400);
+  });
+
+  test("rejects session creation without a backend execution policy", async () => {
+    const response = await call("/session/create", {
+      method: "POST",
+      body: JSON.stringify({ clientSessionKey: "missing-policy" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "policy is required" });
+  });
+
+  test("rejects session resume without a backend execution policy", async () => {
+    const response = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "cursor-agent-1" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "policy is required" });
   });
 });
 
@@ -254,6 +287,30 @@ describe("liveness routes", () => {
 });
 
 describe("prompt dispatch", () => {
+  test("carries a container policy through a read-only prompt", async () => {
+    const state = await createSession({
+      policy: {
+        id: "pipeline",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "restricted",
+      },
+    });
+    state.readOnly = true;
+    const agent = attachFake(state);
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "review", requestId: "read-only", readOnly: true }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(state.policy).toMatchObject({ sandbox: "container", networkAccess: "restricted" });
+    expect(state.readOnly).toBe(true);
+    expect(agent.sends).toHaveLength(1);
+  });
+
   test("accepts a turn, records it, and renders the streamed reply", async () => {
     const state = await createSession();
     attachFake(state, {

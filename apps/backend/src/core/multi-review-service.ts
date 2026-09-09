@@ -59,6 +59,7 @@ import {
   parseFixResult,
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   createPackagedMultiReviewerPrompt,
   createMultiReviewConsolidationPrompt,
@@ -1652,6 +1653,7 @@ export class MultiReviewService {
         reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
+      executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (_selection, resultKey) => this.workflowAgentMcp(workflow, resultKey),
       ...(this.options.workflowResults
         ? {
@@ -1964,6 +1966,7 @@ export class MultiReviewService {
           mode: "build",
           model: selection.model === "default" ? undefined : selection.model,
           effort: selection.reasoningEffort,
+          policy: await this.executionPolicy(workflow),
           interaction: {
             origin: "looped-review",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -2668,6 +2671,12 @@ export class MultiReviewService {
 
   private providerKey(workflow: MultiReviewWorkflow, selection: MultiReviewModelSelection): string {
     return `${workflow.environmentId}:${selection.agent}`;
+  }
+
+  private async executionPolicy(workflow: MultiReviewWorkflow) {
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment) throw new Error("Review environment no longer exists");
+    return resolveEnvironmentExecutionPolicy(environment, "looped-review");
   }
 
   private async provider(

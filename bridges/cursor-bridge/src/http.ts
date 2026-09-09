@@ -173,11 +173,10 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
-    const state = await createSession(
-      clientSessionKey,
-      parseComposerPatch(body),
-      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
-    );
+    if (!isNativeAgentExecutionPolicy(body.policy)) {
+      throw new HttpError(400, "policy is required");
+    }
+    const state = await createSession(clientSessionKey, parseComposerPatch(body), body.policy);
     json(response, 201, publicSession(state));
     return true;
   }
@@ -185,11 +184,10 @@ async function routeGlobal(
     const body = await readJson(request);
     const agentId = readBoundedString(body.sessionId, 1_024, "sessionId");
     if (!agentId) throw new HttpError(400, "sessionId is required");
-    const state = await resumeSession(
-      agentId,
-      parseComposerPatch(body),
-      isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
-    );
+    if (!isNativeAgentExecutionPolicy(body.policy)) {
+      throw new HttpError(400, "policy is required");
+    }
+    const state = await resumeSession(agentId, parseComposerPatch(body), body.policy);
     json(response, 201, publicSession(state));
     return true;
   }

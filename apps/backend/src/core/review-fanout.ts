@@ -45,6 +45,7 @@ import {
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   AmbiguousPromptDispatchError,
   readProviderStatus,
@@ -568,6 +569,8 @@ export interface ReviewFanoutHost {
   /** Pane title for one reviewer's session. */
   sessionLabelFor(reviewer: ReviewerRecord, index: number): string;
   provider(selection: ReviewerModelSelection): Promise<BuildPipelineProvider>;
+  /** Trusted policy resolved from the persisted environment, never provider defaults. */
+  executionPolicy(): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(
     selection: ReviewerModelSelection,
     resultKey: string,
@@ -752,6 +755,7 @@ export class ReviewFanoutRunner {
           ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
           model: reviewerModel(reviewer),
           effort: reviewer.reasoningEffort,
+          policy: await host.executionPolicy(),
           interaction: this.interactionContext(reviewer, sessionKey),
         },
       );

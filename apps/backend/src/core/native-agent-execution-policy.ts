@@ -88,6 +88,18 @@ export function resolveNativeAgentExecutionPolicy(
   );
 }
 
+/** Resolve a workflow policy from the complete persisted environment record. */
+export function resolveEnvironmentExecutionPolicy(
+  environment: Pick<Environment, "environmentType" | "networkAccessMode" | "agentSettings">,
+  origin: AgentInteractionOrigin,
+): NativeAgentExecutionPolicy {
+  return resolveNativeAgentExecutionPolicy(
+    environment,
+    origin,
+    environment.agentSettings?.executionPolicy,
+  );
+}
+
 /**
  * Keep the network axis of a policy something a provider can actually apply.
  *

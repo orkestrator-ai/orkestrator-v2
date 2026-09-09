@@ -46,6 +46,7 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   workflowResultInstruction,
   type WorkflowResultKind,
@@ -90,6 +91,7 @@ const FANOUT_LABEL = "Multi-model review";
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
   provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
+  executionPolicy(pipeline: BuildPipeline): Promise<NativeAgentExecutionPolicy>;
   save(pipeline: BuildPipeline): Promise<void>;
   stepSettings(
     pipeline: BuildPipeline,
@@ -189,6 +191,7 @@ export class BuildPipelineReviewFanout {
       sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
       sessionLabelFor: (_reviewer, index) => `Review ${index + 1}`,
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
+      executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (_selection, resultKey) => this.deps.agentMcp?.(pipeline, resultKey),
       ...(this.deps.workflowResults && this.deps.agentMcp
         ? {
@@ -412,6 +415,7 @@ export class BuildPipelineReviewFanout {
         mode: "plan",
         model: step.model,
         effort: step.effort,
+        policy: await this.deps.executionPolicy(pipeline),
         interaction: {
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,

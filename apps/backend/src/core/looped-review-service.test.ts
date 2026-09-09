@@ -120,6 +120,7 @@ class FakeProvider implements BuildPipelineProvider {
   readonly registrations: Array<{ sessionId: string; interaction?: ProviderSessionRegistration }> =
     [];
   readonly sessions = new Map<string, string>();
+  readonly creates: Array<ProviderCreateSessionOptions | undefined> = [];
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
   statusRejectCount = 0;
@@ -190,6 +191,7 @@ class FakeProvider implements BuildPipelineProvider {
     _label: string,
     options?: ProviderCreateSessionOptions,
   ): Promise<string> {
+    this.creates.push(options);
     const key = options?.clientSessionKey ?? `${phase}:${this.sessions.size}`;
     const existing = this.sessions.get(key);
     if (existing) return existing;
@@ -648,6 +650,14 @@ describe("LoopedReviewService", () => {
       expect(finished.phase).toBe("completed");
       expect(finished.pr.url).toBe("https://github.com/acme/repo/pull/7");
       expect(provider.sent).toHaveLength(4);
+      expect(provider.creates).not.toHaveLength(0);
+      for (const options of provider.creates) {
+        expect(options?.policy).toMatchObject({
+          id: "pipeline",
+          sandbox: "none",
+          networkAccess: "full",
+        });
+      }
       expect(await service.providerSession(started.id)).toEqual({
         providerSessionId: finished.sessions.at(-1)!.providerSessionId,
       });
@@ -664,6 +674,27 @@ describe("LoopedReviewService", () => {
         });
         expect(typeof registration.interaction?.fence).toBe("string");
       }
+    });
+  });
+
+  test("execution policy fails closed when the review environment was deleted", async () => {
+    await harness(async (service, storage) => {
+      const started = await service.start({
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
+      });
+      await storage.removeEnvironment("env-1");
+      const internal = service as unknown as {
+        executionPolicy(workflow: LoopedReviewWorkflow): Promise<unknown>;
+      };
+
+      await expect(internal.executionPolicy(started)).rejects.toThrow(
+        "Review environment no longer exists",
+      );
     });
   });
 

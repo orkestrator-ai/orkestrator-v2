@@ -417,6 +417,18 @@ describe("build pipeline multi-model review", () => {
       expect(reviewLabels).toContain("Review 1");
       expect(reviewLabels).toContain("Review 2");
       expect(reviewLabels).toContain("Review · Consolidation");
+      const reviewCreates = provider.created.filter((entry) => entry.phase === "review");
+      expect(reviewCreates).not.toHaveLength(0);
+      for (const created of reviewCreates) {
+        expect(created.options?.policy).toMatchObject({
+          id: "pipeline",
+          sandbox: "none",
+          networkAccess: "full",
+        });
+      }
+      expect(
+        reviewCreates.find((entry) => entry.label === "Review · Consolidation")?.options?.policy,
+      ).toMatchObject({ id: "pipeline" });
       const reviewerPrompts = provider.sent.filter(
         (entry) =>
           entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),

@@ -49,6 +49,8 @@ import {
   withUnattendedPolicy,
 } from "./build-pipeline-service-helpers.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
 export abstract class BuildPipelineServiceBase {
   protected timer: ReturnType<typeof setInterval> | null = null;
@@ -217,6 +219,16 @@ export abstract class BuildPipelineServiceBase {
 
   protected async refreshWorkflowRollout(): Promise<void> {
     await this.workflowRollout.refresh();
+  }
+
+  /** Background sessions receive the same trusted environment policy as native tabs. */
+  protected async executionPolicy(
+    pipeline: BuildPipeline,
+    origin: "build-pipeline" | "looped-review" = "build-pipeline",
+  ): Promise<NativeAgentExecutionPolicy> {
+    const environment = await this.storage.getEnvironment(pipeline.environmentId);
+    if (!environment) throw new Error("Build environment no longer exists");
+    return resolveEnvironmentExecutionPolicy(environment, origin);
   }
 
   protected async consumeWorkflowResult(

@@ -137,8 +137,10 @@ const {
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
 const { sessions } = await import("./state.js");
+const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 
 beforeEach(() => {
+  resetPlanAccountWindowsForTests();
   sessions.clear();
   process.env.CURSOR_API_KEY = "test-key";
   listed = { items: [] };

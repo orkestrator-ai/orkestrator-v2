@@ -25,6 +25,7 @@ import { schedulePersist } from "./persistence.js";
 import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
 import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
 import { boundTranscript } from "./transcript.js";
+import { mergeAccountWindows, peekPlanAccountWindows, schedulePlanAccountRefresh } from "./plan-usage.js";
 import {
   type JsonObject,
   type PromptJournalEntry,
@@ -453,6 +454,7 @@ function recordUsage(
   // overwrites `sessionTokens` with the new cumulative, so a retry that
   // recomputed this from the session would compare against its own answer.
   scheduleAgentUsageRefresh(state, sessionTokenFloor);
+  schedulePlanAccountRefresh();
 }
 
 /**
@@ -558,8 +560,8 @@ export async function refreshAgentUsage(
   const nextSessionTokenFloor = Math.max(current.sessionTokenFloor ?? 0, sessionTokens ?? 0);
   const nextCostUsd = costUsd ?? current.costUsd;
   const reportTurns = normalizeAgentUsageRuns(report.runs, current.turns);
-  const account = stale
-    ? current.account
+  const agentTotal = stale
+    ? current.account?.filter((entry) => entry.window === "agent")
     : [
         {
           window: "agent",
@@ -568,6 +570,7 @@ export async function refreshAgentUsage(
           ...(chargedCents === undefined ? {} : { spendUsd: chargedCents / 100 }),
         },
       ];
+  const account = mergeAccountWindows(agentTotal, peekPlanAccountWindows() ?? current.account);
   const publicChanged =
     nextSessionTokens !== current.sessionTokens ||
     nextCostUsd !== current.costUsd ||

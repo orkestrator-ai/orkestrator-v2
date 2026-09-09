@@ -97,7 +97,7 @@ describe("ReviewValidationStatus", () => {
     expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
     expect(notes.hasAttribute("open")).toBe(false);
-    expect(notes.querySelector(".text-amber-500")).toBeNull();
+    expect(notes.querySelector(".text-amber-500") === null).toBe(true);
     fireEvent.click(screen.getByText("Notes"));
     expect(screen.getByText("No CI workflows are present.")).toBeTruthy();
   });

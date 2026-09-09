@@ -2384,6 +2384,129 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("does not show dispatch recovery while an ordinary send is still in flight", async () => {
+    const tabId = "tab-in-flight-dispatch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "accepted", requestId: input.requestId };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    const requestId = dispatchNativeAgentIntentMock.mock.calls[0]![0].requestId;
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        turn: { phase: "running" },
+        recoverableDispatch: {
+          requestId,
+          createdAt: "2026-09-09T19:12:51.000Z",
+        },
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    expect(screen.queryByText(/did not confirm your last message/i) === null).toBe(true);
+
+    releaseDispatch();
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+  });
+
+  test("shows dispatch recovery once the send settles without an acknowledgement", async () => {
+    const tabId = "tab-unconfirmed-dispatch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "unknown", requestId: input.requestId, error: "The transport failed" };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    // The backend parked the request id before it reached the provider, so every
+    // projection read from here on carries the record — including the refresh
+    // the failing send performs on its way out.
+    const requestId = dispatchNativeAgentIntentMock.mock.calls[0]![0].requestId;
+    const parked = {
+      requestId,
+      createdAt: "2026-09-09T19:12:51.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      recoverableDispatch: parked,
+    }));
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        turn: { phase: "running" },
+        recoverableDispatch: parked,
+      });
+    });
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+
+    // Settling without an answer is exactly what turns the parked record into a
+    // choice the user can act on, so the card must arrive with it.
+    releaseDispatch();
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+    expect(screen.getByText(/did not confirm your last message/i)).toBeTruthy();
+  });
+
+  test("keeps the recovery card mounted and disabled while a retry is running", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      recoverableDispatch: {
+        requestId: "recoverable-slow-retry",
+        createdAt: "2026-09-09T19:12:51.000Z",
+      },
+    }));
+    let releaseRetry!: () => void;
+    const retryGate = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    retryNativeAgentDispatchMock.mockImplementationOnce(async () => {
+      await retryGate;
+      return { outcome: "accepted" as const, requestId: "recoverable-slow-retry" };
+    });
+
+    render(<AgentNativeTab tabId="tab-slow-retry" data={identity("codex")} isActive />);
+    const retry = await screen.findByRole("button", { name: "Retry send" });
+    fireEvent.click(retry);
+
+    // The retry raises the same dispatch flag an ordinary send does. Hiding the
+    // card on that flag would leave the click with no visible effect at all,
+    // because a parked record also hides the send button.
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
+    expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/did not confirm your last message/i)).toBeTruthy();
+    fireEvent.click(retry);
+
+    releaseRetry();
+    await waitFor(() => expect(retryNativeAgentDispatchMock).toHaveBeenCalledTimes(1));
+  });
+
   test("clears a submitted draft when the transcript confirms a dispatch whose response was lost", async () => {
     const tabId = "tab-transcript-confirmed-send";
     const sessionKey = createSessionKey("env-1", tabId);
@@ -5768,6 +5891,62 @@ describe("AgentNativeTab", () => {
       performNativeAgentSessionActionMock.mockImplementation(async () => ({
         outcome: "applied" as const,
       }));
+    });
+
+    test("withholds steer recovery until the steer itself has settled", async () => {
+      seedProjection({ phase: "running", actions: { steer: true } });
+      const tabId = "tab-steer-in-flight";
+      const sessionKey = createSessionKey("env-1", tabId);
+      let releaseSteer!: () => void;
+      const steerGate = new Promise<void>((resolve) => {
+        releaseSteer = resolve;
+      });
+      performNativeAgentSessionActionMock.mockImplementationOnce((async () => {
+        await steerGate;
+        return { outcome: "unknown" as const };
+      }) as never);
+
+      render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "/steer narrow the scope" } });
+      await waitFor(() =>
+        expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+          "/steer narrow the scope",
+        ),
+      );
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
+
+      // The steer record is durable before the provider can queue the text, so
+      // the active-turn poll exposes it mid-flight exactly as an ordinary
+      // dispatch does. A steer runs through the session action rather than the
+      // dispatch call, so the send flag alone would not cover this.
+      const parked = {
+        requestId: "recoverable-steer-1",
+        createdAt: "2026-09-09T19:12:51.000Z",
+        kind: "steer" as const,
+      };
+      seedProjection({
+        phase: "running",
+        actions: { steer: true },
+        recoverableDispatch: parked,
+      });
+      const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+      act(() => {
+        useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+          ...current,
+          revision: current.revision + 1,
+          recoverableDispatch: parked,
+        });
+      });
+      expect(screen.queryByRole("button", { name: "Retry steer" }) === null).toBe(true);
+      expect(
+        screen.queryByText(/has not confirmed delivery of the steering instruction/i) === null,
+      ).toBe(true);
+
+      releaseSteer();
+      expect(await screen.findByRole("button", { name: "Retry steer" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
     });
 
     test("keeps /steer an ordinary prompt for a provider that cannot steer", async () => {

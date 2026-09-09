@@ -261,6 +261,8 @@ describe("thread lifecycle", () => {
   test("passes a tab-scoped MCP header without overriding ordinary approvals", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),
+      "thread/resume": () => ({ thread: thread("t1") }),
+      "thread/fork": () => ({ thread: thread("t2") }),
       "turn/start": () => ({ turn: { id: "turn-1" } }),
     });
     const config: EngineTurnConfig = {
@@ -269,13 +271,18 @@ describe("thread lifecycle", () => {
     };
     await h.engine.start();
     const started = await h.engine.startThread({ config });
+    await h.engine.resumeThread("t1", { config, includeTurns: true });
+    await h.engine.forkThread("t1", config);
     await h.engine.startTurn({
       handle: started.handle,
       input: [{ type: "text", text: "work" }],
       config,
     });
 
-    for (const method of ["thread/start", "turn/start"]) {
+    // Every entry point that can re-open a thread sends the whole server
+    // table. A leaf-only override on any one of them would silently fall back
+    // to the process-wide bearer token this session is not scoped to.
+    for (const method of ["thread/start", "thread/resume", "thread/fork", "turn/start"]) {
       expect(
         h.child().requests.find((request) => request.method === method)?.params.config,
       ).toEqual({

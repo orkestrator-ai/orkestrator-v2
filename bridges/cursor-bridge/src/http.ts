@@ -186,6 +186,19 @@ async function routeGlobal(
       body.policy,
       readOnly,
     );
+    // Creation is idempotent by client key, so this can be a session that
+    // already exists under the other boundary. Move it rather than answering
+    // 201 with the old one: an attach would otherwise warm an agent the caller
+    // has just asked not to have. A busy session cannot be moved underneath
+    // its own turn, and says so.
+    if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
+      if (state.status === "running" || state.dispatching) {
+        throw new HttpError(409, "Session is already running");
+      }
+      await detachAgent(state);
+      state.readOnly = readOnly;
+      schedulePersist();
+    }
     json(response, 201, publicSession(state));
     return true;
   }

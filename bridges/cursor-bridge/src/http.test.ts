@@ -196,6 +196,38 @@ describe("session creation", () => {
     expect(await response.json()).toEqual({ error: "readOnly must be a boolean" });
   });
 
+  test("recreating an idle session under a stricter boundary drops its warm agent", async () => {
+    const state = await createSession({ clientSessionKey: "tab-1", readOnly: false });
+    attachFake(state);
+
+    const again = await createSession({ clientSessionKey: "tab-1", readOnly: true });
+
+    // Creation is idempotent by client key, so this is the same session.
+    expect(again).toBe(state);
+    expect(again.readOnly).toBe(true);
+    expect(again.agent).toBeNull();
+  });
+
+  test("refuses to move the read-only boundary of a running session", async () => {
+    const state = await createSession({ clientSessionKey: "tab-2", readOnly: false });
+    attachFake(state);
+    state.status = "running";
+
+    const response = await call("/session/create", {
+      method: "POST",
+      body: JSON.stringify({
+        policy: defaultPolicy,
+        clientSessionKey: "tab-2",
+        readOnly: true,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Session is already running" });
+    expect(state.readOnly).toBe(false);
+    expect(state.agent).not.toBeNull();
+  });
+
   test("status exposes token-delta progress while the first model call is running", async () => {
     const state = await createSession({ model: "grok-4.6" });
     state.status = "running";

@@ -89,6 +89,53 @@ describe("ACP bridge", () => {
     );
   });
 
+  test("preserves the read-only boundary across a bridge restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const argsFile = resolve(await temporaryDirectory(), "args.log");
+    const env = {
+      ACP_PROVIDER: "grok",
+      ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
+      FAKE_ACP_ARGS_FILE: argsFile,
+    };
+    const first = await spawnBridge({ stateDirectory, env });
+    // Deliberately permissive: only the review boundary can be what keeps
+    // `--always-approve` off the restored child's command line.
+    const policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "restricted",
+    } as const;
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "read-only-restart", policy, readOnly: true }),
+    }).then((response) => response.json())) as { id: string };
+    await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8").catch(() => ""),
+      (value) => value.includes('"readOnly":true'),
+    );
+    await stopChild(first.child);
+
+    const second = await spawnBridge({ stateDirectory, env });
+    expect(
+      (
+        await nativeFetch(`${second.base}/session/${created.id}/attach`, {
+          method: "POST",
+          headers: second.headers,
+        })
+      ).status,
+    ).toBe(200);
+    const invocations = await waitFor(
+      () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.trim().split("\n").length >= 2,
+    );
+    expect(JSON.parse(invocations.trim().split("\n").at(-1)!) as string[]).not.toContain(
+      "--always-approve",
+    );
+  });
+
   test("restores legacy ACP state with a fail-closed policy", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(

@@ -95,6 +95,9 @@ export async function createSession(
     const existing = existingId ? sessions.get(existingId) : undefined;
     if (existing) {
       if (policy) existing.policy = resolveCursorExecutionPolicy(policy);
+      // The boundary of a session that already exists is moved by the caller
+      // of this function, which owns the HTTP status a conflicting move
+      // deserves. `readOnly` here only seeds a session being created.
       return existing;
     }
     const inFlight = sessionCreations.get(clientSessionKey);

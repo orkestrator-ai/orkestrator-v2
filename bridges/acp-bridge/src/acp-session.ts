@@ -324,7 +324,23 @@ export async function createSession(
     const existingId = clientSessionKeys.get(clientSessionKey);
     if (existingId) {
       const existing = sessions.get(existingId);
-      if (existing) return existing;
+      if (existing) {
+        // Creation is idempotent by client key, so a retry under a different
+        // review boundary must move the session rather than silently keep the
+        // looser one. A boundary that did not change closes nothing, and one
+        // that did cannot close a child in the middle of its own turn.
+        if (typeof spawnOptions.readOnly === "boolean") {
+          if (
+            (existing.readOnly === true) !== spawnOptions.readOnly &&
+            (existing.status === "running" || existing.dispatching)
+          ) {
+            throw new HttpError(409, "Session is already running");
+          }
+          await setSessionReadOnly(existing, spawnOptions.readOnly);
+          schedulePersist();
+        }
+        return existing;
+      }
     }
     const pending = sessionCreations.get(clientSessionKey);
     if (pending) return pending;
@@ -355,7 +371,13 @@ export async function createSessionReserved(
   const child = new AcpProcess({
     model: spawnOptions.model,
     effort: spawnOptions.effort ?? spawnOptions.reasoningId,
-    policy: spawnOptions.policy,
+    // A read-only session spawns its first child under the review boundary.
+    // `setSessionReadOnly` would otherwise have to close a permissive child
+    // that was already talking to the agent.
+    policy: effectiveTurnExecutionPolicy({
+      policy: spawnOptions.policy,
+      readOnly: spawnOptions.readOnly,
+    }),
   });
   try {
     await child.initialize(signal);
@@ -403,6 +425,7 @@ export async function createSessionReserved(
       transcriptTruncated: false,
       sessionConfig,
       ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
+      ...(typeof spawnOptions.readOnly === "boolean" ? { readOnly: spawnOptions.readOnly } : {}),
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.

@@ -143,11 +143,19 @@ export async function route(
       return json(response, 400, { error: "clientSessionKey is too long" });
     }
     const clientSessionKey = rawClientSessionKey || undefined;
+    const createReadOnly = body.readOnly;
+    if (createReadOnly !== undefined && typeof createReadOnly !== "boolean") {
+      return json(response, 400, { error: "readOnly must be a boolean" });
+    }
     const spawnOptions = parseComposerPatch(body) ?? {};
+    // The child is spawned inside `createSession`, so the review boundary has
+    // to be known here. Learning it from the first prompt instead would start
+    // an agent under the permissive policy and immediately replace it.
     const state = await createSession(clientSessionKey, clientSignal, {
       ...spawnOptions,
       model: spawnOptions.modelId,
       effort: spawnOptions.reasoningId,
+      ...(typeof createReadOnly === "boolean" ? { readOnly: createReadOnly } : {}),
       ...(() => {
         // Process authority wins: a coordinator bridge serves one conversation.
         const policy = effectiveExecutionPolicy(

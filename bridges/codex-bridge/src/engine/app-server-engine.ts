@@ -988,18 +988,21 @@ export class AppServerEngine implements CodexEngine {
       ...(config.agentMcp
         ? {
             config: {
-              "mcp_servers.orkestrator.url": config.agentMcp.url,
-              "mcp_servers.orkestrator.http_headers": {
-                Authorization: `Bearer ${config.agentMcp.token}`,
+              // Replace the complete server table. The app-server process may
+              // have inherited an environment-wide bearer_token_env_var for
+              // this name, and configured bearer tokens take precedence over
+              // Authorization headers. Dotted leaf overrides would therefore
+              // keep authenticating as the broader environment capability.
+              "mcp_servers.orkestrator": {
+                url: config.agentMcp.url,
+                http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
+                required: false,
+                startup_timeout_sec: 3,
+                // `approve` bypasses the thread's approval policy, so reserve it
+                // for an explicitly auto-approved policy or the trusted
+                // coordinator profile. Ask/deny must retain Codex's defaults.
+                ...(approveAgentMcpTools ? { default_tools_approval_mode: "approve" } : {}),
               },
-              "mcp_servers.orkestrator.required": false,
-              "mcp_servers.orkestrator.startup_timeout_sec": 3,
-              // `approve` bypasses the thread's approval policy, so reserve it
-              // for an explicitly auto-approved policy or the trusted
-              // coordinator profile. Ask/deny must retain Codex's defaults.
-              ...(approveAgentMcpTools
-                ? { "mcp_servers.orkestrator.default_tools_approval_mode": "approve" }
-                : {}),
             },
           }
         : {}),

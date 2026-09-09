@@ -173,10 +173,19 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
+    const readOnly = body.readOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      throw new HttpError(400, "readOnly must be a boolean");
+    }
     if (!isNativeAgentExecutionPolicy(body.policy)) {
       throw new HttpError(400, "policy is required");
     }
-    const state = await createSession(clientSessionKey, parseComposerPatch(body), body.policy);
+    const state = await createSession(
+      clientSessionKey,
+      parseComposerPatch(body),
+      body.policy,
+      readOnly,
+    );
     json(response, 201, publicSession(state));
     return true;
   }

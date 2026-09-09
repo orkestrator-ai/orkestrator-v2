@@ -179,6 +179,23 @@ describe("session creation", () => {
     });
   });
 
+  test("records the read-only boundary before the session is attached", async () => {
+    const state = await createSession({ mode: "plan", readOnly: true });
+
+    expect(state.readOnly).toBe(true);
+    expect(state.agent).toBeNull();
+  });
+
+  test("rejects a malformed read-only boundary at session creation", async () => {
+    const response = await call("/session/create", {
+      method: "POST",
+      body: JSON.stringify({ policy: defaultPolicy, readOnly: "yes" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "readOnly must be a boolean" });
+  });
+
   test("status exposes token-delta progress while the first model call is running", async () => {
     const state = await createSession({ model: "grok-4.6" });
     state.status = "running";
@@ -289,6 +306,7 @@ describe("liveness routes", () => {
 describe("prompt dispatch", () => {
   test("carries a container policy through a read-only prompt", async () => {
     const state = await createSession({
+      readOnly: true,
       policy: {
         id: "pipeline",
         sandbox: "container",
@@ -297,7 +315,6 @@ describe("prompt dispatch", () => {
         networkAccess: "restricted",
       },
     });
-    state.readOnly = true;
     const agent = attachFake(state);
 
     const response = await call(`/session/${state.id}/prompt`, {

@@ -279,10 +279,12 @@ describe("thread lifecycle", () => {
       expect(
         h.child().requests.find((request) => request.method === method)?.params.config,
       ).toEqual({
-        "mcp_servers.orkestrator.url": "http://127.0.0.1:4567/mcp",
-        "mcp_servers.orkestrator.http_headers": { Authorization: "Bearer tab-secret" },
-        "mcp_servers.orkestrator.required": false,
-        "mcp_servers.orkestrator.startup_timeout_sec": 3,
+        "mcp_servers.orkestrator": {
+          url: "http://127.0.0.1:4567/mcp",
+          http_headers: { Authorization: "Bearer tab-secret" },
+          required: false,
+          startup_timeout_sec: 3,
+        },
       });
     }
   });
@@ -314,9 +316,8 @@ describe("thread lifecycle", () => {
         .requests.find((request) => request.method === "thread/start")!.params;
       expect(params.approvalPolicy).toBe(approvalPolicy);
       expect(
-        (params.config as Record<string, unknown>)[
-          "mcp_servers.orkestrator.default_tools_approval_mode"
-        ],
+        (params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+          ?.default_tools_approval_mode,
       ).toBeUndefined();
     },
   );
@@ -340,9 +341,8 @@ describe("thread lifecycle", () => {
 
     const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
     expect(
-      (params.config as Record<string, unknown>)[
-        "mcp_servers.orkestrator.default_tools_approval_mode"
-      ],
+      (params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+        ?.default_tools_approval_mode,
     ).toBe("approve");
   });
 
@@ -380,9 +380,8 @@ describe("thread lifecycle", () => {
       const params = h.child().requests.find((request) => request.method === method)!.params;
       expect(params.sandbox).toBeUndefined();
       expect(
-        (params.config as Record<string, unknown>)[
-          "mcp_servers.orkestrator.default_tools_approval_mode"
-        ],
+        (params.config as Record<string, Record<string, unknown>>)["mcp_servers.orkestrator"]
+          ?.default_tools_approval_mode,
       ).toBe("approve");
     }
   });

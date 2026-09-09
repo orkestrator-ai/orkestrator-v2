@@ -45,6 +45,7 @@ describe("round trip", () => {
   test("restores the transcript, composer selection and client key", async () => {
     const state = newSessionState("client-key");
     state.agentId = "agent-1";
+    state.readOnly = true;
     state.composer = { ...state.composer, selectedModelId: "composer-2.5", selectedModeId: "plan" };
     state.usage = {
       turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
@@ -72,6 +73,7 @@ describe("round trip", () => {
 
     const restored = sessions.get(state.id)!;
     expect(restored.agentId).toBe("agent-1");
+    expect(restored.readOnly).toBe(true);
     expect(restored.clientSessionKey).toBe("client-key");
     expect(clientSessionKeys.get("client-key")).toBe(state.id);
     expect(restored.messages).toHaveLength(1);

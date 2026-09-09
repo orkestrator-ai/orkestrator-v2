@@ -30,6 +30,7 @@ import { describe, test, expect } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlRpcClient } from "./jsonl-rpc-client.js";
@@ -56,7 +57,12 @@ interface LiveSession {
 
 /** Boots a real app-server against a throwaway CODEX_HOME and workspace. */
 async function boot(
-  options: { copyAuth?: boolean; coordinator?: boolean; extraArgs?: string[] } = {},
+  options: {
+    copyAuth?: boolean;
+    coordinator?: boolean;
+    extraArgs?: string[];
+    extraEnv?: Record<string, string>;
+  } = {},
 ): Promise<LiveSession> {
   const codexHome = await mkdtemp(join(tmpdir(), "ork-live-home-"));
   const workspace = await mkdtemp(join(tmpdir(), "ork-live-ws-"));
@@ -92,7 +98,7 @@ async function boot(
   args.push(...(options.extraArgs ?? []));
   const child = spawn(binary, args, {
     cwd: workspace,
-    env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
+    env: { ...process.env, ...options.extraEnv, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: false,
   });
@@ -138,81 +144,101 @@ async function waitForNotification(
 interface McpMutationProbe {
   url: string;
   called: Promise<void>;
+  authorized: Promise<string>;
   stop: () => Promise<void>;
 }
 
-function startMcpMutationProbe(): McpMutationProbe {
+async function startMcpMutationProbe(expectedAuthorization?: string): Promise<McpMutationProbe> {
   let markCalled!: () => void;
+  let markAuthorized!: (authorization: string) => void;
   const called = new Promise<void>((resolve) => {
     markCalled = resolve;
   });
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      if (request.method !== "POST") return new Response(null, { status: 405 });
-      const message = (await request.json()) as {
-        id?: string | number;
-        method?: string;
-        params?: Record<string, unknown>;
-      };
-      if (message.id === undefined) return new Response(null, { status: 202 });
+  const authorized = new Promise<string>((resolve) => {
+    markAuthorized = resolve;
+  });
+  const server = createServer(async (request, response) => {
+    if (request.method !== "POST") {
+      response.writeHead(405).end();
+      return;
+    }
+    const authorization = request.headers.authorization ?? "";
+    if (expectedAuthorization && authorization !== expectedAuthorization) {
+      response.writeHead(401).end();
+      return;
+    }
+    markAuthorized(authorization);
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      id?: string | number;
+      method?: string;
+      params?: Record<string, unknown>;
+    };
+    if (message.id === undefined) {
+      response.writeHead(202).end();
+      return;
+    }
 
-      let result: Record<string, unknown>;
-      switch (message.method) {
-        case "initialize":
-          result = {
-            protocolVersion: String(message.params?.protocolVersion ?? "2025-06-18"),
-            capabilities: { tools: {} },
-            serverInfo: { name: "orkestrator-approval-probe", version: "1.0.0" },
-          };
-          break;
-        case "tools/list":
-          result = {
-            tools: [
-              {
-                name: "mutating_probe",
-                description: "Records that Codex dispatched this mutating test tool.",
-                inputSchema: { type: "object", properties: {}, additionalProperties: false },
-                annotations: { readOnlyHint: false },
-              },
-            ],
-          };
-          break;
-        case "tools/call":
-          if (message.params?.name !== "mutating_probe") {
-            return Response.json(
-              {
-                jsonrpc: "2.0",
-                id: message.id,
-                error: { code: -32601, message: "unknown tool" },
-              },
-              { status: 200 },
-            );
-          }
-          markCalled();
-          result = { content: [{ type: "text", text: "probe called" }] };
-          break;
-        default:
-          return Response.json(
+    let result: Record<string, unknown>;
+    switch (message.method) {
+      case "initialize":
+        result = {
+          protocolVersion: String(message.params?.protocolVersion ?? "2025-06-18"),
+          capabilities: { tools: {} },
+          serverInfo: { name: "orkestrator-approval-probe", version: "1.0.0" },
+        };
+        break;
+      case "tools/list":
+        result = {
+          tools: [
             {
+              name: "mutating_probe",
+              description: "Records that Codex dispatched this mutating test tool.",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              annotations: { readOnlyHint: false },
+            },
+          ],
+        };
+        break;
+      case "tools/call":
+        if (message.params?.name !== "mutating_probe") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
               jsonrpc: "2.0",
               id: message.id,
-              error: { code: -32601, message: "unknown method" },
-            },
-            { status: 200 },
+              error: { code: -32601, message: "unknown tool" },
+            }),
           );
-      }
-      return Response.json({ jsonrpc: "2.0", id: message.id, result }, { status: 200 });
-    },
+          return;
+        }
+        markCalled();
+        result = { content: [{ type: "text", text: "probe called" }] };
+        break;
+      default:
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            error: { code: -32601, message: "unknown method" },
+          }),
+        );
+        return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
   });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("MCP probe did not bind a port");
 
   return {
-    url: `http://${server.hostname}:${server.port}/mcp`,
+    url: `http://127.0.0.1:${address.port}/mcp`,
     called,
-    stop: async () => {
-      await server.stop(true);
-    },
+    authorized,
+    stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
 
@@ -440,6 +466,44 @@ describeLive("live thread history", () => {
 });
 
 describeLive("live config side effects", () => {
+  test("a thread-scoped MCP header replaces the inherited bearer token", async () => {
+    const scopedAuthorization = "Bearer attempt-scoped-secret";
+    const inheritedTokenEnv = "ORKESTRATOR_LIVE_MCP_BASE_TOKEN";
+    const probe = await startMcpMutationProbe(scopedAuthorization);
+    const session = await boot({
+      extraEnv: { [inheritedTokenEnv]: "environment-wide-secret" },
+      extraArgs: [
+        "-c",
+        `mcp_servers.orkestrator.url=${JSON.stringify(probe.url)}`,
+        "-c",
+        `mcp_servers.orkestrator.bearer_token_env_var=${JSON.stringify(inheritedTokenEnv)}`,
+        "-c",
+        "mcp_servers.orkestrator.required=false",
+      ],
+    });
+    try {
+      await handshake(session);
+      await session.client.request("thread/start", {
+        cwd: session.workspace,
+        sandbox: "read-only",
+        approvalPolicy: "never",
+        config: {
+          "mcp_servers.orkestrator": {
+            url: probe.url,
+            http_headers: { Authorization: scopedAuthorization },
+            required: true,
+            startup_timeout_sec: 10,
+          },
+        },
+      });
+
+      expect(await probe.authorized).toBe(scopedAuthorization);
+    } finally {
+      await session.stop();
+      await probe.stop();
+    }
+  }, 60_000);
+
   test("accepts the coordinator MCP approval mode at process and thread scope", async () => {
     const serverUrl = "http://127.0.0.1:9/mcp";
     const session = await boot({
@@ -474,7 +538,7 @@ describeLive("live config side effects", () => {
   testLiveMcpApproval(
     "dispatches a mutating MCP tool for a read-only coordinator without prompting",
     async () => {
-      const probe = startMcpMutationProbe();
+      const probe = await startMcpMutationProbe();
       const session = await boot({ copyAuth: true });
       try {
         await handshake(session);

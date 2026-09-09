@@ -87,6 +87,7 @@ function toPersisted(state: SessionState): PersistedSession {
   return {
     id: state.id,
     ...(state.policy ? { policy: state.policy } : {}),
+    ...(typeof state.readOnly === "boolean" ? { readOnly: state.readOnly } : {}),
     ...(state.clientSessionKey ? { clientSessionKey: state.clientSessionKey } : {}),
     ...(state.agentId ? { agentId: state.agentId } : {}),
     // A session that was mid-turn when the process died is not running now.
@@ -147,6 +148,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   );
   state.id = entry.id;
   if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
+  if (typeof entry.readOnly === "boolean") state.readOnly = entry.readOnly;
   if (nonBlank(entry.agentId)) state.agentId = entry.agentId;
   state.status = entry.status === "error" ? "error" : "idle";
   if (nonBlank(entry.error)) state.error = entry.error;

@@ -246,6 +246,11 @@ export function SharedNativeAgentController({
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Retry and discard both raise the session's dispatch flag, which is also what
+  // hides the recovery card. Tracking them separately keeps the card mounted and
+  // its buttons disabled for the duration, instead of making the card vanish the
+  // instant the user acts on it.
+  const [isResolvingDispatch, setIsResolvingDispatch] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
@@ -1610,12 +1615,15 @@ export function SharedNativeAgentController({
         </Button>
       </div>
     ) : null,
-    // The backend persists the request id before dispatching, so a projection
-    // can briefly expose this record while an ordinary send is still waiting
-    // for its acknowledgement. It is only a recovery choice once that send
-    // has settled without an answer; before then the controls are disabled and
-    // the warning is both premature and unactionable.
-    recoverableDispatch && !isDispatching ? (
+    // The backend persists the request id before it reaches the provider — for
+    // an ordinary prompt and for a steer alike — so a projection refresh can
+    // briefly expose this record while the submission that created it is still
+    // waiting for its acknowledgement. It is only a recovery choice once that
+    // submission has settled without an answer; before then the warning is both
+    // premature and unactionable. Resolving the record is the exception: retry
+    // and discard raise the dispatch flag themselves, and the card has to stay
+    // on screen to show that the choice the user just made is running.
+    recoverableDispatch && (isResolvingDispatch || (!isDispatching && !isSubmitting)) ? (
       <div
         key="recoverable-dispatch"
         role="alert"
@@ -1631,21 +1639,28 @@ export function SharedNativeAgentController({
             type="button"
             size="sm"
             variant="outline"
-            disabled={isDispatching}
+            disabled={isResolvingDispatch}
             onClick={() => {
-              void retryRecoverableDispatch().then((outcome) => {
-                if (outcome.outcome === "accepted") {
-                  if (recoverableDispatch.kind !== "steer") {
-                    clearConfirmedDraft(recoverableDispatch.requestId);
+              if (isResolvingDispatch) return;
+              setIsResolvingDispatch(true);
+              void retryRecoverableDispatch()
+                .then((outcome) => {
+                  if (outcome.outcome === "accepted") {
+                    if (recoverableDispatch.kind !== "steer") {
+                      clearConfirmedDraft(recoverableDispatch.requestId);
+                    }
+                    setSendError(null);
+                    setOptimisticPrompt(null);
+                  } else if (outcome.outcome === "rejected") {
+                    setSendError(outcome.error);
+                  } else {
+                    setSendError(outcome.error ?? "The dispatch is still being reconciled.");
                   }
-                  setSendError(null);
-                  setOptimisticPrompt(null);
-                } else if (outcome.outcome === "rejected") {
-                  setSendError(outcome.error);
-                } else {
-                  setSendError(outcome.error ?? "The dispatch is still being reconciled.");
-                }
-              });
+                })
+                .catch((error: unknown) => {
+                  setSendError(error instanceof Error ? error.message : String(error));
+                })
+                .finally(() => setIsResolvingDispatch(false));
             }}
           >
             {recoverableDispatch.kind === "steer" ? "Retry steer" : "Retry send"}
@@ -1654,8 +1669,10 @@ export function SharedNativeAgentController({
             type="button"
             size="sm"
             variant="ghost"
-            disabled={isDispatching}
+            disabled={isResolvingDispatch}
             onClick={() => {
+              if (isResolvingDispatch) return;
+              setIsResolvingDispatch(true);
               void discardRecoverableDispatch()
                 .then(() => {
                   setSendError(null);
@@ -1663,7 +1680,8 @@ export function SharedNativeAgentController({
                 })
                 .catch((error: unknown) => {
                   setSendError(error instanceof Error ? error.message : String(error));
-                });
+                })
+                .finally(() => setIsResolvingDispatch(false));
             }}
           >
             Discard

@@ -1717,12 +1717,12 @@ export function SharedNativeAgentController({
         projection?.messageWindow?.truncated ? (
           <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             <span>
-              {projection.messageWindow.truncationReason === "bytes"
+              {projection.messageWindow.truncationReason === "bytes" &&
+              projection.messageWindow.canLoadEarlier === false
                 ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
                 : "Earlier messages are not shown."}
             </span>
-            {projection.messageWindow.truncationReason !== "bytes" &&
-            projection.messageWindow.canLoadEarlier !== false ? (
+            {projection.messageWindow.canLoadEarlier !== false ? (
               <Button
                 type="button"
                 size="sm"

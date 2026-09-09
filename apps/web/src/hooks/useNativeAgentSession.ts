@@ -807,6 +807,41 @@ export function useNativeAgentSession<TMessage = unknown>({
       const current = providerChanged ? null : projectionRef.current;
       const hasAuthoritativeState =
         !identityChanged && sessionStateAvailabilityRef.current === "current" && current !== null;
+      /*
+       * Progressive snapshots are the live tail (100 messages / 512 KiB), not
+       * the whole conversation. Replacing the rendered list with that tail on
+       * every poll — including the refresh that runs when a hidden tab becomes
+       * active again — dropped every message that had aged out. Keep them unless
+       * the session identity or history epoch actually rotated.
+       */
+      const previousEpoch = lastTranscriptViewRef.current?.historyEpoch;
+      const historyEpochChanged =
+        previousEpoch !== undefined && previousEpoch !== value.historyEpoch;
+      const liveIds = new Set(
+        value.messages
+          .map((message) => (message as { id?: unknown })?.id)
+          .filter((id): id is string => typeof id === "string"),
+      );
+      const firstLiveId = value.messages.find(
+        (message) => typeof (message as { id?: unknown })?.id === "string",
+      ) as { id?: unknown } | undefined;
+      const firstLiveIndex =
+        current && typeof firstLiveId?.id === "string"
+          ? current.messages.findIndex(
+              (message) => (message as { id?: unknown })?.id === firstLiveId.id,
+            )
+          : -1;
+      // Ageing out is a suffix window: keep the prefix before the live tail.
+      // A rewind or other prefix window starts at an earlier message we already
+      // hold, so that prefix is empty and the omitted suffix must drop.
+      const retained =
+        current && !identityChanged && !historyEpochChanged && firstLiveIndex > 0
+          ? current.messages.slice(0, firstLiveIndex).filter((message) => {
+              const id = (message as { id?: unknown })?.id;
+              return typeof id !== "string" || !liveIds.has(id);
+            })
+          : [];
+      const messages = [...retained, ...value.messages];
       const next: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
@@ -814,7 +849,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         connection: hasAuthoritativeState ? current.connection : "connecting",
         turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
-        messages: value.messages,
+        messages,
         ...(value.messageWindow ? { messageWindow: value.messageWindow } : {}),
         interactions: hasAuthoritativeState ? current.interactions : [],
         composerControls: hasAuthoritativeState ? current.composerControls : [],

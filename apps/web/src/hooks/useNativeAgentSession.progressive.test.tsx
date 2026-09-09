@@ -148,12 +148,13 @@ function transcriptView(
 function transcriptSnapshot(
   token: string,
   messages: TestMessage[],
+  extras: Partial<NativeAgentTranscriptView<TestMessage>> = {},
 ): NativeAgentTranscriptUpdate<TestMessage> {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
-    value: transcriptView(messages),
+    value: transcriptView(messages, extras),
   };
 }
 
@@ -430,5 +431,147 @@ describe("useNativeAgentSession progressive view", () => {
 
     await waitFor(() => expect(stateCalls.length).toBeGreaterThan(0));
     expect(stateCalls[0]?.knownToken).toBeUndefined();
+  });
+
+  test("a remount keeps messages that a later live snapshot omits", async () => {
+    transcriptUpdates = [
+      () => transcriptSnapshot("transcript-1", [message("m1"), message("m2"), message("m3")]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+    const first = renderSession();
+    await waitFor(() =>
+      expect(first.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "m1",
+        "m2",
+        "m3",
+      ]),
+    );
+    first.unmount();
+
+    transcriptCalls = [];
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("m2"), message("m3")], {
+          historyComplete: false,
+          messageWindow: { limit: 2, truncated: true, canLoadEarlier: true },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    const remount = renderSession();
+    expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+    ]);
+    await waitFor(() => expect(transcriptCalls.length).toBeGreaterThan(0));
+    expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+    ]);
+  });
+
+  test("keeps messages that aged out of the live tail after a later snapshot", async () => {
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-1", [message("m1"), message("m2"), message("m3")], {
+          historyComplete: false,
+          messageWindow: { limit: 3, truncated: false, canLoadEarlier: false },
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2", "m3"]),
+    );
+
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("m2"), message("m3"), message("m4")], {
+          historyComplete: false,
+          messageWindow: {
+            limit: 3,
+            truncated: true,
+            truncationReason: "count",
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "m1",
+      "m2",
+      "m3",
+      "m4",
+    ]);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("drops retained history when the history epoch rotates", async () => {
+    transcriptUpdates = [
+      () => transcriptSnapshot("transcript-1", [message("m1"), message("m2")]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+    );
+
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("m2")], {
+          historyEpoch: "epoch-2",
+          historyComplete: false,
+          messageWindow: { limit: 1, truncated: true, canLoadEarlier: true },
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m2"]);
+  });
+
+  test("drops messages after the live tail when the provider rewinds", async () => {
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-1", [
+          message("m1"),
+          message("m2"),
+          message("m3"),
+          message("m4"),
+        ]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+      ]),
+    );
+
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [message("m1"), message("m2")], {
+          historyComplete: true,
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]);
   });
 });

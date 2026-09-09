@@ -18,7 +18,7 @@ describe("Electron packaging configuration", () => {
   test("keeps package entry points and package files aligned with the Electron build output", async () => {
     const packageJson = await readJson<{
       main: string;
-      scripts: Record<string, string>;
+      scripts?: Record<string, string>;
       devDependencies: Record<string, string>;
       build: {
         directories: { buildResources: string; output: string };
@@ -36,6 +36,14 @@ describe("Electron packaging configuration", () => {
         linux: { category: string; executableName: string; icon: string };
       };
     }>("package.json");
+    const miseConfig = Bun.TOML.parse(await fs.readFile("mise.toml", "utf8")) as {
+      tasks: Record<string, { run?: string | string[] }>;
+    };
+    const tasks = miseConfig.tasks;
+    const taskCommands = (name: string) => {
+      const run = tasks[name]?.run;
+      return Array.isArray(run) ? run.join("\n") : (run ?? "");
+    };
     const electronTsconfig = await readJson<{
       compilerOptions: { outDir: string; rootDir: string };
       include: string[];
@@ -54,20 +62,21 @@ describe("Electron packaging configuration", () => {
     );
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
-    expect(packageJson.scripts.build).toContain("turbo");
-    expect(packageJson.scripts.package).toBeUndefined();
-    expect(packageJson.scripts["package:mac"]).toStartWith("bun install --frozen-lockfile && ");
-    expect(packageJson.scripts["package:mac"]).toContain("bun run download:bun");
-    expect(packageJson.scripts["package:mac"]).toContain("bun run build:all");
-    expect(packageJson.scripts["package:mac"]).toContain("electron-builder --mac --dir");
-    expect(packageJson.scripts["package:mac"]).toContain("install-packaged-app-mac.ts");
-    expect(packageJson.scripts["package:linux"]).toContain("electron-builder --linux --dir");
-    expect(packageJson.scripts["package:linux"]).toContain("install-packaged-app-linux.ts");
-    expect(packageJson.scripts["package:release"]).toContain("electron-builder.release.config.ts");
-    expect(packageJson.scripts["package:release"]).toContain("electron-builder --mac");
-    expect(packageJson.scripts.setup).not.toContain("download:binaries");
-    expect(packageJson.scripts["build:all"]).not.toContain("download:binaries");
-    expect(packageJson.scripts["docker:build"]).not.toContain("--no-cache");
+    expect(packageJson.scripts).toBeUndefined();
+    expect(taskCommands("build")).toContain("turbo");
+    expect(tasks.package).toBeUndefined();
+    expect(taskCommands("package:mac")).toContain("bun install --frozen-lockfile");
+    expect(taskCommands("package:mac")).toContain("mise run download:bun");
+    expect(taskCommands("package:mac")).toContain("mise run build:all");
+    expect(taskCommands("package:mac")).toContain("bunx electron-builder --mac --dir");
+    expect(taskCommands("package:mac")).toContain("bun scripts/install-packaged-app-mac.ts");
+    expect(taskCommands("package:linux")).toContain("bunx electron-builder --linux --dir");
+    expect(taskCommands("package:linux")).toContain("bun scripts/install-packaged-app-linux.ts");
+    expect(taskCommands("package:release")).toContain("electron-builder.release.config.ts");
+    expect(taskCommands("package:release")).toContain("bunx electron-builder --mac");
+    expect(taskCommands("setup")).not.toContain("download:binaries");
+    expect(taskCommands("build:all")).not.toContain("download:binaries");
+    expect(taskCommands("docker:build")).not.toContain("--no-cache");
     expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({
       buildResources: "apps/desktop/electron/resources",
@@ -159,10 +168,16 @@ describe("Electron packaging configuration", () => {
   });
 
   test("uses the Bun-based container image before running the simplified workspace setup", async () => {
-    const workspaceConfig = await readJson<{ setupContainer: string[] }>("orkestrator-ai.json");
+    const workspaceConfig = await readJson<{
+      setupContainer: string[];
+      setupLocal: string[];
+      run: string[];
+    }>("orkestrator-ai.json");
     const dockerfile = await fs.readFile(path.join(process.cwd(), "docker/Dockerfile"), "utf8");
 
     expect(workspaceConfig.setupContainer).toEqual(["bun install"]);
+    expect(workspaceConfig.setupLocal).toEqual(["mise run setup"]);
+    expect(workspaceConfig.run).toEqual(["mise run dev"]);
     expect(dockerfile).toMatch(/^FROM oven\/bun:/m);
   });
 

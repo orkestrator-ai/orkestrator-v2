@@ -140,7 +140,7 @@ export function main(): void {
     fail(error instanceof Error ? error.message : String(error));
   }
   if (parsedArguments.help) {
-    console.log(`Usage: bun run dev:ios [--device "iPhone 17 Pro"]
+    console.log(`Usage: mise run dev:ios [--device "iPhone 17 Pro"]
 
 Environment variables:
   ORKESTRATOR_IOS_SIMULATOR    Default simulator device name

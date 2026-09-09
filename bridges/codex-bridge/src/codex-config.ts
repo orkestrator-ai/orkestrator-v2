@@ -40,9 +40,13 @@ export function codexAppServerConfigOverrides(
 ): Record<string, string> {
   const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
   const overrides: Record<string, string> = {
-    // Codex 0.147+ negotiates the stateless MCP 2026-07-28 protocol and falls
-    // back to the 2025 era for third-party servers that have not upgraded yet.
-    "features.mcp_2026_07_28": "true",
+    // Do not force `features.mcp_2026_07_28`. Codex CLI leaves that flag off
+    // (under development). Enabling it makes app-server probe with
+    // `server/discover` / 2026-07-28 first. Third-party HTTP servers such as
+    // Paper.design reject that with JSON-RPC -32020, and Codex does not fall
+    // back to `initialize`, so they work in CLI and fail in native sessions.
+    // Orkestrator's own agent MCP is dual-era (`legacy: "stateless"`), so it
+    // still works when Codex uses the 2025 handshake.
     // V1 reads the child-only compatibility key.
     "agents.max_concurrent_threads_per_session": String(childLimit),
     // V2 prefers this root-inclusive key whenever it is present in config.toml.

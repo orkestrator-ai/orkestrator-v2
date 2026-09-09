@@ -149,7 +149,7 @@ export async function beginCursorSdkLogin(
   await mkdir(path.dirname(credentialPath), { recursive: true, mode: 0o700 });
   if (!existsSync(options.bridgeEntrypoint)) {
     throw new Error(
-      "The Cursor SDK bridge is not built. Run `bun run build:cursor-bridge` and try again.",
+      "The Cursor SDK bridge is not built. Run `mise run build:cursor-bridge` and try again.",
     );
   }
 

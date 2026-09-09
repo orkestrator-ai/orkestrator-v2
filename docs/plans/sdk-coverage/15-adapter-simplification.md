@@ -90,7 +90,7 @@ SDK's session model.
 - [ ] For each replacement, a before/after test on the same fixture showing
   identical projection output.
 - [ ] Line-count delta per bridge recorded in the PR description.
-- [ ] `bun run test` green; `bun run check` green.
+- [ ] `mise run test` green; `mise run check` green.
 
 ## Out of scope
 

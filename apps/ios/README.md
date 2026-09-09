@@ -15,13 +15,13 @@ The iOS app is a SwiftUI shell around the responsive Orkestrator web interface s
 From the repository root, build, install, and launch the default iPhone simulator with:
 
 ```bash
-bun run dev:ios
+mise run dev:ios
 ```
 
 Choose another installed simulator by name with:
 
 ```bash
-bun run dev:ios --device "iPhone 17 Pro Max"
+mise run dev:ios --device "iPhone 17 Pro Max"
 ```
 
 Alternatively:
@@ -40,7 +40,7 @@ If the active server is offline or its credential has expired, use **Switch save
 Run the native unit tests on an installed simulator with:
 
 ```bash
-bun run test:ios
+mise run test:ios
 ```
 
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

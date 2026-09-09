@@ -1388,8 +1388,8 @@ Run the relevant bridge suites with explicit test paths, then repository checks
 and the declared aggregate suite when validating the integrated change:
 
 ```bash
-bun run check
-bun run test
+mise run check
+mise run test
 ```
 
 Do not use bare root `bun test`; it does not run the declared aggregate suite.

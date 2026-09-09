@@ -252,7 +252,7 @@ start and Grok's native cache before live discovery completes.
 
 ## Agent-test credential policy
 
-`bun run dev:test` creates a profile with isolated application data, worktrees,
+`mise run dev:test` creates a profile with isolated application data, worktrees,
 runtime files, logs, Docker ownership, and an isolated replacement `HOME`. It
 also removes ambient cloud, GitHub, package-registry, Kubernetes, and similar
 credential locations from the backend environment.

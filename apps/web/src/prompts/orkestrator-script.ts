@@ -35,15 +35,16 @@ Compatibility requirements (strict):
 3. Every command must be a non-empty shell command string.
 4. Prefer arrays for \`root\`, \`setupContainer\`, and \`setupLocal\` for consistency.
 5. Keep commands idempotent and safe to run multiple times.
-6. For this repo, prefer Bun commands (for example \`bun install\`, \`bun run dev\`) instead of npm/yarn.
-7. If \`orkestrator-ai.json\` already exists, preserve useful existing commands and update safely.
+6. Prefer Bun over npm/yarn for package management (for example \`bun install\`).
+7. Take the setup and run commands from whatever the repository actually uses to expose them. If it defines tasks in \`mise.toml\`, use \`mise run <task>\`; if its commands live in \`package.json\` scripts, use \`bun run <script>\`. Do not copy the example above when the repository disagrees with it — a command that does not resolve leaves the Play/Run button broken.
+8. If \`orkestrator-ai.json\` already exists, preserve useful existing commands and update safely.
 
 Environment-specific guidance:
 ${environmentGuidance}
 - If both local and container workflows are relevant, it is valid to include both \`setupLocal\` and \`setupContainer\`.
 
 Workflow:
-1. Inspect the repository (package manager, scripts, framework, README, and existing tooling).
+1. Inspect the repository (package manager, task runner, scripts, framework, README, and existing tooling).
 2. Build a practical \`orkestrator-ai.json\` that fits this project.
 3. Write/update the file at repository root.
 4. Validate JSON syntax (for example \`jq . orkestrator-ai.json\`).

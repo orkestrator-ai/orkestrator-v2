@@ -56,10 +56,10 @@ here — fails the suite.
 Publish from the repository root:
 
 ```bash
-bun run publish:cli
+mise run publish:cli
 ```
 
 That runs `smoke:cli` first, which packs the tarball, installs it into a scratch
 project, checks the unbundled dependencies resolve from the installed layout, and
 starts and stops the backend. It needs network access, which is why it is a
-publish gate rather than part of `bun run test`.
+publish gate rather than part of `mise run test`.

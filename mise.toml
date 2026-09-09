@@ -1,2 +1,302 @@
 [tools]
 bun = "1.4.2"
+
+[tasks.dev]
+description = "Start the Electron development application"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/desktop --cache-dir .turbo"
+
+[tasks."dev:test"]
+description = "Start an isolated development test profile"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-test.ts"
+
+[tasks."dev:status"]
+description = "Inspect an isolated development test profile"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-status.ts"
+
+[tasks."dev:login"]
+description = "Authenticate an isolated development test profile"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-login.ts"
+
+[tasks."dev:stop"]
+description = "Stop an isolated development test profile"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-stop.ts"
+
+[tasks."dev:reset"]
+description = "Reset an isolated development test profile"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-reset.ts"
+
+[tasks."dev:web"]
+description = "Start the Vite frontend and standalone backend"
+run = "bunx turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend --cache-dir .turbo"
+
+[tasks."dev:web-public"]
+description = "Start the public web client"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/web-public --cache-dir .turbo"
+
+[tasks."dev:renderer"]
+description = "Start only the Electron renderer"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/web --cache-dir .turbo"
+
+[tasks."dev:ios"]
+description = "Build and launch the iOS simulator application"
+raw_args = true
+run = "bun scripts/run-ios-simulator.ts"
+
+[tasks."start:web"]
+description = "Build and start the standalone backend"
+run = "bunx turbo run start:web --cwd . --filter=@orkestrator/backend --cache-dir .turbo"
+
+[tasks."start:web-public"]
+description = "Build and start the public-web backend"
+run = "bunx turbo run start:web-public --cwd . --filter=@orkestrator/backend --cache-dir .turbo"
+
+[tasks.build]
+description = "Build the desktop application"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+
+[tasks."build:desktop"]
+description = "Build the desktop application"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+
+[tasks."build:backend"]
+description = "Build the standalone backend"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/backend --cache-dir .turbo"
+
+[tasks."build:cli"]
+description = "Build the published CLI"
+run = "bunx turbo --cwd . run build --filter=orkestrator --cache-dir .turbo"
+
+[tasks."build:renderer"]
+description = "Build the Electron renderer"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/web --cache-dir .turbo"
+
+[tasks."build:web-public"]
+description = "Build the public web client"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/web-public --cache-dir .turbo"
+
+[tasks."build:electron"]
+description = "Build the Electron application"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+
+[tasks."build:claude-bridge"]
+description = "Build the Claude bridge"
+run = "bunx turbo --cwd . run build --filter=claude-bridge --cache-dir .turbo"
+
+[tasks."build:codex-bridge"]
+description = "Build the Codex bridge"
+run = "bunx turbo --cwd . run build --filter=codex-bridge --cache-dir .turbo"
+
+[tasks."build:acp-bridge"]
+description = "Build the ACP bridge"
+run = "bunx turbo --cwd . run build --filter=acp-bridge --cache-dir .turbo"
+
+[tasks."build:pi-bridge"]
+description = "Build the Pi bridge"
+run = "bunx turbo --cwd . run build --filter=pi-bridge --cache-dir .turbo"
+
+[tasks."build:cursor-bridge"]
+description = "Build the Cursor bridge"
+run = "bunx turbo --cwd . run build --filter=cursor-bridge --cache-dir .turbo"
+
+[tasks."build:all"]
+description = "Build every workspace package"
+run = "bunx turbo --cwd . run build --cache-dir .turbo"
+
+[tasks."download:bun"]
+description = "Download the pinned Bun runtime for desktop packaging"
+run = "./scripts/download-bun.sh"
+
+[tasks."download:agent"]
+description = "Download an agent CLI artifact"
+raw_args = true
+run = "bun scripts/download-agent.ts"
+
+[tasks."download:claude"]
+description = "Download the pinned Claude CLI"
+run = "bun scripts/download-agent.ts claude"
+
+[tasks."download:opencode"]
+description = "Download the pinned OpenCode CLI"
+run = "bun scripts/download-agent.ts opencode"
+
+[tasks."download:codex"]
+description = "Download the pinned Codex CLI"
+run = "bun scripts/download-agent.ts codex"
+
+[tasks."download:grok"]
+description = "Download the pinned Grok CLI"
+run = "bun scripts/download-agent.ts grok"
+
+[tasks."download:pi"]
+description = "Download the pinned Pi CLI"
+run = "bun scripts/download-agent.ts pi"
+
+[tasks."download:binaries"]
+description = "Download the desktop-bundled runtime and agent binaries"
+run = [
+  "mise run download:bun",
+  "mise run download:claude",
+  "mise run download:opencode",
+  "mise run download:codex",
+]
+
+[tasks."codex:protocol"]
+description = "Regenerate the Codex app-server protocol"
+run = "bun scripts/generate-codex-app-server-protocol.ts"
+
+[tasks."codex:protocol:check"]
+description = "Check the Codex app-server protocol for drift"
+run = "bun scripts/generate-codex-app-server-protocol.ts --check"
+
+[tasks.setup]
+description = "Install dependencies and build every native bridge"
+run = [
+  "bun install",
+  "mise run build:claude-bridge",
+  "mise run build:codex-bridge",
+  "mise run build:acp-bridge",
+  "mise run build:pi-bridge",
+  "mise run build:cursor-bridge",
+]
+
+[tasks."pack:cli"]
+description = "Pack the CLI workspace"
+run = "bun pm pack --cwd packages/cli"
+
+[tasks."smoke:cli"]
+description = "Smoke-test the packed CLI"
+run = "bun run --cwd packages/cli smoke:pack"
+
+[tasks."publish:cli"]
+description = "Smoke-test and publish the CLI"
+run = ["mise run smoke:cli", "bun publish --cwd packages/cli --access public"]
+
+[tasks.preview]
+description = "Preview the production renderer"
+run = "bun run --cwd apps/web preview"
+
+[tasks.test]
+description = "Run the complete non-iOS test suite"
+run = "bun scripts/test-all.ts"
+
+[tasks."test:all"]
+description = "Run the complete test suite, including iOS"
+env = { ORKESTRATOR_INCLUDE_IOS = "1" }
+run = "bun scripts/test-all.ts"
+
+[tasks."test:logged"]
+description = "Run a command with bounded persistent logs"
+raw_args = true
+run = "bun scripts/run-logged.ts"
+
+[tasks."test:browser"]
+description = "Run the component browser suite"
+run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts"
+
+[tasks."test:agent:browser"]
+description = "Run agent tests in a browser"
+run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts"
+
+[tasks."test:agent:docker"]
+description = "Run the Docker agent browser fixture"
+env = { ORKESTRATOR_AGENT_TEST_DOCKER = "1" }
+run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'"
+
+[tasks."test:agent:electron"]
+description = "Run agent tests in Electron"
+run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
+
+[tasks."test:ios"]
+description = "Run the iOS unit tests"
+run = "bun scripts/test-ios.ts"
+
+[tasks."test:unit"]
+description = "Run the root unit tests"
+run = "bun test tests/unit"
+
+[tasks.typecheck]
+description = "Typecheck every workspace package"
+run = "bunx turbo --cwd . run typecheck --cache-dir .turbo"
+
+[tasks.format]
+description = "Format the repository"
+run = "bunx oxfmt ."
+
+[tasks."format:check"]
+description = "Check repository formatting"
+run = "bunx oxfmt --check ."
+
+[tasks.lint]
+description = "Lint the repository"
+run = "bunx oxlint ."
+
+[tasks."lint:fix"]
+description = "Fix auto-fixable lint findings"
+run = "bunx oxlint --fix ."
+
+[tasks.check]
+description = "Check formatting, lint, and types"
+run = ["mise run format:check", "mise run lint", "mise run typecheck"]
+
+[tasks."verify:opencode:live"]
+description = "Run live OpenCode compatibility checks"
+env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
+run = "bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts"
+
+[tasks."verify:toolchains:live"]
+description = "Verify live toolchain artifacts"
+env = { RUN_LIVE_TOOLCHAIN_ARTIFACTS = "1" }
+run = "bun scripts/verify-toolchain-artifacts.ts"
+
+[tasks."verify:packaged-backend"]
+description = "Verify the packaged backend runtime"
+run = "bun scripts/verify-packaged-backend.ts"
+
+[tasks."verify:codex:protocol"]
+description = "Strictly verify the Codex app-server protocol"
+env = { CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY = "0" }
+run = "bun scripts/generate-codex-app-server-protocol.ts --check"
+
+[tasks."docker:build"]
+description = "Build the production Docker image"
+run = "docker build -t orkestrator-v2:latest -f docker/Dockerfile ."
+
+[tasks."docker:build:dev"]
+description = "Build the development Docker image"
+raw_args = true
+run = "bun apps/desktop/scripts/dev-build-image.ts"
+
+[tasks."package:mac"]
+description = "Build and install an unpacked macOS application"
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --mac --dir",
+  "bun scripts/install-packaged-app-mac.ts",
+]
+
+[tasks."package:linux"]
+description = "Build and install an unpacked Linux application"
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --linux --dir",
+  "bun scripts/install-packaged-app-linux.ts",
+]
+
+[tasks."package:release"]
+description = "Build, sign, notarize, and install a macOS release"
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --mac --config electron-builder.release.config.ts",
+  "bun scripts/install-packaged-app-mac.ts",
+]

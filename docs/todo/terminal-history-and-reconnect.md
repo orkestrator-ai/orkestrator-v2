@@ -479,10 +479,10 @@ not only string inclusion or mocked `write()` calls.
       of archive size; reconnect must not scan or download the whole archive.
 - [x] Record measured defaults and unresolved limits here before declaring done.
 
-Run every test/typecheck/build/smoke command through `bun run test:logged`, with
+Run every test/typecheck/build/smoke command through `mise run test:logged`, with
 explicit focused paths and `--parallel` when invoking Bun suites directly. Run
 the owning focused tests and relevant web/backend/protocol/desktop typechecks,
-then required repository checks and `bun run test` for integration validation.
+then required repository checks and `mise run test` for integration validation.
 Follow `AGENTS.md` for exact wrapper commands and flake reporting.
 
 For browser/Electron QA, follow the linked isolated testing guide: unique
@@ -494,7 +494,7 @@ profile cleanup. Do not reproduce this against the user's running research job.
 
 Validation completed on the Linux development host on 2026-09-06:
 
-- `bun run check` passed after the final implementation and retention changes.
+- `mise run check` passed after the final implementation and retention changes.
 - Focused backend history/storage/command tests, protocol contract tests, and
   renderer hook, terminal, history-viewer, gateway, and WebSocket tests passed.
 - The production backend and renderer builds passed, including packaging the
@@ -507,13 +507,13 @@ Validation completed on the Linux development host on 2026-09-06:
   (`terminal-agent-electron-1`). The local case produced about 517 KiB while
   its tab was never mounted, and the Docker case produced its final marker
   after the client became inactive. All three test profiles were cleaned up.
-- The complete `bun run test` repository suite passed through
-  `bun run test:logged` in 73.8 seconds with the runner constrained to its
+- The complete `mise run test` repository suite passed through
+  `mise run test:logged` in 73.8 seconds with the runner constrained to its
   eight-core worker plan. The host's twelve-core plan caused unrelated timing
   failures in process-heavy tests; reducing worker contention produced a clean
   run without changing test timeouts. A later run after the final paging and
   parser-queue hardening overlapped another checkout's full suite and timed out
-  unrelated process-heavy tests; the exact final source passed `bun run check`
+  unrelated process-heavy tests; the exact final source passed `mise run check`
   and its focused backend and history-viewer suites.
 - The credential-bearing fake-Docker fixture now pins credential discovery to
   its temporary test home. This prevents Bun's cached `os.homedir()` value from

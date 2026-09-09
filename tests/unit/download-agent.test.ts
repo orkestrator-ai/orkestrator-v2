@@ -104,7 +104,7 @@ describe("download-agent", () => {
       agent: "grok",
       directory: "/tmp/probe",
     });
-    // Order is not significant: `bun run download:agent -- --dir X grok` works.
+    // Order is not significant: `mise run download:agent --dir X grok` works.
     expect(parseCliArguments(["--dir", "/tmp/probe", "grok"])).toEqual({
       agent: "grok",
       directory: "/tmp/probe",

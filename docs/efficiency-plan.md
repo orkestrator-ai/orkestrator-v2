@@ -538,19 +538,19 @@ Verify these cases at normal bandwidth and under a throttled connection, using
 Run tests/typechecks through `test:logged`. For example, after the owning tests:
 
 ```bash
-bun run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run test:logged -- --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
-bun run test:logged -- --name protocol-typecheck -- bun run --cwd packages/protocol typecheck
-bun run test:logged -- --name format-check -- bun run format:check
-bun run test:logged -- --name lint -- bun run lint
+mise run test:logged --name backend-typecheck -- bun run --cwd apps/backend typecheck
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
+mise run test:logged --name protocol-typecheck -- bun run --cwd packages/protocol typecheck
+mise run test:logged --name format-check -- mise run format:check
+mise run test:logged --name lint -- mise run lint
 ```
 
 Use explicit owning paths and parallel workers for focused Bun test invocations.
 Before final integration run:
 
 ```bash
-bun run test:logged -- --name full-suite -- bun run test
+mise run test:logged --name full-suite -- mise run test
 ```
 
 Add provider/paging and native-client checks where their boundaries change.

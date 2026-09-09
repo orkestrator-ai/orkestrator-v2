@@ -284,7 +284,7 @@ describe("scripts/test-all.ts", () => {
   test("runs the Codex protocol check with an explicit offline fallback", () => {
     const protocolGroup = buildConcurrentGroups(8).find((group) => group.name === PROTOCOL)!;
 
-    expect(protocolGroup.command).toBe("bun");
+    expect(protocolGroup.command).toBe("mise");
     expect(protocolGroup.args).toEqual(["run", "codex:protocol:check"]);
     expect(protocolGroup.env).toEqual({
       [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1",
@@ -294,8 +294,8 @@ describe("scripts/test-all.ts", () => {
   test("runs workspace tests as Turbo package tasks with explicit Bun parallelism", () => {
     const workspaceGroup = buildConcurrentGroups(8).find((group) => group.name === WORKSPACE)!;
 
-    expect(workspaceGroup.command).toBe("turbo");
-    expect(workspaceGroup.args.slice(0, 2)).toEqual(["run", "test:workspace"]);
+    expect(workspaceGroup.command).toBe("bunx");
+    expect(workspaceGroup.args.slice(0, 3)).toEqual(["turbo", "run", "test:workspace"]);
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/backend");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web-public");

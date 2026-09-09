@@ -89,7 +89,7 @@ describe("scripts/run-logged.ts", () => {
     for (const args of [[], ["--name"], ["--name", ""]]) {
       const result = await runLogged(args);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain("Usage: bun run test:logged");
+      expect(result.stderr).toContain("Usage: mise run test:logged");
     }
   });
 });

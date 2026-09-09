@@ -163,8 +163,8 @@ zip entry, a bare `raw` binary, a bundle whose whole tree is kept intact, and
 Codex's companion helper.
 
 ```bash
-bun run download:claude    # or download:codex | :opencode | :grok | :pi
-bun run download:agent -- grok --dir /tmp/probe
+mise run download:claude    # or download:codex | :opencode | :grok | :pi
+mise run download:agent grok --dir /tmp/probe
 ```
 
 There is **no version literal to update here.** The manifest is the only input,
@@ -211,13 +211,13 @@ below.
    against the records you just pasted:
 
    ```bash
-   bun run download:<claude|codex|opencode|grok|pi>
+   mise run download:<claude|codex|opencode|grok|pi>
    ```
 
 6. Build the container after the provider-specific checks:
 
    ```bash
-   bun run docker:build
+   mise run docker:build
    ```
 
 The live verifier downloads large artifacts and requires network access. The
@@ -327,7 +327,7 @@ under `bypassPermissions`.
 7. Rebuild the vendored bridge and verify it:
 
    ```bash
-   bun run build:claude-bridge
+   mise run build:claude-bridge
    bun run --cwd bridges/claude-bridge typecheck
    bun test bridges/claude-bridge/src/sdk-compatibility.test.ts
    bun test bridges/claude-bridge/src --parallel
@@ -410,7 +410,7 @@ hermetic `codex exec` exception.
 
    ```bash
    CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
-     bun run codex:protocol
+     mise run codex:protocol
    ```
 
    An explicit `CODEX_PROTOCOL_BINARY` is an assertion and does not fall back.
@@ -433,7 +433,7 @@ hermetic `codex exec` exception.
 
    ```bash
    CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
-     bun run verify:codex:protocol
+     mise run verify:codex:protocol
    bun test tests/unit/codex-app-server-protocol.test.ts
    bun run --cwd bridges/codex-bridge typecheck
    bun test bridges/codex-bridge/src --parallel
@@ -444,10 +444,19 @@ hermetic `codex exec` exception.
 
    The default live contract tests do not call a model or spend credits. They
    verify initialization order, method errors, model pagination/order, thread
-   listing and reads, thread naming, MCP configuration acceptance,
-   project-trust behavior, and clean process shutdown. Run the separately gated
-   approval canary when an upgrade could affect MCP tool approval semantics; it
-   copies the local auth file and spends one short model turn:
+   listing and reads, thread naming, MCP configuration acceptance, MCP
+   protocol-era negotiation, project-trust behavior, and clean process shutdown.
+
+   Treat a failure in the "live MCP protocol era" block as a release blocker
+   rather than a flaky test. Those two contracts stand in for every third-party
+   HTTP MCP server that still speaks the 2025 protocol: the bridge relies on
+   `features.mcp_2026_07_28` defaulting to off, and a version that flips that
+   default silently breaks those servers in native sessions while they keep
+   working in the Codex CLI.
+
+   Run the separately gated approval canary when an upgrade could affect MCP
+   tool approval semantics; it copies the local auth file and spends one short
+   model turn:
 
    ```bash
    CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
@@ -558,7 +567,7 @@ contract.
      src/core/opencode-provider-dispose.test.ts \
      --parallel
    OPENCODE_CLI_PATH=/absolute/path/to/new/opencode \
-     bun run verify:opencode:live
+     mise run verify:opencode:live
    ```
 
    The live compatibility test starts a clean Bun child process outside the web
@@ -618,7 +627,7 @@ Dockerfile pins the same archive digests the manifest does.
 
 4. Copy the two `linux` archive digests into the Dockerfile's `PI_SHA` branches.
    They are verified by `sha256sum -c -` during the image build, so a version
-   bumped without them fails `bun run docker:build` rather than shipping an
+   bumped without them fails `mise run docker:build` rather than shipping an
    unverified binary.
 5. Review `bridges/pi-bridge/src/translate.ts` against the SDK's
    `AgentSessionEvent` union. This is the compatibility surface: a new event
@@ -637,7 +646,7 @@ Dockerfile pins the same archive digests the manifest does.
 
    ```bash
    bun run --cwd bridges/pi-bridge typecheck
-   bun run build:pi-bridge
+   mise run build:pi-bridge
    bun test bridges/pi-bridge/src --parallel
    ```
 
@@ -723,7 +732,7 @@ trusting a green result.
 
    ```bash
    bun run --cwd bridges/cursor-bridge typecheck
-   bun run build:cursor-bridge
+   mise run build:cursor-bridge
    bun test bridges/cursor-bridge/src --parallel
    ```
 
@@ -742,7 +751,7 @@ trusting a green result.
 5. Rebuild the container, which builds this bridge from the same lockfile:
 
    ```bash
-   bun run docker:build
+   mise run docker:build
    ```
 
 6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
@@ -822,7 +831,7 @@ For a repository-wide agent upgrade, verify every pinned URL, archive digest,
 and extracted executable digest rather than only the current host target:
 
 ```bash
-bun run verify:toolchains:live
+mise run verify:toolchains:live
 ```
 
 `verify:toolchains:live` covers only what the manifest pins. Verify
@@ -833,7 +842,7 @@ Then run provider-specific typechecks and tests above, build the Docker image,
 and finish with the full suite:
 
 ```bash
-bun run test
+mise run test
 ```
 
 Finally verify the inactive-environment path for each provider: start a turn,

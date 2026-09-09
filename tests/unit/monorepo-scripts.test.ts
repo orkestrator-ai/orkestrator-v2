@@ -4,6 +4,9 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
+type MiseTask = { run?: string | string[]; env?: Record<string, string> };
+const miseTasks = () =>
+  (Bun.TOML.parse(read("mise.toml")) as { tasks: Record<string, MiseTask> }).tasks;
 
 describe("monorepo orchestration scripts", () => {
   test("backend build externalizes Sharp and vendors its complete runtime closure", () => {
@@ -11,7 +14,6 @@ describe("monorepo orchestration scripts", () => {
     const runtimeWorkflow = read(".github/workflows/validate-bun-runtime.yml");
     const rootPackage = JSON.parse(read("package.json")) as {
       build?: { extraResources?: Array<{ from?: string; to?: string }> };
-      scripts?: Record<string, string>;
     };
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
     expect(source).toContain('external: ["sharp"]');
@@ -24,14 +26,14 @@ describe("monorepo orchestration scripts", () => {
         to: "backend/node_modules",
       }),
     );
-    expect(rootPackage.scripts?.["verify:packaged-backend"]).toBe(
+    expect(miseTasks()["verify:packaged-backend"].run).toBe(
       "bun scripts/verify-packaged-backend.ts",
     );
-    expect(runtimeWorkflow).toContain("bun run build:all");
+    expect(runtimeWorkflow).toContain("mise run build:all");
     expect(runtimeWorkflow).toContain("bunx electron-builder --dir");
     expect(runtimeWorkflow).toContain("bun scripts/install-packaged-app-linux.ts");
     expect(runtimeWorkflow).toContain("desktop-file-validate");
-    expect(runtimeWorkflow).toContain("bun run verify:packaged-backend");
+    expect(runtimeWorkflow).toContain("mise run verify:packaged-backend");
     expect(runtimeWorkflow).toContain("tests/standalone.test.ts");
   });
 
@@ -138,16 +140,11 @@ describe("monorepo orchestration scripts", () => {
     // The smoke test installs the real tarball from a registry-style layout, so
     // it needs the network and stays out of the default suite. Chaining it into
     // publish is what stops a broken package reaching users unverified.
-    const scripts =
-      (
-        JSON.parse(read("package.json")) as {
-          scripts?: Record<string, string>;
-        }
-      ).scripts ?? {};
+    const tasks = miseTasks();
 
-    expect(scripts["smoke:cli"]).toBe("bun run --cwd packages/cli smoke:pack");
-    expect(scripts["publish:cli"]).toContain("bun run smoke:cli &&");
-    expect(scripts["publish:cli"]).toContain("bun publish --cwd packages/cli");
+    expect(tasks["smoke:cli"].run).toBe("bun run --cwd packages/cli smoke:pack");
+    expect(tasks["publish:cli"].run).toContain("mise run smoke:cli");
+    expect(tasks["publish:cli"].run).toContain("bun publish --cwd packages/cli --access public");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
@@ -163,6 +160,7 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain("Promise.all(");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
     expect(source).toContain('"--filter=orkestrator"');
+    expect(source).toContain('command: "mise"');
     expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
@@ -268,9 +266,12 @@ describe("monorepo orchestration scripts", () => {
     }
   });
 
-  test("iOS development and test scripts use Bun entrypoints", () => {
+  test("root commands are mise tasks and iOS tasks use Bun entrypoints", () => {
     const rootPackage = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
-    expect(rootPackage.scripts?.["dev:ios"]).toBe("bun scripts/run-ios-simulator.ts");
-    expect(rootPackage.scripts?.["test:ios"]).toBe("bun scripts/test-ios.ts");
+    const tasks = miseTasks();
+
+    expect(rootPackage.scripts).toBeUndefined();
+    expect(tasks["dev:ios"].run).toBe("bun scripts/run-ios-simulator.ts");
+    expect(tasks["test:ios"].run).toBe("bun scripts/test-ios.ts");
   });
 });

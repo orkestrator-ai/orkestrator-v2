@@ -138,8 +138,8 @@ Backend:
 - [x] Every bridge has a test that feeds an event with an invented type and
   asserts: no throw, drift counter incremented, kind name recorded, payload
   not recorded.
-- [x] `bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures`
-- [x] `bun run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck`
+- [x] `mise run test:logged --name bridge-tests -- bun test bridges --parallel=2 --only-failures`
+- [x] `mise run test:logged --name backend-typecheck -- bun run --cwd apps/backend typecheck`
 - [x] Browser check per `docs/development/agent-testing.md`: the runtime
   section shows a drift count and an advisory notice for a fixture session on
   at least two platforms; reload and confirm it rehydrates from the snapshot.

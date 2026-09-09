@@ -12,7 +12,7 @@ type FocusableWindow = Pick<BrowserWindow, "isMinimized" | "restore" | "focus">;
  * takes a fallback port and starts a duplicate set of bridge processes. The
  * lock is scoped to `userData`, which is why `app.setPath("userData", ...)`
  * must already have run. Dev uses a separate directory from a packaged
- * install so `bun run dev` can open while Orkestrator is already running.
+ * install so `mise run dev` can open while Orkestrator is already running.
  *
  * Returns whether this process is the primary instance. The caller must skip
  * *all* startup work when it is not: `app.quit()` is asynchronous, so module

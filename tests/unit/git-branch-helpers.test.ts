@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 // `docker/git-branch-helpers.sh` is the branch logic every containerized
 // environment runs, and `docker/tests/git-branch-helpers-test.sh` is its only
-// coverage. Running it from here is what keeps it in `bun run test` instead of
+// coverage. Running it from here is what keeps it in `mise run test` instead of
 // depending on somebody invoking the script by hand.
 const repoRoot = join(import.meta.dir, "..", "..");
 const helperScript = join(repoRoot, "docker", "git-branch-helpers.sh");

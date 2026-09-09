@@ -13,7 +13,7 @@ Branch: `split-large-modules`. Four commits against `bd78829`:
 | `de8dc92` | Replaced namespace-snapshot destructures; broke 12 of 18 import cycles |
 | `ff98e28` | Eliminated the remaining cycles; backend and bridges are now acyclic |
 
-Verified at `ff98e28`: backend/web/desktop typechecks pass, `bun run test`
+Verified at `ff98e28`: backend/web/desktop typechecks pass, `mise run test`
 passes (3,709 pass, 1 skip, 0 fail), forced desktop build passes, and
 `tests/unit/module-import-cycles.test.ts` reports zero cycles.
 
@@ -356,14 +356,14 @@ Confirm which is authoritative before splitting either.
 After each split, the counts must match exactly:
 
 ```bash
-bun run test:logged -- --name split-check -- bun test <old-and-new-paths> --parallel=2
+mise run test:logged --name split-check -- bun test <old-and-new-paths> --parallel=2
 ```
 
 - Total test count before == total after. A drop means tests were lost in the
   move; an increase means one was duplicated.
 - Then the owning group: `bun test ./tests --parallel=4`, or
   `bun test bridges --parallel=2`, or the workspace test task.
-- Then the full `bun run test` before opening a PR.
+- Then the full `mise run test` before opening a PR.
 - `tests/unit/module-import-cycles.test.ts` must still report zero cycles if any
   production file was touched.
 

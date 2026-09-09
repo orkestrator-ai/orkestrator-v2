@@ -141,7 +141,7 @@ describe("agent-test login link", () => {
   test("reports an unstarted profile instead of minting against a stale manifest", async () => {
     const { requests, fetchImpl } = stubGateway(Date.now() + 120_000);
     await expect(mint({ ...readyStatus, status: "stopped" }, fetchImpl)).rejects.toThrow(
-      "bun run dev:test",
+      "mise run dev:test",
     );
     expect(requests).toHaveLength(0);
   });

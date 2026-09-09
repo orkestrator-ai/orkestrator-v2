@@ -11,7 +11,7 @@ and method surface, and regenerates from the pinned binary when available.
 
 That fallback proves only *internal* consistency — the manifest is recomputed
 from the same committed files, so bindings edited together with their manifest
-would still pass. `bun run verify:codex:protocol` refuses the fallback and
+would still pass. `mise run verify:codex:protocol` refuses the fallback and
 requires the pinned binary; run it on a machine with the Codex toolchain
 before releasing, and after any change under this directory.
 

@@ -14,7 +14,7 @@ describe("userDataDirectoryName", () => {
     expect(userDataDirectoryName(false)).toBe(APP_SLUG);
   });
 
-  test("isolates bun run dev from a packaged install", () => {
+  test("isolates mise run dev from a packaged install", () => {
     expect(userDataDirectoryName(true)).toBe(`${APP_SLUG}-dev`);
     expect(userDataDirectoryName(true)).not.toBe(userDataDirectoryName(false));
   });

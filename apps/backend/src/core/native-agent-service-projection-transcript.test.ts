@@ -248,6 +248,9 @@ describe("NativeAgentService transcript projection", () => {
           limit: 512,
           truncated: true,
           truncationReason: "count",
+          // The expanded read below proves it: the limit, not the byte
+          // ceiling, is what is holding the other 88 messages back.
+          canLoadEarlier: true,
         });
 
         const expanded = await service.getProjection({ ...identity, messageLimit: 1_024 });

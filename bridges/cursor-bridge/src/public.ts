@@ -12,6 +12,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
+import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
 import { sessionIsWorking, turnTokenTotal, type JsonObject, type SessionState } from "./state.js";
 
 export function publicSession(state: SessionState): JsonObject {
@@ -151,6 +152,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ? (state.currentRunModelId ?? state.composer.selectedModelId)
     : usage?.modelId;
   const model = state.composer.models.find((entry) => entry.id === modelId);
+  const account = mergeAccountWindows(usage?.account, peekPlanAccountWindows());
   return {
     usedTokens: used,
     ...(model?.contextWindow ? { maximumTokens: model.contextWindow } : {}),
@@ -167,7 +169,7 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage?.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     ...(usage?.turns ? { turns: usage.turns } : {}),
-    ...(usage?.account ? { account: usage.account } : {}),
+    ...(account ? { account } : {}),
     ...(liveEstimate !== undefined ? { estimated: true } : {}),
     source: "cursor",
     updatedAt: state.currentRunUsageUpdatedAt ?? usage!.updatedAt,

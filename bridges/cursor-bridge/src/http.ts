@@ -20,6 +20,7 @@ import {
 import { listModels, refreshModels } from "./models.js";
 import { publicCursorMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
+import { refreshPlanAccountWindows } from "./plan-usage.js";
 import {
   dispatchPrompt,
   errorText,
@@ -328,6 +329,7 @@ async function routeSession(
       const floor = Math.max(state.usage.sessionTokenFloor ?? 0, state.usage.sessionTokens ?? 0);
       await refreshAgentUsage(state, agent, state.promptSequence, floor);
     }
+    await refreshPlanAccountWindows();
     return json(response, 200, { contextUsage: publicContextUsage(state) });
   }
   if (action === "activity" && request.method === "GET") {

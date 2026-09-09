@@ -20,6 +20,7 @@ import {
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./credentials.js";
+import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { cursorMcpServers } from "./mcp.js";
@@ -279,6 +280,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       try {
         const resumed = await Agent.resume(state.agentId, options);
         state.agent = resumed;
+        schedulePlanAccountRefresh();
         return resumed;
       } catch {
         state.agentId = undefined;
@@ -295,6 +297,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     if (clearAgentScopedUsage(state)) state.revision += 1;
     state.agent = created;
     state.agentId = created.agentId;
+    schedulePlanAccountRefresh();
     return created;
   } catch (error) {
     state.workspaceWarmRelease = undefined;

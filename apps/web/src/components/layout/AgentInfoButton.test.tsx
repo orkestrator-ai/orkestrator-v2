@@ -5916,6 +5916,41 @@ describe("AgentInfoButton ACP agents", () => {
     expect(screen.queryByText(/first token snapshot/) === null).toBe(true);
   });
 
+  test("draws Cursor plan-quota windows with the shared account bars", () => {
+    useNativeAgentProjectionStore.getState().setProjection(
+      ACP_KEY,
+      acpProjection("cursor", {
+        contextUsage: {
+          usedTokens: 15_675,
+          source: "cursor",
+          account: [
+            { window: "cursor-internal-auto", label: "Cursor Models", usedPercent: 0 },
+            { window: "cursor-internal-api", label: "Other Models", usedPercent: 46.444 },
+            { window: "agent", label: "Agent total", tokens: 1_300_000, spendUsd: 1.25 },
+          ],
+        },
+      }),
+    );
+
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getByText("Cursor Models")).toBeTruthy();
+    expect(within(account).getByText("0.0% used")).toBeTruthy();
+    expect(
+      within(account).getByRole("progressbar", { name: "Cursor Models: 0.0% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText("Other Models")).toBeTruthy();
+    expect(within(account).getByText("46% used")).toBeTruthy();
+    expect(
+      within(account).getByRole("progressbar", { name: "Other Models: 46% used" }),
+    ).toBeTruthy();
+    expect(within(account).getByText("Agent total")).toBeTruthy();
+    expect(within(account).getByText("1.3M")).toBeTruthy();
+    expect(within(account).getByText("$1.25")).toBeTruthy();
+  });
+
   test("shows Cursor's runtime and says nothing about tokens it never reports", () => {
     useNativeAgentProjectionStore.getState().setProjection(
       ACP_KEY,

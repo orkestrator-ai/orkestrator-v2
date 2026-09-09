@@ -139,9 +139,11 @@ const {
   rewindSessionHistory,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
+const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 
 beforeEach(() => {
+  resetPlanAccountWindowsForTests();
   sessions.clear();
   clientSessionKeys.clear();
   process.env.CURSOR_API_KEY = "test-key";

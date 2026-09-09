@@ -7,7 +7,8 @@
  * most — giving up on a run that is still executing — would otherwise be
  * untestable at any sane wall-clock cost.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { resetPlanAccountWindowsForTests } from "./plan-usage.js";
 import type { SDKAgent } from "@cursor/sdk";
 import {
   dispatchPrompt,
@@ -19,6 +20,14 @@ import {
 import { newSessionState } from "./agent-session.js";
 import { publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
+
+beforeEach(() => {
+  resetPlanAccountWindowsForTests();
+});
+
+afterEach(() => {
+  resetPlanAccountWindowsForTests();
+});
 
 function runningSession(): SessionState {
   const state = newSessionState();

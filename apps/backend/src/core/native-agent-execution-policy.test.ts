@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  resolveEnvironmentExecutionPolicy,
   resolveNativeAgentExecutionPolicy,
   SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   UNAPPLIED_NETWORK_RESTRICTION_NOTE,
@@ -105,6 +106,32 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       projectResources: true,
       toolPolicy: { allow: ["read"] },
       networkAccess: "full",
+    });
+  });
+
+  test("applies a persisted per-environment override to a background workflow", () => {
+    expect(
+      resolveEnvironmentExecutionPolicy(
+        {
+          environmentType: "local",
+          networkAccessMode: "full",
+          agentSettings: {
+            executionPolicy: {
+              sandbox: "provider",
+              approvals: "deny",
+              projectResources: true,
+              networkAccess: "restricted",
+            },
+          },
+        },
+        "looped-review",
+      ),
+    ).toMatchObject({
+      id: "pipeline",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: true,
+      networkAccess: "restricted",
     });
   });
 

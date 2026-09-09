@@ -54,6 +54,7 @@ class FakeProvider implements BuildPipelineProvider {
     agentMcp?: { url: string; token: string };
   }> = [];
   readonly created: string[] = [];
+  readonly createOptions: Array<ProviderCreateSessionOptions | undefined> = [];
   activityState: ProviderActivityState = "working";
   statusState: ProviderStatus = "idle";
   transcript: BridgeMessage[] = [];
@@ -67,6 +68,7 @@ class FakeProvider implements BuildPipelineProvider {
   sendGate: Promise<void> | null = null;
   onSendStart: (() => void) | null = null;
   onAbort: (() => void) | null = null;
+  onStatus: (() => void | Promise<void>) | null = null;
 
   async createSession(
     _phase: string,
@@ -76,6 +78,7 @@ class FakeProvider implements BuildPipelineProvider {
     if (this.createError) throw this.createError;
     const id = `session-${this.created.length + 1}`;
     this.created.push(options?.clientSessionKey ?? id);
+    this.createOptions.push(options);
     return id;
   }
 
@@ -102,6 +105,7 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async status(): Promise<ProviderStatus> {
+    await this.onStatus?.();
     if (this.statusError) throw this.statusError;
     return this.statusState;
   }
@@ -644,10 +648,33 @@ describe("FeaturePlanningService", () => {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
 
       expect(context.provider.created).toEqual([`feature-planning:${context.featureId}`]);
+      expect(context.provider.createOptions[0]?.policy).toMatchObject({
+        id: "pipeline",
+        sandbox: "none",
+        networkAccess: "full",
+      });
       expect(context.provider.sends[0]?.sessionId).toBe("session-1");
       expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId).toBe(
         "session-1",
       );
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("fails definitely when the planning environment disappears during session creation", async () => {
+    const context = await harness();
+    try {
+      context.provider.statusState = "missing";
+      context.provider.onStatus = () => context.storage.removeEnvironment("env-1");
+
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+
+      expect((await context.record())?.phase).toBe("failed");
+      expect((await context.record())?.failure?.message).toContain(
+        "planning environment no longer exists",
+      );
+      expect(context.provider.created).toHaveLength(0);
     } finally {
       await context.dispose();
     }

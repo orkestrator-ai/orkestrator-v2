@@ -21,6 +21,7 @@ const realCursorSdkSnapshot = { ...realCursorSdk };
 const previousApiKey = process.env.CURSOR_API_KEY;
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
+const previousExecutionPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
 const bridgeStateRoot = join(tmpdir(), `cursor-bridge-sdk-test-${process.pid}`);
 process.env.CURSOR_BRIDGE_STATE_DIR = bridgeStateRoot;
 process.env.CURSOR_BRIDGE_AUTH_FILE = join(bridgeStateRoot, "missing-auth.json");
@@ -125,6 +126,7 @@ const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
   await import("./config.js");
 const {
   applyComposerPatch,
+  cursorDeniedTools,
   detachAgent,
   ensureAgent,
   listResumableSessions,
@@ -151,6 +153,7 @@ beforeEach(() => {
   prewarmOptions.length = 0;
   prewarmFails = false;
   warmWorkspaceReleases = 0;
+  delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
 });
 
 test("configures one JSONL store below the bridge state directory", () => {
@@ -216,6 +219,8 @@ afterAll(() => {
   else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
   if (previousCredentialFile === undefined) delete process.env.CURSOR_BRIDGE_AUTH_FILE;
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
+  if (previousExecutionPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+  else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
   mock.module("@cursor/sdk", () => realCursorSdkSnapshot);
 });
 
@@ -228,6 +233,22 @@ function conversationRun(turns: unknown[], supports = true) {
 }
 
 describe("ensureAgent", () => {
+  test("translates denied capabilities into Cursor's SDK tool vocabulary", () => {
+    expect(
+      cursorDeniedTools({
+        id: "pipeline",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: false,
+        capabilityPolicy: {
+          deny: ["file.write", "file.patch", "shell.mutate", "network"],
+        },
+        toolPolicy: { deny: ["Write", "apply_patch", "unknown-provider-tool"] },
+        networkAccess: "restricted",
+      }),
+    ).toEqual(["edit", "delete", "applyAgentDiff", "task", "shell", "webFetch", "webSearch"]);
+  });
+
   test("refuses to attach without a credential, with a message naming the fix", async () => {
     delete process.env.CURSOR_API_KEY;
     const state = newSessionState();
@@ -306,7 +327,7 @@ describe("ensureAgent", () => {
     expect(effective.note).toContain("restricted network access");
   });
 
-  test("uses the outer container boundary for read-only sessions", async () => {
+  test("uses an SDK-valid allowlist with the outer container boundary for read-only sessions", async () => {
     const state = newSessionState(undefined, {
       id: "pipeline",
       sandbox: "container",
@@ -322,7 +343,37 @@ describe("ensureAgent", () => {
       local: {
         sandboxOptions: { enabled: false },
       },
-      disallowedTools: expect.arrayContaining(["Write", "Edit", "Shell", "WebFetch"]),
+      tools: [
+        "read",
+        "grep",
+        "glob",
+        "ls",
+        "readLints",
+        "semSearch",
+        "readTodos",
+        "askQuestion",
+        "await",
+      ],
+    });
+    expect(created[0]).not.toHaveProperty("disallowedTools");
+  });
+
+  test("the coordinator process override does not re-enable a nested container sandbox", async () => {
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "container",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+
+    await ensureAgent(state);
+
+    expect(created[0]).toMatchObject({
+      local: { sandboxOptions: { enabled: false } },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
     });
   });
 

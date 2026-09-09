@@ -444,6 +444,20 @@ async function startVerifying(
 }
 
 describe("BuildPipelineService", () => {
+  test("execution policy fails closed after the build environment is deleted", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput());
+      await storage.removeEnvironment("env-1");
+      const internal = service as unknown as {
+        executionPolicy(pipeline: BuildPipeline): Promise<unknown>;
+      };
+
+      await expect(internal.executionPolicy(started)).rejects.toThrow(
+        "Build environment no longer exists",
+      );
+    });
+  });
+
   test("rejects malformed starts and environments already being deleted", async () => {
     await withService(async (service, storage) => {
       await expect(service.start({} as never)).rejects.toThrow(

@@ -15,6 +15,7 @@ import {
   type Run,
   type SDKAgent,
   type SDKAgentInfo,
+  type ToolName,
 } from "@cursor/sdk";
 import { CATALOG_TIMEOUT_MS, MAX_RESUME_ENTRIES, workingDirectory } from "./config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
@@ -135,28 +136,67 @@ export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
 }
 
 /**
- * Cursor's names for the capabilities a read-only policy denies.
+ * Cursor's names for denied cross-provider capabilities.
  *
- * The policy's `toolPolicy` carries Codex's vocabulary, so passing it to
- * `disallowedTools` here would match nothing at all.
+ * The policy's `toolPolicy.deny` carries Codex's vocabulary, so it is never
+ * forwarded: unknown names make Agent.create/resume reject the whole session.
  */
-const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  "file.write": ["Write", "Create", "Delete"],
-  "file.patch": ["Edit", "MultiEdit", "ApplyPatch"],
-  shell: ["Shell", "Bash"],
-  "shell.mutate": ["Shell", "Bash"],
-  network: ["WebFetch", "WebSearch"],
+const CURSOR_CAPABILITY_TOOLS: Readonly<Record<string, readonly ToolName[]>> = Object.freeze({
+  "file.write": ["edit", "delete", "applyAgentDiff", "task"],
+  "file.patch": ["edit", "applyAgentDiff", "task"],
+  shell: ["shell", "task"],
+  "shell.mutate": ["shell", "task"],
+  network: ["webFetch", "webSearch", "task"],
+});
+
+/**
+ * Built-ins that cannot mutate the checkout, escape through MCP, launch an
+ * independently tooled subagent, or access the network. An allowlist is
+ * deliberate: a new Cursor writing tool stays unavailable until reviewed.
+ */
+export const CURSOR_READ_ONLY_TOOLS = [
+  "read",
+  "grep",
+  "glob",
+  "ls",
+  "readLints",
+  "semSearch",
+  "readTodos",
+  "askQuestion",
+  "await",
+] as const satisfies readonly ToolName[];
+
+const CURSOR_TOOL_ALIASES: Readonly<Record<string, readonly ToolName[]>> = Object.freeze({
+  read: ["read"],
+  grep: ["grep"],
+  glob: ["glob"],
+  ls: ["ls"],
+  shell: ["shell"],
+  bash: ["shell"],
+  edit: ["edit"],
+  write: ["edit"],
+  apply_patch: ["applyAgentDiff"],
 });
 
 export function cursorDeniedTools(
   policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
-): string[] {
-  const tools = new Set<string>();
+): ToolName[] {
+  const tools = new Set<ToolName>();
   for (const capability of policy.capabilityPolicy?.deny ?? []) {
     for (const tool of CURSOR_CAPABILITY_TOOLS[capability] ?? []) tools.add(tool);
   }
-  for (const tool of policy.toolPolicy?.deny ?? []) tools.add(tool);
-  return [...tools];
+  return Array.from(tools);
+}
+
+function cursorAllowedTools(
+  policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+): ToolName[] | undefined {
+  if (!policy.toolPolicy?.allow) return undefined;
+  const tools = new Set<ToolName>();
+  for (const name of policy.toolPolicy.allow) {
+    for (const tool of CURSOR_TOOL_ALIASES[name] ?? []) tools.add(tool);
+  }
+  return Array.from(tools);
 }
 
 async function attach(state: SessionState): Promise<SDKAgent> {
@@ -166,8 +206,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       ? {
           id: "coordinator-read-only",
           // A container is already the process boundary. Reusing it avoids a
-          // nested Cursor sandbox that Docker cannot start, while the tool ban
-          // below still expresses the read-only session surface.
+          // nested Cursor sandbox that Docker cannot start; the SDK allowlist
+          // below independently protects its bind-mounted worktree.
           sandbox: sessionPolicy?.sandbox === "container" ? "container" : "provider",
           approvals: "deny",
           projectResources: false,
@@ -183,8 +223,8 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     );
   }
   // A read-only coordinator is the one deny case Cursor can express: a process
-  // boundary plus a tool ban, with no approval callback behind them. The
-  // boundary may be Cursor's sandbox or the environment's outer container.
+  // boundary plus a closed tool allowlist, with no approval callback behind
+  // them. The boundary may be Cursor's sandbox or the outer container.
   // Orkestrator reports this as `provider-configured` rather than enforced.
   if (readOnly && policy.sandbox !== "provider" && policy.sandbox !== "container") {
     throw new Error(
@@ -207,11 +247,18 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       sandboxOptions: { enabled: policy.sandbox === "provider" },
       autoReview: policy.sandbox === "provider" && policy.approvals === "auto-approve",
     },
-    ...(policy.toolPolicy?.allow ? { tools: policy.toolPolicy.allow } : {}),
-    ...(() => {
-      const denied = cursorDeniedTools(policy);
-      return denied.length > 0 ? { disallowedTools: denied } : {};
-    })(),
+    ...(readOnly
+      ? { tools: [...CURSOR_READ_ONLY_TOOLS] }
+      : (() => {
+          const allowed = cursorAllowedTools(policy);
+          return allowed ? { tools: allowed } : {};
+        })()),
+    ...(!readOnly
+      ? (() => {
+          const denied = cursorDeniedTools(policy);
+          return denied.length > 0 ? { disallowedTools: denied } : {};
+        })()
+      : {}),
     ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
   const releaseWarmWorkspace = await prewarmCursorWorkspace(options);
@@ -270,7 +317,10 @@ export function resolveCursorExecutionPolicy(
   if (process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only") {
     return {
       id: "coordinator-read-only",
-      sandbox: "provider",
+      // Keep the outer boundary when the bridge itself runs in a container.
+      // Cursor's nested provider sandbox cannot start there, and the closed
+      // read-only allowlist still protects the bind-mounted checkout.
+      sandbox: policy?.sandbox === "container" ? "container" : "provider",
       approvals: "deny",
       projectResources: false,
       capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },

@@ -225,6 +225,15 @@ describe("session creation", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "policy is required" });
   });
+
+  test("rejects session resume without a backend execution policy", async () => {
+    const response = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "cursor-agent-1" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "policy is required" });
+  });
 });
 
 describe("liveness routes", () => {
@@ -278,6 +287,30 @@ describe("liveness routes", () => {
 });
 
 describe("prompt dispatch", () => {
+  test("carries a container policy through a read-only prompt", async () => {
+    const state = await createSession({
+      policy: {
+        id: "pipeline",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "restricted",
+      },
+    });
+    state.readOnly = true;
+    const agent = attachFake(state);
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "review", requestId: "read-only", readOnly: true }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(state.policy).toMatchObject({ sandbox: "container", networkAccess: "restricted" });
+    expect(state.readOnly).toBe(true);
+    expect(agent.sends).toHaveLength(1);
+  });
+
   test("accepts a turn, records it, and renders the streamed reply", async () => {
     const state = await createSession();
     attachFake(state, {

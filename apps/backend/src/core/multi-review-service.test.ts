@@ -2665,6 +2665,14 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive fix ha
   expect((await storage.getMultiReviewWorkflow(started.id))?.snapshot).not.toHaveProperty(
     "activeRequest",
   );
+  expect(provider.creates).not.toHaveLength(0);
+  for (const created of provider.creates) {
+    expect(created.options?.policy).toMatchObject({
+      id: "pipeline",
+      sandbox: "none",
+      networkAccess: "full",
+    });
+  }
   await service.shutdown();
   await fs.rm(dataDir, { recursive: true, force: true });
 });
@@ -4775,6 +4783,7 @@ test("Multi Review prepares and consolidates with its review model before openin
         model: "review-coordinator",
         effort: "medium",
         mode: "build",
+        policy: { id: "pipeline", sandbox: "none", networkAccess: "full" },
       });
       expect([...provider.sends.values()][0]?.options.schema).toEqual(
         REVIEW_VALIDATION_PLAN_SCHEMA,
@@ -4807,7 +4816,12 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(
         provider.creates
           .slice(1)
-          .every((entry) => entry.options?.mode === "plan" && entry.options?.readOnly === true),
+          .every(
+            (entry) =>
+              entry.options?.mode === "plan" &&
+              entry.options?.readOnly === true &&
+              entry.options.policy?.id === "pipeline",
+          ),
       ).toBe(true);
       expect(
         commands.filter((entry) => entry.command === "generate_looped_review_package"),
@@ -4849,6 +4863,21 @@ test("Multi Review prepares and consolidates with its review model before openin
       },
     },
   );
+});
+
+test("MultiReviewService execution policy fails when its environment disappears", async () => {
+  const provider = new Provider();
+  await withService("env-policy-gone", provider, async ({ service, storage, start }) => {
+    const started = await start();
+    await storage.removeEnvironment("env-policy-gone");
+    const internal = service as unknown as {
+      executionPolicy(workflow: MultiReviewWorkflow): Promise<unknown>;
+    };
+
+    await expect(internal.executionPolicy(started)).rejects.toThrow(
+      "Review environment no longer exists",
+    );
+  });
 });
 
 test("preparing reviewers cannot be stopped or restarted before their package exists", async () => {

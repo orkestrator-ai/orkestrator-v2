@@ -1,0 +1,48 @@
+"$schema" = "https://starship.rs/config-schema.json"
+
+# Keep context together on the first row and reserve the second row for input.
+add_newline = false
+format = """
+$container\
+$username\
+$directory\
+$git_branch\
+$git_status\
+$cmd_duration\
+$line_break\
+$character"""
+
+[container]
+format = "[$symbol]($style) "
+style = "bold cyan"
+symbol = "⬢"
+
+[username]
+format = "[$user]($style) "
+show_always = true
+style_root = "bold red"
+style_user = "bold cyan"
+
+[directory]
+format = "[$path]($style)[$read_only]($read_only_style) "
+style = "bold blue"
+truncate_to_repo = false
+truncation_length = 3
+
+[git_branch]
+format = "on [$symbol$branch(:$remote_branch)]($style) "
+style = "bold yellow"
+symbol = " "
+
+[git_status]
+format = "([$all_status$ahead_behind]($style) )"
+style = "bold yellow"
+
+[cmd_duration]
+format = "took [$duration]($style) "
+min_time = 2000
+style = "bold bright-black"
+
+[character]
+error_symbol = "[❯](bold red) "
+success_symbol = "[❯](bold green) "

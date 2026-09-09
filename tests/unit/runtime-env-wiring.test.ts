@@ -96,6 +96,34 @@ describe("container runtime environment wiring", () => {
     );
   });
 
+  test("Docker image uses a pinned two-line Starship prompt for Zsh terminals", () => {
+    const dockerfile = read("docker/Dockerfile");
+    const zshrc = read("docker/container-zshrc.zsh");
+    const config = read("docker/starship.toml");
+
+    expect(dockerfile).toMatch(/^ARG STARSHIP_VERSION=\d+\.\d+\.\d+$/m);
+    expect(dockerfile).toContain(
+      "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/${STARSHIP_TARBALL}",
+    );
+    expect(dockerfile).toMatch(
+      /amd64\) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=[a-f0-9]{64} ;;/,
+    );
+    expect(dockerfile).toMatch(
+      /arm64\) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=[a-f0-9]{64} ;;/,
+    );
+    expect(dockerfile).toContain("sha256sum -c -");
+    expect(dockerfile).toContain("COPY docker/starship.toml /etc/starship.toml");
+    expect(dockerfile).toContain("COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc");
+    expect(dockerfile).toContain("'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc");
+    expect(dockerfile).toContain("ENV STARSHIP_CONFIG=/etc/starship.toml");
+    expect(dockerfile).toContain("ENV SHELL=/bin/zsh");
+    expect(dockerfile).toContain('CMD ["/bin/zsh"]');
+    expect(zshrc).toContain('eval "$(starship init zsh)"');
+    expect(zshrc).toContain("setopt APPEND_HISTORY SHARE_HISTORY");
+    expect(config).toContain("add_newline = false");
+    expect(config.indexOf("$line_break")).toBeLessThan(config.indexOf("$character"));
+  });
+
   test("Docker image includes the shared runtime environment helper", () => {
     const dockerfile = read("docker/Dockerfile");
 

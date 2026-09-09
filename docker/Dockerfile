@@ -75,11 +75,12 @@ RUN mkdir -p /usr/local/share/npm-global && \
 
 ARG USERNAME=node
 
-# Persist bash history.
-RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  && mkdir /commandhistory \
+# Persist node shell history. Root terminals use /root/.zsh_history instead so
+# privileged commands are never exposed to the unprivileged node account.
+RUN mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory
+  && chown -R $USERNAME /commandhistory \
+  && install -o root -g root -m 0600 /dev/null /root/.zsh_history
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
@@ -103,24 +104,17 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
-# Set the default shell to zsh rather than sh
+# Container terminals use Zsh, with Starship owning the prompt rendering.
 ENV SHELL=/bin/zsh
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 # Set the default editor and visual
 ENV EDITOR=nano
 ENV VISUAL=nano
 
-# Default powerline10k theme
-ARG ZSH_IN_DOCKER_VERSION=1.2.0
-RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/v${ZSH_IN_DOCKER_VERSION}/zsh-in-docker.sh)" -- \
-  -p git \
-  -p fzf \
-  -a "source /usr/share/doc/fzf/examples/key-bindings.zsh" \
-  -a "source /usr/share/doc/fzf/examples/completion.zsh" \
-  -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  -x
-
-# Every version below must equal PINNED_TOOLCHAIN_VERSIONS in
+# Every agent version in the next block must equal PINNED_TOOLCHAIN_VERSIONS in
 # apps/desktop/electron/toolchain-manifest.ts, and the SHA literals further down
 # must equal that manifest's linux digests. The image cannot read the manifest,
 # so these are a second copy; `every shipped agent, uniformly` in
@@ -316,6 +310,31 @@ RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
  && mv /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge \
  && rm -rf /opt/bridge-build
 
+# Starship owns the interactive Zsh prompt. Use the static musl artifacts on
+# both supported architectures so the prompt binary has no runtime libc
+# dependency, and verify the pinned release before installing it.
+ARG STARSHIP_VERSION=1.26.0
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3 ;; \
+    arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  STARSHIP_TARBALL="starship-${STARSHIP_TARGET}.tar.gz" && \
+  curl -fsSL "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/${STARSHIP_TARBALL}" -o "/tmp/${STARSHIP_TARBALL}" && \
+  printf '%s  %s\n' "$STARSHIP_SHA" "/tmp/${STARSHIP_TARBALL}" | sha256sum -c - && \
+  tar -xzf "/tmp/${STARSHIP_TARBALL}" -C /usr/local/bin starship --no-same-owner && \
+  chmod 755 /usr/local/bin/starship && \
+  rm -f "/tmp/${STARSHIP_TARBALL}" && \
+  starship --version
+
+COPY docker/starship.toml /etc/starship.toml
+COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh
+COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc
+ENV STARSHIP_CONFIG=/etc/starship.toml
+RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
+  && STARSHIP_CONFIG=/etc/starship.toml starship prompt >/dev/null
+
 # Install mise after the expensive CLI, browser and bridge-build layers so a
 # mise-only version bump does not invalidate them. Host installations cannot be
 # reused here: their binaries target macOS and the container runs Linux. The
@@ -372,6 +391,12 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh &
 RUN useradd -o -u 0 -g 0 -M -d /root -s /bin/zsh orkroot && \
   echo "node ALL=(orkroot) NOPASSWD:SETENV: ALL" > /etc/sudoers.d/node-orkroot && \
   chmod 0440 /etc/sudoers.d/node-orkroot
+
+# Exercise the shell contract as both terminal identities while the image is
+# built. The verifier cleans up its sentinel history before the layer commits.
+COPY docker/verify-container-shell.sh /usr/local/share/verify-container-shell.sh
+RUN chmod 755 /usr/local/share/verify-container-shell.sh \
+  && /usr/local/share/verify-container-shell.sh
 
 # Configure SSH for GitHub/GitLab/Bitbucket
 RUN mkdir -p /home/node/.ssh && \

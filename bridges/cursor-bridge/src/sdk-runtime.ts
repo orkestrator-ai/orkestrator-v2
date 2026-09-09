@@ -12,13 +12,36 @@ import { cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
 
 const storeRoot = cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
 
+let platform: Promise<CursorAgentPlatform> | undefined;
+
 /**
  * One store instance must serve every static Agent API. Mixing stores would
  * make create succeed while list, resume or rewind looked somewhere else.
+ *
+ * The binding is reassignable for one reason: this module is a process-wide
+ * singleton evaluated exactly once, so a test that wants the real SDK writing
+ * under its own temporary root cannot get there by setting an environment
+ * variable — an earlier suite in the same process may already have evaluated
+ * this file, and its store would be the one every later import received.
  */
-export const cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(storeRoot);
+export let cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(storeRoot);
 
 Cursor.configure({ local: { store: cursorLocalAgentStore } });
+
+/**
+ * Point the whole runtime at another store, returning the one it replaced.
+ *
+ * The memoized platform is dropped with it: it captured the previous store at
+ * construction, and leaving it in place is exactly the split-brain the comment
+ * above warns about.
+ */
+export function useCursorLocalAgentStoreForTests(store: LocalAgentStore): LocalAgentStore {
+  const previous = cursorLocalAgentStore;
+  cursorLocalAgentStore = store;
+  Cursor.configure({ local: { store } });
+  platform = undefined;
+  return previous;
+}
 
 /**
  * Agent.create reserves a queued first run, but only the returned SDK handle
@@ -46,8 +69,6 @@ export async function hasUnusedInitialRun(agentId: string): Promise<boolean> {
     run.latestCheckpointRef == null,
   );
 }
-
-let platform: Promise<CursorAgentPlatform> | undefined;
 
 async function agentPlatform(): Promise<CursorAgentPlatform> {
   const pending =

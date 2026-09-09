@@ -1,6 +1,7 @@
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import {
   DEFAULT_WORKFLOW_RESULT_TOOLS_SETTINGS,
+  QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS,
   normalizeWorkflowResultToolsSettings,
   type WorkflowResultKind,
   type WorkflowResultToolsSettings,

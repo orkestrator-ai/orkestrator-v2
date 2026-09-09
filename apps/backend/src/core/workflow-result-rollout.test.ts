@@ -18,6 +18,22 @@ describe("WorkflowResultRollout", () => {
     expect(rollout.allows("claude", "verification-result")).toBe(false);
   });
 
+  test("configuration cannot enable a provider the code has not qualified", async () => {
+    const rollout = new WorkflowResultRollout(async () => ({
+      enabled: true,
+      providers: ["opencode", "cursor", "grok", "pi", "codex"],
+      kinds: ["review-report"],
+    }));
+    await rollout.refresh();
+    // These four have no per-turn capability channel. Admitting them would
+    // dispatch a turn the model could never submit against.
+    expect(rollout.allows("opencode", "review-report")).toBe(false);
+    expect(rollout.allows("cursor", "review-report")).toBe(false);
+    expect(rollout.allows("grok", "review-report")).toBe(false);
+    expect(rollout.allows("pi", "review-report")).toBe(false);
+    expect(rollout.allows("codex", "review-report")).toBe(true);
+  });
+
   test("a combination can be enabled per provider and per kind", async () => {
     const rollout = new WorkflowResultRollout(async () => ({
       enabled: true,

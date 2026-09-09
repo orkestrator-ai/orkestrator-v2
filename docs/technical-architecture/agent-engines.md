@@ -380,6 +380,11 @@ per-result-kind lists, and is read through `get_workflow_result_tools_rollout`
 and `set_workflow_result_tools_rollout`. The gate is evaluated once, when an
 attempt is admitted, and the outcome is persisted on the attempt.
 
+The setting can only narrow the qualified set, never widen it. Qualification is
+a property of the code: naming an unqualified provider here has no effect,
+because admitting one would dispatch a turn the model has no channel to submit
+against.
+
 To roll back, disable the combination. New attempts take the legacy transport
 immediately. Attempts already admitted keep their tools and their receipts and
 finish normally, so nothing in flight is stranded. Deploying a release that

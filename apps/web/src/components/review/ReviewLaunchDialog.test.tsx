@@ -427,6 +427,30 @@ describe("ReviewLaunchDialog", () => {
     closePicker();
   });
 
+  test("prefers an explicit provider label over the description caption", () => {
+    renderDialog({
+      defaultTabType: "opencode",
+      catalog: {
+        ...catalog,
+        opencode: [
+          {
+            id: "provider/model-a",
+            name: "OpenCode A",
+            providerLabel: "Provider Cloud",
+            description: "Fallback provider description",
+            reasoningEfforts: [],
+          },
+        ],
+      },
+    });
+
+    openPicker();
+    const row = modelItem(/OpenCode A/);
+    expect(row.textContent).toContain("Provider Cloud");
+    expect(row.textContent).not.toContain("Fallback provider description");
+    closePicker();
+  });
+
   test("shows the model and its reasoning effort on the single trigger", () => {
     renderDialog({
       preferredModels: { claude: "claude-a" },

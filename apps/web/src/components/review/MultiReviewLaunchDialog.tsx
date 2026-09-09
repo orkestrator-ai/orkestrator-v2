@@ -23,6 +23,7 @@ import {
   defaultEffortFor,
   firstModelFor,
   modelsForAgent,
+  toPickerModel,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -218,10 +219,7 @@ export function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
   return (["claude", "codex", "cursor", "grok", "opencode", "pi"] as LaunchAgent[]).flatMap(
     (agent) =>
       modelsForAgent(catalog, agent).map((model) => ({
-        platform: agent,
-        id: model.id,
-        label: model.name,
-        description: model.description,
+        ...toPickerModel(agent, model),
         reasoning: model.reasoningEfforts.map((effort) => ({ id: effort, label: effort })),
       })),
   );

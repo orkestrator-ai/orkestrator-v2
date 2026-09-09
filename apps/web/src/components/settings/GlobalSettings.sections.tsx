@@ -300,6 +300,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         tier={agentSettings}
         onChange={setAgentSettings}
         tiers={{ global: agentSettings }}
+        canInherit={false}
         enabledPlatforms={enabledAgentPlatforms}
         catalog={catalog}
         disabled={isSaving}

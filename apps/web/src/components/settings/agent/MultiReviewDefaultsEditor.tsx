@@ -37,6 +37,7 @@ interface MultiReviewDefaultsEditorProps {
   tier: AgentSettingsTier;
   onChange: (tier: AgentSettingsTier) => void;
   tiers: AgentSettingsTiers;
+  canInherit: boolean;
   enabledPlatforms: AgentPlatform[];
   catalog: AgentModelCatalog;
   disabled?: boolean;
@@ -102,6 +103,7 @@ function ReviewerDefaultPicker({
   fallbackEntry,
   fallbackLabel,
   inheritFallbackFieldsWhenConfigured,
+  canInherit,
   tiers,
   enabledPlatforms,
   catalog,
@@ -117,6 +119,7 @@ function ReviewerDefaultPicker({
   fallbackEntry: AgentActionDefault & { platform: AgentPlatform };
   fallbackLabel: string;
   inheritFallbackFieldsWhenConfigured?: boolean;
+  canInherit: boolean;
   tiers: AgentSettingsTiers;
   enabledPlatforms: AgentPlatform[];
   catalog: AgentModelCatalog;
@@ -227,7 +230,7 @@ function ReviewerDefaultPicker({
         speedInherit={
           speedCapable
             ? {
-                label: "Provider default",
+                label: canInherit ? "Inherit" : "Provider default",
                 selected: storedFastMode === undefined,
               }
             : undefined
@@ -257,6 +260,7 @@ export function MultiReviewDefaultsEditor({
   tier,
   onChange,
   tiers,
+  canInherit,
   enabledPlatforms,
   catalog,
   disabled,
@@ -341,6 +345,7 @@ export function MultiReviewDefaultsEditor({
             fallbackEntry={index === 0 ? { platform: fallbackAgent } : reviewFallbackEntry}
             fallbackLabel={index === 0 ? "App default" : "Follows Review"}
             inheritFallbackFieldsWhenConfigured={index >= DEFAULT_MULTI_REVIEW_REVIEWER_COUNT}
+            canInherit={canInherit}
             tiers={tiers}
             enabledPlatforms={enabledPlatforms}
             catalog={catalog}

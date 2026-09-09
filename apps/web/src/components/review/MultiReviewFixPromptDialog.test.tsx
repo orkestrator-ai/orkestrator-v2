@@ -14,7 +14,14 @@ const catalog: AgentModelCatalog = {
     { id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["low", "medium", "high"] },
     { id: "gpt-5.4", name: "GPT-5.4", reasoningEfforts: ["low", "medium", "high"] },
   ],
-  opencode: [{ id: "provider/model", name: "OpenCode", reasoningEfforts: [] }],
+  opencode: [
+    {
+      id: "provider/model",
+      name: "OpenCode",
+      providerLabel: "Provider Cloud",
+      reasoningEfforts: [],
+    },
+  ],
 };
 
 function setFavoritesEmpty() {
@@ -45,6 +52,16 @@ afterEach(cleanup);
 beforeEach(setFavoritesEmpty);
 
 describe("MultiReviewFixPromptDialog", () => {
+  test("renders OpenCode provider captions from the shared flattened catalog", () => {
+    renderDialog({ defaultSelection: { agent: "opencode", model: "provider/model" } });
+
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom fix model" }));
+    const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
+      name: /OpenCode/,
+    });
+    expect(row.textContent).toContain("Provider Cloud");
+  });
+
   test("submits a cross-provider model and manually selected effort", () => {
     const { onSubmit } = renderDialog();
     const picker = screen.getByRole("combobox", { name: "Custom fix model" });

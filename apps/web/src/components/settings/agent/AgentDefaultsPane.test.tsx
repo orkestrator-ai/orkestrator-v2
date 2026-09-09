@@ -54,10 +54,13 @@ mock.module("@/components/chat/AgentModelPicker", () => ({
         Choose high reasoning
       </button>
       <span data-testid={`${props.id} speed-value`}>{String(props.fastModeEnabled)}</span>
+      <span data-testid={`${props.id} speed-available`}>{String(props.fastModeAvailable)}</span>
       <span data-testid={`${props.id} speed-inherit`}>{String(props.speedInherit?.selected)}</span>
+      <span data-testid={`${props.id} speed-inherit-label`}>{props.speedInherit?.label}</span>
       <button
         type="button"
         aria-label={`${props.id} choose Fast`}
+        disabled={!props.fastModeAvailable}
         onClick={() => props.onFastModeChange?.(true)}
       >
         Choose Fast
@@ -321,6 +324,32 @@ describe("AgentDefaultsPane speed defaults", () => {
     );
   });
 
+  test("checks an inherited action model even when its platform differs from the tier default", () => {
+    const repository: AgentSettingsTier = { defaultAgent: "codex" };
+    render(
+      <AgentDefaultsPane
+        tier={repository}
+        onChange={() => {}}
+        tiers={{
+          global: {
+            actionDefaults: {
+              createScript: { platform: "claude", model: "claude-slow" },
+            },
+          },
+          repository,
+        }}
+        canInherit
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="this repository"
+      />,
+    );
+
+    expect(screen.getByTestId("action-default-createScript speed-available").textContent).toBe(
+      "false",
+    );
+  });
+
   test("writes Fast and clears it back to provider default", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness scope="global" onChange={onChange} />);
@@ -371,5 +400,106 @@ describe("AgentDefaultsPane speed defaults", () => {
         platforms: { codex: { fastMode: true } },
       }),
     );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-createScript inherit speed" }),
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
+  });
+
+  test("uses the platform default model to determine Fast availability for inherited actions", () => {
+    const global: AgentSettingsTier = {
+      defaultAgent: "claude",
+      platforms: { claude: { model: "claude-slow" } },
+    };
+    render(
+      <AgentDefaultsPane
+        tier={global}
+        onChange={() => {}}
+        tiers={{ global }}
+        canInherit={false}
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="the app"
+      />,
+    );
+
+    expect(screen.getByTestId("agent-default-model speed-available").textContent).toBe("false");
+    expect(screen.getByTestId("action-default-createScript speed-available").textContent).toBe(
+      "false",
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "action-default-createScript choose Fast",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  test("resolves a platform-only action through that platform's default model", () => {
+    const catalogWithSlowCodex: AgentModelCatalog = {
+      ...catalog,
+      codex: [...catalog.codex, { id: "codex-slow", name: "Codex Slow", reasoningEfforts: [] }],
+    };
+    const global: AgentSettingsTier = {
+      defaultAgent: "claude",
+      platforms: { codex: { model: "codex-slow" } },
+      actionDefaults: { createScript: { platform: "codex" } },
+    };
+    render(
+      <AgentDefaultsPane
+        tier={global}
+        onChange={() => {}}
+        tiers={{ global }}
+        canInherit={false}
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalogWithSlowCodex}
+        scopeLabel="the app"
+      />,
+    );
+
+    expect(screen.getByTestId("action-default-createScript speed-available").textContent).toBe(
+      "false",
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "action-default-createScript choose Fast",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  test("uses the displayed platform's default when a stored action platform is disabled", () => {
+    const repository: AgentSettingsTier = {
+      defaultAgent: "claude",
+      actionDefaults: { createScript: { platform: "cursor", model: "cursor-a" } },
+    };
+    render(
+      <AgentDefaultsPane
+        tier={repository}
+        onChange={() => {}}
+        tiers={{
+          global: { platforms: { claude: { model: "claude-a" } } },
+          repository,
+        }}
+        canInherit
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="this repository"
+      />,
+    );
+
+    expect(screen.getByTestId("action-default-createScript speed-available").textContent).toBe(
+      "true",
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "action-default-createScript choose Fast",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
   });
 });

@@ -452,7 +452,7 @@ export function CreateEnvironmentDialog({
           {
             id: configuredOpenCodeModel,
             name: openCodeModelDisplayLabel(configuredOpenCodeModel),
-            providerLabel: openCodeModelProviderId(configuredOpenCodeModel) ?? "Configured default",
+            providerLabel: openCodeModelProviderId(configuredOpenCodeModel) || "Configured default",
             description: "Configured default",
             reasoningEfforts: configuredOpenCodeEffort ? [configuredOpenCodeEffort] : [],
           },

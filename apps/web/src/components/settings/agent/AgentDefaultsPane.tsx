@@ -426,7 +426,10 @@ export function AgentDefaultsPane({
             // disabled, without clearing the platform's setting for its other
             // models.
             const actionSpeedCapable = platformOwnsSpeed(actionPlatform);
-            const effectiveActionModel = entry ? entry.model : inheritedEntry?.model;
+            const effectiveActionModel =
+              (platform ? entry?.model : undefined) ??
+              (inheritedPlatform === actionPlatform ? inheritedEntry?.model : undefined) ??
+              resolveAgentPlatformSettings(tiers, actionPlatform).model;
             const actionSupportsSpeed = modelSupportsSpeed(
               actionPlatform,
               catalog,

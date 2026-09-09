@@ -67,6 +67,7 @@ import {
 import { parseReviewPackageReference } from "./review-package.js";
 import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
 import {
+  errorMessage,
   WORKTREE_PROBE_ATTEMPTS,
   VALIDATION_STAGE_LABELS,
   VERIFICATION_SCHEMA,
@@ -188,6 +189,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const record = await this.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     pipeline.backendRevision = record.revision;
+    if (pipeline.pendingResultConsumptions?.length && this.options.workflowResults) {
+      try {
+        for (const resultKey of pipeline.pendingResultConsumptions) {
+          await this.options.workflowResults.consume(resultKey);
+        }
+        delete pipeline.pendingResultConsumptions;
+        await this.save(pipeline, record.revision);
+      } catch (error) {
+        console.warn(
+          `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
+          errorMessage(error),
+        );
+      }
+      return;
+    }
     if (!isActiveBuildPhase(pipeline.phase)) {
       await this.reconcileTerminalState(pipeline);
       return;
@@ -691,8 +707,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         Date.now() - Date.parse(session.turnStartedAt ?? session.startedAt),
       );
       session.structuredResultStatus = "accepted";
+      this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
       await this.save(pipeline, pipeline.backendRevision);
-      await this.consumeWorkflowResult(session, session.structuredRequestId);
+      await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
       return;
     }
     const preparation = parseReviewPreparationResult(result.value);
@@ -714,8 +731,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       targetBranch,
     });
     session.structuredResultStatus = "accepted";
+    this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
     await this.startStage(pipeline, "review", "reviewing");
-    await this.consumeWorkflowResult(session, session.structuredRequestId);
+    await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
   }
 
   private async advanceValidation(pipeline: BuildPipeline): Promise<void> {
@@ -1235,12 +1253,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       (candidate) => candidate.sdkSessionId === attempt.sessionId,
     );
     const resultKind = this.workflowResultKind(attempt.phase, attempt.validationPlan === true);
-    if (
-      attempt.resultTransport === "tool-v1" &&
-      resultKind &&
-      this.options.workflowResults &&
-      session
-    ) {
+    if (attempt.resultTransport === "tool-v1") {
+      if (!resultKind || !this.options.workflowResults || !session) {
+        throw new Error("Tool-mode prompt attempt lost its result-slot binding");
+      }
       await this.options.workflowResults.prepare({
         resultKey: attempt.requestId,
         kind: resultKind,
@@ -1423,13 +1439,14 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     session.structuredResultStatus = "accepted";
     session.reviewReport = report;
     pipeline.structuredReview = report;
+    this.stageWorkflowResultConsumption(pipeline, session, requestId);
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");
-      await this.consumeWorkflowResult(session, requestId);
+      await this.consumeWorkflowResult(pipeline, session, requestId);
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");
-    await this.consumeWorkflowResult(session, requestId);
+    await this.consumeWorkflowResult(pipeline, session, requestId);
   }
 
   /**

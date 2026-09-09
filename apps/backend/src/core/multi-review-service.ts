@@ -1157,6 +1157,7 @@ export class MultiReviewService {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
         const workflow = record.snapshot;
         return isSupervisedPhase(workflow.phase) ||
+          (workflow.pendingResultConsumptions?.length ?? 0) > 0 ||
           (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
           ? [this.runLocked(record.id)]
           : [];
@@ -1330,11 +1331,20 @@ export class MultiReviewService {
       existingPhase === "interactive" &&
       existing.snapshot.addressPromptPending === true &&
       this.options.dispatchAddressPrompt !== undefined;
-    if (!pendingAddress && !isSupervisedPhase(existingPhase)) return;
+    if (
+      !pendingAddress &&
+      !isSupervisedPhase(existingPhase) &&
+      !existing.snapshot.pendingResultConsumptions?.length
+    )
+      return;
     if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
     const controlled = await this.loadControlled(workflowId);
     if (!controlled) return;
     const { workflow, token } = controlled;
+    if (workflow.pendingResultConsumptions?.length) {
+      await this.consumePendingResults(workflow, token);
+      return;
+    }
     if (
       workflow.phase === "interactive" &&
       workflow.addressPromptPending === true &&
@@ -1540,14 +1550,14 @@ export class MultiReviewService {
     } else {
       delete workflow.error;
     }
-    delete workflow.cancellingSince;
-    delete workflow.activeRequest;
-    await this.save(workflow, token);
-    await Promise.allSettled(
+    await Promise.all(
       cancelledResultKeys.map((resultKey) =>
         this.options.workflowResults?.close(resultKey, "cancelled"),
       ),
     );
+    delete workflow.cancellingSince;
+    delete workflow.activeRequest;
+    await this.save(workflow, token);
     await this.release(workflow, token);
   }
 
@@ -1662,6 +1672,18 @@ export class MultiReviewService {
             readResult: <T>(requestId: string) =>
               this.options.workflowResults!.structured<T>(requestId),
             consumeResult: (requestId: string) => this.options.workflowResults!.consume(requestId),
+            stageResultConsumption: (requestId: string) => {
+              workflow.pendingResultConsumptions = Array.from(
+                new Set([...(workflow.pendingResultConsumptions ?? []), requestId]),
+              );
+            },
+            finishResultConsumption: (requestId: string) => {
+              const pending = (workflow.pendingResultConsumptions ?? []).filter(
+                (candidate) => candidate !== requestId,
+              );
+              if (pending.length > 0) workflow.pendingResultConsumptions = pending;
+              else delete workflow.pendingResultConsumptions;
+            },
             closeResult: (requestId: string) =>
               this.options.workflowResults!.close(requestId, "superseded"),
           }
@@ -2221,8 +2243,9 @@ export class MultiReviewService {
         session.status = "idle";
         session.completedAt = nowIso();
         delete session.stalledSince;
+        this.stageWorkflowResultConsumption(workflow, request);
         await this.save(workflow, token);
-        await this.consumeWorkflowResult(request);
+        await this.consumePendingResults(workflow, token);
         return;
       }
       let preparation: ReturnType<typeof parseReviewPreparationResult>;
@@ -2259,8 +2282,9 @@ export class MultiReviewService {
       settleStepRuntime(workflow, "prepare");
       delete workflow.activeRequest;
       delete workflow.reviewSnapshotStale;
+      this.stageWorkflowResultConsumption(workflow, request);
       await this.save(workflow, token);
-      await this.consumeWorkflowResult(request);
+      await this.consumePendingResults(workflow, token);
       return;
     }
     if (request.kind === "consolidate") {
@@ -2286,8 +2310,9 @@ export class MultiReviewService {
       session.completedAt = nowIso();
       settleStepRuntime(workflow, "consolidate");
       delete workflow.activeRequest;
+      this.stageWorkflowResultConsumption(workflow, request);
       await this.save(workflow, token);
-      await this.consumeWorkflowResult(request);
+      await this.consumePendingResults(workflow, token);
       await this.release(workflow, token);
       return;
     }
@@ -2326,8 +2351,9 @@ export class MultiReviewService {
       session.status = "idle";
       workflow.phase = "completed";
     }
+    this.stageWorkflowResultConsumption(workflow, request);
     await this.save(workflow, token);
-    await this.consumeWorkflowResult(request);
+    await this.consumePendingResults(workflow, token);
     await this.release(workflow, token);
   }
 
@@ -2389,18 +2415,35 @@ export class MultiReviewService {
     );
     delete request.idleResultPolls;
     session.requestIds.push(requestId);
-    await this.save(workflow, token);
     if (previousTransport === "tool-v1") {
       await this.options.workflowResults?.close(previousRequestId, "superseded");
     }
+    await this.save(workflow, token);
   }
 
-  private async consumeWorkflowResult(
+  private stageWorkflowResultConsumption(
+    workflow: MultiReviewWorkflow,
     request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
-  ): Promise<void> {
+  ): void {
     if (request.resultTransport === "tool-v1") {
-      await this.options.workflowResults?.consume(request.requestId);
-      delete request.resultSubmission;
+      workflow.pendingResultConsumptions = Array.from(
+        new Set([...(workflow.pendingResultConsumptions ?? []), request.requestId]),
+      );
+    }
+  }
+
+  private async consumePendingResults(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const pending = workflow.pendingResultConsumptions ?? [];
+    if (pending.length === 0) return;
+    try {
+      for (const resultKey of pending) await this.options.workflowResults?.consume(resultKey);
+      delete workflow.pendingResultConsumptions;
+      await this.save(workflow, token);
+    } catch (error) {
+      console.warn(
+        `[multi-review] Deferred result consumption for ${workflow.id}:`,
+        errorMessage(error),
+      );
     }
   }
 

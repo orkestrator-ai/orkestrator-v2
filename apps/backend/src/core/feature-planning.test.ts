@@ -785,6 +785,141 @@ describe("FeaturePlanningService", () => {
     }
   });
 
+  test("tool-mode cancellation closes the abandoned result capability", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const requestId = (await context.record())!.requestId!;
+      await context.service.cancel(context.featureId);
+
+      expect(
+        await context.workflowResults!.status(
+          { environmentId: "env-1", projectId: "project-1" },
+          requestId,
+        ),
+      ).toMatchObject({ lifecycle: "cancelled", completion: "blocked" });
+      expect(
+        await context.workflowResults!.submit(
+          { environmentId: "env-1", projectId: "project-1" },
+          requestId,
+          { phase: "collecting", title: "Late", summary: "" },
+        ),
+      ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a failed result-slot close leaves cancellation durable for a later pass", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const requestId = (await context.record())!.requestId!;
+      const close = context.workflowResults!.close.bind(context.workflowResults);
+      context.workflowResults!.close = async () => {
+        throw new Error("injected close failure");
+      };
+
+      await expect(context.service.cancel(context.featureId)).rejects.toThrow(
+        "injected close failure",
+      );
+      expect((await context.record())?.phase).toBe("cancelling");
+
+      context.workflowResults!.close = close;
+      await context.service.advanceNow(context.featureId);
+      expect(await context.record()).toBeUndefined();
+      expect(
+        await context.workflowResults!.status(
+          { environmentId: "env-1", projectId: "project-1" },
+          requestId,
+        ),
+      ).toMatchObject({ lifecycle: "cancelled", completion: "blocked" });
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("tool-mode retry supersedes the prior result capability before replacing its key", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      const requestId = record.requestId!;
+      await context.storage.mutateFeaturePlanning(
+        context.featureId,
+        record.operationId,
+        (_plan, current) => {
+          current.phase = "failed";
+          current.failure = {
+            code: "parse",
+            message: "invalid result",
+            occurredAt: new Date().toISOString(),
+            retryPhase: "dispatching",
+          };
+        },
+      );
+
+      await context.service.retry(context.featureId);
+      expect(
+        await context.workflowResults!.status(
+          { environmentId: "env-1", projectId: "project-1" },
+          requestId,
+        ),
+      ).toMatchObject({ lifecycle: "superseded", completion: "blocked" });
+      expect((await context.record())?.requestId).toBeUndefined();
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("restart drains a result whose domain transition was saved before consumption", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const requestId = (await context.record())!.requestId!;
+      const scope = { environmentId: "env-1", projectId: "project-1" };
+      await context.workflowResults!.submit(scope, requestId, {
+        phase: "confirming",
+        title: "Applied once",
+        summary: "Crash-safe settlement",
+      });
+      context.provider.reply("The plan is ready.");
+      await context.service.advanceNow(context.featureId);
+
+      const consume = context.workflowResults!.consume.bind(context.workflowResults);
+      context.workflowResults!.consume = async () => {
+        throw new Error("injected consumption failure");
+      };
+      await context.service.advanceNow(context.featureId);
+      const applied = await context.storage.getFeaturePlan(context.featureId);
+      expect(applied?.title).toBe("Applied once");
+      expect(applied?.planning?.resultAppliedAt).toBeDefined();
+
+      context.workflowResults!.consume = consume;
+      const restartedResults = new WorkflowResultService(context.dataDir);
+      const restarted = new FeaturePlanningService(context.storage, async <T>() => undefined as T, {
+        autoAdvance: false,
+        provider: async () => context.provider,
+        workflowResults: restartedResults,
+        resolveAgentToolConnection: () => ({
+          url: "http://127.0.0.1:1234/mcp",
+          token: "test-token",
+        }),
+      });
+      await restarted.advanceNow(context.featureId);
+
+      const settled = await context.storage.getFeaturePlan(context.featureId);
+      expect(settled?.planning).toBeUndefined();
+      expect(settled?.title).toBe("Applied once");
+      expect(await restartedResults.status(scope, requestId)).toMatchObject({
+        lifecycle: "consumed",
+        completion: "completed",
+      });
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("cancelling while send is in flight aborts and never leaves a hidden turn", async () => {
     const context = await harness();
     try {

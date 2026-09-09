@@ -220,15 +220,44 @@ export abstract class BuildPipelineServiceBase {
   }
 
   protected async consumeWorkflowResult(
+    pipeline: BuildPipeline,
     session: PipelineSession,
     resultKey: string,
   ): Promise<void> {
     if (session.resultTransport === "tool-v1") {
-      await this.options.workflowResults?.consume(resultKey);
-      // Consumption ends the submission's own lifecycle. Completion is a
-      // separate stage transition the supervisor still owns.
-      delete session.resultSubmission;
+      try {
+        await this.options.workflowResults?.consume(resultKey);
+        // Consumption ends the submission's own lifecycle. Completion is a
+        // separate stage transition the supervisor still owns.
+        delete session.resultSubmission;
+        const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+          (candidate) => candidate !== resultKey,
+        );
+        if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+        else delete pipeline.pendingResultConsumptions;
+        await this.save(pipeline, pipeline.backendRevision);
+      } catch (error) {
+        // The already-saved outbox marker is authoritative. A later supervisor
+        // pass retries cleanup without turning an applied domain transition
+        // into a workflow failure.
+        this.stageWorkflowResultConsumption(pipeline, session, resultKey);
+        console.warn(
+          `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
+          errorMessage(error),
+        );
+      }
     }
+  }
+
+  protected stageWorkflowResultConsumption(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    resultKey: string,
+  ): void {
+    if (session.resultTransport !== "tool-v1") return;
+    pipeline.pendingResultConsumptions = Array.from(
+      new Set([...(pipeline.pendingResultConsumptions ?? []), resultKey]),
+    );
   }
 
   protected async readWorkflowResult<T>(
@@ -259,6 +288,20 @@ export abstract class BuildPipelineServiceBase {
       };
       if (!isBuildPipeline(normalized)) continue;
       const pipeline = normalized;
+      if (pipeline.pendingResultConsumptions?.length && this.options.workflowResults) {
+        try {
+          for (const resultKey of pipeline.pendingResultConsumptions) {
+            await this.options.workflowResults.consume(resultKey);
+          }
+          delete pipeline.pendingResultConsumptions;
+          await this.save(pipeline, record.revision);
+        } catch (error) {
+          console.warn(
+            `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
+            errorMessage(error),
+          );
+        }
+      }
       if (
         (record.snapshot as { controller?: unknown }).controller !== "backend" ||
         (record.snapshot as { backendRevision?: unknown }).backendRevision !== record.revision
@@ -572,12 +615,15 @@ export abstract class BuildPipelineServiceBase {
         pipeline.error = `Build paused, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`;
       }
     });
+    await this.closeWorkflowResults(pipeline, "superseded");
     if (abortErrors.length > 0) throw abortErrors[0];
     return pipeline;
   }
 
   async resume(pipelineId: string): Promise<BuildPipeline> {
     await this.refreshWorkflowRollout();
+    const paused = (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    if (paused.phase === "paused") await this.closeWorkflowResults(paused, "superseded");
     const pipeline = await this.mutate(pipelineId, (candidate) => {
       if (candidate.phase !== "paused") return;
       const phase = candidate.pausedFromPhase ?? "building";
@@ -867,6 +913,14 @@ export abstract class BuildPipelineServiceBase {
     // is active. Cancellation is a terminal transition, so retaining the id
     // here would grow the map for every cancelled build until shutdown.
     this.lastProviderAgent.delete(pipelineId);
+    await this.closeWorkflowResults(pipeline, "cancelled");
+    await this.reconcileTerminalState(pipeline);
+    if (abortErrors.length > 0) throw abortErrors[0];
+    return pipeline;
+  }
+
+  /** Enumerates every bearer result slot still reachable from a pipeline snapshot. */
+  private workflowResultKeys(pipeline: BuildPipeline): Set<string> {
     const resultKeys = new Set(
       pipeline.sessions.flatMap((session) =>
         session.resultTransport === "tool-v1" && session.structuredRequestId
@@ -883,14 +937,27 @@ export abstract class BuildPipelineServiceBase {
     if (consolidation?.resultTransport === "tool-v1") {
       resultKeys.add(consolidation.requestId);
     }
+    if (pipeline.pendingPromptAttempt?.resultTransport === "tool-v1") {
+      resultKeys.add(pipeline.pendingPromptAttempt.requestId);
+    }
+    if (
+      pipeline.activePromptContext?.resultTransport === "tool-v1" &&
+      pipeline.activePromptContext.requestId
+    ) {
+      resultKeys.add(pipeline.activePromptContext.requestId);
+    }
+    return resultKeys;
+  }
+
+  private async closeWorkflowResults(
+    pipeline: BuildPipeline,
+    lifecycle: "cancelled" | "superseded",
+  ): Promise<void> {
     await Promise.all(
-      Array.from(resultKeys, (resultKey) =>
-        this.options.workflowResults?.close(resultKey, "cancelled"),
+      Array.from(this.workflowResultKeys(pipeline), (resultKey) =>
+        this.options.workflowResults?.close(resultKey, lifecycle),
       ),
     );
-    await this.reconcileTerminalState(pipeline);
-    if (abortErrors.length > 0) throw abortErrors[0];
-    return pipeline;
   }
 
   /** Stops every provider turn owned by a live multi-model review. */

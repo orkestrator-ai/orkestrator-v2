@@ -18,6 +18,7 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
 import { LoopedReviewService } from "./looped-review-service.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -110,7 +111,12 @@ function inputRequest(
 
 class FakeProvider implements BuildPipelineProvider {
   readonly agent: LoopedReviewAgent;
-  readonly sent: Array<{ sessionId: string; requestId: string; schema?: JsonSchema }> = [];
+  readonly sent: Array<{
+    sessionId: string;
+    requestId: string;
+    schema?: JsonSchema;
+    agentMcp?: ProviderSendOptions["agentMcp"];
+  }> = [];
   readonly registrations: Array<{ sessionId: string; interaction?: ProviderSessionRegistration }> =
     [];
   readonly sessions = new Map<string, string>();
@@ -193,7 +199,12 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async send(sessionId: string, _prompt: string, options: ProviderSendOptions): Promise<void> {
-    this.sent.push({ sessionId, requestId: options.requestId, schema: options.schema });
+    this.sent.push({
+      sessionId,
+      requestId: options.requestId,
+      schema: options.schema,
+      agentMcp: options.agentMcp,
+    });
     if (this.sendBarrier) await this.sendBarrier;
     if (this.ambiguousOnce && !this.ambiguousThrown) {
       this.ambiguousThrown = true;
@@ -282,6 +293,7 @@ async function harness(
     storage: StorageService,
     provider: FakeProvider,
     invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+    workflowResults?: WorkflowResultService,
   ) => Promise<void>,
   agent: LoopedReviewAgent = "claude",
   serviceOptions: {
@@ -290,6 +302,7 @@ async function harness(
     useProductionProvider?: boolean;
     bridgeAuthToken?: string;
     reviewPackageVerificationFailures?: number;
+    toolMode?: boolean;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-looped-review-"));
@@ -316,6 +329,7 @@ async function harness(
     });
   }
   const provider = new FakeProvider(agent);
+  const workflowResults = serviceOptions.toolMode ? new WorkflowResultService(dataDir) : undefined;
   const bridgeCalls: string[] = [];
   let reviewPackageVerificationFailures = serviceOptions.reviewPackageVerificationFailures ?? 0;
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
@@ -369,18 +383,28 @@ async function harness(
     useProductionProvider,
     bridgeAuthToken: _bridgeAuthToken,
     reviewPackageVerificationFailures: _reviewPackageVerificationFailures,
+    toolMode: _toolMode,
     ...controllerOptions
   } = serviceOptions;
   const service = new LoopedReviewService(storage, invoke, {
     autoAdvance: false,
     ...(useProductionProvider ? {} : { provider: async () => provider }),
     missingResultPollLimit: 3,
+    ...(workflowResults
+      ? {
+          workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        }
+      : {}),
     ...controllerOptions,
   });
   Object.assign(invoke, { bridgeCalls });
   await service.init();
   try {
-    await run(service, storage, provider, invoke);
+    await run(service, storage, provider, invoke, workflowResults);
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -558,6 +582,54 @@ describe("LoopedReviewService", () => {
       },
       "claude",
       { useProductionProvider: true, bridgeAuthToken: "" },
+    );
+  });
+
+  test("tool-mode dispatch attaches its capability and consumes the applied result", async () => {
+    await harness(
+      async (service, storage, provider, _invoke, workflowResults) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        for (let pass = 0; pass < 4 && provider.sent.length === 0; pass += 1) {
+          await service.advanceNow(started.id);
+        }
+        const dispatched = await snapshot(storage, started.id);
+        const requestId = dispatched.dispatch!.requestId;
+        expect(dispatched.dispatch?.resultTransport).toBe("tool-v1");
+        expect(provider.sent[0]?.schema).toBeUndefined();
+        expect(provider.sent[0]?.agentMcp).toEqual({
+          url: "http://127.0.0.1:1234/mcp",
+          token: "test-token",
+        });
+
+        await workflowResults!.submit(
+          { environmentId: "env-1", projectId: "project-1" },
+          requestId,
+          {
+            validation: [],
+            uncommittedFiles: [],
+            limitations: ["No validation configured."],
+          },
+        );
+        await service.advanceNow(started.id);
+
+        expect((await snapshot(storage, started.id)).phase).toBe("discovering");
+        expect(provider.structuredCount).toBe(0);
+        expect(
+          await workflowResults!.status(
+            { environmentId: "env-1", projectId: "project-1" },
+            requestId,
+          ),
+        ).toMatchObject({ lifecycle: "consumed", completion: "completed" });
+      },
+      "claude",
+      { toolMode: true },
     );
   });
 

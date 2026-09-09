@@ -23,9 +23,19 @@ export function createNativeAgentProvider(
   if (dependencies.workflowResults) {
     const providerStructured = provider.structured.bind(provider);
     provider.structured = async <T>(sessionId: string, requestId: string) => {
-      const toolResult = await dependencies.workflowResults!.structured<T>(requestId);
-      if (toolResult || (await dependencies.workflowResults!.registered(requestId))) {
-        return toolResult;
+      try {
+        const lookup = dependencies.workflowResults!.lookup
+          ? await dependencies.workflowResults!.lookup<T>(requestId)
+          : {
+              result: await dependencies.workflowResults!.structured<T>(requestId),
+              registered: await dependencies.workflowResults!.registered(requestId),
+            };
+        if (lookup.result || lookup.registered) return lookup.result;
+      } catch (error) {
+        console.warn(
+          "[native-agent] Workflow result store unavailable; using provider result:",
+          error,
+        );
       }
       return providerStructured<T>(sessionId, requestId);
     };

@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
@@ -44,7 +44,7 @@ export interface WorkflowResultCallerScope {
 
 interface StoredWorkflowResult extends WorkflowResultSlotInput {
   schemaVersion: number;
-  lifecycle: "open" | "accepted" | "consumed" | "cancelled" | "superseded";
+  lifecycle: "open" | "accepted" | "consumed" | "cancelled" | "superseded" | "exhausted";
   createdAt: string;
   updatedAt: string;
   result?: unknown;
@@ -129,7 +129,9 @@ function validStoredEntry(key: string, value: unknown): value is StoredWorkflowR
     (entry.expectedStoryId === undefined || typeof entry.expectedStoryId === "string") &&
     validContext(entry.context) &&
     entry.schemaVersion === WORKFLOW_RESULT_SCHEMA_VERSION &&
-    ["open", "accepted", "consumed", "cancelled", "superseded"].includes(String(entry.lifecycle)) &&
+    ["open", "accepted", "consumed", "cancelled", "superseded", "exhausted"].includes(
+      String(entry.lifecycle),
+    ) &&
     typeof entry.createdAt === "string" &&
     typeof entry.updatedAt === "string" &&
     (entry.firstSubmissionAt === undefined || typeof entry.firstSubmissionAt === "string") &&
@@ -171,7 +173,9 @@ export class WorkflowResultService {
   private readonly filePath: string;
   private readonly capabilityIdentityPath: string;
   private capabilityIdentity: WorkflowResultCapabilityIdentity | null = null;
+  private cachedStore: { fingerprint: string; store: WorkflowResultStore } | null = null;
   private mutation: Promise<unknown> = Promise.resolve();
+  private pendingAuthentications = 0;
   private pendingCalls = 0;
   private pendingBytes = 0;
   private readonly pendingCallsByKey = new Map<string, number>();
@@ -188,28 +192,24 @@ export class WorkflowResultService {
     await mkdir(path.dirname(this.capabilityIdentityPath), { recursive: true });
     try {
       const parsed = await this.readCapabilityIdentity();
-      if (!validCapabilityIdentity(parsed)) throw new Error("invalid capability identity");
-      this.capabilityIdentity = parsed;
-      return;
+      if (validCapabilityIdentity(parsed)) {
+        this.capabilityIdentity = parsed;
+        return;
+      }
+      await rm(this.capabilityIdentityPath, { force: true });
     } catch (error) {
-      if ((error as { code?: unknown }).code !== "ENOENT") throw error;
+      if ((error as { code?: unknown }).code !== "ENOENT") {
+        // The identity contains no user data and is useful only while valid.
+        // Regenerating it invalidates stale bearer capabilities but keeps the
+        // rest of the agent-tools server available after a torn write.
+        await rm(this.capabilityIdentityPath, { force: true });
+      }
     }
     const identity: WorkflowResultCapabilityIdentity = {
       version: CAPABILITY_IDENTITY_VERSION,
       secret: randomBytes(32).toString("base64url"),
     };
-    try {
-      await writeFile(this.capabilityIdentityPath, `${JSON.stringify(identity)}\n`, {
-        mode: 0o600,
-        flag: "wx",
-      });
-      this.capabilityIdentity = identity;
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-      const parsed = await this.readCapabilityIdentity();
-      if (!validCapabilityIdentity(parsed)) throw new Error("invalid capability identity");
-      this.capabilityIdentity = parsed;
-    }
+    this.capabilityIdentity = await this.writeCapabilityIdentity(identity);
   }
 
   capabilityPort(): number | undefined {
@@ -228,7 +228,9 @@ export class WorkflowResultService {
 
   capabilityToken(scope: WorkflowResultCallerScope, resultKey: string): string {
     const signature = this.signCapability(scope, resultKey);
-    return `${resultKey}_${signature}`;
+    const environmentId = Buffer.from(scope.environmentId, "utf8").toString("base64url");
+    const projectId = Buffer.from(scope.projectId, "utf8").toString("base64url");
+    return `${resultKey}.${environmentId}.${projectId}.${signature}`;
   }
 
   async authenticateCapability(token: string): Promise<
@@ -237,24 +239,39 @@ export class WorkflowResultService {
       })
     | null
   > {
-    const separator = token.indexOf("_");
-    if (separator <= 0) return null;
-    const resultKey = token.slice(0, separator);
-    const signature = token.slice(separator + 1);
-    if (!/^[0-9a-f-]{36}$/i.test(resultKey) || !/^[A-Za-z0-9_-]{43}$/.test(signature)) return null;
-    const store = await this.load();
-    const entry = store.entries[resultKey];
-    if (!entry) return null;
-    const expected = this.signCapability(entry, resultKey);
+    if (this.pendingAuthentications >= 16 || token.length > 2_048) return null;
+    const [resultKey, encodedEnvironmentId, encodedProjectId, signature, ...extra] =
+      token.split(".");
+    if (
+      extra.length > 0 ||
+      !resultKey ||
+      !encodedEnvironmentId ||
+      !encodedProjectId ||
+      !signature ||
+      !/^[0-9a-f-]{36}$/i.test(resultKey) ||
+      !/^[A-Za-z0-9_-]{1,684}$/.test(encodedEnvironmentId) ||
+      !/^[A-Za-z0-9_-]{1,684}$/.test(encodedProjectId) ||
+      !/^[A-Za-z0-9_-]{43}$/.test(signature)
+    )
+      return null;
+    const environmentId = decodeCapabilityScope(encodedEnvironmentId);
+    const projectId = decodeCapabilityScope(encodedProjectId);
+    if (!environmentId || !projectId) return null;
+    const scope = { environmentId, projectId };
+    const expected = this.signCapability(scope, resultKey);
     const actualBytes = Buffer.from(signature);
     const expectedBytes = Buffer.from(expected);
     if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes))
       return null;
-    return {
-      environmentId: entry.environmentId,
-      projectId: entry.projectId,
-      workflowResultKey: resultKey,
-    };
+    this.pendingAuthentications += 1;
+    try {
+      const entry = (await this.load()).entries[resultKey];
+      if (!entry || entry.environmentId !== environmentId || entry.projectId !== projectId)
+        return null;
+      return { environmentId, projectId, workflowResultKey: resultKey };
+    } finally {
+      this.pendingAuthentications -= 1;
+    }
   }
 
   async prepare(input: WorkflowResultSlotInput): Promise<void> {
@@ -301,6 +318,7 @@ export class WorkflowResultService {
     const entry = (await this.load()).entries[resultKey];
     if (!entry) return undefined;
     if (entry.lifecycle === "accepted") return "received";
+    if (entry.lifecycle === "exhausted") return "needs-attention";
     if (entry.lifecycle !== "open") return undefined;
     if (entry.rejectedDigests.length === 0) return "preparing";
     return entry.rejectedDigests.length >= WORKFLOW_RESULT_MAX_REJECTIONS
@@ -371,6 +389,29 @@ export class WorkflowResultService {
               code: "capability_denied",
               nextAction: "stop",
               message: "This tool connection cannot submit that workflow result.",
+            },
+          } satisfies WorkflowResultSubmission;
+        }
+        if (
+          entry.lifecycle === "cancelled" ||
+          entry.lifecycle === "superseded" ||
+          entry.lifecycle === "exhausted"
+        ) {
+          const exhausted = entry.lifecycle === "exhausted";
+          this.metrics.recordSubmission({
+            provider: entry.provider,
+            kind: entry.kind,
+            outcome: "rejected",
+            code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
+          });
+          return {
+            ok: false,
+            error: {
+              code: exhausted ? "correction_budget_exhausted" : "attempt_closed",
+              nextAction: "stop",
+              message: exhausted
+                ? "The correction budget for this workflow result is exhausted."
+                : "This workflow result attempt is closed.",
             },
           } satisfies WorkflowResultSubmission;
         }
@@ -449,6 +490,7 @@ export class WorkflowResultService {
           entry.rejectedDigests = entry.rejectedDigests.slice(-WORKFLOW_RESULT_MAX_REJECTIONS);
           entry.updatedAt = new Date().toISOString();
           if (entry.rejectedDigests.length >= WORKFLOW_RESULT_MAX_REJECTIONS) {
+            entry.lifecycle = "exhausted";
             this.metrics.recordSubmission({
               provider: entry.provider,
               kind: entry.kind,
@@ -535,7 +577,9 @@ export class WorkflowResultService {
       completion:
         entry.lifecycle === "consumed"
           ? "completed"
-          : entry.lifecycle === "cancelled" || entry.lifecycle === "superseded"
+          : entry.lifecycle === "cancelled" ||
+              entry.lifecycle === "superseded" ||
+              entry.lifecycle === "exhausted"
             ? "blocked"
             : "pending",
       ...(entry.receipt ? { receipt: entry.receipt } : {}),
@@ -557,6 +601,24 @@ export class WorkflowResultService {
 
   async registered(resultKey: string): Promise<boolean> {
     return (await this.load()).entries[resultKey] !== undefined;
+  }
+
+  async lookup<T>(
+    resultKey: string,
+  ): Promise<{ registered: boolean; result: StructuredOutputResult<T> | null }> {
+    const entry = (await this.load()).entries[resultKey];
+    return {
+      registered: entry !== undefined,
+      result:
+        entry?.receipt && entry.lifecycle === "accepted" && entry.result !== undefined
+          ? {
+              ok: true,
+              provider: entry.provider,
+              requestId: resultKey,
+              value: entry.result as T,
+            }
+          : null,
+    };
   }
 
   async binding(
@@ -582,6 +644,11 @@ export class WorkflowResultService {
       const consumedAt = new Date().toISOString();
       entry.lifecycle = "consumed";
       entry.result = undefined;
+      entry.context = undefined;
+      entry.schema = undefined;
+      entry.expectedStoryId = undefined;
+      entry.rejectedDigests = [];
+      entry.firstSubmissionAt = undefined;
       entry.updatedAt = consumedAt;
       this.metrics.recordConsumptionLatency(
         entry.kind,
@@ -606,6 +673,11 @@ export class WorkflowResultService {
       }
       entry.lifecycle = lifecycle;
       entry.result = undefined;
+      entry.context = undefined;
+      entry.schema = undefined;
+      entry.expectedStoryId = undefined;
+      entry.rejectedDigests = [];
+      entry.firstSubmissionAt = undefined;
       entry.updatedAt = new Date().toISOString();
     });
   }
@@ -624,9 +696,11 @@ export class WorkflowResultService {
   private async load(): Promise<WorkflowResultStore> {
     const startedAt = Date.now();
     try {
-      const metadata = await stat(this.filePath);
+      const metadata = await stat(this.filePath, { bigint: true });
       if (metadata.size > MAX_STORE_BYTES)
         throw new Error("Workflow result store exceeds its size limit");
+      const fingerprint = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}`;
+      if (this.cachedStore?.fingerprint === fingerprint) return this.cachedStore.store;
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
         throw new Error("invalid store");
@@ -646,10 +720,18 @@ export class WorkflowResultService {
       }
       const entries = Object.fromEntries(rawEntries) as Record<string, StoredWorkflowResult>;
       this.metrics.recordStorageDuration("load", Date.now() - startedAt);
-      return { version: WORKFLOW_RESULT_STORE_VERSION, entries };
+      const store = { version: WORKFLOW_RESULT_STORE_VERSION, entries } as const;
+      this.cachedStore = { fingerprint, store };
+      return store;
     } catch (error) {
-      if ((error as { code?: unknown }).code === "ENOENT")
-        return { version: WORKFLOW_RESULT_STORE_VERSION, entries: {} };
+      if ((error as { code?: unknown }).code === "ENOENT") {
+        const store: WorkflowResultStore = {
+          version: WORKFLOW_RESULT_STORE_VERSION,
+          entries: {},
+        };
+        this.cachedStore = { fingerprint: "missing", store };
+        return store;
+      }
       throw error;
     }
   }
@@ -657,12 +739,18 @@ export class WorkflowResultService {
   private async save(store: WorkflowResultStore): Promise<void> {
     const startedAt = Date.now();
     await mkdir(path.dirname(this.filePath), { recursive: true });
+    this.prune(store);
     const temp = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     const serialized = `${JSON.stringify(store, null, 2)}\n`;
     const bytes = Buffer.byteLength(serialized, "utf8");
     if (bytes > MAX_STORE_BYTES) throw new Error("Workflow result store exceeds its size limit");
     await writeFile(temp, serialized, { mode: 0o600 });
     await rename(temp, this.filePath);
+    const metadata = await stat(this.filePath, { bigint: true });
+    this.cachedStore = {
+      fingerprint: `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeNs}:${metadata.ctimeNs}`,
+      store,
+    };
     this.metrics.recordStorageDuration("save", Date.now() - startedAt);
     this.metrics.setGauge("retained_bytes", bytes);
     this.metrics.setGauge(
@@ -675,20 +763,34 @@ export class WorkflowResultService {
 
   private prune(store: WorkflowResultStore): void {
     const entries = Object.values(store.entries);
-    if (entries.length <= WORKFLOW_RESULT_MAX_ENTRIES) return;
     const removable = entries
       .filter(
         (entry) =>
           entry.lifecycle === "consumed" ||
           entry.lifecycle === "cancelled" ||
-          entry.lifecycle === "superseded",
+          entry.lifecycle === "superseded" ||
+          entry.lifecycle === "exhausted",
       )
       .sort((left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt));
-    for (const entry of removable) {
-      if (Object.keys(store.entries).length <= WORKFLOW_RESULT_MAX_ENTRIES) break;
-      delete store.entries[entry.resultKey];
+    let removableIndex = 0;
+    let entryCount = entries.length;
+    while (entryCount > WORKFLOW_RESULT_MAX_ENTRIES && removableIndex < removable.length) {
+      delete store.entries[removable[removableIndex++]!.resultKey];
+      entryCount -= 1;
     }
-    if (Object.keys(store.entries).length > WORKFLOW_RESULT_MAX_ENTRIES)
+    const retainedByteLimit = MAX_STORE_BYTES - WORKFLOW_RESULT_MAX_BYTES;
+    let retainedBytes = Buffer.byteLength(JSON.stringify(store), "utf8");
+    while (retainedBytes > retainedByteLimit && removableIndex < removable.length) {
+      // Re-measure in bounded batches. Serializing after every tombstone makes
+      // byte pruning quadratic at the 4,096-entry limit.
+      const batchEnd = Math.min(removableIndex + 64, removable.length);
+      while (removableIndex < batchEnd) {
+        delete store.entries[removable[removableIndex++]!.resultKey];
+        entryCount -= 1;
+      }
+      retainedBytes = Buffer.byteLength(JSON.stringify(store), "utf8");
+    }
+    if (entryCount > WORKFLOW_RESULT_MAX_ENTRIES)
       throw new Error("Workflow result store has too many active entries");
   }
 
@@ -697,6 +799,7 @@ export class WorkflowResultService {
       const release = await this.acquireMutationLock();
       try {
         const store = await this.load();
+        this.cachedStore = null;
         const result = await operation(store);
         await this.save(store);
         return result;
@@ -719,6 +822,28 @@ export class WorkflowResultService {
     if (metadata.size > MAX_CAPABILITY_IDENTITY_BYTES)
       throw new Error("Workflow result capability identity exceeds its size limit");
     return JSON.parse(await readFile(this.capabilityIdentityPath, "utf8")) as unknown;
+  }
+
+  private async writeCapabilityIdentity(
+    identity: WorkflowResultCapabilityIdentity,
+  ): Promise<WorkflowResultCapabilityIdentity> {
+    const temp = `${this.capabilityIdentityPath}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, `${JSON.stringify(identity)}\n`, { mode: 0o600 });
+      try {
+        // Linking a complete same-directory temp file preserves `wx` creation
+        // semantics without ever exposing partially written JSON.
+        await link(temp, this.capabilityIdentityPath);
+        return identity;
+      } catch (error) {
+        if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+        const existing = await this.readCapabilityIdentity();
+        if (!validCapabilityIdentity(existing)) throw new Error("invalid capability identity");
+        return existing;
+      }
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined);
+    }
   }
 
   private signCapability(scope: WorkflowResultCallerScope, resultKey: string): string {
@@ -782,4 +907,17 @@ function validCapabilityIdentity(value: unknown): value is WorkflowResultCapabil
 export interface WorkflowResultReader {
   structured<T>(resultKey: string): Promise<StructuredOutputResult<T> | null>;
   registered(resultKey: string): Promise<boolean>;
+  lookup?<T>(
+    resultKey: string,
+  ): Promise<{ registered: boolean; result: StructuredOutputResult<T> | null }>;
+}
+
+function decodeCapabilityScope(encoded: string): string | null {
+  try {
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    if (!decoded || Buffer.from(decoded, "utf8").toString("base64url") !== encoded) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
 }

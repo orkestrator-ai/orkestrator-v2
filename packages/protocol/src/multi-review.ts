@@ -261,6 +261,8 @@ export interface MultiReviewWorkflow {
     /** Bounded terminal polls while the provider finalizes cumulative usage. */
     usageFinalizationPolls?: number;
   };
+  /** Accepted result keys whose domain transition is durable but consumption is pending. */
+  pendingResultConsumptions?: string[];
   cancellingSince?: string;
   error?: string;
   createdAt: string;
@@ -613,6 +615,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "fixTabId",
       "presentationError",
       "activeRequest",
+      "pendingResultConsumptions",
       "cancellingSince",
       "error",
       "createdAt",
@@ -651,6 +654,10 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
         value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
+    (value.pendingResultConsumptions !== undefined &&
+      (!Array.isArray(value.pendingResultConsumptions) ||
+        value.pendingResultConsumptions.length > 64 ||
+        !value.pendingResultConsumptions.every((key) => nonBlank(key)))) ||
     !optionalDate(value.cancellingSince) ||
     (value.fixResult !== undefined && !isFixResult(value.fixResult)) ||
     (value.addressPromptPending !== undefined && typeof value.addressPromptPending !== "boolean") ||

@@ -582,6 +582,9 @@ export interface ReviewFanoutHost {
   /** Bounded delivery state for one slot, projected into the saved record. */
   projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
   consumeResult?(requestId: string): Promise<void>;
+  /** Adds/removes a durable owner-side outbox marker around consumption. */
+  stageResultConsumption?(requestId: string): void;
+  finishResultConsumption?(requestId: string): void;
   closeResult?(requestId: string): Promise<void>;
   /** Persists the host's own record. Called after every durable mutation. */
   save(): Promise<void>;
@@ -935,10 +938,22 @@ export class ReviewFanoutRunner {
     delete reviewer.stalledSince;
     this.host.progress.forget(reviewer.providerSessionId);
     delete reviewer.progressDigest;
+    if (reviewer.resultTransport === "tool-v1") {
+      host.stageResultConsumption?.(reviewer.requestId);
+    }
     await host.save();
     if (reviewer.resultTransport === "tool-v1") {
-      await host.consumeResult?.(reviewer.requestId);
-      delete reviewer.resultSubmission;
+      try {
+        await host.consumeResult?.(reviewer.requestId);
+        delete reviewer.resultSubmission;
+        host.finishResultConsumption?.(reviewer.requestId);
+        await host.save();
+      } catch (error) {
+        host.stageResultConsumption?.(reviewer.requestId);
+        console.warn(
+          `[review-fanout] Deferred result consumption: ${reviewFanoutErrorMessage(error)}`,
+        );
+      }
     }
     return "continue";
   }
@@ -1133,10 +1148,10 @@ export class ReviewFanoutRunner {
         : "structured-output-v1";
     reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
     delete reviewer.idleResultPolls;
-    await this.host.save();
     if (previousTransport === "tool-v1" && previousRequestId) {
       await this.host.closeResult?.(previousRequestId);
     }
+    await this.host.save();
     return "stop";
   }
 

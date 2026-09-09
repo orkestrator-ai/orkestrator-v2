@@ -652,7 +652,11 @@ export class LoopedReviewService {
         // `paused` and `failed` cannot progress without a user command, and
         // resume/retry/cancel each advance explicitly. Polling them would claim a
         // lease and re-read the store every second for nothing.
-        if (isLoopedReviewActivePhase(phase) || phase === "cancelling") {
+        if (
+          isLoopedReviewActivePhase(phase) ||
+          phase === "cancelling" ||
+          ((record.snapshot as LoopedReviewWorkflow).pendingResultConsumptions?.length ?? 0) > 0
+        ) {
           await this.runLocked(record.id);
         }
       }),
@@ -712,10 +716,17 @@ export class LoopedReviewService {
     if (
       existing &&
       isLoopedReviewWorkflow(existing.snapshot) &&
-      isLoopedReviewTerminalPhase(existing.snapshot.phase)
+      isLoopedReviewTerminalPhase(existing.snapshot.phase) &&
+      !existing.snapshot.pendingResultConsumptions?.length
     )
       return;
     const { workflow, lease } = await this.loadControlled(workflowId);
+    if (workflow.pendingResultConsumptions?.length) {
+      await this.consumePendingResults(workflow, lease.token);
+      if (isLoopedReviewTerminalPhase(workflow.phase))
+        await this.releaseWorkflowResources(workflow);
+      return;
+    }
     if (workflow.phase === "cancelling") {
       await this.reconcileCancellation(workflow, lease.token);
       return;
@@ -827,9 +838,10 @@ export class LoopedReviewService {
     if (result) {
       await this.applyResult(workflow, session, dispatch, result, lease.token);
       if (dispatch.resultTransport === "tool-v1") {
-        await this.options.workflowResults?.consume(dispatch.requestId);
-        delete dispatch.resultSubmission;
+        await this.consumePendingResults(workflow, lease.token);
       }
+      if (isLoopedReviewTerminalPhase(workflow.phase))
+        await this.releaseWorkflowResources(workflow);
       return;
     }
     // Read as data. A turn that ended terminally is definitely not going to
@@ -920,6 +932,9 @@ export class LoopedReviewService {
 
   private async finalizeCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
     const cancelledDispatch = workflow.dispatch;
+    if (cancelledDispatch?.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.close(cancelledDispatch.requestId, "cancelled");
+    }
     workflow.phase = "cancelled";
     delete workflow.cancellingFromPhase;
     delete workflow.cancellingSince;
@@ -939,9 +954,6 @@ export class LoopedReviewService {
       if (session.status === "running") session.status = "cancelled";
     }
     await this.save(workflow, token);
-    if (cancelledDispatch?.resultTransport === "tool-v1") {
-      await this.options.workflowResults?.close(cancelledDispatch.requestId, "cancelled");
-    }
     await this.releaseWorkflowResources(workflow);
   }
 
@@ -1228,6 +1240,11 @@ export class LoopedReviewService {
     session.status = "idle";
     if (dispatch.kind !== "discover") session.completedAt = timestamp;
     delete workflow.structuredWait;
+    if (dispatch.resultTransport === "tool-v1") {
+      workflow.pendingResultConsumptions = Array.from(
+        new Set([...(workflow.pendingResultConsumptions ?? []), dispatch.requestId]),
+      );
+    }
     if (dispatch.kind === "prepare") {
       const preparation = definiteResult(() => parseReviewPreparationResult(result.value));
       const packageId = `review-package-${workflow.id}-r${workflow.currentRound}`;
@@ -1336,7 +1353,24 @@ export class LoopedReviewService {
       delete workflow.dispatch;
     }
     await this.save(workflow, token);
-    if (isLoopedReviewTerminalPhase(workflow.phase)) await this.releaseWorkflowResources(workflow);
+  }
+
+  private async consumePendingResults(
+    workflow: LoopedReviewWorkflow,
+    token: string,
+  ): Promise<void> {
+    const pending = workflow.pendingResultConsumptions ?? [];
+    if (pending.length === 0) return;
+    try {
+      for (const resultKey of pending) await this.options.workflowResults?.consume(resultKey);
+      delete workflow.pendingResultConsumptions;
+      await this.save(workflow, token);
+    } catch (error) {
+      console.warn(
+        `[looped-review] Deferred result consumption for ${workflow.id}:`,
+        message(error),
+      );
+    }
   }
 
   private async provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider> {

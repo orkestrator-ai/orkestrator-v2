@@ -255,6 +255,20 @@ describe("WorkflowResultService", () => {
       error: { code: "correction_budget_exhausted", nextAction: "stop" },
     });
     expect(await service.projection(resultKey)).toBe("needs-attention");
+    const lateValid = await service.submit(scope, resultKey, {
+      phase: "collecting",
+      title: "Too late",
+      summary: "",
+    });
+    expect(lateValid).toMatchObject({
+      ok: false,
+      error: { code: "correction_budget_exhausted", nextAction: "stop" },
+    });
+    expect(await service.structured(resultKey)).toBeNull();
+    expect(await service.status(scope, resultKey)).toMatchObject({
+      lifecycle: "exhausted",
+      completion: "blocked",
+    });
   });
 
   test("two simultaneous identical valid calls produce one receipt", async () => {
@@ -335,6 +349,59 @@ describe("WorkflowResultService", () => {
     expect(status).toMatchObject({ lifecycle: "cancelled", completion: "blocked" });
     expect(status?.receipt).toBeDefined();
     expect(await service.structured(resultKey)).toBeNull();
+    expect(
+      await service.submit(scope, resultKey, {
+        phase: "collecting",
+        title: "Late replay",
+        summary: "",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+  });
+
+  test("terminal slots discard bulky validation context and stay below the byte ceiling", async () => {
+    const sources = Object.fromEntries(
+      Array.from({ length: 4_096 }, (_, index) => [`reviewer-${index}:0`, "issue" as const]),
+    );
+    for (let index = 0; index < 24; index += 1) {
+      const resultKey = crypto.randomUUID();
+      await service.prepare({
+        resultKey,
+        kind: "consolidated-review",
+        ...scope,
+        provider: "codex",
+        context: { type: "consolidated-review", sources },
+      });
+      await service.close(resultKey, "superseded");
+    }
+    const filePath = join(dataDir, "workflow-results.json");
+    const raw = await readFile(filePath, "utf8");
+    const stored = JSON.parse(raw) as {
+      entries: Record<string, { context?: unknown; schema?: unknown; rejectedDigests: string[] }>;
+    };
+    expect(Buffer.byteLength(raw)).toBeLessThan(256 * 1024);
+    expect(
+      Object.values(stored.entries).every(
+        (entry) =>
+          entry.context === undefined &&
+          entry.schema === undefined &&
+          entry.rejectedDigests.length === 0,
+      ),
+    ).toBe(true);
+    await expect(prepare()).resolves.toBeString();
+  });
+
+  test("regenerates a truncated capability identity atomically", async () => {
+    await writeFile(join(dataDir, "workflow-result-tools.json"), '{"version":1');
+    await expect(service.initializeCapabilityIdentity()).resolves.toBeUndefined();
+    const resultKey = await prepare();
+    const token = service.capabilityToken(scope, resultKey);
+    expect(await service.authenticateCapability(token)).toEqual({
+      ...scope,
+      workflowResultKey: resultKey,
+    });
+    expect(JSON.parse(await readFile(join(dataDir, "workflow-result-tools.json"), "utf8"))).toEqual(
+      expect.objectContaining({ version: 1, secret: expect.any(String) }),
+    );
   });
 
   test("a superseded attempt does not affect its replacement", async () => {

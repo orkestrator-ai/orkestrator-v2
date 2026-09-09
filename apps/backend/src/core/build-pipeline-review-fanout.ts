@@ -211,6 +211,18 @@ export class BuildPipelineReviewFanout {
             readResult: <T>(requestId: string) =>
               this.deps.workflowResults!.structured<T>(requestId),
             consumeResult: (requestId: string) => this.deps.workflowResults!.consume(requestId),
+            stageResultConsumption: (requestId: string) => {
+              pipeline.pendingResultConsumptions = Array.from(
+                new Set([...(pipeline.pendingResultConsumptions ?? []), requestId]),
+              );
+            },
+            finishResultConsumption: (requestId: string) => {
+              const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+                (candidate) => candidate !== requestId,
+              );
+              if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+              else delete pipeline.pendingResultConsumptions;
+            },
             closeResult: (requestId: string) =>
               this.deps.workflowResults!.close(requestId, "superseded"),
           }
@@ -591,10 +603,30 @@ export class BuildPipelineReviewFanout {
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
     pipeline.structuredReviewRequestId = consolidation.requestId;
+    if (consolidation.resultTransport === "tool-v1") {
+      pipeline.pendingResultConsumptions = Array.from(
+        new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
+      );
+    }
     await this.deps.save(pipeline);
     if (consolidation.resultTransport === "tool-v1") {
-      await this.deps.workflowResults?.consume(consolidation.requestId);
-      delete consolidation.resultSubmission;
+      try {
+        await this.deps.workflowResults?.consume(consolidation.requestId);
+        delete consolidation.resultSubmission;
+        const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+          (candidate) => candidate !== consolidation.requestId,
+        );
+        if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+        else delete pipeline.pendingResultConsumptions;
+        await this.deps.save(pipeline);
+      } catch (error) {
+        pipeline.pendingResultConsumptions = Array.from(
+          new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
+        );
+        console.warn(
+          `[build-pipeline] Deferred consolidation result consumption: ${reviewFanoutErrorMessage(error)}`,
+        );
+      }
     }
     return { kind: "consolidated" };
   }
@@ -696,10 +728,10 @@ export class BuildPipelineReviewFanout {
     consolidation.requestId = randomUUID();
     consolidation.state = "prepared";
     delete consolidation.idleResultPolls;
-    await this.deps.save(pipeline);
     if (previousTransport === "tool-v1") {
       await this.deps.workflowResults?.close(previousRequestId, "superseded");
     }
+    await this.deps.save(pipeline);
     return { kind: "working" };
   }
 }

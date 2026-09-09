@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -299,6 +299,46 @@ describe("agent Kanban tools", () => {
       isError: true,
       structuredContent: { ok: false, error: { code: "capability_denied" } },
     });
+  });
+
+  test("starts ordinary tools after regenerating a truncated workflow capability identity", async () => {
+    await server.stop();
+    await writeFile(join(dataDir, "workflow-result-tools.json"), "");
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await expect(server.start()).resolves.toBeUndefined();
+    await addMessagingEnvironment("env-identity", "project-identity", ["agent-identity"]);
+    const connection = server.connection(
+      "env-identity",
+      "project-identity",
+      "host",
+      "agent-identity",
+    );
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(ALL_AGENT_TOOL_NAMES);
+  });
+
+  test("rejects a forged workflow token without parsing a corrupt result store", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "feature-plan-state",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "codex",
+    });
+    const connection = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+    const final = connection.token.at(-1);
+    const forged = `${connection.token.slice(0, -1)}${final === "A" ? "B" : "A"}`;
+    await writeFile(join(dataDir, "workflow-results.json"), "{not-json");
+
+    const rejected = await rpc(connection.url, forged, "tools/list");
+    expect(rejected.response.status).toBe(401);
   });
 
   test("advertises one typed submission tool for every workflow result kind", async () => {

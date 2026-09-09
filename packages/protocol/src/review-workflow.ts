@@ -406,6 +406,8 @@ export interface LoopedReviewWorkflow {
   sessions: LoopedReviewSession[];
   activeSessionId?: string;
   dispatch?: LoopedReviewDispatch;
+  /** Accepted result keys whose domain transition is durable but consumption is pending. */
+  pendingResultConsumptions?: string[];
   structuredWait?: LoopedReviewStructuredWait;
   pendingInteractionResolution?: PendingLoopedReviewInteractionResolution;
   interactionSummary?: AgentInteractionWorkflowSummary;
@@ -1119,6 +1121,12 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     (workflow.pendingInteractionResolution !== undefined &&
       !isPendingInteractionResolution(workflow.pendingInteractionResolution)) ||
     (workflow.dispatch !== undefined && !isDispatch(workflow.dispatch)) ||
+    (workflow.pendingResultConsumptions !== undefined &&
+      (!Array.isArray(workflow.pendingResultConsumptions) ||
+        workflow.pendingResultConsumptions.length > 32 ||
+        !workflow.pendingResultConsumptions.every((key) =>
+          isBoundedNonEmptyString(key, LOOPED_REVIEW_MAX_ID_LENGTH),
+        ))) ||
     (workflow.structuredWait !== undefined &&
       (!isRecord(workflow.structuredWait) ||
         !isBoundedNonEmptyString(workflow.structuredWait.dispatchId, LOOPED_REVIEW_MAX_ID_LENGTH) ||

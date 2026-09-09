@@ -27,6 +27,7 @@ import {
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./native-agent-provider.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 
 import type { Environment } from "./models.js";
 
@@ -348,6 +349,36 @@ function pendingInteractionSnapshot(
 }
 
 describe("NativeAgentService", () => {
+  test("falls through to provider structured output when the workflow result store is malformed", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-provider-result-fallback-"));
+    try {
+      await fs.writeFile(path.join(dataDir, "workflow-results.json"), "{malformed");
+      const bridgeResult = {
+        ok: true as const,
+        provider: "codex" as const,
+        requestId: "request-1",
+        value: { complete: true },
+      };
+      const bridgeFetch = mock(async () => Response.json({ structuredOutput: bridgeResult }));
+      const provider = createNativeAgentProvider(
+        {
+          agent: "codex",
+          baseUrl: "http://codex.test",
+          authToken: "test-token",
+        },
+        {
+          fetch: bridgeFetch as unknown as typeof fetch,
+          workflowResults: new WorkflowResultService(dataDir),
+        },
+      );
+
+      await expect(provider.structured("session-1", "request-1")).resolves.toEqual(bridgeResult);
+      expect(bridgeFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a disconnected OpenCode model on the interactive tab path", async () => {
     const messageCalls = mock(async () => ({ data: [] }));
     const promptCalls = mock(async () => ({ data: true }));

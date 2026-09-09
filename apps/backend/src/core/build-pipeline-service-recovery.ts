@@ -131,12 +131,13 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     session.structuredResultStatus = "accepted";
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
+    this.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (complete) {
       await this.updateKanbanLifecycle(pipeline, {
         comment: "✅ Validation complete",
       });
       await this.startStage(pipeline, "pr", "creating-pr");
-      await this.consumeWorkflowResult(session, resolvedRequestId);
+      await this.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
     }
     if (pipeline.iteration >= pipeline.maxIterations) {
@@ -148,7 +149,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     delete pipeline.validationRun;
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
-    await this.consumeWorkflowResult(session, resolvedRequestId);
+    await this.consumeWorkflowResult(pipeline, session, resolvedRequestId);
   }
 
   /**

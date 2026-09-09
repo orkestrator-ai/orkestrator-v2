@@ -1,5 +1,6 @@
 import {
   normalizeWorkflowResultToolsSettings,
+  STRUCTURED_OUTPUT_PROVIDER_VALUES,
   WORKFLOW_RESULT_KINDS,
   type WorkflowResultToolsSettings,
 } from "@orkestrator/protocol/workflow-results";
@@ -41,6 +42,14 @@ export function registerWorkflowResultCommands(register: CommandRegistrar): void
       }
       if (providers !== undefined && !Array.isArray(providers)) {
         throw new Error("providers must be an array");
+      }
+      if (Array.isArray(providers)) {
+        const unknown = providers.filter(
+          (provider) =>
+            !(STRUCTURED_OUTPUT_PROVIDER_VALUES as readonly unknown[]).includes(provider),
+        );
+        if (unknown.length > 0)
+          throw new Error("providers contains an unknown structured output provider");
       }
       if (kinds !== undefined && !Array.isArray(kinds)) {
         throw new Error("kinds must be an array");

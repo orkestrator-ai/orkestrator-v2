@@ -25,7 +25,13 @@ export const WORKFLOW_RESULT_KINDS = [
 
 export type WorkflowResultKind = (typeof WORKFLOW_RESULT_KINDS)[number];
 export type WorkflowResultTransport = "tool-v1" | "structured-output-v1" | "planner-block-v1";
-export type WorkflowResultLifecycle = "open" | "accepted" | "consumed" | "cancelled" | "superseded";
+export type WorkflowResultLifecycle =
+  | "open"
+  | "accepted"
+  | "consumed"
+  | "cancelled"
+  | "superseded"
+  | "exhausted";
 
 export interface WorkflowResultReceipt {
   version: 1;
@@ -204,7 +210,7 @@ export const DEFAULT_WORKFLOW_RESULT_TOOLS_SETTINGS: WorkflowResultToolsSettings
   kinds: [...WORKFLOW_RESULT_KINDS],
 };
 
-const STRUCTURED_OUTPUT_PROVIDER_VALUES: readonly StructuredOutputProvider[] = [
+export const STRUCTURED_OUTPUT_PROVIDER_VALUES: readonly StructuredOutputProvider[] = [
   "claude",
   "codex",
   "opencode",

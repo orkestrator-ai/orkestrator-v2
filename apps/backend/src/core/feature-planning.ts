@@ -313,6 +313,9 @@ export class FeaturePlanningService {
     if (!record) throw new Error("There is no planning request to retry");
     if (record.phase !== "failed") return record;
     const retryPhase = record.failure?.retryPhase ?? "dispatching";
+    if (retryPhase === "dispatching" && record.resultTransport === "tool-v1" && record.requestId) {
+      await this.options.workflowResults?.close(record.requestId, "superseded");
+    }
     await this.storage.mutateFeaturePlanning(featureId, record.operationId, (_plan, current) => {
       current.phase = retryPhase;
       delete current.failure;
@@ -354,7 +357,15 @@ export class FeaturePlanningService {
         if (!current || current.operationId !== record.operationId) return;
         await this.abortForCancellation(current);
         this.idleSince.delete(featureId);
-        await this.storage.clearFeaturePlanning(featureId, current.operationId);
+        await this.storage.mutateFeaturePlanning(
+          featureId,
+          current.operationId,
+          (_plan, candidate) => {
+            candidate.phase = "cancelling";
+          },
+        );
+        const cancelling = await this.read(featureId);
+        if (cancelling) await this.finalizeCancellation(cancelling);
       });
     } finally {
       if (this.cancellationRequests.get(featureId) === record.operationId) {
@@ -441,6 +452,7 @@ export class FeaturePlanningService {
   private async advance(featureId: string): Promise<void> {
     const record = await this.read(featureId);
     if (!record || !isActiveFeaturePlanningPhase(record.phase)) return;
+    if (record.phase === "cancelling") return await this.finalizeCancellation(record);
     if (await this.clearIfCancellationRequested(record)) return;
     if (record.phase === "dispatching") return await this.runDispatch(record);
     if (record.phase === "running") return await this.runAwaitReply(record);
@@ -679,6 +691,12 @@ export class FeaturePlanningService {
    * which is what makes a replay idempotent.
    */
   private async runPersist(record: FeaturePlanningRecord): Promise<void> {
+    if (record.resultTransport === "tool-v1" && record.requestId && record.resultAppliedAt) {
+      await this.options.workflowResults?.consume(record.requestId);
+      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+      this.idleSince.delete(record.featureId);
+      return;
+    }
     const raw = record.rawResponse;
     if (!raw) {
       throw new DefiniteFeaturePlanningError(
@@ -721,16 +739,21 @@ export class FeaturePlanningService {
           : "The reply did not contain a feature planner state block",
       );
     }
-    // Applying the state block and detaching the record are one write: a
-    // `complete` record left attached by a crash between two writes would sit
-    // on the plan forever, since nothing sweeps terminal records.
+    // Tool-mode settlement deliberately retains the record as a durable
+    // consumption outbox. A restart can see resultAppliedAt, skip reapplying
+    // the domain transition, consume idempotently, and then detach it.
     await this.update(record, (plan, current) => {
       if (current.kind === "story") this.applyStoryRefinement(plan, current, parsed);
       else this.applyFeaturePlannerState(plan, current, parsed);
-      delete plan.planning;
+      if (current.resultTransport === "tool-v1" && current.requestId) {
+        current.resultAppliedAt = nowIso();
+      } else {
+        delete plan.planning;
+      }
     });
     if (record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.consume(record.requestId);
+      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
     }
     this.idleSince.delete(record.featureId);
   }
@@ -1136,11 +1159,23 @@ export class FeaturePlanningService {
     if (this.cancellationRequests.get(record.featureId) !== record.operationId) return false;
     await this.abortForCancellation(record, provider, sessionId);
     this.idleSince.delete(record.featureId);
-    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+    await this.storage.mutateFeaturePlanning(
+      record.featureId,
+      record.operationId,
+      (_plan, current) => {
+        current.phase = "cancelling";
+      },
+    );
+    const cancelling = await this.read(record.featureId);
+    if (cancelling) await this.finalizeCancellation(cancelling);
+    return true;
+  }
+
+  private async finalizeCancellation(record: FeaturePlanningRecord): Promise<void> {
     if (record.resultTransport === "tool-v1" && record.requestId) {
       await this.options.workflowResults?.close(record.requestId, "cancelled");
     }
-    return true;
+    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
   }
 
   private async abortForCancellation(

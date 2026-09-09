@@ -532,6 +532,8 @@ export interface BuildPipeline {
   reconnectAttempt?: PipelineReconnectAttempt;
   pendingPromptAttempt?: PipelinePromptAttempt;
   activePromptContext?: PipelineFailureContext;
+  /** Accepted result keys whose domain transition is durable but consumption is pending. */
+  pendingResultConsumptions?: string[];
   /** One exact-once interaction currently crossing the provider boundary. */
   pendingInteractionResolution?: PendingPipelineInteractionResolution;
   /** Content-free totals across every stage attempt in this pipeline/ticket. */
@@ -1129,6 +1131,12 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     (value.reconnectAttempt !== undefined && !isReconnectAttempt(value.reconnectAttempt)) ||
     (value.pendingPromptAttempt !== undefined && !isPromptAttempt(value.pendingPromptAttempt)) ||
     (value.activePromptContext !== undefined && !isFailureContext(value.activePromptContext)) ||
+    (value.pendingResultConsumptions !== undefined &&
+      (!Array.isArray(value.pendingResultConsumptions) ||
+        value.pendingResultConsumptions.length > 64 ||
+        !value.pendingResultConsumptions.every(
+          (key) => isNonBlankString(key) && key.length <= 512,
+        ))) ||
     (value.pendingInteractionResolution !== undefined &&
       !isPendingPipelineInteractionResolution(value.pendingInteractionResolution)) ||
     (value.interactionSummary !== undefined &&

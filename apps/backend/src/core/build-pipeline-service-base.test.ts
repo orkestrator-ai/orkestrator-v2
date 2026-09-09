@@ -33,6 +33,7 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
@@ -182,6 +183,7 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
+      workflowResults?: WorkflowResultService;
       kanbanTasks: Map<
         string,
         {
@@ -194,6 +196,7 @@ async function withService(
       >;
     },
   ) => Promise<void>,
+  options: { toolMode?: boolean } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
   const storage = new StorageService(dataDir);
@@ -248,6 +251,7 @@ async function withService(
     currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
     kanbanTasks,
+    ...(options.toolMode ? { workflowResults: new WorkflowResultService(dataDir) } : {}),
   };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
@@ -319,6 +323,15 @@ async function withService(
   const service = new BuildPipelineService(storage, invoke, {
     autoAdvance: false,
     provider: async () => provider,
+    ...(controls.workflowResults
+      ? {
+          workflowResults: controls.workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        }
+      : {}),
   });
   try {
     await run(service, storage, provider, invocations, controls);
@@ -949,6 +962,36 @@ describe("BuildPipelineService", () => {
       expect(provider.sent).toHaveLength(2);
       expect(resumed.pendingPromptAttempt).toBeUndefined();
     });
+  });
+
+  test("tool-mode pause and resume supersede the abandoned result slot", async () => {
+    await withService(
+      async (service, storage, _provider, _invocations, controls) => {
+        const { started } = await startBuilding(service, storage);
+        const beforePause = await pipeline(storage, started.id);
+        const oldKey = beforePause.sessions[beforePause.currentSessionIndex]!.structuredRequestId!;
+
+        await service.pause(started.id);
+        expect(
+          await controls.workflowResults!.status(
+            { environmentId: "env-1", projectId: "project-1" },
+            oldKey,
+          ),
+        ).toMatchObject({ lifecycle: "superseded", completion: "blocked" });
+
+        await service.resume(started.id);
+        const resumed = await pipeline(storage, started.id);
+        expect(resumed.sessions[resumed.currentSessionIndex]!.structuredRequestId).not.toBe(oldKey);
+        expect(
+          await controls.workflowResults!.submit(
+            { environmentId: "env-1", projectId: "project-1" },
+            oldKey,
+            { commands: [], summary: "late" },
+          ),
+        ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+      },
+      { toolMode: true },
+    );
   });
 
   test("completes PR creation when GitHub mergeability is still indeterminate", async () => {

@@ -73,7 +73,7 @@ function credentialDigest(token: string): string {
 function bearerToken(request: IncomingMessage): string | null {
   const authorization = request.headers.authorization;
   if (!authorization || Array.isArray(authorization)) return null;
-  const match = /^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(authorization);
+  const match = /^Bearer ([A-Za-z0-9_.-]{32,2048})$/.exec(authorization);
   return match?.[1] ?? null;
 }
 

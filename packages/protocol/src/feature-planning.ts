@@ -437,13 +437,19 @@ export const FEATURE_PLANNING_PHASES = [
   "dispatching",
   "running",
   "persisting",
+  "cancelling",
   "complete",
   "failed",
 ] as const;
 export type FeaturePlanningPhase = (typeof FEATURE_PLANNING_PHASES)[number];
 
 /** Phases the backend advances on its own. */
-export const FEATURE_PLANNING_ACTIVE_PHASES = ["dispatching", "running", "persisting"] as const;
+export const FEATURE_PLANNING_ACTIVE_PHASES = [
+  "dispatching",
+  "running",
+  "persisting",
+  "cancelling",
+] as const;
 export type ActiveFeaturePlanningPhase = (typeof FEATURE_PLANNING_ACTIVE_PHASES)[number];
 
 export const FEATURE_PLANNING_FAILURE_CODES = [
@@ -512,6 +518,8 @@ export interface FeaturePlanningRecord {
   responseModelId?: string;
   /** Set once the reply has been appended to the plan, before it is applied. */
   responseMessageId?: string;
+  /** Domain state was applied; only durable result consumption remains. */
+  resultAppliedAt?: string;
   failure?: FeaturePlanningFailure;
   /** Start of the current retry attempt; reset whenever a failed exchange retries. */
   attemptStartedAt?: string;
@@ -666,6 +674,7 @@ export function isFeaturePlanningRecord(value: unknown): value is FeaturePlannin
   return (
     isOptionalIsoTimestamp(candidate.attemptStartedAt) &&
     isOptionalIsoTimestamp(candidate.dispatchedAt) &&
+    isOptionalIsoTimestamp(candidate.resultAppliedAt) &&
     isIsoTimestamp(candidate.startedAt) &&
     isIsoTimestamp(candidate.updatedAt) &&
     typeof candidate.backendRevision === "number" &&

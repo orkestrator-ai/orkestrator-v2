@@ -45,6 +45,7 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
 const mockGetLogDirectory = mock(async () => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
 const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
+const mockGetAppVersion = mock(async () => "2.15.1");
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
     updated: [],
@@ -102,6 +103,7 @@ mock.module("@/lib/backend", () => ({
   getLogDirectory: mockGetLogDirectory,
   getLogStorageStats: mockGetLogStorageStats,
   cleanupLogs: mockCleanupLogs,
+  getAppVersion: mockGetAppVersion,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
@@ -148,6 +150,8 @@ describe("GlobalSettings", () => {
     mockSetGitHubToken.mockClear();
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
+    mockGetAppVersion.mockClear();
+    mockGetAppVersion.mockImplementation(async () => "2.15.1");
     mockGetLogDirectory.mockClear();
     mockGetLogDirectory.mockImplementation(async () => null);
     mockGetLogStorageStats.mockClear();
@@ -1066,6 +1070,7 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
+    expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
   });
 
@@ -1868,6 +1873,15 @@ describe("GlobalSettings", () => {
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+  });
+
+  test("shows the running app version on the debug tab", async () => {
+    mockGetAppVersion.mockResolvedValue("9.8.7-test");
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("App version")).toBeTruthy();
+    expect(await screen.findByText("9.8.7-test")).toBeTruthy();
+    expect(mockGetAppVersion).toHaveBeenCalled();
   });
 
   test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {

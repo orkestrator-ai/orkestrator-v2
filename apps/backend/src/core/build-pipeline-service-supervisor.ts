@@ -102,6 +102,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
         provider: (pipeline, agent) => this.provider(pipeline, agent),
+        executionPolicy: (pipeline) => this.executionPolicy(pipeline),
         save: async (pipeline) => {
           await this.save(pipeline, pipeline.backendRevision);
         },
@@ -1056,6 +1057,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         model,
         effort,
         mode,
+        policy: await this.executionPolicy(pipeline),
         interaction: {
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,

@@ -40,6 +40,7 @@ import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -984,6 +985,14 @@ export class FeaturePlanningService {
       { repository: repository?.agentSettings, global: config.global.agentSettings },
       "codex",
     );
+    const environment = await this.storage.getEnvironment(environmentId);
+    if (!environment) {
+      throw new DefiniteFeaturePlanningError(
+        "environment",
+        "dispatching",
+        "The planning environment no longer exists",
+      );
+    }
     const created = await this.providerOperation(environmentId, provider, () =>
       provider.createSession("review", plan?.title || "Feature planning", {
         clientSessionKey: `feature-planning:${record.featureId}`,
@@ -993,6 +1002,7 @@ export class FeaturePlanningService {
         // another platform's catalogue.
         ...(codexDefaults.model ? { model: codexDefaults.model } : {}),
         effort: codexDefaults.reasoningEffort || "high",
+        policy: resolveEnvironmentExecutionPolicy(environment, "build-pipeline"),
       }),
     );
     await this.storage.updateFeaturePlan(record.featureId, { codexSessionId: created });

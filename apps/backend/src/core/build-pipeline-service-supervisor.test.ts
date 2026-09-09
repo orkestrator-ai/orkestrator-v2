@@ -369,6 +369,26 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
+  test("passes the container execution policy to background provider sessions", async () => {
+    await withService(async (service, storage, provider) => {
+      await storage.updateEnvironment("env-1", {
+        environmentType: "containerized",
+        containerId: "container-1",
+        networkAccessMode: "restricted",
+      });
+
+      await startBuilding(service, storage, { environmentType: "containerized" });
+
+      expect(provider.created[0]?.options?.policy).toEqual({
+        id: "pipeline",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "restricted",
+      });
+    });
+  });
+
   test("owns and advances the complete pipeline without a renderer", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start({

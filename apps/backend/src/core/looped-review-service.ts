@@ -75,6 +75,7 @@ import {
   parseReviewPreparationResult,
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -1017,6 +1018,7 @@ export class LoopedReviewService {
           mode: executionMode(phase),
           model: workflow.model === "default" ? undefined : workflow.model,
           effort: workflow.reasoningEffort,
+          policy: await this.executionPolicy(workflow),
           interaction: {
             origin: "looped-review",
             interactionPolicy: workflow.interactionPolicy,
@@ -1413,6 +1415,12 @@ export class LoopedReviewService {
     );
     this.providers.set(key, provider);
     return provider;
+  }
+
+  private async executionPolicy(workflow: LoopedReviewWorkflow) {
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment) throw new Error("Review environment no longer exists");
+    return resolveEnvironmentExecutionPolicy(environment, "looped-review");
   }
 
   private registerSessions(workflow: LoopedReviewWorkflow, provider: BuildPipelineProvider): void {

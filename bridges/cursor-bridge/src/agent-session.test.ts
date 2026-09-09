@@ -306,6 +306,26 @@ describe("ensureAgent", () => {
     expect(effective.note).toContain("restricted network access");
   });
 
+  test("uses the outer container boundary for read-only sessions", async () => {
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "container",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+
+    await ensureAgent(state);
+
+    expect(created[0]).toMatchObject({
+      local: {
+        sandboxOptions: { enabled: false },
+      },
+      disallowedTools: expect.arrayContaining(["Write", "Edit", "Shell", "WebFetch"]),
+    });
+  });
+
   test("a failed attach does not poison the next one", async () => {
     const state = newSessionState();
     delete process.env.CURSOR_API_KEY;

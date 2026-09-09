@@ -160,11 +160,15 @@ export function cursorDeniedTools(
 }
 
 async function attach(state: SessionState): Promise<SDKAgent> {
+  const sessionPolicy = state.policy;
   const policy = resolveCursorExecutionPolicy(
     state.readOnly
       ? {
           id: "coordinator-read-only",
-          sandbox: "provider",
+          // A container is already the process boundary. Reusing it avoids a
+          // nested Cursor sandbox that Docker cannot start, while the tool ban
+          // below still expresses the read-only session surface.
+          sandbox: sessionPolicy?.sandbox === "container" ? "container" : "provider",
           approvals: "deny",
           projectResources: false,
           capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
@@ -178,14 +182,13 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       "Cursor SDK cannot enforce an approvals-deny policy, so this session was refused before attach.",
     );
   }
-  // A read-only coordinator is the one deny case Cursor can express: the
-  // sandbox plus a tool ban, with no approval callback behind them. Orkestrator
-  // reports that as `provider-configured` rather than enforced, and refuses
-  // outright if the sandbox itself is unavailable — a tool ban alone would be
-  // a claim with nothing holding it up.
-  if (readOnly && policy.sandbox !== "provider") {
+  // A read-only coordinator is the one deny case Cursor can express: a process
+  // boundary plus a tool ban, with no approval callback behind them. The
+  // boundary may be Cursor's sandbox or the environment's outer container.
+  // Orkestrator reports this as `provider-configured` rather than enforced.
+  if (readOnly && policy.sandbox !== "provider" && policy.sandbox !== "container") {
     throw new Error(
-      "Cursor cannot run a read-only coordinator without its sandbox, so this session was refused before attach.",
+      "Cursor cannot run a read-only coordinator without a sandbox boundary, so this session was refused before attach.",
     );
   }
   const { apiKey } = await resolveCredential();
@@ -305,8 +308,10 @@ export function resolveCursorExecutionPolicy(
     resolved.networkAccess === "restricted" && resolved.sandbox === "none"
       ? "provider"
       : resolved.sandbox;
-  if (resolved.networkAccess === "restricted") {
+  if (resolved.networkAccess === "restricted" && sandbox === "provider") {
     notes.push("Cursor enforces restricted network access through its provider sandbox.");
+  } else if (resolved.networkAccess === "restricted" && sandbox === "container") {
+    notes.push("Restricted network access is enforced by the outer container boundary.");
   } else if (sandbox === "provider") {
     notes.push("Cursor SDK cannot independently guarantee full network inside its sandbox.");
   }

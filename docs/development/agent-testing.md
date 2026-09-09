@@ -240,9 +240,11 @@ property is exactly what the field wants, it is the gateway token rather than an
 OTP, and it must never be echoed, put in a shell argument or URL, pasted into
 chat, or captured in screenshots, traces, logs, and reports.
 
-Use the fixture to create/start an environment, open a terminal, run
-`bun run dev`, open the printed preview, change the `fixture-v1` marker, and
-verify status/diff updates. Every background change must include this path:
+Use the fixture to create/start an environment and open a terminal. Run the
+fixture project's own `bun run dev` — the script belongs to the copied fixture,
+not to this repository, whose commands are mise tasks — then open the printed
+preview, change the `fixture-v1` marker, and verify status/diff updates. Every
+background change must include this path:
 
 1. Start the operation.
 2. Switch to another environment or tab.

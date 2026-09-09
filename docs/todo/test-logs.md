@@ -129,7 +129,7 @@ to the root long pole. On the 18-core reference host, six root workers completed
 in 81.7 seconds versus 137.9 seconds at four workers. Package scripts use
 `--only-failures` so successful assertion lines are not serialized.
 
-iOS uses a shared simulator and runs alone. It is opt-in through `bun run
+iOS uses a shared simulator and runs alone. It is opt-in through `mise run
 test:all`, keeping ordinary cross-platform validation independent of Xcode.
 
 ## Other bounded test artifacts

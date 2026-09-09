@@ -71,6 +71,11 @@ describe("agent upgrade runbook contracts", () => {
     // The point of this guard: the runbook naming a task that was renamed or
     // deleted is exactly the drift the consolidation was meant to end, and
     // asserting the prose alone cannot catch it.
+    //
+    // Scope: this covers the two forms the runbook uses. A bare
+    // `bun run <script>` names the root manifest, which no longer declares
+    // scripts at all, so it is always wrong and is banned repository-wide by
+    // `tests/unit/mise-tasks.test.ts` rather than checked here.
     const runbook = await read("docs/upgrade-agents.md");
 
     // `download:<claude|codex|opencode>` is a documented placeholder, not a
@@ -94,8 +99,10 @@ describe("agent upgrade runbook contracts", () => {
       ).toBeTruthy();
     }
 
+    let workspaceInvocations = 0;
     for (const match of runbook.matchAll(/\bbun run --cwd (\S+) ([\w:-]+)/g)) {
       const [, workspace, script] = match;
+      workspaceInvocations += 1;
       const manifest = (await Bun.file(path.join(root, workspace, "package.json")).json()) as {
         scripts?: Record<string, string>;
       };
@@ -104,6 +111,9 @@ describe("agent upgrade runbook contracts", () => {
         `docs/upgrade-agents.md runs \`bun run --cwd ${workspace} ${script}\``,
       ).toBeTruthy();
     }
+    // Without this the loop degrades into a no-op the first time somebody
+    // rewrites the workspace typecheck steps, and stops guarding anything.
+    expect(workspaceInvocations).toBeGreaterThan(0);
   });
 
   test("every repository path the runbook cites exists", async () => {

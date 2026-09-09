@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
-import { createRequestLogger, readDebugFlag, redactRequestLogMessage } from "./logger.js";
+import { createRequestLogger, readDebugFlag } from "./logger.js";
 
 describe("readDebugFlag", () => {
   test("is off when the variable is unset or blank", () => {
@@ -17,8 +17,8 @@ describe("readDebugFlag", () => {
     }
   });
 
-  test("is on for anything else", () => {
-    for (const value of ["1", "true", "yes", "on", "verbose", " 1 "]) {
+  test("requires the same explicit opt-in as every other bridge", () => {
+    for (const value of ["1", " 1 "]) {
       expect(readDebugFlag(value)).toBe(true);
     }
   });
@@ -34,22 +34,23 @@ describe("createRequestLogger", () => {
     expect(typeof middleware).toBe("function");
   });
 
-  test("redacts EventSource tokens from request logs", async () => {
+  test("never records URL paths or query parameters", async () => {
     const token = "live-bridge-credential";
-    const lines: string[] = [];
+    const records: unknown[] = [];
     const app = new Hono();
     app.use(
       "*",
       createRequestLogger(true, (...parts) => {
-        lines.push(parts.join(" "));
+        records.push(parts);
       })!,
     );
     app.get("/event/subscribe", (context) => context.text("ok"));
 
     await app.request(`/event/subscribe?token=${token}&cursor=4`);
 
-    expect(lines.join("\n")).not.toContain(token);
-    expect(lines.join("\n")).toContain("token=<redacted>&cursor=4");
-    expect(redactRequestLogMessage(`GET /?TOKEN=${token}`)).toBe("GET /?TOKEN=<redacted>");
+    expect(JSON.stringify(records)).not.toContain(token);
+    expect(JSON.stringify(records)).not.toContain("/event/subscribe");
+    expect(JSON.stringify(records)).not.toContain("cursor");
+    expect(records).toEqual([["http-request", expect.objectContaining({ httpStatus: 200 })]]);
   });
 });

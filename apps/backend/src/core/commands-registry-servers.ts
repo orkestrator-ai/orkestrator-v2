@@ -166,7 +166,11 @@ export function registerServerCommands(
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation("claude", id, async () => {
       const connection = await resolveContainerAgentToolConnection(context, id);
-      return startContainerClaudeServer(id, connection);
+      return startContainerClaudeServer(
+        id,
+        connection,
+        (await context.storage.loadConfig()).global.debugLogging === true,
+      );
     });
   });
   register("stop_claude_server", ({ containerId }) => {
@@ -322,6 +326,7 @@ export function registerServerCommands(
           export CWD=/workspace
           export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
           export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
+          export ORKESTRATOR_BRIDGE_DEBUG=${config.global.debugLogging === true ? "1" : "0"}
           ${
             agentToolConnection
               ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
@@ -418,10 +423,9 @@ export function registerServerCommands(
     register(`start_${provider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       return enqueueContainerBridgeOperation(provider, id, async () => {
+        const bridgeConfig = await context.storage.loadConfig();
         const cursorApiKey =
-          provider === "cursor"
-            ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
-            : undefined;
+          provider === "cursor" ? resolveCursorApiKey(bridgeConfig.global).apiKey : undefined;
         const useCursorSdk = provider === "cursor";
         const expectedCredentialFingerprint =
           provider === "cursor" ? `sdk:${cursorApiKeyFingerprint(cursorApiKey)}` : undefined;
@@ -467,6 +471,7 @@ export function registerServerCommands(
           export PORT=${containerPort}
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
+          export ORKESTRATOR_BRIDGE_DEBUG=${bridgeConfig.global.debugLogging === true ? "1" : "0"}
           ${
             useCursorSdk
               ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
@@ -548,9 +553,10 @@ function registerPiServerCommands(register: CommandRegistrar): void {
   const logFile = "/tmp/pi-bridge.log";
   const processPattern = "[p]i-bridge/dist/index.js";
 
-  register("start_pi_server", ({ containerId }) => {
+  register("start_pi_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     return enqueueContainerBridgeOperation("pi", id, async () => {
+      const config = await context.storage.loadConfig();
       const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
       if (hostPort && (await checkHttpHealth(hostPort))) {
         const existingToken = (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim();
@@ -579,6 +585,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
           export PI_SESSION_DIR=/home/node/.pi/agent/sessions
           export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
           export PI_BRIDGE_TOKEN=${quoteShell(token)}
+          export ORKESTRATOR_BRIDGE_DEBUG=${config.global.debugLogging === true ? "1" : "0"}
           setsid bun /opt/pi-bridge/dist/index.js > ${logFile} 2>&1 &
         `,
         [token],

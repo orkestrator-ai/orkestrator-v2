@@ -255,34 +255,52 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("idle");
   });
 
-  test("warns when a provider turn produces no messages or heartbeat", async () => {
-    jest.useFakeTimers();
-    const warn = mock(() => {});
-    const originalWarn = console.warn;
-    console.warn = warn;
-    try {
-      const session = createSession("quiet provider");
-      track(session.id);
-      const promptPromise = sendPrompt(session.id, "hello?");
-      const call = await nextQueryCall();
-
-      jest.advanceTimersByTime(30_001);
-      expect(
-        warn.mock.calls.some(([message]) =>
-          String(message).includes("has not responded after 5 seconds"),
-        ),
-      ).toBe(true);
-      expect(
-        warn.mock.calls.some(([message]) => String(message).includes("No SDK messages yet")),
-      ).toBe(true);
-
-      call.finish();
-      await promptPromise;
-    } finally {
-      console.warn = originalWarn;
-      jest.useRealTimers();
-    }
-  });
+  test.each([false, true])(
+    "quiet-turn diagnostics are gated and cleaned up (debug=%s)",
+    async (enabled) => {
+      jest.useFakeTimers();
+      const lines: string[] = [];
+      const originalInfo = console.info;
+      const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      console.info = (line: unknown) => {
+        lines.push(String(line));
+      };
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = enabled ? "1" : "0";
+      let finish: (() => void) | undefined;
+      let promptPromise: Promise<unknown> | undefined;
+      try {
+        const session = createSession("quiet provider");
+        track(session.id);
+        promptPromise = sendPrompt(session.id, "PRIVATE PROMPT");
+        const call = await nextQueryCall();
+        finish = () => call.finish();
+        jest.advanceTimersByTime(60_001);
+        const snapshots = lines.filter((line) => line.startsWith("[bridge-diagnostics] "));
+        expect(snapshots.some((line) => line.includes('"event":"heartbeat"'))).toBe(enabled);
+        if (enabled) {
+          const heartbeat = snapshots.find((line) => line.includes('"event":"heartbeat"'))!;
+          expect(heartbeat).toContain('"lastDeltaAgoMs":null');
+          expect(heartbeat).toContain('"sdkMessageCount":0');
+          expect(heartbeat).toContain('"terminal":"pending"');
+        } else {
+          expect(snapshots).toHaveLength(0);
+        }
+        expect(lines.join("\n")).not.toContain("PRIVATE PROMPT");
+        call.finish();
+        await promptPromise;
+        const count = lines.length;
+        jest.advanceTimersByTime(120_000);
+        expect(lines).toHaveLength(count);
+      } finally {
+        finish?.();
+        await promptPromise;
+        console.info = originalInfo;
+        if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+        else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
+        jest.useRealTimers();
+      }
+    },
+  );
 
   test("streams partial assistant text before the final assistant message arrives", async () => {
     const session = createSession("streaming");

@@ -36,8 +36,12 @@ export async function refreshClaudeModelCatalog(
     if (!containerId) {
       throw new Error("Container ID is required for Claude model discovery");
     }
-    const started = await enqueueContainerBridgeOperation("claude", containerId, () =>
-      startContainerClaudeServer(containerId),
+    const started = await enqueueContainerBridgeOperation("claude", containerId, async () =>
+      startContainerClaudeServer(
+        containerId,
+        undefined,
+        (await context.storage.loadConfig()).global.debugLogging === true,
+      ),
     );
     port = started.hostPort;
     authToken = started.authToken;

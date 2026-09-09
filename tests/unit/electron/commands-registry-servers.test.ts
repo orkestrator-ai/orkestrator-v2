@@ -264,7 +264,7 @@ exit 0
       status: "running",
     });
     const { context } = createContext(environment, {
-      globalConfig: { codexMaxConcurrentThreads: 9 },
+      globalConfig: { codexMaxConcurrentThreads: 9, debugLogging: true },
     });
     const commands = createCommandRegistry();
 
@@ -320,6 +320,7 @@ exit 0
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
+        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
@@ -352,7 +353,7 @@ exit 0
       containerId: "container-cursor-sdk",
       status: "running",
     });
-    const globalConfig: Record<string, unknown> = {};
+    const globalConfig: Record<string, unknown> = { debugLogging: true };
     const { context } = createContext(environment, { globalConfig, dataDir });
     const commands = createCommandRegistry();
 
@@ -457,6 +458,7 @@ exit 0
         expect(execLog).not.toContain("export ACP_PROVIDER=");
         expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CURSOR_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
         expect(execLog).toContain(
           "export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state",
         );
@@ -647,6 +649,7 @@ exit 0
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain(`export ACP_PROVIDER=${provider}`);
         expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
         expect(execLog).toContain("export HOSTNAME=0.0.0.0");
         expect(execLog).toContain(
@@ -768,6 +771,7 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
         expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
         expect(execLog).not.toContain("PI_BRIDGE_PROJECT_RESOURCES");
@@ -972,6 +976,7 @@ exit 0
         expect(execLog).not.toContain("setsid node");
         expect(execLog).toContain("/tmp/claude-bridge-token");
         expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
         expect(execLog).toContain(
           "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",
         );

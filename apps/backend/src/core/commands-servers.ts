@@ -958,6 +958,7 @@ export async function startLocalServerUnlocked(
     );
   }
 
+  const bridgeConfig = await context.storage.loadConfig();
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
@@ -970,6 +971,7 @@ export async function startLocalServerUnlocked(
     // without running its shutdown path. Advertising our PID lets each bridge
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
+    ORKESTRATOR_BRIDGE_DEBUG: bridgeConfig.global.debugLogging === true ? "1" : "0",
     ...(agentToolConnection
       ? {
           [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,

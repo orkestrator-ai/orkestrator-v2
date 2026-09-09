@@ -1,3 +1,7 @@
+import {
+  createBridgeDiagnostics,
+  type BridgeRunDiagnostics,
+} from "@orkestrator/protocol/bridge-diagnostics";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -699,6 +703,7 @@ export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
   readonly clientMethods = new AcpClientMethods(workingDirectory);
+  #diagnostics?: BridgeRunDiagnostics;
   #nextId = 1;
   #pending = new Map<
     number,
@@ -734,11 +739,17 @@ export class AcpProcess {
       env: { ...process.env, ...providerConfig.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.#diagnostics = createBridgeDiagnostics("acp", { id: `process-${this.child.pid}` }, () => ({
+      pendingRequests: this.#pending.size,
+    }));
+    this.#diagnostics?.checkpoint("attached");
     this.child.stdout.on("data", (chunk: Buffer | string) => {
       this.#acceptChunk(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     // Agent stderr may contain prompts or file contents. Drain but never log it.
-    this.child.stderr.resume();
+    this.child.stderr.on("data", (chunk: Buffer | string) => {
+      this.#diagnostics?.count("stderrBytes", Buffer.byteLength(chunk));
+    });
     // Bun currently drops writes to a dead child's stdin silently, but an
     // unhandled stream "error" event is an uncaught exception under Node
     // semantics — it would take the whole bridge, and every session on it,
@@ -814,16 +825,20 @@ export class AcpProcess {
   ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new Error(`${provider} ACP process is not running`));
     const id = this.#nextId++;
+    this.#diagnostics?.count("requestsSent");
+    this.#diagnostics?.tool(String(id), method, "started");
     return new Promise((resolvePromise, reject) => {
       const fail = (error: Error) => {
         const pending = this.#pending.get(id);
         if (!pending) return;
         this.#pending.delete(id);
+        this.#diagnostics?.tool(String(id), method, "completed");
         clearTimeout(pending.timer);
         pending.cleanupAbort?.();
         reject(error);
       };
       const timer = setTimeout(() => {
+        this.#diagnostics?.count("timeouts");
         fail(new Error(`${provider} ACP ${method} timed out`));
         void this.close();
       }, timeoutMs);
@@ -847,6 +862,9 @@ export class AcpProcess {
   }
 
   notify(method: string, params: JsonObject): void {
+    if (method === "session/cancel") {
+      this.#diagnostics?.requestCancellation();
+    }
     if (!this.#closed) this.#write({ jsonrpc: "2.0", method, params });
   }
 
@@ -909,15 +927,20 @@ export class AcpProcess {
 
   #acceptLine(line: string): void {
     if (!line.trim()) return;
+    this.#diagnostics?.streamEvent();
     let message: JsonObject;
     try {
       message = JSON.parse(line) as JsonObject;
     } catch {
+      this.#diagnostics?.count("protocolErrors");
       this.#close(new Error(`${provider} ACP emitted malformed JSON`));
       void this.close();
       return;
     }
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
+      this.#diagnostics?.activity("response");
+      this.#diagnostics?.count("responsesReceived");
+      this.#diagnostics?.tool(String(message.id), "request", "completed");
       const pending = this.#pending.get(message.id);
       if (!pending) return;
       this.#pending.delete(message.id);
@@ -939,6 +962,7 @@ export class AcpProcess {
     }
     if (typeof message.id === "number" && typeof message.method === "string") {
       const params = isObject(message.params) ? message.params : {};
+      this.#diagnostics?.activity("request");
       if (message.method === "session/request_permission") {
         this.onPermission(message.id, params);
       } else if (isAcpClientMethod(message.method)) {
@@ -984,6 +1008,8 @@ export class AcpProcess {
       return;
     }
     if (message.method === "session/update" && isObject(message.params)) {
+      this.#diagnostics?.activity("notification");
+      this.#diagnostics?.count("notificationsReceived");
       this.onUpdate(message.params);
       return;
     }
@@ -992,6 +1018,8 @@ export class AcpProcess {
       // Process-scoped facts are recorded here rather than in the session
       // handler because an agent announces them during `session/new`, before
       // this child is attached to a session at all.
+      this.#diagnostics?.activity("notification");
+      this.#diagnostics?.count("notificationsReceived");
       rememberVendorRuntime(message.method, params);
       // Every vendor *notification* is then offered to the session handler,
       // which ignores the ones it does not model. Notifications expect no reply,
@@ -1005,6 +1033,8 @@ export class AcpProcess {
   #close(error: Error): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#diagnostics?.streamSettled("rejected");
+    this.#diagnostics?.close();
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
       pending.cleanupAbort?.();

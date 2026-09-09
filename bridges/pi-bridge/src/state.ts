@@ -1,3 +1,7 @@
+import type {
+  BridgeRunDiagnostics,
+  CancellationReason,
+} from "@orkestrator/protocol/bridge-diagnostics";
 /**
  * The transcript model this bridge serves, and the per-session state that
  * produces it.
@@ -215,6 +219,7 @@ export interface PendingApproval {
 }
 
 export interface SessionState {
+  diagnostics?: BridgeRunDiagnostics;
   /** Workflow-owned tool restriction, independent of Pi thinking/composer modes. */
   readOnly?: boolean;
   id: string;
@@ -258,7 +263,7 @@ export interface SessionState {
   /** The in-flight attach, shared by every caller that wants this attached. */
   attaching?: Promise<AgentSession>;
   /** Cancels the turn in flight. Never persisted. */
-  cancelTurn?: () => Promise<void>;
+  cancelTurn?: (reason?: CancellationReason) => Promise<void>;
   /**
    * A turn accepted but not yet handed to the agent. Transient and deliberately
    * not persisted: a restart answers the same question through the prompt

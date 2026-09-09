@@ -109,6 +109,14 @@ const HANDLED_SESSION_EVENTS: Record<AgentSessionEvent["type"], boolean> = {
 
 export function applySessionEvent(state: SessionState, event: unknown): void {
   if (!isObject(event) || !nonBlank(event.type)) return;
+  state.diagnostics?.activity(event.type);
+  if (event.type === "tool_execution_start" || event.type === "tool_execution_end") {
+    state.diagnostics?.tool(
+      event.toolCallId,
+      event.toolName,
+      event.type === "tool_execution_end" ? "completed" : "started",
+    );
+  }
 
   switch (event.type) {
     case "message_start":

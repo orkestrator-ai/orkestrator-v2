@@ -1,3 +1,4 @@
+import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -773,12 +774,29 @@ async function sweepIdleThreads(
   }
 }
 
+const debugDiagnostics = createBridgeDiagnostics("codex", { id: "app-server" }, () => {
+  const health = appServerRuntime.getHealth();
+  return {
+    ...health.rpc,
+    state: health.state,
+    generation: health.generation,
+    restartCount: health.restartCount,
+    circuitOpen: health.circuitOpen,
+    notificationQueueDepth: health.notificationQueueDepth,
+    notificationQueueHighWaterMark: health.notificationQueueHighWaterMark,
+    unknownNotifications: health.unknownNotifications,
+    unknownServerRequests: health.unknownServerRequests,
+  };
+});
+debugDiagnostics?.checkpoint("attached");
+
 const cleanupTimer = setInterval(() => {
   void sweepIdleThreads();
 }, CLEANUP_INTERVAL_MS);
 cleanupTimer.unref?.();
 
 async function stopSelectedEngine(): Promise<void> {
+  debugDiagnostics?.close();
   await appServerRuntime.stop();
 }
 

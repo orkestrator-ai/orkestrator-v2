@@ -148,6 +148,8 @@ async function refreshClaude(
     CLAUDE_BRIDGE_TOKEN: token,
     CLAUDE_CLI_PATH: resolveClaudeBinary(context),
     ORKESTRATOR_PARENT_PID: String(process.pid),
+    ORKESTRATOR_BRIDGE_DEBUG:
+      (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
   };
   await applyClaudeHostCredentialEnvironment(context, env);
   const catalog = await withShortLivedBridge(
@@ -191,6 +193,8 @@ async function refreshCodex(context: CommandContext): Promise<HostCatalog> {
         ),
         ORKESTRATOR_VERSION: APP_VERSION,
         ORKESTRATOR_PARENT_PID: String(process.pid),
+        ORKESTRATOR_BRIDGE_DEBUG:
+          (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
       },
     },
     async (port, authToken) => {
@@ -230,6 +234,8 @@ async function refreshAcp(
     ...process.env,
     CWD: workingDirectory,
     ORKESTRATOR_PARENT_PID: String(process.pid),
+    ORKESTRATOR_BRIDGE_DEBUG:
+      (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
   };
   if (useCursorSdk) {
     env.CURSOR_BRIDGE_TOKEN = token;
@@ -309,6 +315,8 @@ async function refreshOpenCode(
         OPENCODE_SERVER_USERNAME: "opencode",
         OPENCODE_SERVER_PASSWORD: token,
         ORKESTRATOR_PARENT_PID: String(process.pid),
+        ORKESTRATOR_BRIDGE_DEBUG:
+          (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",
       },
     },
     async (port) => {

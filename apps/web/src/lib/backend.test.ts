@@ -2105,6 +2105,9 @@ describe("backend command wrapper coverage", () => {
       "getScopedResourceSnapshots",
       "getNativeAgentModelCatalog",
       "getNativeAgentSyncCapabilities",
+      "getNativeAgentTranscriptUpdate",
+      "getNativeAgentSessionStateUpdate",
+      "getNativeAgentDiscoveryUpdate",
       "getNativeAgentProjectionUpdate",
       "getNativeAgentMessagePage",
     ]);
@@ -2207,6 +2210,34 @@ describe("backend command wrapper coverage", () => {
     };
     invokeMock.mockResolvedValueOnce(page);
     await expect(backendWrappers.getNativeAgentMessagePage(pageInput)).resolves.toEqual(page);
+  });
+
+  test("validates independent native-agent view-domain responses", async () => {
+    const commonInput = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "tab-1",
+      viewVersion: 1 as const,
+    };
+
+    invokeMock.mockResolvedValueOnce({ viewVersion: 1, status: "missing" });
+    await expect(
+      backendWrappers.getNativeAgentTranscriptUpdate({
+        ...commonInput,
+        liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      }),
+    ).resolves.toEqual({ viewVersion: 1, status: "missing" });
+
+    invokeMock.mockResolvedValueOnce({ viewVersion: 1, status: "missing" });
+    await expect(backendWrappers.getNativeAgentSessionStateUpdate(commonInput)).resolves.toEqual({
+      viewVersion: 1,
+      status: "missing",
+    });
+
+    invokeMock.mockResolvedValueOnce({ viewVersion: 1, status: "missing" });
+    await expect(
+      backendWrappers.getNativeAgentDiscoveryUpdate({ ...commonInput, sections: ["models"] }),
+    ).resolves.toEqual({ viewVersion: 1, status: "missing" });
   });
 
   test("getEnvironmentExtensions defaults to the cached backend result", async () => {

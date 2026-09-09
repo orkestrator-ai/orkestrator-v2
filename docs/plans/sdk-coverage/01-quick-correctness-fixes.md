@@ -103,8 +103,8 @@ each can be reviewed and reverted on its own.
 ## Verification
 
 - [x] Each fix has a focused bridge test that fails before and passes after.
-- [x] `bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures` passes.
-- [x] `bun run check` passes.
+- [x] `mise run test:logged --name bridge-tests -- bun test bridges --parallel=2 --only-failures` passes.
+- [x] `mise run check` passes.
 
 ## Out of scope
 

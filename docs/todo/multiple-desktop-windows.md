@@ -321,7 +321,7 @@ be additive with an explicit fallback for older remote servers.
 Extend owning tests under `tests/unit/electron/`, renderer pane/persistence tests,
 and backend tests only where behavior changes. Follow the repository's logged
 test workflow; run focused explicit-path Bun suites with `--parallel`, relevant
-desktop/web/backend typechecks, format and lint checks, then `bun run test` for
+desktop/web/backend typechecks, format and lint checks, then `mise run test` for
 the completed cross-cutting change.
 
 Use isolated `dev:test` profiles and the seeded fixture, following

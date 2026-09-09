@@ -129,14 +129,15 @@ docker/                     # Docker configuration
 └── init-firewall.sh        # Network firewall setup
 ```
 
-## Package Manager - Bun
+## Task Runner - mise; Package Manager - Bun
 
-**Always use Bun, never npm or yarn.**
+Use mise for repository-level tasks and Bun for package management and focused
+commands. Never use npm or yarn.
 
 ```bash
 bun install              # NOT npm install
-bun run <script>         # NOT npm run
-bun run test             # Repository-declared full suite; NOT bare `bun test`
+mise run <task>          # Repository-level task; NOT npm run
+mise run test            # Complete suite; NOT bare root-level `bun test`
 bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
@@ -146,7 +147,7 @@ Bun automatically loads `.env` files.
 
 At the repository root, bare `bun test` is not equivalent to running the
 package's `test` script. It performs direct test discovery and can collect
-Playwright/E2E specifications and unrelated fixtures. Use `bun run test` for
+Playwright/E2E specifications and unrelated fixtures. Use `mise run test` for
 the repository's complete validation suite. Reserve `bun test` for an explicit
 test file or directory when intentionally running a focused subset.
 
@@ -188,11 +189,11 @@ run over the whole repo in well under a second, so there is no turbo task and no
 per-package config — always run them from the repo root.
 
 ```bash
-bun run format         # rewrite files in place
-bun run format:check   # verify only; what CI runs
-bun run lint           # report; fails on errors, not warnings
-bun run lint:fix       # apply the auto-fixable subset
-bun run check          # format:check && lint && typecheck
+mise run format         # rewrite files in place
+mise run format:check   # verify only; what CI runs
+mise run lint           # report; fails on errors, not warnings
+mise run lint:fix       # apply the auto-fixable subset
+mise run check          # format:check && lint && typecheck
 ```
 
 `.github/workflows/lint.yml` runs `format:check` and `lint` on every pull
@@ -202,7 +203,7 @@ does not hide lint output — one push reports both.
 ### What is excluded, and why
 
 `bridges/codex-bridge/src/app-server/generated/**` is excluded from both tools.
-It is a lockfile: `bun run verify:codex:protocol` regenerates it and compares
+It is a lockfile: `mise run verify:codex:protocol` regenerates it and compares
 byte-for-byte, so reformatting it would fail that check against a generator this
 repo does not control. `test-fixtures/**` is excluded from linting because those
 files deliberately contain failing and malformed code.
@@ -232,7 +233,7 @@ characters as a matter of course — terminal output, tmux capture, transcript
 sanitising — so a control character in a regex here is the intent rather than
 the typo the rule is looking for.
 
-Warnings never fail the build, so `bun run lint` exiting `0` means zero errors,
+Warnings never fail the build, so `mise run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
 
 Reach for a disable directive only when the rule is wrong about that specific
@@ -911,22 +912,22 @@ Files:
 
 ## Testing
 
-For the complete repository suite, always invoke the package script with
-`bun run test`; never substitute a bare root-level `bun test`. Direct
+For the complete repository suite, always invoke the mise task with
+`mise run test`; never substitute a bare root-level `bun test`. Direct
 `bun test` is appropriate only with an explicit focused path, as in the logged
 root and bridge subset commands below.
 
 ```bash
-bun run test
-bun run test:all # Includes the serial iOS suite when Xcode is available.
-bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
-bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run test:logged -- --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
-bun run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck
+mise run test
+mise run test:all # Includes the serial iOS suite when Xcode is available.
+mise run test:logged --name root-tests -- bun test ./tests --parallel=4 --only-failures
+mise run test:logged --name bridge-tests -- bun test bridges --parallel=2 --only-failures
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
+mise run test:logged --name backend-typecheck -- bun run --cwd apps/backend typecheck
 ```
 
-Run each command separately so its exit status maps to one suite. `bun run test`
+Run each command separately so its exit status maps to one suite. `mise run test`
 is the complete concurrent cross-platform suite; `test:all` adds iOS at the end.
 The explicit `./tests` path avoids package tests.
 
@@ -937,7 +938,7 @@ Terminal and conversation buffers are not authoritative. Do not add a second
 `tee`, because that recreates an unbounded duplicate:
 
 ```bash
-bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
+mise run test:logged --name root-tests -- bun test ./tests --parallel=4 --only-failures
 ```
 
 If a tool buffer maxes out, do not infer success or failure from the visible
@@ -953,7 +954,7 @@ The exit status is authoritative; text matching is only a diagnostic aid because
 some tests intentionally exercise and print error paths. See
 [`docs/test-logs.md`](docs/test-logs.md) for limits and retention.
 
-When running tests for a code review, normally `bun run test` is adequite. Only use logged tests for interrogating those specific areas and where there's a need for the outputs. At code review this should already have been done. So `bun run test` is enough.
+When running tests for a code review, normally `mise run test` is adequite. Only use logged tests for interrogating those specific areas and where there's a need for the outputs. At code review this should already have been done. So `mise run test` is enough.
 
 ### Required frontend-to-browser test cycle for agents
 
@@ -983,7 +984,7 @@ The detailed operational reference is
   which have no PATH fallback — are launchable; `--agent-platforms` narrows it.
 - Do not assume ports, profile paths, browser URLs, or process IDs. Discover them
   through `dev:status --json` on every run.
-- Sign the browser in with `bun run dev:login -- --profile <profile>` and open
+- Sign the browser in with `mise run dev:login --profile <profile>` and open
   the single-use `loginUrl` it prints. Never print, paste into chat, add to a
   URL, or save the gateway token itself. The status manifest contains only the
   path to the mode-`0600` auth file.
@@ -997,8 +998,8 @@ At minimum, typecheck the web package and run the owning test file. Add backend
 or desktop typechecks when the change crosses those boundaries.
 
 ```bash
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run test:logged -- --name changed-component -- \
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name changed-component -- \
   bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
   --parallel=2 --only-failures
 ```
@@ -1012,7 +1013,7 @@ Start the profile in a long-lived terminal/tool session. The command remains
 alive to supervise Vite, Electron, the backend, bridges, and their process trees.
 
 ```bash
-bun run dev:test -- --profile agent-settings-dialog --fixture
+mise run dev:test --profile agent-settings-dialog --fixture
 ```
 
 Startup is idempotent: running the same command for a live profile reports the
@@ -1020,7 +1021,7 @@ existing instance instead of creating a second backend. In another command
 session, discover its state:
 
 ```bash
-bun run dev:status -- --profile agent-settings-dialog --json
+mise run dev:status --profile agent-settings-dialog --json
 ```
 
 Wait until the manifest says `status: "ready"` and its liveness block reports
@@ -1053,7 +1054,7 @@ seeding each one from the host installation when it has the same pinned version
 so the default normally costs a local copy rather than a download, and enabling
 that same selection in the profile so the platforms it provisions are the ones
 the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
-not need all five; the flag is rejected by `bun run dev`, which keeps the
+not need all five; the flag is rejected by `mise run dev`, which keeps the
 durable per-installation selection. Do not remove this to save startup time
 without checking what the run launches: Claude, Codex and OpenCode fall back to
 a PATH lookup, but Cursor and Grok resolve only through the managed toolchain,
@@ -1076,18 +1077,18 @@ cleans up its environment.
 ```bash
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-settings-dialog \
 ORKESTRATOR_AGENT_TEST_RUN_ID=agent-settings-dialog \
-bun run test:logged -- --name agent-browser -- bun run test:agent:browser
+mise run test:logged --name agent-browser -- mise run test:agent:browser
 ```
 
 Use the optional suites only when their layer is in scope:
 
 ```bash
 # Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
-bun run test:logged -- --name agent-electron -- bun run test:agent:electron
+mise run test:logged --name agent-electron -- mise run test:agent:electron
 
 # Requires a profile started with --fixture-environments local,container
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-container-qa \
-bun run test:logged -- --name agent-docker -- bun run test:agent:docker
+mise run test:logged --name agent-docker -- mise run test:agent:docker
 ```
 
 The Docker suite is opt-in because it builds/starts the workspace-specific
@@ -1104,7 +1105,7 @@ menus, clipboard, preload, IPC, or shutdown. For repeatable assertions prefer
 Playwright and accessible roles/names.
 
 If the login page appears, do not read the token and do not drive the password
-field. Run `bun run dev:login -- --profile <profile>` (add `--json` for
+field. Run `mise run dev:login --profile <profile>` (add `--json` for
 `{ loginUrl, expiresAt }`) and navigate the browser under test to the printed
 `loginUrl`. That URL carries a single-use bootstrap code — not the gateway token
 — which the gateway consumes on the first request before redirecting to the app,
@@ -1169,7 +1170,7 @@ that a missed event can be recovered.
 | Browser gateway or backend command              | Backend and web typechecks; focused gateway/command tests; browser smoke; authenticated real-browser path               |
 | Electron main, preload, IPC, or window behavior | Desktop typecheck; focused Electron tests; `test:agent:electron`; native-window check when visual behavior changed      |
 | Docker lifecycle or container UI                | Backend typecheck; exact-owner focused tests; local browser smoke; opt-in Docker fixture/suite when Docker is available |
-| Cross-cutting or release-sensitive change       | All relevant checks above, then `bun run test`; use `bun run test:all` for release validation including iOS             |
+| Cross-cutting or release-sensitive change       | All relevant checks above, then `mise run test`; use `mise run test:all` for release validation including iOS             |
 
 #### 8. Evidence and failure reporting
 
@@ -1200,8 +1201,8 @@ test. Reset it as well unless preserving state is intentional and stated in the
 handoff.
 
 ```bash
-bun run dev:stop -- --profile agent-settings-dialog
-bun run dev:reset -- --profile agent-settings-dialog
+mise run dev:stop --profile agent-settings-dialog
+mise run dev:reset --profile agent-settings-dialog
 ```
 
 `dev:stop` validates launcher PID plus process start time and reports surviving
@@ -1322,10 +1323,10 @@ the live source checkout as the test project.
 bun install
 
 # Run the Electron application
-bun run dev
+mise run dev
 
 # Build for production
-bun run build
+mise run build
 
 # Build Docker base image
 docker build -t orkestrator-v2:latest -f docker/Dockerfile .

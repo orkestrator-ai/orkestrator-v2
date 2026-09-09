@@ -16,6 +16,7 @@ import {
   boundTranscriptResponse,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { streamSSE } from "hono/streaming";
 import { readCachedTranscript } from "./transcript-cache.js";
 import {
@@ -1069,6 +1070,11 @@ app.use("/session/:id/messages", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/messages", compress({ encoding: "gzip" }));
+app.use("/session/:id/transcript", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
+app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
 
 app.get("/global/health", (c) => {
   const health = appServerRuntime.getHealth();
@@ -1250,6 +1256,29 @@ app.get("/session/:id/messages", async (c) => {
   const messages = await appServerRuntime.getMessages(c.req.param("id"));
   if (!messages) return c.json({ error: "Session not found" }, 404);
   return c.json(boundCodexTranscriptResponse(messages));
+});
+
+app.get("/session/:id/transcript", (c) => {
+  const sessionId = c.req.param("id");
+  const status = appServerRuntime.getStatus(sessionId, false);
+  const cached = appServerRuntime.getCachedMessages(sessionId);
+  if (!status || !cached) return c.json({ error: "Session not found" }, 404);
+  const limit = Number(c.req.query("limit"));
+  const targetBytes = Number(c.req.query("targetBytes"));
+  return c.json(
+    bridgeTranscriptUpdate(cached.messages, {
+      sessionIdentity: sessionId,
+      generation: status.engineGeneration,
+      contentEpoch: status.contentEpoch,
+      revision: status.messageRevision,
+      limit,
+      targetBytes,
+      knownToken: c.req.query("knownToken"),
+      complete: true,
+      freshness: cached.freshness,
+      title: status.title,
+    }),
+  );
 });
 
 app.get("/session/:id/status", (c) => {

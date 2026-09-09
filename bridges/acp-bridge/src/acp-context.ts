@@ -402,6 +402,7 @@ export interface ApprovalState {
 export interface PersistedSession {
   id: string;
   policy?: NativeAgentExecutionPolicy;
+  readOnly?: boolean;
   clientSessionKey?: string;
   acpSessionId: string;
   status: SessionStatus;
@@ -512,6 +513,8 @@ export interface AcpSpawnOptions {
   model?: string;
   effort?: string;
   policy?: NativeAgentExecutionPolicy;
+  /** Review boundary recorded before the first child is spawned. */
+  readOnly?: boolean;
 }
 
 /** MCP launch configuration shared by every ACP session in this environment. */

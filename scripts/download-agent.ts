@@ -12,7 +12,7 @@
  * Here the manifest is the only input. A version bump changes nothing in this
  * file, and every agent is reachable the same way:
  *
- *   bun run download:claude          # or codex | opencode | grok | pi
+ *   mise run download:claude         # or codex | opencode | grok | pi
  *   bun scripts/download-agent.ts claude --dir /tmp/probe
  *
  * Unlike the shell scripts it replaces, this verifies what it downloaded

@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentDiscoveryView,
+  NativeAgentSessionProjection,
+  NativeAgentViewIdentity,
+} from "@orkestrator/protocol/native-agent";
 
 export interface NativeAgentSyncCacheEntry {
   token: string;
@@ -13,9 +17,25 @@ export interface NativeAgentSyncCacheEntry {
   historyBytes: number;
 }
 
+export interface NativeAgentProgressiveCacheEntry {
+  identity?: NativeAgentViewIdentity;
+  transcriptToken?: string;
+  stateToken?: string;
+  discoveryToken?: string;
+  transcriptAvailability: "unavailable" | "cached" | "current" | "empty";
+  transcriptRefreshing: boolean;
+  transcriptError?: string;
+  stateAvailability: "unavailable" | "refreshing" | "current";
+  stateError?: string;
+  discovery?: NativeAgentDiscoveryView;
+}
+
 interface NativeAgentProjectionState {
   projections: ReadonlyMap<string, NativeAgentSessionProjection>;
+  projectionBytes: ReadonlyMap<string, number>;
   syncCaches: ReadonlyMap<string, NativeAgentSyncCacheEntry>;
+  progressiveCaches: ReadonlyMap<string, NativeAgentProgressiveCacheEntry>;
+  progressiveCacheBytes: ReadonlyMap<string, number>;
   /**
    * How many times each session's retained history has been evicted here.
    *
@@ -32,6 +52,7 @@ interface NativeAgentProjectionState {
     projection: NativeAgentSessionProjection | null,
     syncCache?: NativeAgentSyncCacheEntry | null,
   ) => void;
+  setProgressiveCache: (sessionKey: string, cache: NativeAgentProgressiveCacheEntry | null) => void;
   markTurnStopped: (sessionKey: string, sessionId: string) => void;
   clearTurnStopped: (sessionKey: string) => void;
   reset: () => void;
@@ -40,16 +61,29 @@ interface NativeAgentProjectionState {
 /** Renderer cache only; the backend projection remains authoritative. */
 export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>((set) => ({
   projections: new Map(),
+  projectionBytes: new Map(),
   syncCaches: new Map(),
+  progressiveCaches: new Map(),
+  progressiveCacheBytes: new Map(),
   historyEvictions: new Map(),
   turnStopMarkers: new Map(),
   setProjection: (sessionKey, projection, syncCache) =>
     set((state) => {
       const next = new Map(state.projections);
+      const nextBytes = new Map(state.projectionBytes);
       const nextSync = new Map(state.syncCaches);
-      if (projection) next.set(sessionKey, projection);
-      else {
+      if (projection) {
+        const previous = state.projections.get(sessionKey);
+        next.set(sessionKey, projection);
+        nextBytes.set(
+          sessionKey,
+          previous?.messages === projection.messages
+            ? (state.projectionBytes.get(sessionKey) ?? 0)
+            : new TextEncoder().encode(JSON.stringify(projection.messages)).byteLength,
+        );
+      } else {
         next.delete(sessionKey);
+        nextBytes.delete(sessionKey);
         nextSync.delete(sessionKey);
         // Nothing retains this session's history any more, so its eviction
         // counter has no reader left to compare against. Dropping it keeps the
@@ -57,12 +91,55 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
         if (state.historyEvictions.has(sessionKey)) {
           const nextEvictions = new Map(state.historyEvictions);
           nextEvictions.delete(sessionKey);
-          return { projections: next, syncCaches: nextSync, historyEvictions: nextEvictions };
+          return {
+            projections: next,
+            projectionBytes: nextBytes,
+            syncCaches: nextSync,
+            historyEvictions: nextEvictions,
+          };
         }
       }
       if (syncCache === null) nextSync.delete(sessionKey);
       else if (syncCache !== undefined) nextSync.set(sessionKey, syncCache);
-      return { projections: next, syncCaches: nextSync };
+      // Display caches are shared by identity, never by mounted tab lifetime.
+      // Keep both a count and a byte ceiling so tab churn converges.
+      if (projection) {
+        next.delete(sessionKey);
+        next.set(sessionKey, projection);
+      }
+      let liveBytes = Array.from(nextBytes.values()).reduce((total, bytes) => total + bytes, 0);
+      while (next.size > 128 || liveBytes > 32 * 1024 * 1024) {
+        const oldest = next.keys().next().value as string | undefined;
+        if (!oldest || oldest === sessionKey) break;
+        liveBytes -= nextBytes.get(oldest) ?? 0;
+        next.delete(oldest);
+        nextBytes.delete(oldest);
+        nextSync.delete(oldest);
+      }
+      return { projections: next, projectionBytes: nextBytes, syncCaches: nextSync };
+    }),
+  setProgressiveCache: (sessionKey, cache) =>
+    set((state) => {
+      const next = new Map(state.progressiveCaches);
+      const nextBytes = new Map(state.progressiveCacheBytes);
+      next.delete(sessionKey);
+      nextBytes.delete(sessionKey);
+      if (cache) {
+        next.set(sessionKey, cache);
+        nextBytes.set(
+          sessionKey,
+          new TextEncoder().encode(JSON.stringify(cache.discovery ?? null)).byteLength + 4_096,
+        );
+      }
+      let retainedBytes = Array.from(nextBytes.values()).reduce((total, bytes) => total + bytes, 0);
+      while (next.size > 128 || retainedBytes > 16 * 1024 * 1024) {
+        const oldest = next.keys().next().value as string | undefined;
+        if (!oldest || oldest === sessionKey) break;
+        retainedBytes -= nextBytes.get(oldest) ?? 0;
+        next.delete(oldest);
+        nextBytes.delete(oldest);
+      }
+      return { progressiveCaches: next, progressiveCacheBytes: nextBytes };
     }),
   markTurnStopped: (sessionKey, sessionId) =>
     set((state) => {
@@ -80,7 +157,10 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
   reset: () =>
     set({
       projections: new Map(),
+      projectionBytes: new Map(),
       syncCaches: new Map(),
+      progressiveCaches: new Map(),
+      progressiveCacheBytes: new Map(),
       historyEvictions: new Map(),
       turnStopMarkers: new Map(),
     }),

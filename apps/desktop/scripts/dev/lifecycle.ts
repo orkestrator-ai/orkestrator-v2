@@ -332,7 +332,7 @@ export async function seedAgentTestProfileState(
  * The backend gateway is always required: without an auth file and a backend
  * pid there is nothing to supervise or talk to.
  *
- * A reported *browser* URL is not. An ordinary `bun run dev` starts the backend
+ * A reported *browser* URL is not. An ordinary `mise run dev` starts the backend
  * with `--desktop-web-client`, and that backend deliberately omits `browserUrl`
  * from its readiness message — the loopback listener is up, but its
  * authoritative public URL belongs to ManagedWebClient and may not exist until
@@ -376,7 +376,7 @@ export async function startDevelopment(
   const orphaned = orphanedRuntimeProcesses(existingLive);
   if (orphaned.length > 0) {
     throw new Error(
-      `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run bun run dev:stop before restarting.`,
+      `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run mise run dev:stop before restarting.`,
     );
   }
 
@@ -619,7 +619,7 @@ export function printHumanStatus(
   console.log(`Renderer: ${status.rendererUrl}`);
   if (status.browserUrl) console.log(`Browser: ${status.browserUrl}`);
   if (status.flavor === "agent-test") {
-    console.log(`Login: bun run dev:login -- --profile ${status.profile}`);
+    console.log(`Login: mise run dev:login --profile ${status.profile}`);
   }
   if (status.testProject) console.log(`Test project: ${status.testProject}`);
   console.log(`Status: ${status.statusPath}`);
@@ -648,7 +648,7 @@ export async function showStatus(args: DevArguments): Promise<number> {
   // the command that turns it into a browser login without anyone reading,
   // echoing, or retyping the token.
   const loginCommand =
-    status.flavor === "agent-test" ? `bun run dev:login -- --profile ${status.profile}` : undefined;
+    status.flavor === "agent-test" ? `mise run dev:login --profile ${status.profile}` : undefined;
   if (args.json) console.log(JSON.stringify({ ...status, live, loginCommand }, null, 2));
   else printHumanStatus(status, live);
   return status.status === "ready" && live.launcher ? 0 : 1;
@@ -669,9 +669,11 @@ export async function loginProfile(
   const profile = await (deps.resolveProfile ?? resolveStoredProfile)(args, "agent-test");
   const status = await (deps.readStatus ?? readStatus)(statusManifestPath(profile));
   if (!status)
-    throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
+    throw new Error(
+      `Profile ${profile.id} has no runtime status. Start it with mise run dev:test.`,
+    );
   if (!(deps.liveness ?? liveness)(status).launcher) {
-    throw new Error(`Profile ${profile.id} is not running. Start it with bun run dev:test.`);
+    throw new Error(`Profile ${profile.id} is not running. Start it with mise run dev:test.`);
   }
   const login = await (deps.mint ?? mintAgentTestLoginUrl)({ status });
   (deps.log ?? console.log)(
@@ -733,7 +735,7 @@ export async function resetProfile(args: DevArguments): Promise<number> {
 
   await removeProfileState(profile, args.keepToolchains);
   console.log(
-    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with bun run dev:test."}`,
+    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with mise run dev:test."}`,
   );
   return 0;
 }

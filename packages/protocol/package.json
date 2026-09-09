@@ -35,6 +35,7 @@
     "./pane-layout-merge": "./src/pane-layout-merge.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
+    "./progressive-transcript": "./src/progressive-transcript.ts",
     "./project-folders": "./src/project-folders.ts",
     "./resource-events": "./src/resource-events.ts",
     "./review-artifacts": "./src/review-artifacts.ts",

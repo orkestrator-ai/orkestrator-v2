@@ -427,10 +427,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(readme).toContain("mise install");
     expect(readme).toContain("mise exec -- bun install");
-    expect(readme).toContain("mise exec -- bun run dev");
-    expect(readme).toContain("mise exec -- bun run package:mac");
-    expect(readme).toContain("mise exec -- bun run package:release");
-    expect(readme).toContain("mise exec -- bun run package:linux");
+    expect(readme).toContain("mise run dev");
+    expect(readme).toContain("mise run package:mac");
+    expect(readme).toContain("mise run package:release");
+    expect(readme).toContain("mise run package:linux");
   });
 
   test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
@@ -492,7 +492,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       expect(source).toContain('run: test "$(bun --version)" = "$(mise current bun)"');
     }
     expect(workflow.match(/- "mise\.toml"/g)).toHaveLength(2);
-    expect(workflow).toContain("run: ./scripts/download-bun.sh");
+    expect(workflow).toContain("run: mise run download:bun");
     expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
   });
 
@@ -793,7 +793,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       expect(host!.executable.sha256).not.toBe(artifact.executable.sha256);
     }
 
-    // Only `bun run verify:toolchains:live` can prove a digest matches the
+    // Only `mise run verify:toolchains:live` can prove a digest matches the
     // release it names. Within the Codex release, every target and companion is
     // a distinct native asset, so duplicate digests identify a copied block.
     const digests = new Map<string, string>();
@@ -1088,7 +1088,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
      * Shape checks (`/^[a-f0-9]{64}$/`) cannot tell a real digest from a
      * plausible one, and nothing in CI downloads the releases: live verification
      * is `RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts`
-     * (see `bun run verify:toolchains:live`), which is a manual step in the
+     * (see `mise run verify:toolchains:live`), which is a manual step in the
      * upgrade guide.
      *
      * The realistic offline-detectable failure is a version bump that updates

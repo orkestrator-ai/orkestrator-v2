@@ -45,6 +45,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
@@ -174,10 +175,32 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
+    const readOnly = body.readOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      throw new HttpError(400, "readOnly must be a boolean");
+    }
     if (!isNativeAgentExecutionPolicy(body.policy)) {
       throw new HttpError(400, "policy is required");
     }
-    const state = await createSession(clientSessionKey, parseComposerPatch(body), body.policy);
+    const state = await createSession(
+      clientSessionKey,
+      parseComposerPatch(body),
+      body.policy,
+      readOnly,
+    );
+    // Creation is idempotent by client key, so this can be a session that
+    // already exists under the other boundary. Move it rather than answering
+    // 201 with the old one: an attach would otherwise warm an agent the caller
+    // has just asked not to have. A busy session cannot be moved underneath
+    // its own turn, and says so.
+    if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
+      if (state.status === "running" || state.dispatching) {
+        throw new HttpError(409, "Session is already running");
+      }
+      await detachAgent(state);
+      state.readOnly = readOnly;
+      schedulePersist();
+    }
     json(response, 201, publicSession(state));
     return true;
   }
@@ -221,8 +244,9 @@ async function startLogin(response: ServerResponse): Promise<void> {
   json(response, 200, { url: loginUrl, loginUrl });
 }
 
+const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -269,6 +293,23 @@ async function routeSession(
       response,
       200,
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
+  }
+  if (action === "transcript" && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(
+      response,
+      200,
+      bridgeTranscriptUpdate(state.messages, {
+        sessionIdentity: state.id,
+        generation: TRANSCRIPT_GENERATION,
+        contentEpoch: state.droppedMessages,
+        revision: state.revision,
+        limit: Number(url.searchParams.get("limit")),
+        targetBytes: Number(url.searchParams.get("targetBytes")),
+        knownToken: url.searchParams.get("knownToken") ?? undefined,
+        complete: !state.transcriptTruncated && state.droppedMessages === 0,
+      }),
     );
   }
   if (action === "status" && request.method === "GET") {

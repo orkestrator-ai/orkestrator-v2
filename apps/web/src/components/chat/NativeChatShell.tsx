@@ -50,6 +50,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   agentExpansionScope: string;
 
   connectionState: NativeConnectionState;
+  /** Cached or authoritative transcript content can render before transport settles. */
+  displayAvailable?: boolean;
   errorMessage?: string | null;
   desynced?: boolean;
   serverLog?: string | null;
@@ -160,6 +162,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   containerId,
   agentExpansionScope,
   connectionState,
+  displayAvailable = false,
   errorMessage,
   desynced = false,
   serverLog,
@@ -230,7 +233,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     };
   }, [composeDockElement]);
 
-  if (connectionState === "connecting") {
+  if (connectionState === "connecting" && !displayAvailable) {
     return (
       <div
         role="status"
@@ -244,7 +247,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     );
   }
 
-  if (connectionState === "error") {
+  if (connectionState === "error" && !displayAvailable) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
         <AlertCircle className="h-10 w-10 text-destructive" />
@@ -302,6 +305,53 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    */
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
   const composerCentered = centerCompose && !hasTranscriptCards;
+  const connectionNotice =
+    displayAvailable && connectionState !== "connected" ? (
+      <div
+        role={connectionState === "error" ? "alert" : "status"}
+        className={cn(
+          "rounded-md border px-3 py-2 text-xs",
+          connectionState === "error"
+            ? "border-destructive/40 bg-destructive/10 text-destructive"
+            : "border-border bg-muted/70 text-muted-foreground",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          {connectionState === "error" ? (
+            <AlertCircle className="h-4 w-4 shrink-0" />
+          ) : (
+            <RefreshCw className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" />
+          )}
+          <span className="min-w-0 flex-1 break-words">
+            {connectionState === "error"
+              ? errorMessage ||
+                `Unable to reconnect to ${agentLabel}. The saved conversation remains readable.`
+              : `Refreshing ${agentLabel} session…`}
+          </span>
+          {connectionState === "error" ? (
+            <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          ) : null}
+          {connectionState === "error" && serverLog ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowLog((value) => !value)}
+              className="h-7"
+            >
+              {showLog ? "Hide Log" : "Show Log"}
+            </Button>
+          ) : null}
+        </div>
+        {showLog && serverLog ? (
+          <pre className="mt-2 max-h-32 overflow-auto rounded-md bg-background/80 p-2 text-left text-xs whitespace-pre-wrap">
+            {serverLog.trim() ? serverLog : "(empty log)"}
+          </pre>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -455,13 +505,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
          * is exactly the state a desynced tab is in.
          */
         notice={
-          desynced ? (
+          connectionNotice ??
+          (desynced ? (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
               Live updates disconnected. A full session refresh will run when the connection
               returns.
             </div>
-          ) : null
+          ) : null)
         }
         topAccessory={
           topAccessory || !isAtBottom ? (

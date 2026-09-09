@@ -50,6 +50,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
@@ -71,6 +72,8 @@ import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
+
+const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 
 export async function route(
   request: IncomingMessage,
@@ -143,11 +146,19 @@ export async function route(
       return json(response, 400, { error: "clientSessionKey is too long" });
     }
     const clientSessionKey = rawClientSessionKey || undefined;
+    const createReadOnly = body.readOnly;
+    if (createReadOnly !== undefined && typeof createReadOnly !== "boolean") {
+      return json(response, 400, { error: "readOnly must be a boolean" });
+    }
     const spawnOptions = parseComposerPatch(body) ?? {};
+    // The child is spawned inside `createSession`, so the review boundary has
+    // to be known here. Learning it from the first prompt instead would start
+    // an agent under the permissive policy and immediately replace it.
     const state = await createSession(clientSessionKey, clientSignal, {
       ...spawnOptions,
       model: spawnOptions.modelId,
       effort: spawnOptions.reasoningId,
+      ...(typeof createReadOnly === "boolean" ? { readOnly: createReadOnly } : {}),
       ...(() => {
         // Process authority wins: a coordinator bridge serves one conversation.
         const policy = effectiveExecutionPolicy(
@@ -159,7 +170,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -183,6 +194,23 @@ export async function route(
       response,
       200,
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
+  }
+  if (action === "transcript" && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(
+      response,
+      200,
+      bridgeTranscriptUpdate(state.messages, {
+        sessionIdentity: state.id,
+        generation: `${provider}:${TRANSCRIPT_GENERATION}`,
+        contentEpoch: state.droppedMessages,
+        revision: state.revision,
+        limit: Number(url.searchParams.get("limit")),
+        targetBytes: Number(url.searchParams.get("targetBytes")),
+        knownToken: url.searchParams.get("knownToken") ?? undefined,
+        complete: !state.transcriptTruncated && state.droppedMessages === 0,
+      }),
     );
   }
   if (action === "status" && request.method === "GET") {

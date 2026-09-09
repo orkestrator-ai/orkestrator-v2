@@ -64,7 +64,7 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
       result.fixture = true;
     } else if (argument === "--agent-platforms") {
       if (!options.agentPlatformsAllowed) {
-        throw new Error("--agent-platforms is only supported by bun run dev:test");
+        throw new Error("--agent-platforms is only supported by mise run dev:test");
       }
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => !isAgentPlatform(value))) {

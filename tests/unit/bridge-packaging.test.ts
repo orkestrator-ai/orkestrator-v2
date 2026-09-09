@@ -18,6 +18,15 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
+const miseTasks = (
+  Bun.TOML.parse(read("mise.toml")) as {
+    tasks: Record<string, { run?: string | string[] }>;
+  }
+).tasks;
+const taskCommands = (name: string) => {
+  const run = miseTasks[name]?.run;
+  return Array.isArray(run) ? run.join("\n") : (run ?? "");
+};
 
 /** Every workspace bridge that produces a `dist/index.js` a runtime can start. */
 const buildableBridges = readdirSync(path.join(root, "bridges"), { withFileTypes: true })
@@ -59,14 +68,13 @@ describe("bridge packaging", () => {
   });
 
   test("every buildable bridge is built by `setup` and by the container image", () => {
-    const manifest = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     const dockerfile = read("docker/Dockerfile");
 
     for (const bridge of buildableBridges) {
       // A bridge nobody builds is a bridge nobody can start, whichever lookup
       // finds its directory.
-      expect(manifest.scripts.setup, `setup does not build ${bridge}`).toContain(`build:${bridge}`);
-      expect(manifest.scripts[`build:${bridge}`]).toContain(`--filter=${bridge}`);
+      expect(taskCommands("setup"), `setup does not build ${bridge}`).toContain(`build:${bridge}`);
+      expect(taskCommands(`build:${bridge}`)).toContain(`--filter=${bridge}`);
       expect(dockerfile, `the image does not install ${bridge}`).toContain(`--filter ${bridge}`);
       expect(dockerfile, `the image does not stage /opt/${bridge}`).toContain(`/opt/${bridge}`);
     }

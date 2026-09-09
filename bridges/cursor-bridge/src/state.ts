@@ -353,6 +353,7 @@ export interface SessionState {
 export interface PersistedSession {
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  readOnly?: boolean;
   clientSessionKey?: string;
   agentId?: string;
   status: SessionStatus;

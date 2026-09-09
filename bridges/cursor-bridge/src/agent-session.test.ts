@@ -32,6 +32,7 @@ let listRunsFails = false;
 let resumeFails = false;
 const created: Array<Record<string, unknown>> = [];
 const resumed: string[] = [];
+const resumedOptions: Array<Record<string, unknown>> = [];
 let storedRuns: Array<Record<string, unknown>> = [];
 const deletedRunBatches: string[][] = [];
 let updatedAgent: Record<string, unknown> | undefined;
@@ -109,8 +110,9 @@ mock.module("@cursor/sdk", () => ({
       created.push(options);
       return fakeSdkAgent("created-agent");
     },
-    resume: async (agentId: string) => {
+    resume: async (agentId: string, options: Record<string, unknown>) => {
       resumed.push(agentId);
+      resumedOptions.push(options);
       if (resumeFails) throw new Error("no such agent");
       return fakeSdkAgent(agentId);
     },
@@ -126,6 +128,7 @@ const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
   await import("./config.js");
 const {
   applyComposerPatch,
+  createSession,
   cursorDeniedTools,
   detachAgent,
   ensureAgent,
@@ -136,12 +139,13 @@ const {
   rewindSessionHistory,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
-const { sessions } = await import("./state.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
+const { clientSessionKeys, sessions } = await import("./state.js");
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
   sessions.clear();
+  clientSessionKeys.clear();
   process.env.CURSOR_API_KEY = "test-key";
   listed = { items: [] };
   runs = { items: [] };
@@ -149,6 +153,7 @@ beforeEach(() => {
   resumeFails = false;
   created.length = 0;
   resumed.length = 0;
+  resumedOptions.length = 0;
   storedRuns = [];
   deletedRunBatches.length = 0;
   updatedAgent = undefined;
@@ -233,6 +238,15 @@ function conversationRun(turns: unknown[], supports = true) {
     conversation: async () => turns,
   };
 }
+
+/** The container boundary a pipeline session runs behind. */
+const containerPolicy = {
+  id: "pipeline",
+  sandbox: "container",
+  approvals: "auto-approve",
+  projectResources: true,
+  networkAccess: "restricted",
+} as const;
 
 describe("ensureAgent", () => {
   test("translates denied capabilities into Cursor's SDK tool vocabulary", () => {
@@ -377,6 +391,40 @@ describe("ensureAgent", () => {
       local: { sandboxOptions: { enabled: false } },
       tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
     });
+  });
+
+  test("a session created read-only warms its first agent behind the allowlist", async () => {
+    const state = await createSession(undefined, undefined, containerPolicy, true);
+
+    await ensureAgent(state);
+
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      local: { sandboxOptions: { enabled: false } },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+    });
+    expect(created[0]).not.toHaveProperty("disallowedTools");
+    expect(created[0]?.tools).not.toEqual(expect.arrayContaining(["write", "shell"]));
+  });
+
+  test("a replacement agent for a read-only session resumes behind the allowlist", async () => {
+    const state = await createSession("tab-1", undefined, containerPolicy, false);
+    await ensureAgent(state);
+    expect(created[0]?.tools).toBeUndefined();
+
+    // What the create route and the prompt route both do when the boundary
+    // moves: drop the agent, then let the next attach rebuild it.
+    await detachAgent(state);
+    state.readOnly = true;
+    await ensureAgent(state);
+
+    // The session already holds an agent id, so the replacement comes back
+    // through resume — which has to carry the new boundary just as create does.
+    expect(resumed).toEqual(["created-agent"]);
+    expect(resumedOptions[0]?.tools).toEqual(
+      expect.arrayContaining(["read", "grep", "glob", "ls"]),
+    );
+    expect(resumedOptions[0]).not.toHaveProperty("disallowedTools");
   });
 
   test("a failed attach does not poison the next one", async () => {

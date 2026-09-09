@@ -140,7 +140,7 @@ export abstract class GatewayAuth extends GatewayEvents {
   protected agentTestLoginHint(): string {
     if (!this.agentTestMode) return "";
     const profile = this.agentTestProfile ?? "<profile>";
-    return `Development profile "${profile}". On the host, run bun run dev:login -- --profile ${profile} and open the single-use URL it prints.`;
+    return `Development profile "${profile}". On the host, run mise run dev:login --profile ${profile} and open the single-use URL it prints.`;
   }
 
   protected isOriginAllowed(request: IncomingMessage, originValue: string): boolean {

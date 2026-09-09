@@ -381,6 +381,10 @@ export async function loadPersistedState(): Promise<void> {
         (Number.isSafeInteger(candidate.droppedParts) && Number(candidate.droppedParts) > 0),
       sessionConfig: restoreSessionConfig(candidate),
       policy: restorePersistedPolicy(candidate.policy),
+      // The boundary outlives the process that recorded it: the next child is
+      // spawned lazily from this state, so losing it would restore a review
+      // session as permissive.
+      ...(typeof candidate.readOnly === "boolean" ? { readOnly: candidate.readOnly } : {}),
       dispatching: false,
       historyReplay: false,
       // Drift and notices describe a process that is gone. A restored session

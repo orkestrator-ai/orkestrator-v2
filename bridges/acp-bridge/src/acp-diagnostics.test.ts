@@ -28,6 +28,7 @@ test.each([false, true])(
       expect(closed.counters.requestsSent).toBeGreaterThan(0);
       expect(closed.counters.responsesReceived).toBeGreaterThan(0);
       expect(closed.metrics.pendingRequests).toBe(0);
+      expect(closed.stream).toBe("resolved");
       expect(lines.join("\n")).not.toContain("integration-test-token");
     } else {
       expect(lines).toHaveLength(0);

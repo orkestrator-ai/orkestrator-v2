@@ -181,6 +181,23 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
 
+/**
+ * Keep failure logs useful without copying provider messages, prompts, or tool
+ * output into the process log. Constructor names are code-owned metadata, but
+ * still bounded and validated in case a foreign error object overrides them.
+ */
+function diagnosticErrorClass(error: unknown): string {
+  try {
+    if (!(error instanceof Error)) return "NonError";
+    const name = error.constructor?.name;
+    return typeof name === "string" && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name)
+      ? name
+      : "Error";
+  } catch {
+    return "Error";
+  }
+}
+
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
 2. Consider viable approaches and their trade-offs.
@@ -2312,6 +2329,7 @@ export async function sendPrompt(
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
     }
+    diagnostics?.streamSettled("resolved");
 
     // The stream can end on a delta (abort, SDK hang-up) with a snapshot still
     // pending; publish it so the transcript holds everything that streamed.
@@ -2323,6 +2341,8 @@ export async function sendPrompt(
     });
 
     if (abortController.signal.aborted) {
+      diagnostics?.terminalSettled("rejected");
+      diagnostics?.streamSettled("rejected");
       if (options?.outputSchema && structuredRequestId) {
         recordInterruptedStructuredOutputIfCurrent();
       }
@@ -2443,12 +2463,15 @@ export async function sendPrompt(
       state: "failure",
     });
 
+    diagnostics?.terminalSettled("rejected");
+    diagnostics?.streamSettled("rejected");
     if (abortController.signal.aborted) {
       recordInterruptedStructuredOutputIfCurrent();
       return;
     }
-    diagnostics?.terminalSettled("rejected");
-    console.error("[session-manager] Error processing prompt");
+    console.error("[session-manager] Error processing prompt", {
+      errorClass: diagnosticErrorClass(error),
+    });
 
     if (session.abortController === abortController) {
       if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
@@ -2482,7 +2505,6 @@ export async function sendPrompt(
     }
     throw error;
   } finally {
-    diagnostics?.streamSettled("resolved");
     diagnostics?.close();
     flushDebugLogs();
     abortController.signal.removeEventListener("abort", observeAbort);

@@ -7,7 +7,7 @@
  * and what it does with a run that outlives its budget — none of which needs a
  * model to answer.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from "./prompt.js";
@@ -115,6 +115,13 @@ function runningState(): SessionState {
 
 function input(overrides: Partial<DispatchInput> = {}): DispatchInput {
   return { prompt: "do the thing", images: [], ...overrides };
+}
+
+function closedDiagnostic(lines: string[]): Record<string, unknown> | undefined {
+  return lines
+    .filter((line) => line.startsWith("[bridge-diagnostics] "))
+    .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
+    .find((entry) => entry.event === "closed");
 }
 
 describe("dispatchPrompt", () => {
@@ -275,20 +282,75 @@ describe("dispatchPrompt", () => {
   });
 
   test("records a failed turn with the text Pi refused with", async () => {
+    const previousFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const previousInfo = console.info;
+    const lines: string[] = [];
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+    console.info = (line: unknown) => lines.push(String(line));
     const state = runningState();
     const stub = stubSession();
+    try {
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-1" }));
+      stub.fail(new Error("provider is out of quota"));
+      await handle.completion;
 
-    const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-1" }));
-    stub.fail(new Error("provider is out of quota"));
-    await handle.completion;
-
-    expect(state.status).toBe("error");
-    expect(state.error).toBe("provider is out of quota");
-    expect(state.promptJournal.get("req-1")?.state).toBe("failed");
+      expect(state.status).toBe("error");
+      expect(state.error).toBe("provider is out of quota");
+      expect(state.promptJournal.get("req-1")?.state).toBe("failed");
+      expect(closedDiagnostic(lines)).toMatchObject({
+        terminal: "rejected",
+        stream: "rejected",
+        cancelReason: "turn-ended",
+      });
+    } finally {
+      stub.finish();
+      console.info = previousInfo;
+      if (previousFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousFlag;
+    }
   });
 
-  test("aborts a run that outlived its budget before reporting the turn failed", async () => {
-    process.env.PI_BRIDGE_PROMPT_TIMEOUT_MS = "60000";
+  test("records a timed-out turn with rejected outcomes and timeout cancellation", async () => {
+    jest.useFakeTimers();
+    const previousFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const previousInfo = console.info;
+    const lines: string[] = [];
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+    console.info = (line: unknown) => lines.push(String(line));
+    const state = runningState();
+    const stub = stubSession();
+    let completion: Promise<void> | undefined;
+    try {
+      const handle = await dispatchPrompt(
+        state,
+        stub.session,
+        input({ requestId: "timeout" }),
+        60_000,
+      );
+      completion = handle.completion;
+      jest.advanceTimersByTime(60_001);
+      await completion;
+
+      expect(stub.aborted()).toBe(1);
+      expect(state.status).toBe("error");
+      expect(state.error).toBe("The Pi turn exceeded its time budget");
+      expect(closedDiagnostic(lines)).toMatchObject({
+        terminal: "rejected",
+        stream: "rejected",
+        cancellation: "resolved",
+        cancelReason: "timeout",
+      });
+    } finally {
+      stub.finish();
+      await completion;
+      console.info = previousInfo;
+      if (previousFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousFlag;
+      jest.useRealTimers();
+    }
+  });
+
+  test("aborts a failed run before reporting the turn failed", async () => {
     const state = runningState();
     const order: string[] = [];
     const stub = stubSession({ onAbort: () => order.push("abort") });

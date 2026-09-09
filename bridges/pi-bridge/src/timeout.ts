@@ -6,6 +6,10 @@
  * implementation means the timer is unref'd in exactly one place — a ref'd
  * timer here would hold the event loop open and stop the bridge exiting.
  */
+export class TimeoutError extends Error {
+  override readonly name = "TimeoutError";
+}
+
 export async function withTimeout<T>(
   work: Promise<T>,
   timeoutMs: number,
@@ -16,7 +20,7 @@ export async function withTimeout<T>(
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timer = setTimeout(() => reject(new TimeoutError(message)), timeoutMs);
         timer.unref();
       }),
     ]);

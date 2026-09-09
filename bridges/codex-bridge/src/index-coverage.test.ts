@@ -511,6 +511,77 @@ describe("codex bridge private boundary coverage", () => {
     expect(errors).toEqual([["[codex-bridge] app-server engine ready (codex 0.145.0)"]]);
   });
 
+  test("gates process diagnostics, filters health details, and stops heartbeats on shutdown", async () => {
+    jest.useFakeTimers();
+    const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const originalInfo = console.info;
+    const lines: string[] = [];
+    console.info = (line: unknown) => lines.push(String(line));
+    let diagnostics: ReturnType<typeof __testing.createCodexProcessDiagnosticsForTesting> =
+      undefined;
+    try {
+      const runtime = {
+        getHealth: () => ({
+          state: "ready",
+          generation: 3,
+          restartCount: 2,
+          circuitOpen: false,
+          notificationQueueDepth: 4,
+          notificationQueueHighWaterMark: 7,
+          unknownNotifications: 1,
+          unknownServerRequests: 5,
+          lastError: "PRIVATE FAILURE DETAIL",
+          codexHome: "/PRIVATE/CODEX_HOME",
+          rpc: {
+            requestsSent: 11,
+            responsesReceived: 10,
+          },
+        }),
+        stop: async () => undefined,
+      };
+
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
+      expect(__testing.createCodexProcessDiagnosticsForTesting(runtime as never)).toBeUndefined();
+
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+      diagnostics = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);
+      diagnostics?.report("heartbeat");
+
+      const heartbeat = lines
+        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
+        .find((entry) => entry.event === "heartbeat");
+      expect(heartbeat).toMatchObject({
+        bridge: "codex",
+        phase: "attached",
+        metrics: {
+          state: "ready",
+          generation: 3,
+          restartCount: 2,
+          circuitOpen: false,
+          notificationQueueDepth: 4,
+          notificationQueueHighWaterMark: 7,
+          unknownNotifications: 1,
+          unknownServerRequests: 5,
+          requestsSent: 11,
+          responsesReceived: 10,
+        },
+      });
+      expect(lines.join("\n")).not.toContain("PRIVATE");
+
+      await __testing.stopSelectedEngineForTesting(runtime as never, diagnostics);
+      const lineCount = lines.length;
+      expect(lines.at(-1)).toContain('"event":"closed"');
+      jest.advanceTimersByTime(120_000);
+      expect(lines).toHaveLength(lineCount);
+    } finally {
+      diagnostics?.close();
+      console.info = originalInfo;
+      if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
+      jest.useRealTimers();
+    }
+  });
+
   test("contains idle cleanup failures", async () => {
     const warnings: unknown[][] = [];
     const originalWarn = console.warn;

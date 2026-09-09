@@ -715,6 +715,7 @@ export class AcpProcess {
     }
   >();
   #closed = false;
+  #terminationOutcome?: "resolved" | "rejected";
   #stdoutBuffer = Buffer.alloc(0);
   onUpdate: (params: JsonObject) => void = () => undefined;
   onVendor: (method: string, params: JsonObject) => void = () => undefined;
@@ -765,6 +766,7 @@ export class AcpProcess {
         new Error(
           `${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`,
         ),
+        this.#terminationOutcome ?? (code === 0 ? "resolved" : "rejected"),
       );
     });
   }
@@ -783,7 +785,7 @@ export class AcpProcess {
     const result = await this.request("initialize", initializeRequest, RPC_TIMEOUT_MS, signal);
     const initialized = isObject(result) ? result : {};
     if (initialized.protocolVersion !== PROTOCOL_VERSION) {
-      await this.close();
+      await this.#terminateChild("rejected");
       throw new Error(
         `${provider} negotiated unsupported ACP protocol version ${String(initialized.protocolVersion)}; Orkestrator supports version ${PROTOCOL_VERSION}`,
       );
@@ -840,14 +842,14 @@ export class AcpProcess {
       const timer = setTimeout(() => {
         this.#diagnostics?.count("timeouts");
         fail(new Error(`${provider} ACP ${method} timed out`));
-        void this.close();
+        void this.#terminateChild("rejected");
       }, timeoutMs);
       timer.unref();
       let cleanupAbort: (() => void) | undefined;
       if (signal) {
         const onAbort = () => {
           fail(new Error(`${provider} ACP ${method} was cancelled`));
-          void this.close();
+          void this.#terminateChild("rejected");
         };
         signal.addEventListener("abort", onAbort, { once: true });
         cleanupAbort = () => signal.removeEventListener("abort", onAbort);
@@ -873,6 +875,17 @@ export class AcpProcess {
   }
 
   async close(): Promise<void> {
+    await this.#terminateChild("resolved");
+  }
+
+  async #terminateChild(outcome: "resolved" | "rejected"): Promise<void> {
+    // Fault-driven teardown wins over a later cleanup call. A timed-out request
+    // commonly rejects its owner before SIGTERM has produced the exit event;
+    // that owner's finally block may call close(), but it must not rewrite the
+    // failure as an ordinary shutdown.
+    if (outcome === "rejected" || this.#terminationOutcome === undefined) {
+      this.#terminationOutcome = outcome;
+    }
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     const exited = new Promise<void>((resolvePromise) =>
       this.child.once("exit", () => resolvePromise()),
@@ -912,7 +925,7 @@ export class AcpProcess {
       if (newline < 0) break;
       if (newline > MAX_LINE_BYTES) {
         this.#close(new Error(`${provider} ACP emitted an oversized JSONL frame`));
-        void this.close();
+        void this.#terminateChild("rejected");
         return;
       }
       const line = this.#stdoutBuffer.subarray(0, newline).toString("utf8");
@@ -921,7 +934,7 @@ export class AcpProcess {
     }
     if (this.#stdoutBuffer.length > MAX_LINE_BYTES) {
       this.#close(new Error(`${provider} ACP emitted an unterminated oversized JSONL frame`));
-      void this.close();
+      void this.#terminateChild("rejected");
     }
   }
 
@@ -934,7 +947,7 @@ export class AcpProcess {
     } catch {
       this.#diagnostics?.count("protocolErrors");
       this.#close(new Error(`${provider} ACP emitted malformed JSON`));
-      void this.close();
+      void this.#terminateChild("rejected");
       return;
     }
     if (typeof message.id === "number" && ("result" in message || "error" in message)) {
@@ -1030,10 +1043,10 @@ export class AcpProcess {
     }
   }
 
-  #close(error: Error): void {
+  #close(error: Error, streamOutcome: "resolved" | "rejected" = "rejected"): void {
     if (this.#closed) return;
     this.#closed = true;
-    this.#diagnostics?.streamSettled("rejected");
+    this.#diagnostics?.streamSettled(streamOutcome);
     this.#diagnostics?.close();
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);

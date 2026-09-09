@@ -560,7 +560,7 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
       "",
       "That fallback proves only *internal* consistency — the manifest is recomputed",
       "from the same committed files, so bindings edited together with their manifest",
-      "would still pass. `bun run verify:codex:protocol` refuses the fallback and",
+      "would still pass. `mise run verify:codex:protocol` refuses the fallback and",
       "requires the pinned binary; run it on a machine with the Codex toolchain",
       "before releasing, and after any change under this directory.",
       "",
@@ -622,7 +622,7 @@ async function main(): Promise<void> {
     console.warn(
       "[codex-protocol] WARNING: the pinned binary is unavailable, so the " +
         "committed bindings were NOT verified against the protocol. Only " +
-        "internal self-consistency was checked. Run `bun run verify:codex:protocol` " +
+        "internal self-consistency was checked. Run `mise run verify:codex:protocol` " +
         "on a machine with the pinned Codex toolchain before releasing.",
     );
     return;

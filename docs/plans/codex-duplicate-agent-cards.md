@@ -329,11 +329,11 @@ suites.
 Start with the owning files and add any new resolver/failure test paths:
 
 ```bash
-bun run test:logged -- --name codex-agent-cards -- bun test bridges/codex-bridge/src/subagent-transcript.test.ts bridges/codex-bridge/src/subagent-transcript-parts.test.ts bridges/codex-bridge/src/codex-collaboration.test.ts bridges/codex-bridge/src/messages/render-turn.test.ts --parallel=2 --only-failures
-bun run test:logged -- --name codex-bridge-typecheck -- bun run --cwd bridges/codex-bridge typecheck
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run format:check
-bun run lint
+mise run test:logged --name codex-agent-cards -- bun test bridges/codex-bridge/src/subagent-transcript.test.ts bridges/codex-bridge/src/subagent-transcript-parts.test.ts bridges/codex-bridge/src/codex-collaboration.test.ts bridges/codex-bridge/src/messages/render-turn.test.ts --parallel=2 --only-failures
+mise run test:logged --name codex-bridge-typecheck -- bun run --cwd bridges/codex-bridge typecheck
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run format:check
+mise run lint
 ```
 
 If the fix changes rollout metadata, include its tests. If it changes backend
@@ -346,9 +346,9 @@ Follow [the isolated testing reference](../development/agent-testing.md) and
 the current root `AGENTS.md`. Start a unique fixture profile, for example:
 
 ```bash
-bun run dev:test -- --profile agent-codex-card-dedup --fixture --credential-source codex --agent-platforms codex
-bun run dev:status -- --profile agent-codex-card-dedup --json
-bun run dev:login -- --profile agent-codex-card-dedup --json
+mise run dev:test --profile agent-codex-card-dedup --fixture --credential-source codex --agent-platforms codex
+mise run dev:status --profile agent-codex-card-dedup --json
+mise run dev:login --profile agent-codex-card-dedup --json
 ```
 
 The startup command supervises a long-running stack; run status/login from a
@@ -375,14 +375,14 @@ Do not launch a production session to manufacture the failure.
 After verification:
 
 ```bash
-bun run dev:stop -- --profile agent-codex-card-dedup
-bun run dev:reset -- --profile agent-codex-card-dedup
+mise run dev:stop --profile agent-codex-card-dedup
+mise run dev:reset --profile agent-codex-card-dedup
 ```
 
 Confirm the profile has stopped and its state was reset. Report any deliberately
 retained fixture state. For broad runtime/projection changes, follow the root
 minimum-verification table and run the complete suite through the logged wrapper
-around `bun run test`; never use bare root-level `bun test`.
+around `mise run test`; never use bare root-level `bun test`.
 
 ## Completion checklist
 

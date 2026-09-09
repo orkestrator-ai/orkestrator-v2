@@ -88,7 +88,7 @@ describe("development CLI arguments", () => {
     // validated the value, wrote it into the profile, and then did nothing with
     // it — the flag looked supported and silently was not.
     expect(() => parseDevArguments(["--agent-platforms", "cursor"])).toThrow(
-      "only supported by bun run dev:test",
+      "only supported by mise run dev:test",
     );
   });
 });

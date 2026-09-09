@@ -8,7 +8,7 @@ import {
 } from "./test-all";
 
 function usage(): never {
-  console.error("Usage: bun run test:logged -- --name <label> -- <command> [args...]");
+  console.error("Usage: mise run test:logged --name <label> -- <command> [args...]");
   process.exit(2);
 }
 

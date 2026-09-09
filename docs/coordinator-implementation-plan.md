@@ -445,11 +445,11 @@ behavior, then the repository's required isolated real-stack browser cycle.
   return, and verify exact transcript/status/pending prompts/controls. No extra
   session, build, review, or message may be created by remount.
 
-Run checks through `bun run test:logged -- --name <name> -- <command>` as required
+Run checks through `mise run test:logged --name <name> -- <command>` as required
 by `AGENTS.md`. Start the real stack with a unique `dev:test --fixture` profile,
 use only its returned fixture project, discover URLs through `dev:status`, and
 authenticate with `dev:login`. Run owning tests and affected package typechecks
-before browser QA. Run root formatting/lint checks and the declared `bun run test`
+before browser QA. Run root formatting/lint checks and the declared `mise run test`
 suite before delivery; never substitute bare root-level `bun test`.
 
 Update `docs/technical-architecture/control-mcp.md`, session architecture docs,

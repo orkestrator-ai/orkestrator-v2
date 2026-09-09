@@ -16,8 +16,8 @@ binds only to `127.0.0.1` and never configures Tailscale Serve.
 ## Start or reuse a profile
 
 ```bash
-bun run dev:test -- --profile codex-qa --fixture
-bun run dev:status -- --profile codex-qa --json
+mise run dev:test --profile codex-qa --fixture
+mise run dev:status --profile codex-qa --json
 ```
 
 The second start is idempotent and reports the already-running launcher. Wait for
@@ -28,8 +28,8 @@ gateway auth file but never includes its token.
 ## Sign a browser in
 
 ```bash
-bun run dev:login -- --profile codex-qa          # human-readable
-bun run dev:login -- --profile codex-qa --json   # { loginUrl, expiresAt, ... }
+mise run dev:login --profile codex-qa          # human-readable
+mise run dev:login --profile codex-qa --json   # { loginUrl, expiresAt, ... }
 ```
 
 This is the normal way to reach the UI. The command reads the profile's auth
@@ -64,7 +64,7 @@ See [`../todo/credentials-and-models.md`](../todo/credentials-and-models.md) for
 per-platform credential, container-import, and model-cache matrix.
 
 ```bash
-bun run dev:test -- --profile live-agents --fixture
+mise run dev:test --profile live-agents --fixture
 ```
 
 To narrow the profile to one provider, pass `--credential-source codex` (or any
@@ -99,10 +99,10 @@ profile already has is left alone. Narrow the set when a run does not need all
 five:
 
 ```bash
-bun run dev:test -- --profile cursor-qa --fixture --agent-platforms cursor,grok
+mise run dev:test --profile cursor-qa --fixture --agent-platforms cursor,grok
 ```
 
-`--agent-platforms` belongs to `dev:test` only; `bun run dev` rejects it rather
+`--agent-platforms` belongs to `dev:test` only; `mise run dev` rejects it rather
 than accept a value it would ignore, because ordinary development keeps its
 durable per-installation selection.
 
@@ -141,16 +141,16 @@ bounded owner-only `auth.json` snapshot is refreshed into the isolated home.
 To create and start fixture environments during seeding:
 
 ```bash
-bun run dev:test -- --profile codex-qa --fixture --fixture-environments local
+mise run dev:test --profile codex-qa --fixture --fixture-environments local
 # Requires the profile image printed in profile.json:
-bun run dev:test -- --profile container-qa --fixture --fixture-environments local,container
+mise run dev:test --profile container-qa --fixture --fixture-environments local,container
 ```
 
 The container fixture path builds the workspace-specific development image when
 it is missing. Rebuild it explicitly without touching `orkestrator-v2:latest`:
 
 ```bash
-bun run docker:build:dev -- --profile container-qa
+mise run docker:build:dev --profile container-qa
 ```
 
 Never add the live Orkestrator source checkout as the project under test. Use the
@@ -165,26 +165,26 @@ deletes raw output on success, and compresses bounded failure evidence. Run each
 command separately so its result belongs to one check:
 
 ```bash
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run test:logged -- --name changed-component -- \
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name changed-component -- \
   bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
   --parallel=2 --only-failures
 
 ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa \
 ORKESTRATOR_AGENT_TEST_RUN_ID=codex-qa \
-bun run test:logged -- --name agent-browser -- bun run test:agent:browser
+mise run test:logged --name agent-browser -- mise run test:agent:browser
 
-bun run test:logged -- --name agent-electron -- bun run test:agent:electron
+mise run test:logged --name agent-electron -- mise run test:agent:electron
 
 # Against a profile started with --fixture-environments local,container:
 ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
-bun run test:logged -- --name agent-docker -- bun run test:agent:docker
+mise run test:logged --name agent-docker -- mise run test:agent:docker
 
 # Run for cross-cutting or release-sensitive changes:
-bun run test
+mise run test
 
 # Release validation, including the serial iOS suite:
-bun run test:all
+mise run test:all
 ```
 
 Do not add another `tee`; the terminal harness may already retain output, and a
@@ -232,7 +232,7 @@ target the exact `electronTitle`; never interact with a window titled only
 `Orkestrator AI`.
 
 If the browser shows the login page, do not go looking for the token: run
-`bun run dev:login -- --profile <profile>` and open the `loginUrl` it prints, as
+`mise run dev:login --profile <profile>` and open the `loginUrl` it prints, as
 described above. The page itself repeats that command for the running profile.
 Typing the token into the form still works and remains the fallback if the
 launcher is unavailable — `authFile` is an owner-only JSON file whose `token`
@@ -240,9 +240,11 @@ property is exactly what the field wants, it is the gateway token rather than an
 OTP, and it must never be echoed, put in a shell argument or URL, pasted into
 chat, or captured in screenshots, traces, logs, and reports.
 
-Use the fixture to create/start an environment, open a terminal, run
-`bun run dev`, open the printed preview, change the `fixture-v1` marker, and
-verify status/diff updates. Every background change must include this path:
+Use the fixture to create/start an environment and open a terminal. Run the
+fixture project's own `bun run dev` — the script belongs to the copied fixture,
+not to this repository, whose commands are mise tasks — then open the printed
+preview, change the `fixture-v1` marker, and verify status/diff updates. Every
+background change must include this path:
 
 1. Start the operation.
 2. Switch to another environment or tab.
@@ -257,8 +259,8 @@ Continue past non-blocking failures and state any skipped flows.
 ## Stop and reset
 
 ```bash
-bun run dev:stop -- --profile codex-qa
-bun run dev:reset -- --profile codex-qa
+mise run dev:stop --profile codex-qa
+mise run dev:reset --profile codex-qa
 ```
 
 Stopping the profile also discards every issued browser session, since they live

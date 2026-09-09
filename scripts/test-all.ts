@@ -355,7 +355,7 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1;
  * The env var carrying the planned per-package worker count into the Turbo
  * group. It is deliberately *not* passed after Turbo's `--` separator: turbo
  * folds passthrough arguments into the hash of the requested task **and its
- * dependencies**, so `bun run build` and `bun run test` would compute different
+ * dependencies**, so the workspace `build` and `test` tasks would compute different
  * `build` hashes and re-run `tsc && vite build` on every alternation.
  *
  * turbo.json declares it under `test:workspace.passThroughEnv`, which forwards
@@ -391,8 +391,9 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
   return [
     {
       name: "workspace (web, backend, desktop, web-public, cli, protocol)",
-      command: "turbo",
+      command: "bunx",
       args: [
+        "turbo",
         "run",
         "test:workspace",
         "--cwd",
@@ -438,7 +439,7 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       // lack that managed binary, so the generator has an explicit offline
       // fallback for this pipeline only.
       name: "codex protocol lockfile",
-      command: "bun",
+      command: "mise",
       args: ["run", "codex:protocol:check"],
       env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
     },

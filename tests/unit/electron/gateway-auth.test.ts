@@ -708,7 +708,7 @@ describe("remote gateway", () => {
     const replayed = await requestUrl(loginUrl(code));
     expect(replayed.status).toBe(401);
     expect(replayed.body).toContain("already used or has expired");
-    expect(replayed.body).toContain("bun run dev:login -- --profile agent-login-qa");
+    expect(replayed.body).toContain("mise run dev:login --profile agent-login-qa");
     expect(replayed.headers["set-cookie"]).toBeUndefined();
 
     const wrongMethod = await requestUrl(loginUrl(await mint()), { method: "POST" });

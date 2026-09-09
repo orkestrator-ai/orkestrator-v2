@@ -71,10 +71,10 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Download and verify bundled Bun
-        run: ./scripts/download-bun.sh
+        run: mise run download:bun
 
       - name: Build the desktop application
-        run: bun run build:all
+        run: mise run build:all
 
       - name: Exercise the standalone packaged-backend layout
         run: cd apps/backend && bun test --preload ../../tests/setup-node.ts tests/standalone.test.ts
@@ -100,7 +100,7 @@ jobs:
           desktop-file-validate "$XDG_DATA_HOME/applications/orkestrator-v2.desktop"
 
       - name: Verify the packaged backend and native Sharp runtime
-        run: bun run verify:packaged-backend
+        run: mise run verify:packaged-backend
 
   container:
     name: Container (linux/amd64 + linux/arm64)

@@ -163,7 +163,7 @@ keeping Codex the only allowed provider. Ships alone; nothing user-visible.
 - `native-agent-execution-policy.test.ts`: coordinator policy carries the
   capability deny list and is still not overridable.
 
-Acceptance: `bun run test` green; an existing Codex coordinator conversation
+Acceptance: `mise run test` green; an existing Codex coordinator conversation
 still opens, dispatches, restarts, and closes exactly as before.
 
 ## Phase 1 — Provider choice per conversation
@@ -412,12 +412,12 @@ and cannot create a file, edit a file, run `touch`, or fetch a URL.
 ## Verification per PR
 
 ```bash
-bun run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
-bun run test:logged -- --name coordinator-backend -- bun test apps/backend/src/core/coordinator-service.test.ts apps/backend/src/core/commands-registry-coordinator.test.ts apps/backend/src/core/commands-servers-coordinator.test.ts --parallel=2 --only-failures
-bun run test:logged -- --name coordinator-web -- bun --cwd=apps/web test src/components/projects/CoordinatorPanel.test.tsx --parallel=2 --only-failures
-bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures
-bun run test
+mise run test:logged --name backend-typecheck -- bun run --cwd apps/backend typecheck
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name coordinator-backend -- bun test apps/backend/src/core/coordinator-service.test.ts apps/backend/src/core/commands-registry-coordinator.test.ts apps/backend/src/core/commands-servers-coordinator.test.ts --parallel=2 --only-failures
+mise run test:logged --name coordinator-web -- bun --cwd=apps/web test src/components/projects/CoordinatorPanel.test.tsx --parallel=2 --only-failures
+mise run test:logged --name bridge-tests -- bun test bridges --parallel=2 --only-failures
+mise run test
 ```
 
 Plus the browser cycle from AGENTS.md for PRs 2 and 3, including the

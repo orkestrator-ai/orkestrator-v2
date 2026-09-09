@@ -6,8 +6,9 @@ export function buildAgentLaunchCommand(options: {
   initialPrompt?: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }): string | null {
-  const { tabType, initialPrompt, model, reasoningEffort } = options;
+  const { tabType, initialPrompt, model, reasoningEffort, fastMode } = options;
   if (
     tabType !== "plain" &&
     tabType !== "claude" &&
@@ -19,5 +20,11 @@ export function buildAgentLaunchCommand(options: {
   ) {
     return null;
   }
-  return buildTerminalAgentLaunchCommand({ tabType, initialPrompt, model, reasoningEffort });
+  return buildTerminalAgentLaunchCommand({
+    tabType,
+    initialPrompt,
+    model,
+    reasoningEffort,
+    fastMode,
+  });
 }

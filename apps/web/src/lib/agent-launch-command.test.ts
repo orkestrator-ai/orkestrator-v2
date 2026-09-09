@@ -28,6 +28,24 @@ describe("buildAgentLaunchCommand", () => {
     );
   });
 
+  test("passes explicit Fast and Normal choices to Claude's one-shot settings", () => {
+    expect(
+      buildAgentLaunchCommand({ tabType: "claude", initialPrompt: "Review", fastMode: true }),
+    ).toBe('claude --dangerously-skip-permissions --settings "{\\"fastMode\\":true}" "Review"');
+    expect(buildAgentLaunchCommand({ tabType: "claude", fastMode: false })).toBe(
+      'claude --dangerously-skip-permissions --settings "{\\"fastMode\\":false}"',
+    );
+  });
+
+  test("passes explicit Fast and Normal choices to Codex's service tier", () => {
+    expect(buildAgentLaunchCommand({ tabType: "codex", fastMode: true })).toBe(
+      'codex --config "service_tier=\\"priority\\""',
+    );
+    expect(buildAgentLaunchCommand({ tabType: "codex", fastMode: false })).toBe(
+      'codex --config "service_tier=\\"default\\""',
+    );
+  });
+
   test("quotes untrusted model and prompt values as shell arguments", () => {
     expect(
       buildAgentLaunchCommand({

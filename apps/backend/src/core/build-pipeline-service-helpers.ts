@@ -29,6 +29,7 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
+import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import type { AppConfig } from "./models.js";
 import {
   type BuildPipelineProvider,
@@ -170,7 +171,7 @@ export function repositoryAgent(
 /**
  * The connection-level model, reasoning effort, and speed for one harness.
  *
- * Both come from the shared tier resolver, so a step that pinned a harness
+ * They come from the shared tier resolver, so a step that pinned a harness
  * other than the repository's default gets *that* harness's own model rather
  * than one from a catalogue it does not have. The `owns` guard this used to
  * need is gone: a model now lives in its own platform column, so there is no
@@ -183,9 +184,14 @@ export function connectionDefaultsFor(
   agent: BuildPipelineAgent,
   config: Pick<AppConfig, "global">,
   repository: { agentSettings?: AgentSettingsTier },
+  environment?: { agentSettings?: AgentSettingsTier },
 ): { model?: string; effort?: string; fastMode?: boolean } {
   const resolved = resolveAgentPlatformSettings(
-    { repository: repository.agentSettings, global: config.global.agentSettings },
+    {
+      environment: environment?.agentSettings,
+      repository: repository.agentSettings,
+      global: config.global.agentSettings,
+    },
     agent,
   );
   return {
@@ -193,6 +199,30 @@ export function connectionDefaultsFor(
     ...(resolved.reasoningEffort ? { effort: resolved.reasoningEffort } : {}),
     ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
   };
+}
+
+/**
+ * Apply a configured Fast/Normal choice only when the selected model can
+ * honour it. Explicit Normal is always retained; Fast is omitted for a
+ * platform or pinned model whose catalogue explicitly says the speed axis is
+ * unavailable. A missing/stale catalogue must not silently turn a user's Fast
+ * choice into Normal; the provider remains the authority in that case.
+ */
+export function fastModeForModel(
+  agent: BuildPipelineAgent,
+  configured: boolean | undefined,
+  model: string | undefined,
+  catalog: readonly AgentModel[] = [],
+): boolean | undefined {
+  if (configured !== true) return configured;
+  if (!nativeAgentCapabilities(agent).composer.speed) return undefined;
+  if (!model || model === "default") return true;
+  const selected = catalog.find(
+    (candidate) =>
+      candidate.platform === agent &&
+      (candidate.id === model || candidate.aliases?.includes(model) === true),
+  );
+  return selected && selected.supportsSpeed !== true ? undefined : true;
 }
 
 /**
@@ -267,6 +297,7 @@ export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepCo
       agent: step.agent,
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
+      ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -291,6 +322,7 @@ export function normalizeReviewers(
       agent: reviewer.agent,
       ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
+      ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
     };
   });
 }

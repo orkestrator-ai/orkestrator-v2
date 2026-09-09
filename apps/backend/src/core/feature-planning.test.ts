@@ -51,6 +51,9 @@ class FakeProvider implements BuildPipelineProvider {
     sessionId: string;
     prompt: string;
     requestId: string;
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
     agentMcp?: { url: string; token: string };
   }> = [];
   readonly created: string[] = [];
@@ -91,6 +94,9 @@ class FakeProvider implements BuildPipelineProvider {
         sessionId,
         prompt,
         requestId: options.requestId,
+        model: options.model,
+        effort: options.effort,
+        fastMode: options.fastMode,
         agentMcp: options.agentMcp,
       });
       throw new AmbiguousPromptDispatchError("The bridge did not answer");
@@ -100,6 +106,9 @@ class FakeProvider implements BuildPipelineProvider {
       sessionId,
       prompt,
       requestId: options.requestId,
+      model: options.model,
+      effort: options.effort,
+      fastMode: options.fastMode,
       agentMcp: options.agentMcp,
     });
   }
@@ -264,6 +273,51 @@ async function harness(
 }
 
 describe("FeaturePlanningService", () => {
+  test("applies the Codex model, reasoning, and Fast defaults to planning turns", async () => {
+    const context = await harness({
+      invoke:
+        () =>
+        async <T>(command: string) => {
+          if (command === "get_native_agent_model_catalog") {
+            return [
+              {
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
+                platform: "codex",
+                supportsSpeed: true,
+              },
+            ] as T;
+          }
+          return undefined as T;
+        },
+    });
+    try {
+      const config = await context.storage.loadConfig();
+      config.global.agentSettings = {
+        platforms: {
+          codex: { model: "gpt-5.6-sol", reasoningEffort: "high", fastMode: true },
+        },
+      };
+      await context.storage.saveConfig(config);
+      context.provider.statusState = "missing";
+
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+
+      expect(context.provider.createOptions[0]).toMatchObject({
+        model: "gpt-5.6-sol",
+        effort: "high",
+        fastMode: true,
+      });
+      expect(context.provider.sends[0]).toMatchObject({
+        model: "gpt-5.6-sol",
+        effort: "high",
+        fastMode: true,
+      });
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("uses the durable tool result while preserving the assistant prose", async () => {
     const context = await harness({ toolMode: true });
     try {

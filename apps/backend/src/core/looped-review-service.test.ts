@@ -115,6 +115,7 @@ class FakeProvider implements BuildPipelineProvider {
     sessionId: string;
     requestId: string;
     schema?: JsonSchema;
+    fastMode?: boolean;
     agentMcp?: ProviderSendOptions["agentMcp"];
   }> = [];
   readonly registrations: Array<{ sessionId: string; interaction?: ProviderSessionRegistration }> =
@@ -205,6 +206,7 @@ class FakeProvider implements BuildPipelineProvider {
       sessionId,
       requestId: options.requestId,
       schema: options.schema,
+      fastMode: options.fastMode,
       agentMcp: options.agentMcp,
     });
     if (this.sendBarrier) await this.sendBarrier;
@@ -466,6 +468,28 @@ function workflowFixture(overrides: Partial<LoopedReviewWorkflow> = {}): LoopedR
 }
 
 describe("LoopedReviewService", () => {
+  test("persists Fast and applies it to every looped-review session and turn", async () => {
+    await harness(async (service, _storage, provider) => {
+      const started = await service.start({
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        fastMode: true,
+        targetBranch: "main",
+        allowance: 1,
+      });
+      expect(started.fastMode).toBe(true);
+
+      for (let pass = 0; pass < 4 && provider.sent.length === 0; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      expect(provider.creates[0]?.fastMode).toBe(true);
+      expect(provider.sent[0]?.fastMode).toBe(true);
+    });
+  });
+
   test("rejects invalid, missing, wrong-project, and deleting review environments", async () => {
     await harness(async (service, storage) => {
       await expect(service.start({} as never)).rejects.toThrow(

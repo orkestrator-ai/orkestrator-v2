@@ -111,7 +111,26 @@ export abstract class BuildPipelineServiceBase {
   protected abstract stepSettings(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
-  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string }>;
+  ): Promise<{
+    agent: BuildPipelineAgent;
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
+  }>;
+  protected abstract settingsForSelection(
+    pipeline: BuildPipeline,
+    selection: {
+      agent: BuildPipelineAgent;
+      model?: string;
+      effort?: string;
+      fastMode?: boolean;
+    },
+  ): Promise<{
+    agent: BuildPipelineAgent;
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
+  }>;
   protected abstract awaitStructuredResult(
     pipeline: BuildPipeline,
     session: PipelineSession,

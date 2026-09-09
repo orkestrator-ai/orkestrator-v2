@@ -13,6 +13,7 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import { type ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_LIMITS,
@@ -37,6 +38,7 @@ import {
   errorMessage,
   resumablePhase,
   connectionDefaultsFor,
+  fastModeForModel,
   sessionAgent,
   stepModel,
   MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
@@ -439,24 +441,70 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     agent: BuildPipelineAgent;
     model?: string;
     effort?: string;
+    fastMode?: boolean;
   }> {
     const step = pipeline.steps?.[stepKeyForSessionPhase(sessionPhase)];
     if (step) {
       const effort = step.reasoningEffort?.trim();
-      return {
+      return this.settingsForSelection(pipeline, {
         agent: step.agent,
         // Normalised on read as well as on write: `start()` is not the only way
         // a snapshot gets here — `importLegacy` accepts one straight from disk,
         // where a placeholder could otherwise be sent as a real model id.
         model: stepModel(step.agent, step.model),
         effort: effort && effort !== "default" ? effort : undefined,
-      };
+        fastMode: step.fastMode,
+      });
     }
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
-    return {
+    return this.settingsForSelection(pipeline, {
       agent: pipeline.agentType,
       ...connectionDefaultsFor(pipeline.agentType, config, repository),
+    });
+  }
+
+  protected async settingsForSelection(
+    pipeline: BuildPipeline,
+    selection: {
+      agent: BuildPipelineAgent;
+      model?: string;
+      effort?: string;
+      fastMode?: boolean;
+    },
+  ): Promise<{
+    agent: BuildPipelineAgent;
+    model?: string;
+    effort?: string;
+    fastMode?: boolean;
+  }> {
+    const environment = await this.storage.getEnvironment(pipeline.environmentId);
+    if (!environment) throw new Error("Build environment no longer exists");
+    const config = await this.storage.loadConfig();
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const defaults = connectionDefaultsFor(selection.agent, config, repository, environment);
+    // A deliberately unpinned step keeps its established model/effort
+    // semantics. The provider may still have a connection default, so use that
+    // effective model for the speed capability check without pinning it here.
+    const capabilityModel = selection.model ?? defaults.model;
+    const configuredFastMode = selection.fastMode ?? defaults.fastMode;
+    const catalog =
+      configuredFastMode === true && capabilityModel
+        ? await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+            environmentId: pipeline.environmentId,
+          }).catch(() => [])
+        : [];
+    const fastMode = fastModeForModel(
+      selection.agent,
+      configuredFastMode,
+      capabilityModel,
+      catalog,
+    );
+    return {
+      agent: selection.agent,
+      ...(selection.model ? { model: selection.model } : {}),
+      ...(selection.effort ? { effort: selection.effort } : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     };
   }
 
@@ -508,13 +556,19 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const connection = await this.bridgeConnection(agent, environment);
+    const { fastMode: _fastMode, ...connectionDefaults } = connectionDefaultsFor(
+      agent,
+      config,
+      repository,
+      environment,
+    );
     const provider = createBuildPipelineProvider(
       {
         ...connection,
         // Connection-level defaults only, and only this harness's own. Every
         // pipeline turn passes the step's model and effort per call, which take
         // precedence; these fill in whatever the step left unset.
-        ...connectionDefaultsFor(agent, config, repository),
+        ...connectionDefaults,
       },
       {
         ...this.options.providerDependencies,

@@ -19,7 +19,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
+import { connectionDefaultsFor, fastModeForModel } from "./build-pipeline-service-helpers.js";
 
 import type {
   BuildPipelineProvider,
@@ -97,6 +97,57 @@ describe("build pipeline connection defaults", () => {
         },
       ),
     ).toEqual({ model: "global-model", effort: "xhigh", fastMode: false });
+  });
+
+  test("lets an environment override the inherited speed used by background workflows", () => {
+    expect(
+      connectionDefaultsFor(
+        "cursor",
+        {
+          global: {
+            agentSettings: {
+              platforms: { cursor: { model: "global-model", fastMode: false } },
+            },
+          },
+        } as never,
+        {
+          agentSettings: {
+            platforms: { cursor: { reasoningEffort: "high", fastMode: false } },
+          },
+        },
+        {
+          agentSettings: {
+            platforms: { cursor: { fastMode: true } },
+          },
+        },
+      ),
+    ).toEqual({ model: "global-model", effort: "high", fastMode: true });
+  });
+
+  test("keeps explicit Normal and only clamps Fast for a known unsupported model", () => {
+    const catalog = [
+      {
+        id: "fast-model",
+        aliases: ["fast-alias"],
+        name: "Fast model",
+        label: "Fast model",
+        platform: "codex" as const,
+        supportsSpeed: true,
+      },
+      {
+        id: "normal-only",
+        name: "Normal only",
+        label: "Normal only",
+        platform: "codex" as const,
+        supportsSpeed: false,
+      },
+    ];
+
+    expect(fastModeForModel("codex", false, "normal-only", catalog)).toBe(false);
+    expect(fastModeForModel("codex", true, "fast-alias", catalog)).toBe(true);
+    expect(fastModeForModel("codex", true, "normal-only", catalog)).toBeUndefined();
+    expect(fastModeForModel("codex", true, "catalogue-not-loaded", [])).toBe(true);
+    expect(fastModeForModel("opencode", true, "any-model", catalog)).toBeUndefined();
   });
 });
 

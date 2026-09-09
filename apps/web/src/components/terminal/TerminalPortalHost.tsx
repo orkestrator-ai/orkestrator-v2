@@ -208,6 +208,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
             isReviewTab={tab.isReviewTab}
             initialAgentModel={tab.initialAgentModel}
             initialReasoningEffort={tab.initialReasoningEffort}
+            initialFastMode={tab.initialFastMode}
             paneId={paneId}
             isSetupTab={tab.isSetupTab}
             backendManagedTerminal={tab.backendManagedTerminal}

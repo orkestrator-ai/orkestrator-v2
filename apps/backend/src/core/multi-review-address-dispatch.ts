@@ -104,6 +104,11 @@ export async function recoverMissingMultiReviewFixSession(
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
     reasoningEffort: workflow.fixModel.reasoningEffort,
+    ...(typeof session.fastMode === "boolean"
+      ? { fastMode: session.fastMode }
+      : typeof workflow.fixModel.fastMode === "boolean"
+        ? { fastMode: workflow.fixModel.fastMode }
+        : {}),
     phase: "fix" as const,
     sessionMode: "build" as const,
   };
@@ -177,6 +182,7 @@ export async function dispatchMultiReviewAddressPrompt(
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
     reasoningEffort: selection.reasoningEffort,
+    ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
     phase: "fix" as const,
     sessionMode: "build" as const,
   };

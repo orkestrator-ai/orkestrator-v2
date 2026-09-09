@@ -98,6 +98,7 @@ class FanoutProvider implements BuildPipelineProvider {
     prompt: string;
     requestId: string;
     model?: string;
+    fastMode?: boolean;
   }> = [];
   readonly aborted: string[] = [];
   readonly statusReads: string[] = [];
@@ -137,7 +138,13 @@ class FanoutProvider implements BuildPipelineProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
-    this.sent.push({ sessionId, prompt, requestId: options.requestId, model: options.model });
+    this.sent.push({
+      sessionId,
+      prompt,
+      requestId: options.requestId,
+      model: options.model,
+      fastMode: options.fastMode,
+    });
     const model = this.sessionModels.get(sessionId);
     if (model && this.ambiguousModels.has(model) && !this.ambiguityRaised.has(model)) {
       this.ambiguityRaised.add(model);
@@ -351,6 +358,41 @@ async function rewritePipeline(
 }
 
 describe("build pipeline multi-model review", () => {
+  test("applies each reviewer's Fast or Normal platform default", async () => {
+    await withPipeline(async ({ service, storage, read, provider, providers }) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = {
+        platforms: {
+          claude: { fastMode: true },
+          codex: { fastMode: false },
+        },
+      };
+      await storage.saveConfig(config);
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "codex", model: "gpt-5.4" },
+        ]),
+      );
+
+      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+      expect(reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.fastMode)).toEqual([
+        true,
+        false,
+      ]);
+      await service.advanceNow(started.id);
+
+      expect(provider.created.find((entry) => entry.label === "Review 1")?.options?.fastMode).toBe(
+        true,
+      );
+      expect(providers.get("codex")?.created[0]?.options?.fastMode).toBe(false);
+      expect(provider.sent.find((entry) => entry.sessionId.includes("review-1"))?.fastMode).toBe(
+        true,
+      );
+      expect(providers.get("codex")?.sent[0]?.fastMode).toBe(false);
+    });
+  });
+
   test("a single reviewer keeps the classic one-session review stage", async () => {
     await withPipeline(async ({ service, read }) => {
       const started = await service.start(startInput([{ agent: "claude", model: "opus" }]));

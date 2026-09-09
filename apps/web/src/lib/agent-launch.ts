@@ -134,11 +134,12 @@ export function modelSupportsSpeed(
   modelId: string | undefined,
 ): boolean {
   if (!platformOwnsSpeed(platform)) return false;
-  // With no pin, the provider chooses its model. Platform capability is the
-  // only authoritative fact available until that session publishes a catalog.
+  // With no pin or no catalogue match, the provider is the authority. A
+  // missing/stale catalogue must not silently turn an explicit Fast choice
+  // into Normal before the launch reaches that provider.
   if (!modelId) return true;
   const model = modelsForAgent(catalog, platform).find(
     (option) => option.id === modelId || option.resolvedModel === modelId,
   );
-  return model?.supportsSpeed === true;
+  return model ? model.supportsSpeed === true : true;
 }

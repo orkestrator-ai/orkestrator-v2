@@ -55,6 +55,15 @@ function reviewer(overrides: Partial<ReviewerRecord> = {}): ReviewerRecord {
 describe("reviewer model selection", () => {
   test("requires a platform and a non-blank model", () => {
     expect(isReviewerModelSelection({ agent: "claude", model: "sonnet" })).toBe(true);
+    expect(isReviewerModelSelection({ agent: "claude", model: "sonnet", fastMode: true })).toBe(
+      true,
+    );
+    expect(isReviewerModelSelection({ agent: "claude", model: "sonnet", fastMode: false })).toBe(
+      true,
+    );
+    expect(isReviewerModelSelection({ agent: "claude", model: "sonnet", fastMode: "fast" })).toBe(
+      false,
+    );
     expect(isReviewerModelSelection({ agent: "claude", model: "  " })).toBe(false);
     expect(isReviewerModelSelection({ agent: "not-an-agent", model: "sonnet" })).toBe(false);
   });
@@ -164,7 +173,10 @@ describe("consolidation session", () => {
 
   test("accepts a session with and without a pinned model", () => {
     expect(isReviewConsolidationSession(session)).toBe(true);
-    expect(isReviewConsolidationSession({ ...session, model: "sonnet" })).toBe(true);
+    expect(isReviewConsolidationSession({ ...session, model: "sonnet", fastMode: true })).toBe(
+      true,
+    );
+    expect(isReviewConsolidationSession({ ...session, fastMode: "fast" })).toBe(false);
     expect(isReviewConsolidationSession({ ...session, model: "  " })).toBe(false);
   });
 

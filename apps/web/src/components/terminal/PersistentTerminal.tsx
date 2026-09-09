@@ -142,6 +142,7 @@ interface PersistentTerminalProps {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialFastMode?: boolean;
   paneId: string;
   isSetupTab?: boolean;
   backendManagedTerminal?: boolean;
@@ -174,6 +175,7 @@ export function PersistentTerminal({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  initialFastMode,
   paneId,
   isSetupTab,
   backendManagedTerminal = false,
@@ -232,9 +234,10 @@ export function PersistentTerminal({
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
+    fastMode: initialFastMode,
   });
   const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialAgentModel || initialReasoningEffort),
+    Boolean(initialAgentModel || initialReasoningEffort || typeof initialFastMode === "boolean"),
   );
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
@@ -1813,6 +1816,7 @@ export function PersistentTerminal({
       initialPrompt,
       model: initialLaunchModel,
       reasoningEffort: initialLaunchReasoningEffort,
+      fastMode: initialLaunchOptionsRef.current.fastMode,
     });
     if (agentCommand) return `${agentCommand}\n`;
     if (tabType !== "plain" || !initialCommands || initialCommands.length === 0) {

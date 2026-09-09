@@ -91,6 +91,7 @@ class FakeProvider implements BuildPipelineProvider {
     prompt: string;
     schema?: JsonSchema;
     mode?: "plan" | "build";
+    fastMode?: boolean;
   }> = [];
   readonly created: Array<{
     phase: PipelineSessionPhase;
@@ -122,7 +123,12 @@ class FakeProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: { requestId: string; schema?: JsonSchema; mode?: "plan" | "build" },
+    options: {
+      requestId: string;
+      schema?: JsonSchema;
+      mode?: "plan" | "build";
+      fastMode?: boolean;
+    },
   ): Promise<void> {
     this.sent.push({
       sessionId,
@@ -130,6 +136,7 @@ class FakeProvider implements BuildPipelineProvider {
       prompt,
       schema: options.schema,
       mode: options.mode,
+      fastMode: options.fastMode,
     });
   }
 
@@ -369,6 +376,20 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
+  test("applies an explicit Normal default to build sessions and turns", async () => {
+    await withService(async (service, storage, provider) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = { platforms: { claude: { fastMode: false } } };
+      await storage.saveConfig(config);
+
+      const { session } = await startBuilding(service, storage);
+
+      expect(session.fastMode).toBe(false);
+      expect(provider.created[0]?.options?.fastMode).toBe(false);
+      expect(provider.sent[0]?.fastMode).toBe(false);
+    });
+  });
+
   test("passes the container execution policy to background provider sessions", async () => {
     await withService(async (service, storage, provider) => {
       await storage.updateEnvironment("env-1", {

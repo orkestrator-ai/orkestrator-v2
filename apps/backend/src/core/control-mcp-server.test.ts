@@ -130,6 +130,7 @@ describe("Orkestrator control MCP server", () => {
               id: "gpt-5.6-codex",
               name: "GPT-5.6 Codex",
               platform: "codex",
+              supportsSpeed: true,
               reasoning: [{ id: "high", name: "High" }],
             },
           ];
@@ -687,6 +688,7 @@ describe("Orkestrator control MCP server", () => {
         agent: "codex",
         modelId: "gpt-5.6-codex",
         reasoningId: "high",
+        fastMode: true,
         conversationMode: "build",
         title: "Fix the failing suite",
         prompt: "Diagnose and fix the failing test suite.",
@@ -706,6 +708,7 @@ describe("Orkestrator control MCP server", () => {
       agent: "codex",
       modelId: "gpt-5.6-codex",
       reasoningId: "high",
+      fastMode: true,
       conversationMode: "build",
       title: "Fix the failing suite",
       prompt: "Diagnose and fix the failing test suite.",
@@ -737,6 +740,17 @@ describe("Orkestrator control MCP server", () => {
       reasoningId: "ultra",
     });
     expect(unavailableReasoning.body.result?.isError).toBe(true);
+    overrides.set("get_native_agent_model_catalog", () => [
+      {
+        id: "gpt-5.6-codex",
+        label: "GPT-5.6 Codex",
+        platform: "codex",
+        supportsSpeed: false,
+        reasoning: [{ id: "high", label: "High" }],
+      },
+    ]);
+    const unavailableFastMode = await call({ modelId: "gpt-5.6-codex", fastMode: true });
+    expect(unavailableFastMode.body.result?.isError).toBe(true);
     expect(invocations.filter(({ command }) => command === "launch_control_job")).toHaveLength(0);
   });
 
@@ -774,6 +788,7 @@ describe("Orkestrator control MCP server", () => {
         agent: "codex",
         modelId: "gpt-5.6-codex",
         reasoningId: "high",
+        fastMode: true,
         conversationMode: "plan",
         prompt: "Plan the implementation.",
       },
@@ -793,6 +808,10 @@ describe("Orkestrator control MCP server", () => {
         initialAgentModel: "gpt-5.6-codex",
         initialReasoningEffort: "high",
         initialConversationMode: "plan",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { mode: "native", fastMode: true } },
+        },
         controlRequestId: "environment-request-1",
       },
     );
@@ -809,6 +828,7 @@ describe("Orkestrator control MCP server", () => {
         agent: "codex",
         modelId: "gpt-5.6-codex",
         reasoningId: "high",
+        fastMode: true,
         conversationMode: "plan",
         prompt: "Plan the implementation.",
       },

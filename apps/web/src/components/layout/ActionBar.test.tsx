@@ -5060,13 +5060,19 @@ describe("ActionBar configured action defaults", () => {
       resolve: { platform: "claude", model: "sonnet" },
       push: { platform: "opencode", model: "openai/gpt-push", reasoningEffort: "high" },
     };
+    currentClaudeFastMode = false;
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
     await waitFor(() =>
       expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({ agent: "claude", title: "Resolve", modelId: "sonnet" }),
+        expect.objectContaining({
+          agent: "claude",
+          title: "Resolve",
+          modelId: "sonnet",
+          fastMode: false,
+        }),
       ),
     );
 
@@ -5103,6 +5109,7 @@ describe("ActionBar configured action defaults", () => {
     currentActionDefaults = {
       push: { platform: "opencode", model: "openai/gpt-push" },
     };
+    currentClaudeFastMode = true;
 
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
@@ -5111,7 +5118,7 @@ describe("ActionBar configured action defaults", () => {
     // The menu picks a platform, so OpenCode's model cannot travel with it.
     await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
     expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ agent: "claude", title: "Git Push" }),
+      expect.objectContaining({ agent: "claude", title: "Git Push", fastMode: true }),
     );
     expect(launchNativeAgentJobMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("modelId");
   });
@@ -5226,6 +5233,7 @@ describe("ActionBar configured action defaults", () => {
     currentActionDefaults = {
       review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
+    currentClaudeFastMode = true;
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
@@ -5240,6 +5248,7 @@ describe("ActionBar configured action defaults", () => {
           agent: "claude",
           model: "sonnet",
           reasoningEffort: "high",
+          fastMode: true,
         }),
       ),
     );

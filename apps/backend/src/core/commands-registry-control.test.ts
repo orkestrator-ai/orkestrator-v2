@@ -59,6 +59,7 @@ describe("launch_control_job command", () => {
       order: 0,
       environmentType: "local",
       worktreePath: dataDir,
+      agentSettings: { platforms: { codex: { fastMode: true } } },
     });
     const ensured: Array<Record<string, unknown>> = [];
     const dispatched: Array<Record<string, unknown>> = [];
@@ -131,6 +132,7 @@ describe("launch_control_job command", () => {
         agent: "codex",
         logicalSessionKey: `env-env-1:${String(first.tabId)}`,
         sessionMode: "build",
+        fastMode: true,
         initialPromptPresentation,
       });
       expect(dispatched[0]).toMatchObject({
@@ -141,6 +143,7 @@ describe("launch_control_job command", () => {
         prompt: delegation.source,
         initialPromptPresentation,
         mode: "build",
+        fastMode: true,
       });
       expect(ensured[2]).not.toHaveProperty("initialPromptPresentation");
       expect(dispatched[2]).not.toHaveProperty("initialPromptPresentation");

@@ -1,4 +1,5 @@
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import {
   FEATURE_PLANNING_LIMITS,
@@ -41,6 +42,7 @@ import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { fastModeForModel } from "./build-pipeline-service-helpers.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -484,8 +486,9 @@ export class FeaturePlanningService {
     }
     const environment = await this.ensureEnvironment(record);
     if (!environment) return;
+    const launchSettings = await this.codexLaunchSettings(record, environment);
     const provider = await this.provider(environment.id);
-    const session = await this.ensureSession(record, environment.id, provider);
+    const session = await this.ensureSession(record, environment.id, provider, launchSettings);
     const sessionId = session.sessionId;
     if (await this.clearIfCancellationRequested(record)) return;
     const plan = await this.storage.getFeaturePlan(record.featureId);
@@ -537,9 +540,6 @@ export class FeaturePlanningService {
     }
     if (await this.clearIfCancellationRequested(record)) return;
     try {
-      // Fast mode is deliberately not forced here. It is a per-session choice
-      // the user makes in the model picker, not a stored default a background
-      // planning turn should apply on their behalf.
       // Only a tool-mode attempt has a prepared slot. Handing the capability to
       // a legacy dispatch would offer a second result channel for a turn whose
       // transport was already decided.
@@ -549,7 +549,16 @@ export class FeaturePlanningService {
       await provider.send(
         sessionId,
         toolMode ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId)}` : prompt,
-        { requestId, mode: "plan", ...(agentMcp ? { agentMcp } : {}) },
+        {
+          requestId,
+          mode: "plan",
+          model: launchSettings.model,
+          effort: launchSettings.effort,
+          ...(typeof launchSettings.fastMode === "boolean"
+            ? { fastMode: launchSettings.fastMode }
+            : {}),
+          ...(agentMcp ? { agentMcp } : {}),
+        },
       );
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) {
@@ -968,6 +977,7 @@ export class FeaturePlanningService {
     record: FeaturePlanningRecord,
     environmentId: string,
     provider: BuildPipelineProvider,
+    launchSettings: { model?: string; effort: string; fastMode?: boolean },
   ): Promise<{ sessionId: string; created: boolean }> {
     const plan = await this.storage.getFeaturePlan(record.featureId);
     const existing = plan?.codexSessionId;
@@ -979,12 +989,6 @@ export class FeaturePlanningService {
       );
       if (status !== "missing") return { sessionId: existing, created: false };
     }
-    const config = await this.storage.loadConfig();
-    const repository = config.repositories[record.projectId];
-    const codexDefaults = resolveAgentPlatformSettings(
-      { repository: repository?.agentSettings, global: config.global.agentSettings },
-      "codex",
-    );
     const environment = await this.storage.getEnvironment(environmentId);
     if (!environment) {
       throw new DefiniteFeaturePlanningError(
@@ -1000,8 +1004,11 @@ export class FeaturePlanningService {
         // Feature planning always runs on Codex, so it reads Codex's own
         // column rather than a repository-wide model that may belong to
         // another platform's catalogue.
-        ...(codexDefaults.model ? { model: codexDefaults.model } : {}),
-        effort: codexDefaults.reasoningEffort || "high",
+        ...(launchSettings.model ? { model: launchSettings.model } : {}),
+        effort: launchSettings.effort,
+        ...(typeof launchSettings.fastMode === "boolean"
+          ? { fastMode: launchSettings.fastMode }
+          : {}),
         policy: resolveEnvironmentExecutionPolicy(environment, "build-pipeline"),
       }),
     );
@@ -1013,6 +1020,34 @@ export class FeaturePlanningService {
       delete current.baselineAssistantIds;
     });
     return { sessionId: created, created: true };
+  }
+
+  private async codexLaunchSettings(
+    record: FeaturePlanningRecord,
+    environment: Environment,
+  ): Promise<{ model?: string; effort: string; fastMode?: boolean }> {
+    const config = await this.storage.loadConfig();
+    const repository = config.repositories[record.projectId];
+    const defaults = resolveAgentPlatformSettings(
+      {
+        environment: environment.agentSettings,
+        repository: repository?.agentSettings,
+        global: config.global.agentSettings,
+      },
+      "codex",
+    );
+    const catalog =
+      defaults.fastMode === true && defaults.model
+        ? await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+            environmentId: environment.id,
+          }).catch(() => [])
+        : [];
+    const fastMode = fastModeForModel("codex", defaults.fastMode, defaults.model, catalog);
+    return {
+      ...(defaults.model ? { model: defaults.model } : {}),
+      effort: defaults.reasoningEffort || "high",
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    };
   }
 
   private agentMcp(

@@ -126,7 +126,9 @@ export function TerminalContainer({
     [config, envProjectId, envAgentSettings],
   );
   const opencodeMode = resolveAgentPlatformSettings(tiers, "opencode").mode;
-  const codexMode = resolveAgentPlatformSettings(tiers, "codex").mode;
+  const codex = resolveAgentPlatformSettings(tiers, "codex");
+  const codexMode = codex.mode;
+  const grok = resolveAgentPlatformSettings(tiers, "grok");
   const piMode = resolveAgentPlatformSettings(tiers, "pi").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
@@ -1493,6 +1495,15 @@ export function TerminalContainer({
         initialAgentModel: options?.initialAgentModel,
         initialReasoningEffort: options?.initialReasoningEffort,
         initialConversationMode: options?.initialConversationMode,
+        initialFastMode:
+          options?.initialFastMode ??
+          (type === "claude"
+            ? claude.fastMode
+            : type === "codex"
+              ? codex.fastMode
+              : type === "grok"
+                ? grok.fastMode
+                : undefined),
       };
 
       rendererDebugLog(
@@ -1517,7 +1528,9 @@ export function TerminalContainer({
       claudeMode,
       claudeNativeBackend,
       claude.fastMode,
+      codex.fastMode,
       codexMode,
+      grok.fastMode,
       piMode,
       isLocalEnvironmentReady,
       isLocalEnvironment,

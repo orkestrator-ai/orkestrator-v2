@@ -20,7 +20,7 @@ import {
 const workflow = {
   id: "multi-1",
   environmentId: "env-1",
-  fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+  fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high", fastMode: false },
   fixSession: { providerSessionId: "provider-fix" },
 } as MultiReviewWorkflow;
 
@@ -44,6 +44,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
     title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model: "gpt-5.6",
     reasoningEffort: "high",
+    fastMode: false,
     phase: "fix",
     sessionMode: "build",
   });
@@ -94,6 +95,7 @@ test("dispatchMultiReviewAddressPrompt creates a fix session separate from revie
     expect.objectContaining({
       agent: "codex",
       model: "gpt-5.6",
+      fastMode: false,
       logicalSessionKey: "multi-review:multi-1:interactive",
       sessionMode: "build",
     }),
@@ -178,7 +180,12 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
   });
   const custom = {
     ...workflow,
-    customFixModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+    customFixModel: {
+      agent: "codex" as const,
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      fastMode: true,
+    },
     customFixInstruction: "Fix the reported regression",
     addressSessionKey: "multi-review:multi-1:interactive:launch-1",
     addressRequestId: "multi-review-address:multi-1:launch-1",
@@ -201,6 +208,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
       model: "gpt-5.4",
+      fastMode: true,
       sessionMode: "build",
     }),
   );
@@ -344,6 +352,7 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
+      fastMode: false,
       sessionKey: "multi-review:multi-1:interactive:launch-1",
       providerSessionId: "provider-fix",
       requestIds: ["multi-review-address:multi-1"],
@@ -367,6 +376,7 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
       providerSessionId: "provider-replacement",
       expectedProviderSessionId: "provider-fix",
+      fastMode: false,
       sessionMode: "build",
     }),
   );

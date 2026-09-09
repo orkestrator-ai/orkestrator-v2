@@ -1859,6 +1859,64 @@ test("MultiReviewService adopts a snapshot for a workflow persisted without one"
   );
 });
 
+test("MultiReviewService applies the coordinator platform's fast default per selection", async () => {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-fast-default-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-fast-default",
+    projectId: "project-1",
+    name: "review",
+    branch: "change",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "full",
+    order: 0,
+    environmentType: "local",
+    worktreePath: "/tmp/review",
+    agentSettings: { platforms: { cursor: { fastMode: true } } },
+    setupScriptsComplete: true,
+  });
+  const service = new MultiReviewService(
+    storage,
+    async <T>(command: string): Promise<T> => {
+      expect(command).toBe("start_local_cursor_server_cmd");
+      return { port: 4123, authToken: "test-token" } as T;
+    },
+    { autoAdvance: false },
+  );
+
+  try {
+    const storedEnvironment = (await storage.getEnvironment("env-fast-default"))!;
+    const selection = (
+      service as unknown as {
+        configuredSelection(
+          selection: MultiReviewModelSelection,
+          environment: typeof storedEnvironment,
+          config: Awaited<ReturnType<StorageService["loadConfig"]>>,
+          repository: object,
+          catalog: readonly [],
+        ): MultiReviewModelSelection;
+      }
+    ).configuredSelection(
+      { agent: "cursor", model: "cursor-grok-4.6", reasoningEffort: "high" },
+      storedEnvironment,
+      await storage.loadConfig(),
+      {},
+      [],
+    );
+
+    expect(selection.fastMode).toBe(true);
+  } finally {
+    await service.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 async function withService(
   environmentId: string,
   provider: Provider,

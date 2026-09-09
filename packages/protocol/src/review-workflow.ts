@@ -388,6 +388,8 @@ export interface LoopedReviewWorkflow {
   agent: LoopedReviewAgent;
   model: string;
   reasoningEffort?: string;
+  /** Fast/Normal choice pinned when the workflow starts. */
+  fastMode?: boolean;
   targetBranch: string;
   reviewInstruction?: string;
   context?: ReviewPackageContext;
@@ -431,6 +433,7 @@ export interface StartLoopedReviewInput {
   agent: LoopedReviewAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   targetBranch: string;
   reviewInstruction?: string;
   context?: ReviewPackageContext;
@@ -560,6 +563,7 @@ export function isStartLoopedReviewInput(value: unknown): value is StartLoopedRe
       "agent",
       "model",
       "reasoningEffort",
+      "fastMode",
       "targetBranch",
       "reviewInstruction",
       "context",
@@ -576,6 +580,7 @@ export function isStartLoopedReviewInput(value: unknown): value is StartLoopedRe
     isSafeLoopedReviewTargetBranch(input.targetBranch) &&
     (input.reasoningEffort === undefined ||
       isBoundedNonEmptyString(input.reasoningEffort, LOOPED_REVIEW_MAX_REASONING_EFFORT_LENGTH)) &&
+    (input.fastMode === undefined || typeof input.fastMode === "boolean") &&
     getReviewInstructionValidationError(input.reviewInstruction) === null &&
     (input.context === undefined || isReviewPackageContext(input.context)) &&
     (input.allowance === undefined ||
@@ -1082,6 +1087,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
         workflow.reasoningEffort,
         LOOPED_REVIEW_MAX_REASONING_EFFORT_LENGTH,
       )) ||
+    (workflow.fastMode !== undefined && typeof workflow.fastMode !== "boolean") ||
     !isSafeLoopedReviewTargetBranch(workflow.targetBranch) ||
     getReviewInstructionValidationError(workflow.reviewInstruction) !== null ||
     (workflow.context !== undefined && !isReviewPackageContext(workflow.context)) ||

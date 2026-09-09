@@ -13,6 +13,7 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import { type ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_LIMITS,
@@ -37,6 +38,8 @@ import {
   errorMessage,
   resumablePhase,
   connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  resolveFastMode,
   sessionAgent,
   stepModel,
   MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
@@ -45,7 +48,21 @@ import {
   elapsedSince,
   appendInteractionSummary,
 } from "./build-pipeline-service-helpers.js";
-import type { PullRequestDetection } from "./build-pipeline-service-helpers.js";
+import type {
+  AgentModelCatalogReader,
+  BuildStepSelection,
+  PullRequestDetection,
+} from "./build-pipeline-service-helpers.js";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import type { AppConfig } from "./models.js";
+
+/** Tiers and catalogue access shared by every selection in one operation. */
+interface BuildSelectionContext {
+  environment: { agentSettings?: AgentSettingsTier };
+  config: Pick<AppConfig, "global">;
+  repository: { agentSettings?: AgentSettingsTier };
+  readCatalog: AgentModelCatalogReader;
+}
 
 export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceSupervisor {
   protected async repairStructuredReport(
@@ -435,28 +452,102 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   protected async stepSettings(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
-  ): Promise<{
-    agent: BuildPipelineAgent;
-    model?: string;
-    effort?: string;
-  }> {
+  ): Promise<BuildStepSelection> {
     const step = pipeline.steps?.[stepKeyForSessionPhase(sessionPhase)];
     if (step) {
       const effort = step.reasoningEffort?.trim();
-      return {
+      return this.settingsForSelection(pipeline, {
         agent: step.agent,
         // Normalised on read as well as on write: `start()` is not the only way
         // a snapshot gets here — `importLegacy` accepts one straight from disk,
         // where a placeholder could otherwise be sent as a real model id.
         model: stepModel(step.agent, step.model),
         effort: effort && effort !== "default" ? effort : undefined,
-      };
+        fastMode: step.fastMode,
+      });
     }
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    // Deliberately without the environment tier, and deliberately without
+    // `fastMode`. Model and effort keep their established repository-and-global
+    // semantics here, while an unpinned speed has to stay absent so
+    // `settingsForSelection` can resolve it across all three tiers. Passing a
+    // repository value through as if the step had pinned it would let it shadow
+    // the environment's own choice.
+    const { fastMode: _inheritedFastMode, ...defaults } = connectionDefaultsFor(
+      pipeline.agentType,
+      config,
+      repository,
+    );
+    return this.settingsForSelection(pipeline, { agent: pipeline.agentType, ...defaults });
+  }
+
+  /**
+   * The tiers and catalogue one operation resolves its selections against.
+   *
+   * Loaded once and shared, so a fan-out resolving one selection per reviewer
+   * does not repeat these reads — or the catalogue fetch behind them — per
+   * reviewer.
+   */
+  protected async selectionContext(pipeline: BuildPipeline): Promise<BuildSelectionContext> {
+    const environment = await this.storage.getEnvironment(pipeline.environmentId);
+    if (!environment) throw new Error("Build environment no longer exists");
+    const config = await this.storage.loadConfig();
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     return {
-      agent: pipeline.agentType,
-      ...connectionDefaultsFor(pipeline.agentType, config, repository),
+      environment,
+      config,
+      repository,
+      readCatalog: createAgentModelCatalogReader(() =>
+        this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+          environmentId: pipeline.environmentId,
+        }),
+      ),
+    };
+  }
+
+  protected async settingsForSelection(
+    pipeline: BuildPipeline,
+    selection: BuildStepSelection,
+  ): Promise<BuildStepSelection> {
+    return this.resolveSelection(selection, await this.selectionContext(pipeline));
+  }
+
+  /** Resolve a whole fan-out's selections against one shared context. */
+  protected async settingsForSelections(
+    pipeline: BuildPipeline,
+    selections: readonly BuildStepSelection[],
+  ): Promise<BuildStepSelection[]> {
+    if (selections.length === 0) return [];
+    const context = await this.selectionContext(pipeline);
+    return Promise.all(selections.map((selection) => this.resolveSelection(selection, context)));
+  }
+
+  private async resolveSelection(
+    selection: BuildStepSelection,
+    context: BuildSelectionContext,
+  ): Promise<BuildStepSelection> {
+    const defaults = connectionDefaultsFor(
+      selection.agent,
+      context.config,
+      context.repository,
+      context.environment,
+    );
+    // A deliberately unpinned step keeps its established model/effort
+    // semantics. The provider may still have a connection default, so use that
+    // effective model for the speed capability check without pinning it here.
+    const capabilityModel = selection.model ?? defaults.model;
+    const fastMode = await resolveFastMode(
+      selection.agent,
+      selection.fastMode ?? defaults.fastMode,
+      capabilityModel,
+      context.readCatalog,
+    );
+    return {
+      agent: selection.agent,
+      ...(selection.model ? { model: selection.model } : {}),
+      ...(selection.effort ? { effort: selection.effort } : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     };
   }
 
@@ -508,13 +599,19 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const connection = await this.bridgeConnection(agent, environment);
+    const { fastMode: _fastMode, ...connectionDefaults } = connectionDefaultsFor(
+      agent,
+      config,
+      repository,
+      environment,
+    );
     const provider = createBuildPipelineProvider(
       {
         ...connection,
         // Connection-level defaults only, and only this harness's own. Every
         // pipeline turn passes the step's model and effort per call, which take
         // precedence; these fill in whatever the step left unset.
-        ...connectionDefaultsFor(agent, config, repository),
+        ...connectionDefaults,
       },
       {
         ...this.options.providerDependencies,

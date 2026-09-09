@@ -755,6 +755,7 @@ export class ReviewFanoutRunner {
           ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
           model: reviewerModel(reviewer),
           effort: reviewer.reasoningEffort,
+          ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
           policy: await host.executionPolicy(),
           interaction: this.interactionContext(reviewer, sessionKey),
         },
@@ -845,6 +846,7 @@ export class ReviewFanoutRunner {
             ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
             model: reviewerModel(reviewer),
             effort: reviewer.reasoningEffort,
+            ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
           },
         );

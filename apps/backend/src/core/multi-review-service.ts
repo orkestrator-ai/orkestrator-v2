@@ -28,6 +28,8 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -38,7 +40,7 @@ import {
   workflowResultInstruction,
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
-import type { Environment } from "./models.js";
+import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
@@ -53,6 +55,12 @@ import {
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import {
+  connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  resolveFastMode,
+  type AgentModelCatalogReader,
+} from "./build-pipeline-service-helpers.js";
 import {
   parseReviewPreparationResult,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
@@ -443,6 +451,16 @@ export class MultiReviewService {
       throw new Error("The review environment is unavailable");
     }
     const reviewWorktreeSnapshot = await this.captureReviewWorktreeSnapshot(input.environmentId);
+    const config = await this.storage.loadConfig();
+    const repository = config.repositories[input.projectId] ?? {};
+    const readCatalog = this.catalogReaderFor(input.environmentId);
+    const withFastMode = (selection: MultiReviewModelSelection) =>
+      this.configuredSelection(selection, environment, config, repository, readCatalog);
+    const [reviewers, reviewModelSelection, fixModel] = await Promise.all([
+      Promise.all(input.reviewers.map(withFastMode)),
+      input.reviewModel ? withFastMode(input.reviewModel) : undefined,
+      withFastMode(input.fixModel),
+    ]);
     const timestamp = nowIso();
     const workflow: MultiReviewWorkflow = {
       version: MULTI_REVIEW_WORKFLOW_VERSION,
@@ -453,13 +471,13 @@ export class MultiReviewService {
       projectId: input.projectId,
       targetBranch: input.targetBranch,
       ...(input.reviewInstruction ? { reviewInstruction: input.reviewInstruction } : {}),
-      reviewers: input.reviewers.map((selection) => ({
+      reviewers: reviewers.map((selection) => ({
         id: randomUUID(),
         ...selection,
         status: "pending" as const,
       })),
-      ...(input.reviewModel ? { reviewModel: input.reviewModel } : {}),
-      fixModel: input.fixModel,
+      ...(reviewModelSelection ? { reviewModel: reviewModelSelection } : {}),
+      fixModel,
       reviewWorktreeSnapshot,
       phase: "preparing",
       createdAt: timestamp,
@@ -565,7 +583,17 @@ export class MultiReviewService {
         workflow.addressRequestId = `multi-review-address:${workflow.id}:${launchId}`;
         workflow.addressTabId = `multi-review-fix:${workflow.id}:${launchId}`;
         workflow.customFixInstruction = instruction;
-        workflow.customFixModel = { ...input.fixModel };
+        const environment = await this.storage.getEnvironment(workflow.environmentId);
+        if (!environment) throw new Error("Review environment no longer exists");
+        const config = await this.storage.loadConfig();
+        const repository = config.repositories[workflow.projectId] ?? {};
+        workflow.customFixModel = await this.configuredSelection(
+          input.fixModel,
+          environment,
+          config,
+          repository,
+          this.catalogReaderFor(workflow.environmentId),
+        );
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
         delete workflow.presentationError;
@@ -1966,6 +1994,7 @@ export class MultiReviewService {
           ...(preparing ? { mode: "build" as const, readOnly: false } : READ_ONLY_REPORT_TURN),
           model: selection.model === "default" ? undefined : selection.model,
           effort: selection.reasoningEffort,
+          ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
           policy: await this.executionPolicy(workflow),
           interaction: {
             origin: "looped-review",
@@ -2121,6 +2150,7 @@ export class MultiReviewService {
               : { mode: "build" as const, readOnly: false }),
             model: selection.model === "default" ? undefined : selection.model,
             effort: selection.reasoningEffort,
+            ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
           },
         );
@@ -2671,6 +2701,40 @@ export class MultiReviewService {
 
   private providerKey(workflow: MultiReviewWorkflow, selection: MultiReviewModelSelection): string {
     return `${workflow.environmentId}:${selection.agent}`;
+  }
+
+  /**
+   * A catalogue reader scoped to one environment, shared by every selection.
+   *
+   * The read is lazy because most workflows configure no speed at all, and the
+   * command behind it can wait on live bridge catalogue fetches. Nothing on
+   * this path should pay for it unless a Fast choice actually needs narrowing.
+   */
+  private catalogReaderFor(environmentId: string): AgentModelCatalogReader {
+    return createAgentModelCatalogReader(() =>
+      this.invoke<AgentModel[]>("get_native_agent_model_catalog", { environmentId }),
+    );
+  }
+
+  private async configuredSelection(
+    selection: MultiReviewModelSelection,
+    environment: Environment,
+    config: AppConfig,
+    repository: { agentSettings?: AgentSettingsTier },
+    readCatalog: AgentModelCatalogReader,
+  ): Promise<MultiReviewModelSelection> {
+    const defaults = connectionDefaultsFor(selection.agent, config, repository, environment);
+    const fastMode = await resolveFastMode(
+      selection.agent,
+      selection.fastMode ?? defaults.fastMode,
+      selection.model === "default" ? undefined : selection.model,
+      readCatalog,
+    );
+    const { fastMode: _requestedFastMode, ...rest } = selection;
+    return {
+      ...rest,
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    };
   }
 
   private async executionPolicy(workflow: MultiReviewWorkflow) {

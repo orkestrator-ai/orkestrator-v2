@@ -1219,6 +1219,9 @@ describe("build pipeline protocol", () => {
     ).toBe(true);
 
     expect(isBuildStepConfigs(steps)).toBe(true);
+    expect(isBuildStepConfigs({ build: { agent: "codex", fastMode: true } })).toBe(true);
+    expect(isBuildStepConfigs({ build: { agent: "codex", fastMode: false } })).toBe(true);
+    expect(isBuildStepConfigs({ build: { agent: "codex", fastMode: "fast" } })).toBe(false);
     expect(isBuildStepConfigs({ "resolve-conflicts": { agent: "codex" } })).toBe(true);
     // The fix stage follows the build step, so a key for it would never be read.
     expect(isBuildStepConfigs({ fix: { agent: "claude" } })).toBe(false);

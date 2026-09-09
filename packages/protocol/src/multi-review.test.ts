@@ -129,6 +129,53 @@ describe("multi review protocol", () => {
     ).toBe(false);
   });
 
+  test("accepts the speed a session was opened with on both session slots", () => {
+    const session = {
+      agent: "claude" as const,
+      model: "sonnet",
+      sessionKey: "review-session",
+      providerSessionId: "provider-review",
+      requestIds: ["request-1"],
+      status: "idle" as const,
+      startedAt: new Date(0).toISOString(),
+    };
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-1",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [
+        { id: "reviewer-1", agent: "claude", model: "opus", status: "completed", report },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "preparing",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      backendRevision: 2,
+    };
+
+    // A session record is spread from its whole selection, so a workflow that
+    // pinned a speed persists it here. Rejecting the key would hide the
+    // workflow from its own supervisor rather than merely dropping a field.
+    expect(isMultiReviewWorkflow({ ...workflow, reviewSession: session })).toBe(true);
+    for (const fastMode of [true, false]) {
+      expect(isMultiReviewWorkflow({ ...workflow, reviewSession: { ...session, fastMode } })).toBe(
+        true,
+      );
+      expect(isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, fastMode } })).toBe(
+        true,
+      );
+    }
+    expect(
+      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, fastMode: "yes" } }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({ ...workflow, fixSession: { ...session, unknownKey: true } }),
+    ).toBe(false);
+  });
+
   test("validates per-step runtimes and cumulative fix-session usage", () => {
     const timestamp = new Date(0).toISOString();
     const workflow = {

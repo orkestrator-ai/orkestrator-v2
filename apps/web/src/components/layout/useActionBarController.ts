@@ -764,6 +764,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       let launchError: string | undefined;
       try {
         const { task } = findTaskForEnvironment(selectedEnvironmentId);
+        const agent = getReviewAgent(selection.tabType);
+        const configuredFastMode = preferredFastModesByPlatform[agent];
+        const fastMode =
+          typeof configuredFastMode === "boolean" &&
+          modelSupportsSpeed(agent, reviewModelCatalog, selection.model)
+            ? configuredFastMode
+            : undefined;
         const kanbanState = useKanbanStore.getState();
         const hasCurrentProjectNotes =
           kanbanState.currentNotesProjectId === selectedProjectId &&
@@ -782,9 +789,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const workflow = await backend.startLoopedReview({
           environmentId: selectedEnvironmentId,
           projectId: selectedProjectId,
-          agent: getReviewAgent(selection.tabType),
+          agent,
           model: selection.model,
           reasoningEffort: selection.reasoningEffort,
+          ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
           reviewInstruction: config.global.reviewInstruction,
           context,
@@ -876,7 +884,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       createTab,
       installLoopedReviewWorkflow,
       isRunning,
+      preferredFastModesByPlatform,
       removeLoopedReviewWorkflow,
+      reviewModelCatalog,
       selectedEnvironment,
       selectedEnvironmentId,
       selectedProjectId,
@@ -1511,6 +1521,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const actionDefault = actionDefaultFor("push");
       const agent = agentOverride || actionDefault.agent;
       const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+      const requestedModel = defaultForAgent?.model ?? preferredModelsByPlatform[agent];
+      const configuredFastMode = preferredFastModesByPlatform[agent];
+      const fastMode =
+        typeof configuredFastMode === "boolean" &&
+        modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+          ? configuredFastMode
+          : undefined;
       const activationRequest = beginPaneTabActivationRequest(environmentId);
       try {
         const result = await backend.launchNativeAgentJob({
@@ -1525,6 +1542,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(defaultForAgent?.reasoningEffort
             ? { reasoningId: defaultForAgent.reasoningEffort }
             : {}),
+          ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         });
         requestPaneTabActivation(environmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
@@ -1536,7 +1554,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
       }
     },
-    [actionDefaultFor, isRunning, selectedEnvironmentId, tabCount],
+    [
+      actionDefaultFor,
+      isRunning,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+      reviewModelCatalog,
+      selectedEnvironmentId,
+      tabCount,
+    ],
   );
 
   // Launch conflict resolution as a backend-owned job. The resulting tab is a
@@ -1548,6 +1574,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
         initialReasoningEffort?: string;
+        initialFastMode?: boolean;
       };
       targetBranch?: string;
       /**
@@ -1594,6 +1621,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
         const initialReasoningEffort =
           launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+        const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
+        const configuredFastMode =
+          launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+        const initialFastMode =
+          typeof configuredFastMode === "boolean" &&
+          modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+            ? configuredFastMode
+            : undefined;
         const activationRequest = beginPaneTabActivationRequest(operationEnvironmentId);
         const result = await backend.launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
@@ -1606,6 +1641,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           activateTab: true,
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
+          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
         requestPaneTabActivation(operationEnvironmentId, result.tabId, activationRequest);
         if (result.status === "rejected") {
@@ -1634,7 +1670,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         }
       }
     },
-    [actionDefaultFor, selectedEnvironmentId, selectedProjectId, tabCount, config.repositories],
+    [
+      actionDefaultFor,
+      config.repositories,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+      reviewModelCatalog,
+      selectedEnvironmentId,
+      selectedProjectId,
+      tabCount,
+    ],
   );
 
   const resolveLaunchInFlight = resolveLaunchEnvironmentId !== null;

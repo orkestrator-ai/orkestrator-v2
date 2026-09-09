@@ -32,7 +32,6 @@ import {
   pipelineReviewerConfigs,
   type BuildPipeline,
   type BuildPipelineAgent,
-  type BuildStepConfig,
   type PipelineSession,
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
@@ -59,6 +58,7 @@ import {
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./looped-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
@@ -96,7 +96,15 @@ export interface BuildPipelineReviewFanoutDeps {
   stepSettings(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
-  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string }>;
+  ): Promise<BuildStepSelection>;
+  settingsForSelection(
+    pipeline: BuildPipeline,
+    selection: BuildStepSelection,
+  ): Promise<BuildStepSelection>;
+  settingsForSelections(
+    pipeline: BuildPipeline,
+    selections: readonly BuildStepSelection[],
+  ): Promise<BuildStepSelection[]>;
   refreshTranscript(
     session: PipelineSession,
     provider: BuildPipelineProvider,
@@ -143,9 +151,17 @@ export class BuildPipelineReviewFanout {
     if (!pipeline.reviewPackage) {
       throw new Error(`${FANOUT_LABEL} cannot start because no immutable review package exists`);
     }
-    pipeline.reviewFanout = {
-      reviewers: pipelineReviewerConfigs(pipeline).map((config) => reviewerFromConfig(config)),
-    };
+    // One batch, so the shared environment, config, and model catalogue are
+    // read once for the whole fan-out rather than once per reviewer.
+    const selections = await this.deps.settingsForSelections(
+      pipeline,
+      pipelineReviewerConfigs(pipeline).map((config) => ({
+        agent: config.agent,
+        model: config.model,
+        effort: config.reasoningEffort,
+      })),
+    );
+    pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig) };
     pipeline.phase = "reviewing";
     delete pipeline.structuredReview;
     delete pipeline.structuredReviewRequestId;
@@ -332,6 +348,7 @@ export class BuildPipelineReviewFanout {
       agent: BuildPipelineAgent;
       label: string;
       startedAt?: string;
+      fastMode?: boolean;
     },
   ): PipelineSession {
     const existing = pipeline.sessions.find(
@@ -349,6 +366,7 @@ export class BuildPipelineReviewFanout {
       status: "running",
       startedAt: fields.startedAt ?? reviewFanoutNowIso(),
       label: fields.label,
+      ...(typeof fields.fastMode === "boolean" ? { fastMode: fields.fastMode } : {}),
       messages: [],
       messageRevision: 0,
     };
@@ -402,11 +420,11 @@ export class BuildPipelineReviewFanout {
   ): Promise<ReviewFanoutStep> {
     if (!state.consolidation) {
       const step = pipeline.reviewPreparation
-        ? {
+        ? await this.deps.settingsForSelection(pipeline, {
             agent: pipeline.reviewPreparation.agent,
             model: pipeline.reviewPreparation.model,
             effort: pipeline.reviewPreparation.reasoningEffort,
-          }
+          })
         : await this.deps.stepSettings(pipeline, "address");
       const provider = await this.deps.provider(pipeline, step.agent);
       const sessionKey = `${pipeline.id}:review-consolidation:${pipeline.iteration}:${randomUUID()}`;
@@ -415,6 +433,7 @@ export class BuildPipelineReviewFanout {
         mode: "plan",
         model: step.model,
         effort: step.effort,
+        ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
         policy: await this.deps.executionPolicy(pipeline),
         interaction: {
           origin: "build-pipeline",
@@ -445,6 +464,7 @@ export class BuildPipelineReviewFanout {
           : {}),
         ...(step.model ? { model: step.model } : {}),
         ...(step.effort ? { reasoningEffort: step.effort } : {}),
+        ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
       };
       await this.deps.save(pipeline);
     }
@@ -456,6 +476,7 @@ export class BuildPipelineReviewFanout {
       sdkSessionId: consolidation.providerSessionId,
       agent: consolidation.agent as BuildPipelineAgent,
       label: "Consolidation",
+      fastMode: consolidation.fastMode,
     });
     provider.registerSession?.(consolidation.providerSessionId, {
       origin: "build-pipeline",
@@ -509,6 +530,9 @@ export class BuildPipelineReviewFanout {
             mode: "plan",
             model: consolidation.model,
             effort: consolidation.reasoningEffort,
+            ...(typeof consolidation.fastMode === "boolean"
+              ? { fastMode: consolidation.fastMode }
+              : {}),
             ...(agentMcp ? { agentMcp } : {}),
           },
         );
@@ -740,7 +764,7 @@ export class BuildPipelineReviewFanout {
   }
 }
 
-function reviewerFromConfig(config: BuildStepConfig): ReviewerRecord {
+function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
   const model = config.model?.trim();
   return {
     id: randomUUID(),
@@ -753,7 +777,8 @@ function reviewerFromConfig(config: BuildStepConfig): ReviewerRecord {
     // ran it on the repository default.
     model: model || "default",
     ...(model ? {} : { modelUnpinned: true }),
-    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    ...(config.effort ? { reasoningEffort: config.effort } : {}),
+    ...(typeof config.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
     status: "pending",
   };
 }

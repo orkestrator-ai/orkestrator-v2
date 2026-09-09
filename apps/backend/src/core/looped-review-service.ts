@@ -41,6 +41,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   workflowResultInstruction,
   type WorkflowResultKind,
@@ -76,6 +77,11 @@ import {
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import {
+  connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  resolveFastMode,
+} from "./build-pipeline-service-helpers.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -452,6 +458,19 @@ export class LoopedReviewService {
       throw new Error("A looped review is already running for this environment");
     }
     const allowance = normalizeReviewAllowance(input.allowance);
+    const config = await this.storage.loadConfig();
+    const repository = config.repositories[input.projectId] ?? {};
+    const fastMode = await resolveFastMode(
+      input.agent,
+      input.fastMode ??
+        connectionDefaultsFor(input.agent, config, repository, environment).fastMode,
+      input.model === "default" ? undefined : input.model,
+      createAgentModelCatalogReader(() =>
+        this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+          environmentId: input.environmentId,
+        }),
+      ),
+    );
     const timestamp = nowIso();
     const workflow: LoopedReviewWorkflow = {
       version: LOOPED_REVIEW_WORKFLOW_VERSION,
@@ -462,6 +481,7 @@ export class LoopedReviewService {
       agent: input.agent,
       model: input.model,
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
       targetBranch: input.targetBranch,
       ...(input.reviewInstruction ? { reviewInstruction: input.reviewInstruction } : {}),
       ...(input.context ? { context: input.context } : {}),
@@ -806,6 +826,7 @@ export class LoopedReviewService {
             mode: executionMode(session.phase),
             model: workflow.model === "default" ? undefined : workflow.model,
             effort: workflow.reasoningEffort,
+            ...(typeof workflow.fastMode === "boolean" ? { fastMode: workflow.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
           },
         );
@@ -1018,6 +1039,7 @@ export class LoopedReviewService {
           mode: executionMode(phase),
           model: workflow.model === "default" ? undefined : workflow.model,
           effort: workflow.reasoningEffort,
+          ...(typeof workflow.fastMode === "boolean" ? { fastMode: workflow.fastMode } : {}),
           policy: await this.executionPolicy(workflow),
           interaction: {
             origin: "looped-review",
@@ -1395,6 +1417,7 @@ export class LoopedReviewService {
         ...connection,
         model: workflow.model === "default" ? undefined : workflow.model,
         effort: workflow.reasoningEffort,
+        fastMode: workflow.fastMode,
       },
       {
         ...this.options.providerDependencies,

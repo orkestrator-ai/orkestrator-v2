@@ -48,7 +48,7 @@ import {
   DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
   withUnattendedPolicy,
 } from "./build-pipeline-service-helpers.js";
-import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
+import type { BuildStepSelection, CommandInvoker } from "./build-pipeline-service-helpers.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
@@ -111,7 +111,15 @@ export abstract class BuildPipelineServiceBase {
   protected abstract stepSettings(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
-  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string }>;
+  ): Promise<BuildStepSelection>;
+  protected abstract settingsForSelection(
+    pipeline: BuildPipeline,
+    selection: BuildStepSelection,
+  ): Promise<BuildStepSelection>;
+  protected abstract settingsForSelections(
+    pipeline: BuildPipeline,
+    selections: readonly BuildStepSelection[],
+  ): Promise<BuildStepSelection[]>;
   protected abstract awaitStructuredResult(
     pipeline: BuildPipeline,
     session: PipelineSession,

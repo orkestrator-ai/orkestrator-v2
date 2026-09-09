@@ -1292,6 +1292,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             initialPrompt: prompt || undefined,
             model,
             reasoningEffort,
+            fastMode: resolved.fastMode,
           });
           if (!command) throw new Error(`${agent} does not support terminal launch`);
           await this.invoke("launch_terminal_job", {

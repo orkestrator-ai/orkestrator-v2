@@ -189,6 +189,9 @@ describe("review workflow contract", () => {
       allowance: 10,
     };
     expect(isStartLoopedReviewInput(input)).toBe(true);
+    expect(isStartLoopedReviewInput({ ...input, fastMode: true })).toBe(true);
+    expect(isStartLoopedReviewInput({ ...input, fastMode: false })).toBe(true);
+    expect(isStartLoopedReviewInput({ ...input, fastMode: "fast" })).toBe(false);
     expect(isStartLoopedReviewInput({ ...input, allowance: 11 })).toBe(false);
     expect(isStartLoopedReviewInput({ ...input, allowance: 0 })).toBe(false);
     expect(isStartLoopedReviewInput({ ...input, allowance: 1 })).toBe(true);
@@ -1269,6 +1272,9 @@ describe("workflow-level structure and bounds", () => {
       false,
     );
     expect(isLoopedReviewWorkflow(workflowFixture({ backendRevision: -1 }))).toBe(false);
+    expect(isLoopedReviewWorkflow(workflowFixture({ fastMode: true }))).toBe(true);
+    expect(isLoopedReviewWorkflow(workflowFixture({ fastMode: false }))).toBe(true);
+    expect(isLoopedReviewWorkflow(workflowFixture({ fastMode: "fast" as never }))).toBe(false);
     expect(isLoopedReviewWorkflow(workflowFixture({ agent: "gemini" } as never))).toBe(false);
     expect(
       isLoopedReviewWorkflow(

@@ -86,6 +86,7 @@ import {
   elapsedSinceLatest,
   discardSessionReviewReports,
 } from "./build-pipeline-service-helpers.js";
+import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
   /**
@@ -107,6 +108,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           await this.save(pipeline, pipeline.backendRevision);
         },
         stepSettings: (pipeline, sessionPhase) => this.stepSettings(pipeline, sessionPhase),
+        settingsForSelection: (pipeline, selection) =>
+          this.settingsForSelection(pipeline, selection),
+        settingsForSelections: (pipeline, selections) =>
+          this.settingsForSelections(pipeline, selections),
         refreshTranscript: (session, provider, messages) =>
           this.refreshTranscript(session, provider, messages),
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
@@ -1002,7 +1007,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       mode?: ProviderExecutionMode;
       schema?: JsonSchema;
       label?: string;
-      settings?: { agent: BuildPipelineAgent; model?: string; effort?: string };
+      settings?: BuildStepSelection;
     },
   ): Promise<void> {
     await this.refreshWorkflowRollout();
@@ -1039,8 +1044,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         !override && sessionPhase === "verify"
           ? await this.validationBaseline(pipeline, sessionPhase)
           : undefined;
-      const { agent, model, effort } =
-        override?.settings ?? (await this.stepSettings(pipeline, sessionPhase));
+      const { agent, model, effort, fastMode } = override?.settings
+        ? await this.settingsForSelection(pipeline, override.settings)
+        : await this.stepSettings(pipeline, sessionPhase);
       const provider = await this.provider(pipeline, agent);
       const label = override?.label ?? SESSION_LABELS[sessionPhase];
       // Stated rather than left to each provider's own default, so the sandbox a
@@ -1056,6 +1062,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const sessionId = await provider.createSession(sessionPhase, label, {
         model,
         effort,
+        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         mode,
         policy: await this.executionPolicy(pipeline),
         interaction: {
@@ -1097,6 +1104,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         agent,
         ...(model ? { model } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
+        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         iteration: pipeline.iteration,
@@ -1163,6 +1171,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         schema,
         model,
         effort,
+        fastMode,
         mode,
         resultTransport,
         agent,
@@ -1180,6 +1189,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       schema,
       model,
       effort,
+      fastMode,
       mode,
       resultTransport,
       agent,
@@ -1210,6 +1220,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           schema: resultTransport === "tool-v1" ? undefined : schema,
           model,
           effort,
+          ...(typeof fastMode === "boolean" ? { fastMode } : {}),
           mode,
           ...(agentMcp ? { agentMcp } : {}),
         },
@@ -1270,7 +1281,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     const fallbackStep =
       sessionPhase &&
-      (!session || session.model === undefined || session.reasoningEffort === undefined)
+      (!session ||
+        session.model === undefined ||
+        session.reasoningEffort === undefined ||
+        session.fastMode === undefined)
         ? await this.stepSettings(pipeline, sessionPhase)
         : undefined;
     const step = !sessionPhase
@@ -1280,6 +1294,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             agent: sessionAgent(pipeline, session),
             model: session.model ?? fallbackStep?.model,
             effort: session.reasoningEffort ?? fallbackStep?.effort,
+            fastMode: session.fastMode ?? fallbackStep?.fastMode,
           }
         : fallbackStep;
     // Re-state the mode the session was opened with so a redispatch cannot land
@@ -1305,6 +1320,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           mode,
           model: step?.model,
           effort: step?.effort,
+          ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
           ...(agentMcp ? { agentMcp } : {}),
         },
       );

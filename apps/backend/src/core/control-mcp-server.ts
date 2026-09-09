@@ -5,7 +5,7 @@ import path from "node:path";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   COORDINATOR_ASYNC_CONTRACT,
   coordinatorRuntimeId,
@@ -537,6 +537,7 @@ async function validateSelection(
     agent: AgentPlatform;
     modelId?: string;
     reasoningId?: string;
+    fastMode?: boolean;
   },
 ): Promise<void> {
   const options = await launchOptions(invoke, input.projectId, input.environmentId);
@@ -544,6 +545,9 @@ async function validateSelection(
     throw new Error(`Agent platform is disabled: ${input.agent}`);
   }
   if (input.reasoningId && !input.modelId) throw new Error("reasoningId requires modelId");
+  if (input.fastMode === true && !nativeAgentCapabilities(input.agent).composer.speed) {
+    throw new Error(`Fast mode is not available for ${input.agent}`);
+  }
   if (!input.modelId) return;
   const model = options.models.find(
     (candidate) => candidate.platform === input.agent && candidate.id === input.modelId,
@@ -551,6 +555,9 @@ async function validateSelection(
   if (!model) throw new Error(`Model is not available for ${input.agent}: ${input.modelId}`);
   if (input.reasoningId && !(model.reasoning ?? []).some(({ id }) => id === input.reasoningId)) {
     throw new Error(`Reasoning option is not available for ${input.modelId}: ${input.reasoningId}`);
+  }
+  if (input.fastMode === true && model.supportsSpeed !== true) {
+    throw new Error(`Fast mode is not available for ${input.modelId}`);
   }
 }
 
@@ -1022,6 +1029,7 @@ async function createControlMcp(
         agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
         modelId: z.string().trim().min(1).max(500).optional(),
         reasoningId: z.string().trim().min(1).max(100).optional(),
+        fastMode: z.boolean().optional(),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
@@ -1057,7 +1065,12 @@ async function createControlMcp(
         namingPrompt: input.name ? undefined : input.prompt,
         agentSettings: {
           defaultAgent: input.agent,
-          platforms: { [input.agent]: { mode: "native" } },
+          platforms: {
+            [input.agent]: {
+              mode: "native",
+              ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
+            },
+          },
         },
         pendingAgentLaunch: true,
         initialAgentModel: input.modelId,
@@ -1131,6 +1144,7 @@ async function createControlMcp(
         agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
         modelId: z.string().trim().min(1).max(500).optional(),
         reasoningId: z.string().trim().min(1).max(100).optional(),
+        fastMode: z.boolean().optional(),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         title: z.string().trim().min(1).max(200).optional(),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
@@ -1155,6 +1169,7 @@ async function createControlMcp(
         agent: input.agent,
         modelId: input.modelId,
         reasoningId: input.reasoningId,
+        fastMode: input.fastMode,
       });
       const delegation = coordinatorScope
         ? createCoordinatorDelegatedPrompt(

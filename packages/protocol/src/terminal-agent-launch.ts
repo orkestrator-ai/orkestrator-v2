@@ -17,14 +17,18 @@ export function buildTerminalAgentLaunchCommand(options: {
   initialPrompt?: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }): string | null {
-  const { tabType, initialPrompt, model, reasoningEffort } = options;
+  const { tabType, initialPrompt, model, reasoningEffort, fastMode } = options;
   const hasExplicitModel = !!model && model !== "default";
 
   if (tabType === "claude") {
     const args = ["claude", "--dangerously-skip-permissions"];
     if (hasExplicitModel) args.push("--model", shellArg(model));
     if (reasoningEffort) args.push("--effort", shellArg(reasoningEffort));
+    if (typeof fastMode === "boolean") {
+      args.push("--settings", shellArg(JSON.stringify({ fastMode })));
+    }
     if (initialPrompt) args.push(shellArg(initialPrompt));
     return args.join(" ");
   }
@@ -41,6 +45,9 @@ export function buildTerminalAgentLaunchCommand(options: {
     if (hasExplicitModel) args.push("--model", shellArg(model));
     if (reasoningEffort) {
       args.push("--config", shellArg(`model_reasoning_effort="${reasoningEffort}"`));
+    }
+    if (typeof fastMode === "boolean") {
+      args.push("--config", shellArg(`service_tier="${fastMode ? "priority" : "default"}"`));
     }
     if (initialPrompt) args.push(shellArg(initialPrompt));
     return args.join(" ");

@@ -126,7 +126,8 @@ export function TerminalContainer({
     [config, envProjectId, envAgentSettings],
   );
   const opencodeMode = resolveAgentPlatformSettings(tiers, "opencode").mode;
-  const codexMode = resolveAgentPlatformSettings(tiers, "codex").mode;
+  const codex = resolveAgentPlatformSettings(tiers, "codex");
+  const codexMode = codex.mode;
   const piMode = resolveAgentPlatformSettings(tiers, "pi").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
@@ -1493,6 +1494,13 @@ export function TerminalContainer({
         initialAgentModel: options?.initialAgentModel,
         initialReasoningEffort: options?.initialReasoningEffort,
         initialConversationMode: options?.initialConversationMode,
+        // Only the harnesses whose terminal launch command can carry a speed.
+        // `buildTerminalAgentLaunchCommand` has nothing to put a Grok choice
+        // in, so recording one here would drop it silently and still mark the
+        // tab's initial launch options as pending.
+        initialFastMode:
+          options?.initialFastMode ??
+          (type === "claude" ? claude.fastMode : type === "codex" ? codex.fastMode : undefined),
       };
 
       rendererDebugLog(
@@ -1517,6 +1525,7 @@ export function TerminalContainer({
       claudeMode,
       claudeNativeBackend,
       claude.fastMode,
+      codex.fastMode,
       codexMode,
       piMode,
       isLocalEnvironmentReady,

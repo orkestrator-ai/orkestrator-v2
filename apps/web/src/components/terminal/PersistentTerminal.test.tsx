@@ -3351,7 +3351,7 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("launches Codex terminal mode with one-shot model, effort, and prompt", async () => {
+  it("launches Codex terminal mode with one-shot model, effort, speed, and prompt", async () => {
     usePaneLayoutStore.setState((state) => {
       const environments = new Map(state.environments);
       const environment = environments.get("env-1")!;
@@ -3364,6 +3364,7 @@ describe("PersistentTerminal", () => {
             ...tab,
             initialAgentModel: "gpt-review",
             initialReasoningEffort: "high",
+            initialFastMode: false,
           })),
         },
       });
@@ -3380,6 +3381,7 @@ describe("PersistentTerminal", () => {
         initialPrompt={"Fix the failing tests"}
         initialAgentModel="gpt-review"
         initialReasoningEffort="high"
+        initialFastMode={false}
         isEnvironmentVisible={true}
         isActive={true}
         isFocused={true}
@@ -3390,12 +3392,13 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(bootstrapWrites()).toContain(
-        'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
+        'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" --config "service_tier=\\"default\\"" "Fix the failing tests"\n',
       );
     });
     expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
+      initialFastMode: undefined,
     });
   });
 

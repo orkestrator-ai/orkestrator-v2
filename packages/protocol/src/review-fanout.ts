@@ -32,6 +32,8 @@ export interface ReviewerModelSelection {
   agent: AgentPlatform;
   model: string;
   reasoningEffort?: string;
+  /** Fast/Normal choice pinned when this durable reviewer was admitted. */
+  fastMode?: boolean;
 }
 
 export type ReviewerStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -112,6 +114,7 @@ export interface ReviewConsolidationSession {
   agent: AgentPlatform;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
   /** Bounded backend-projected delivery state for the tool-mode result slot. */
   resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
@@ -189,11 +192,15 @@ function optionalRepairAttempts(value: unknown): boolean {
 /** Field-level check, for records that carry a selection plus their own keys. */
 export function isReviewerModelSelectionFields(value: Record<string, unknown>): boolean {
   if (!isAgentPlatform(value.agent) || !nonBlank(value.model)) return false;
-  return value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128);
+  return (
+    (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
+    (value.fastMode === undefined || typeof value.fastMode === "boolean")
+  );
 }
 
 export function isReviewerModelSelection(value: unknown): value is ReviewerModelSelection {
-  if (!record(value) || !hasOnlyKeys(value, ["agent", "model", "reasoningEffort"])) return false;
+  if (!record(value) || !hasOnlyKeys(value, ["agent", "model", "reasoningEffort", "fastMode"]))
+    return false;
   return isReviewerModelSelectionFields(value);
 }
 
@@ -209,6 +216,7 @@ const REVIEWER_KEYS = [
   "agent",
   "model",
   "reasoningEffort",
+  "fastMode",
   "id",
   "status",
   "modelUnpinned",
@@ -329,6 +337,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
       "agent",
       "model",
       "reasoningEffort",
+      "fastMode",
       "resultTransport",
       "resultSubmission",
       "schemaRepairAttempts",
@@ -347,6 +356,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     isAgentPlatform(value.agent) &&
     (value.model === undefined || nonBlank(value.model)) &&
     (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     (value.resultTransport === undefined ||
       value.resultTransport === "tool-v1" ||
       value.resultTransport === "structured-output-v1") &&

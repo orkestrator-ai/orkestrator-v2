@@ -59,6 +59,7 @@ describe("launch_control_job command", () => {
       order: 0,
       environmentType: "local",
       worktreePath: dataDir,
+      agentSettings: { platforms: { codex: { fastMode: true } } },
     });
     const ensured: Array<Record<string, unknown>> = [];
     const dispatched: Array<Record<string, unknown>> = [];
@@ -131,6 +132,7 @@ describe("launch_control_job command", () => {
         agent: "codex",
         logicalSessionKey: `env-env-1:${String(first.tabId)}`,
         sessionMode: "build",
+        fastMode: true,
         initialPromptPresentation,
       });
       expect(dispatched[0]).toMatchObject({
@@ -141,11 +143,172 @@ describe("launch_control_job command", () => {
         prompt: delegation.source,
         initialPromptPresentation,
         mode: "build",
+        fastMode: true,
       });
       expect(ensured[2]).not.toHaveProperty("initialPromptPresentation");
       expect(dispatched[2]).not.toHaveProperty("initialPromptPresentation");
       const layout = await storage.getPaneLayout("env-1");
       expect(JSON.stringify(layout?.root).match(/"id":"agent-job-/g)).toHaveLength(2);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a Fast launch alive when the model catalogue cannot be read", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-fast-catalogue-outage-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+      // A configured model is what puts the catalogue on the path at all: a
+      // Fast choice with no model to check needs no catalogue.
+      agentSettings: { platforms: { codex: { fastMode: true, model: "gpt-5.6-codex" } } },
+    });
+    const ensured: Array<Record<string, unknown>> = [];
+    const context = {
+      storage,
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+      environmentLifecycleTasks: {},
+      nativeAgents: {
+        ensureSession: async (input: Record<string, unknown>) => {
+          ensured.push(input);
+          return { providerSessionId: "provider-session-1" };
+        },
+        dispatchIntent: async () => ({ outcome: "accepted" as const }),
+      },
+    } as unknown as CommandContext;
+    const registry = createCommandRegistry();
+    let catalogReads = 0;
+    registry.set("get_native_agent_model_catalog", async () => {
+      catalogReads += 1;
+      throw new Error("bridge is unavailable");
+    });
+    const command = registry.get("launch_native_agent_job");
+    if (!command) throw new Error("launch_native_agent_job was not registered");
+
+    try {
+      const result = (await command(
+        {
+          requestId: "renderer-request-1",
+          environmentId: "env-1",
+          agent: "codex",
+          title: "Push Changes",
+          prompt: "Push the branch.",
+        },
+        context,
+      )) as Record<string, unknown>;
+
+      // The catalogue can only ever narrow a Fast choice, so losing it must
+      // leave the provider as the authority instead of failing the launch.
+      expect(catalogReads).toBe(1);
+      expect(result).toMatchObject({ status: "accepted" });
+      expect(ensured[0]).toMatchObject({ agent: "codex", fastMode: true });
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("drops an inherited reasoning effort the requested model cannot offer", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-inherited-effort-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+      // Configured for whichever model the tier was set up against, which is
+      // not the model this caller pins.
+      agentSettings: { platforms: { codex: { reasoningEffort: "xhigh" } } },
+    });
+    const ensured: Array<Record<string, unknown>> = [];
+    const context = {
+      storage,
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+      environmentLifecycleTasks: {},
+      nativeAgents: {
+        ensureSession: async (input: Record<string, unknown>) => {
+          ensured.push(input);
+          return { providerSessionId: "provider-session-1" };
+        },
+        dispatchIntent: async () => ({ outcome: "accepted" as const }),
+      },
+    } as unknown as CommandContext;
+    const registry = createCommandRegistry();
+    registry.set("get_native_agent_model_catalog", async () => [
+      {
+        id: "gpt-5.6-codex",
+        name: "GPT-5.6 Codex",
+        label: "GPT-5.6 Codex",
+        platform: "codex",
+        reasoning: [{ id: "high", name: "High", label: "High" }],
+      },
+    ]);
+    const command = registry.get("launch_control_job");
+    if (!command) throw new Error("launch_control_job was not registered");
+
+    try {
+      const result = (await command(
+        {
+          requestId: "control-request-1",
+          environmentId: "env-1",
+          agent: "codex",
+          modelId: "gpt-5.6-codex",
+          title: "Independent job",
+          prompt: "Fix the failing tests.",
+        },
+        context,
+      )) as Record<string, unknown>;
+
+      expect(result).toMatchObject({ status: "accepted" });
+      expect(ensured[0]).toMatchObject({ agent: "codex", model: "gpt-5.6-codex" });
+      expect(ensured[0]?.reasoningEffort).toBeUndefined();
+
+      // An effort the caller asked for by name is still a hard error: silently
+      // ignoring it would run a turn the caller did not request.
+      await expect(
+        command(
+          {
+            requestId: "control-request-2",
+            environmentId: "env-1",
+            agent: "codex",
+            modelId: "gpt-5.6-codex",
+            reasoningId: "xhigh",
+            title: "Independent job",
+            prompt: "Fix the failing tests.",
+          },
+          context,
+        ),
+      ).rejects.toThrow("Reasoning option is not available for gpt-5.6-codex: xhigh");
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

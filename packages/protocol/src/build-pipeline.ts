@@ -121,6 +121,8 @@ export interface BuildStepConfig {
   agent: BuildPipelineAgent;
   model?: string;
   reasoningEffort?: string;
+  /** Fast/Normal choice retained for exact prompt recovery. */
+  fastMode?: boolean;
 }
 
 export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
@@ -282,6 +284,8 @@ export interface PipelineSession {
   /** Exact prompt-level selection, retained so ambiguous dispatch can retry faithfully. */
   model?: string;
   reasoningEffort?: string;
+  /** Fast/Normal choice retained for exact prompt recovery. */
+  fastMode?: boolean;
   /** Persisted interaction authority for backend-owned workflow sessions. */
   origin?: import("./agent-interactions.js").AgentInteractionOrigin;
   interactionPolicy?: import("./agent-interactions.js").AgentInteractionPolicy;
@@ -739,7 +743,8 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
   return (
     AGENTS.has(value.agent as BuildPipelineAgent) &&
     isOptionalNonBlankString(value.model) &&
-    isOptionalNonBlankString(value.reasoningEffort)
+    isOptionalNonBlankString(value.reasoningEffort) &&
+    (value.fastMode === undefined || typeof value.fastMode === "boolean")
   );
 }
 
@@ -837,6 +842,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
     (value.model === undefined || isNonBlankString(value.model)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
+    (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||
       (value.origin === "build-pipeline" &&
         isAgentInteractionPolicy(value.interactionPolicy) &&

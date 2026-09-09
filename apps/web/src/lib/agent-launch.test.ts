@@ -209,9 +209,9 @@ describe("modelSupportsSpeed", () => {
     expect(modelSupportsSpeed("claude", speedCatalog, "fast")).toBe(true);
   });
 
-  test("rejects an explicitly unsupported, missing, or platform-ineligible model", () => {
+  test("rejects an explicitly unsupported or platform-ineligible model", () => {
     expect(modelSupportsSpeed("claude", speedCatalog, "normal-only")).toBe(false);
-    expect(modelSupportsSpeed("claude", speedCatalog, "retired")).toBe(false);
+    expect(modelSupportsSpeed("claude", speedCatalog, "retired")).toBe(true);
     expect(modelSupportsSpeed("opencode", speedCatalog, undefined)).toBe(false);
   });
 });

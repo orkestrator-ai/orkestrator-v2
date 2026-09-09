@@ -22,6 +22,12 @@ mock.module("@/components/chat/AgentModelPicker", () => ({
       <span data-testid={`${props.id} selected-platform-model-count`}>
         {props.models.filter((model) => model.platform === props.selectedPlatform).length}
       </span>
+      <span data-testid={`${props.id} provider-labels`}>
+        {props.models
+          .map((model) => model.providerLabel)
+          .filter(Boolean)
+          .join(",")}
+      </span>
       <button
         type="button"
         aria-label={`${props.id} choose Codex A`}
@@ -84,9 +90,24 @@ const catalog: AgentModelCatalog = {
     },
     { id: "claude-slow", name: "Claude Slow", reasoningEfforts: [] },
   ],
-  codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
+  codex: [
+    {
+      id: "codex-a",
+      name: "Codex A",
+      reasoningEfforts: ["medium", "high"],
+      supportsSpeed: true,
+    },
+  ],
   cursor: [{ id: "cursor-a", name: "Cursor A", reasoningEfforts: ["medium"] }],
-  opencode: [],
+  opencode: [
+    {
+      id: "opencode-go/deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      providerLabel: "opencode-go",
+      description: "opencode-go",
+      reasoningEfforts: ["low", "high"],
+    },
+  ],
 };
 
 type Scope = "global" | "repository" | "environment";
@@ -289,6 +310,17 @@ describe("AgentDefaultsPane create-script defaults", () => {
 });
 
 describe("AgentDefaultsPane speed defaults", () => {
+  test("keeps OpenCode provider captions in every Defaults picker", () => {
+    render(<SettingsHarness scope="global" onChange={() => {}} />);
+
+    expect(screen.getByTestId("agent-default-model provider-labels").textContent).toContain(
+      "opencode-go",
+    );
+    expect(screen.getByTestId("action-default-review2 provider-labels").textContent).toContain(
+      "opencode-go",
+    );
+  });
+
   test("writes Fast and clears it back to provider default", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness scope="global" onChange={onChange} />);
@@ -318,5 +350,26 @@ describe("AgentDefaultsPane speed defaults", () => {
       model: "claude-slow",
     });
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
+  });
+
+  test("offers the same per-platform Fast setting from an action picker", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-createScript choose Codex A" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-createScript choose Fast" }),
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        actionDefaults: {
+          createScript: { platform: "codex", model: "codex-a" },
+        },
+        platforms: { codex: { fastMode: true } },
+      }),
+    );
   });
 });

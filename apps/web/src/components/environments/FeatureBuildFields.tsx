@@ -298,6 +298,7 @@ function FeatureBuildModelPickers({
       platform,
       id: option.id,
       label: option.name,
+      providerLabel: option.providerLabel,
       description: option.description,
       reasoning: option.reasoningEfforts.map((effort) => ({
         id: effort,

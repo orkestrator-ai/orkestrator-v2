@@ -3,7 +3,10 @@ import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import { openCodeModelDisplayLabel } from "@orkestrator/protocol/native-agent";
+import {
+  openCodeModelDisplayLabel,
+  openCodeModelProviderId,
+} from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -144,11 +147,15 @@ function catalogWithConfiguredOpenCodeFallbacks(
     ...defaults.catalog,
     opencode: [
       ...modelsForAgent(defaults.catalog, "opencode"),
-      ...Array.from(configuredModels, ([id, efforts]) => ({
-        id,
-        name: openCodeModelDisplayLabel(id),
-        reasoningEfforts: Array.from(efforts),
-      })),
+      ...Array.from(configuredModels, ([id, efforts]) => {
+        const providerLabel = openCodeModelProviderId(id);
+        return {
+          id,
+          name: openCodeModelDisplayLabel(id),
+          ...(providerLabel ? { providerLabel } : {}),
+          reasoningEfforts: Array.from(efforts),
+        };
+      }),
     ],
   };
 }

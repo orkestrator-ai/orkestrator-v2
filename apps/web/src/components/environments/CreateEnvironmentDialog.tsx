@@ -101,6 +101,7 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
+  openCodeModelProviderId,
 } from "@orkestrator/protocol/native-agent";
 import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
@@ -412,6 +413,7 @@ export function CreateEnvironmentDialog({
             opencode: cachedOpenCodeModels.map((candidate) => ({
               id: candidate.id,
               name: openCodeModelDisplayLabel(candidate.id, candidate.name),
+              providerLabel: candidate.provider,
               description: candidate.provider,
               reasoningEfforts: [...(candidate.variants ?? [])],
             })),
@@ -450,6 +452,7 @@ export function CreateEnvironmentDialog({
           {
             id: configuredOpenCodeModel,
             name: openCodeModelDisplayLabel(configuredOpenCodeModel),
+            providerLabel: openCodeModelProviderId(configuredOpenCodeModel) ?? "Configured default",
             description: "Configured default",
             reasoningEfforts: configuredOpenCodeEffort ? [configuredOpenCodeEffort] : [],
           },
@@ -1165,6 +1168,7 @@ export function CreateEnvironmentDialog({
       platform,
       id: option.id,
       label: option.name,
+      providerLabel: option.providerLabel,
       description: option.description,
     })),
   );

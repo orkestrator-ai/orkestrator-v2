@@ -29,6 +29,7 @@ import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   effortLabel,
+  modelSupportsSpeed,
   modelsForAgent,
   platformOwnsSpeed,
   toPickerModel,
@@ -394,7 +395,8 @@ export function AgentDefaultsPane({
                 ? inheritedEntry.platform
                 : undefined;
             const displayedPlatform = inheritedPlatform ?? effectiveAgent;
-            const actionModels = modelsForAgent(catalog, platform ?? effectiveAgent);
+            const actionPlatform = platform ?? displayedPlatform;
+            const actionModels = modelsForAgent(catalog, actionPlatform);
             const actionSelected =
               platform && entry?.model
                 ? actionModels.find((model) => model.id === entry.model)
@@ -417,6 +419,24 @@ export function AgentDefaultsPane({
                       label: effortLabel(effort),
                     })),
                   ];
+            // Speed is a per-platform default rather than a second, action-only
+            // setting. Surface that same value from every action picker so all
+            // instances of the shared selector offer the same controls. A
+            // model that cannot honour Fast leaves the choices visible but
+            // disabled, without clearing the platform's setting for its other
+            // models.
+            const actionSpeedCapable = platformOwnsSpeed(actionPlatform);
+            const effectiveActionModel = entry ? entry.model : inheritedEntry?.model;
+            const actionSupportsSpeed = modelSupportsSpeed(
+              actionPlatform,
+              catalog,
+              effectiveActionModel,
+            );
+            const actionStoredSpeed = tier?.platforms?.[actionPlatform]?.fastMode;
+            const actionInheritedSpeed = resolveAgentPlatformSettings(
+              parentTiers,
+              actionPlatform,
+            ).fastMode;
             return (
               <div
                 key={key}
@@ -472,7 +492,7 @@ export function AgentDefaultsPane({
                           : "App default"
                   }
                   onModelChange={(nextModelId) =>
-                    setAction(key, { platform: platform ?? effectiveAgent, model: nextModelId })
+                    setAction(key, { platform: actionPlatform, model: nextModelId })
                   }
                   onModelSelect={(nextModel) =>
                     setAction(key, { platform: nextModel.platform, model: nextModel.id })
@@ -488,10 +508,35 @@ export function AgentDefaultsPane({
                   // belongs to the model: choosing a new one resets it.
                   onReasoningChange={(nextId) =>
                     setAction(key, {
-                      platform: platform ?? effectiveAgent,
+                      platform: actionPlatform,
                       ...(entry?.model ? { model: entry.model } : {}),
                       ...(nextId === INHERIT ? {} : { reasoningEffort: nextId }),
                     })
+                  }
+                  speedCapable={actionSpeedCapable}
+                  fastModeAvailable={actionSpeedCapable && actionSupportsSpeed}
+                  fastModeEnabled={
+                    actionSpeedCapable ? (actionStoredSpeed ?? actionInheritedSpeed ?? null) : false
+                  }
+                  speedInherit={
+                    actionSpeedCapable
+                      ? {
+                          label: canInherit ? "Inherit" : "Provider default",
+                          selected: actionStoredSpeed === undefined,
+                        }
+                      : undefined
+                  }
+                  onFastModeChange={
+                    actionSpeedCapable
+                      ? (enabled) =>
+                          onChange(withPlatformField(tier, actionPlatform, "fastMode", enabled))
+                      : undefined
+                  }
+                  onFastModeInherit={
+                    actionSpeedCapable
+                      ? () =>
+                          onChange(withPlatformField(tier, actionPlatform, "fastMode", undefined))
+                      : undefined
                   }
                 />
                 {actionModelMissing && (

@@ -6,11 +6,13 @@ import { Label } from "@/components/ui/label";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   effortLabel,
+  modelSupportsSpeed,
   modelsForAgent,
+  platformOwnsSpeed,
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
-import { resolvedActionDefault } from "@/lib/agent-settings";
+import { resolvedActionDefault, withPlatformField } from "@/lib/agent-settings";
 import {
   AGENT_PLATFORM_LABELS,
   firstEnabledAgentPlatform,
@@ -105,7 +107,9 @@ function ReviewerDefaultPicker({
   catalog,
   pickerModels,
   favorites,
+  tier,
   disabled,
+  onTierChange,
   onChange,
 }: {
   index: number;
@@ -118,7 +122,9 @@ function ReviewerDefaultPicker({
   catalog: AgentModelCatalog;
   pickerModels: AgentModel[];
   favorites: ReturnType<typeof useAgentModelFavorites>;
+  tier: AgentSettingsTier;
   disabled?: boolean;
+  onTierChange: (tier: AgentSettingsTier) => void;
   onChange: (entry: AgentActionDefault | undefined) => void;
 }) {
   const platform =
@@ -158,6 +164,10 @@ function ReviewerDefaultPicker({
         ];
   const modelLabel = selectedModel?.name ?? effectiveModelId ?? "Provider default";
   const label = `Reviewer ${index + 1}`;
+  const speedCapable = platformOwnsSpeed(platform);
+  const speedAvailable = modelSupportsSpeed(platform, catalog, effectiveModelId);
+  const storedFastMode = tier.platforms?.[platform]?.fastMode;
+  const effectiveFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode ?? null;
 
   return (
     <div
@@ -210,6 +220,27 @@ function ReviewerDefaultPicker({
             ...(entry?.model ? { model: entry.model } : {}),
             ...(reasoningEffort === INHERIT ? {} : { reasoningEffort }),
           })
+        }
+        speedCapable={speedCapable}
+        fastModeAvailable={speedCapable && speedAvailable}
+        fastModeEnabled={speedCapable ? effectiveFastMode : false}
+        speedInherit={
+          speedCapable
+            ? {
+                label: "Provider default",
+                selected: storedFastMode === undefined,
+              }
+            : undefined
+        }
+        onFastModeChange={
+          speedCapable
+            ? (enabled) => onTierChange(withPlatformField(tier, platform, "fastMode", enabled))
+            : undefined
+        }
+        onFastModeInherit={
+          speedCapable
+            ? () => onTierChange(withPlatformField(tier, platform, "fastMode", undefined))
+            : undefined
         }
         className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
       />
@@ -315,7 +346,9 @@ export function MultiReviewDefaultsEditor({
             catalog={catalog}
             pickerModels={pickerModels}
             favorites={favorites}
+            tier={tier}
             disabled={disabled}
+            onTierChange={onChange}
             onChange={(entry) => onChange(withReviewerEntry(tier, index, entry))}
           />
         ))}

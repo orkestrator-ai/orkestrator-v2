@@ -101,6 +101,7 @@ export function includeMissingOpenCodeModels(
     extras.push({
       id: modelId,
       name: openCodeModelDisplayLabel(modelId),
+      providerLabel: providerId,
       description: providerId,
       reasoningEfforts: [],
     });
@@ -151,6 +152,7 @@ export function buildReviewModelCatalog(
   const opencode = liveOpenCodeModels.map((model) => ({
     id: model.id,
     name: openCodeModelDisplayLabel(model.id, model.name),
+    providerLabel: model.provider,
     description: model.provider,
     reasoningEfforts: [...(model.variants ?? [])],
   }));
@@ -160,6 +162,7 @@ export function buildReviewModelCatalog(
     models.map((model) => ({
       id: model.id,
       name: model.label,
+      ...(model.providerLabel ? { providerLabel: model.providerLabel } : {}),
       description: model.description,
       reasoningEfforts: Array.from(
         new Set(model.reasoning?.map((option) => option.id).filter((id) => id !== "default") ?? []),

@@ -203,7 +203,9 @@ export function ReviewLaunchDialog({
           platform,
           id: option.id,
           label: option.name,
-          ...(option.description ? { providerLabel: option.description } : {}),
+          ...(option.providerLabel || option.description
+            ? { providerLabel: option.providerLabel ?? option.description }
+            : {}),
           description: option.description,
         })),
       ),

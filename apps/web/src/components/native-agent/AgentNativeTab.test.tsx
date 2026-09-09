@@ -3403,7 +3403,7 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
-  test("stays connecting while an invalidation races a new tab's session creation", async () => {
+  test("keeps a new tab free of refresh copy before its initial prompt is injected", async () => {
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
@@ -3421,7 +3421,14 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
+    render(
+      <AgentNativeTab
+        tabId="tab-new-cursor"
+        data={freshTab("cursor")}
+        initialPrompt="Review the current changes"
+        isActive
+      />,
+    );
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
 
     // Invalidations are announced per environment, so every projection commit
@@ -3440,10 +3447,12 @@ describe("AgentNativeTab", () => {
       });
     });
 
-    // Cursor is still being spawned. "No session" is not something the backend
-    // can assert yet, and a failure the user cannot act on — on a tab that goes
-    // on to connect — is worse than showing the wait it is already in.
-    expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy();
+    // Cursor is still being spawned. There is no established conversation to
+    // refresh yet, and the opening prompt cannot be injected until creation
+    // finishes, so keep the normal new-tab presentation free of reconnect copy.
+    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
 
@@ -3454,6 +3463,7 @@ describe("AgentNativeTab", () => {
         setTimeout(resolve, 20);
       });
     });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
 
@@ -3629,7 +3639,7 @@ describe("AgentNativeTab", () => {
 
     // The second connect has not returned, so there is still nothing to resolve.
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
 
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);

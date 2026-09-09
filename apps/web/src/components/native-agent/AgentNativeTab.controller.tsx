@@ -228,6 +228,7 @@ export function SharedNativeAgentController({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
+  const hasConnectedSessionRef = useRef(false);
   // The projection rewrites `data.sessionId` to whatever session the tab ends
   // up connected to, so the id the tab was *asked* to resume has to be captured
   // before that can happen.
@@ -1503,6 +1504,9 @@ export function SharedNativeAgentController({
           : runtimeError || hasCompletedRead
             ? ("error" as const)
             : ("connecting" as const)));
+  useEffect(() => {
+    if (connectionState === "connected") hasConnectedSessionRef.current = true;
+  }, [connectionState]);
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1687,6 +1691,9 @@ export function SharedNativeAgentController({
       // bare paths instead of pictures.
       containerId={data.containerId}
       connectionState={connectionState}
+      showRefreshNotice={
+        Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current
+      }
       displayAvailable={
         Boolean(projection?.messages.length) ||
         (connectionState !== "error" &&

@@ -52,6 +52,12 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   connectionState: NativeConnectionState;
   /** Cached or authoritative transcript content can render before transport settles. */
   displayAvailable?: boolean;
+  /**
+   * Whether a connecting transport is refreshing an established session.
+   * Fresh tabs keep their ready/composer layout visible while the first
+   * provider session is created, but that creation is not a refresh.
+   */
+  showRefreshNotice?: boolean;
   errorMessage?: string | null;
   desynced?: boolean;
   serverLog?: string | null;
@@ -163,6 +169,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentExpansionScope,
   connectionState,
   displayAvailable = false,
+  showRefreshNotice = true,
   errorMessage,
   desynced = false,
   serverLog,
@@ -306,7 +313,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
   const composerCentered = centerCompose && !hasTranscriptCards;
   const connectionNotice =
-    displayAvailable && connectionState !== "connected" ? (
+    displayAvailable &&
+    connectionState !== "connected" &&
+    (connectionState === "error" || showRefreshNotice) ? (
       <div
         role={connectionState === "error" ? "alert" : "status"}
         className={cn(

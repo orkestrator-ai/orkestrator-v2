@@ -42,7 +42,10 @@ import type { AgentToolConnection } from "./agent-tools.js";
 import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { fastModeForModel } from "./build-pipeline-service-helpers.js";
+import {
+  createAgentModelCatalogReader,
+  resolveFastMode,
+} from "./build-pipeline-service-helpers.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -1036,13 +1039,16 @@ export class FeaturePlanningService {
       },
       "codex",
     );
-    const catalog =
-      defaults.fastMode === true && defaults.model
-        ? await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-            environmentId: environment.id,
-          }).catch(() => [])
-        : [];
-    const fastMode = fastModeForModel("codex", defaults.fastMode, defaults.model, catalog);
+    const fastMode = await resolveFastMode(
+      "codex",
+      defaults.fastMode,
+      defaults.model,
+      createAgentModelCatalogReader(() =>
+        this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+          environmentId: environment.id,
+        }),
+      ),
+    );
     return {
       ...(defaults.model ? { model: defaults.model } : {}),
       effort: defaults.reasoningEffort || "high",

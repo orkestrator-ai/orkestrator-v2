@@ -452,6 +452,10 @@ function isFixSession(value: unknown): boolean {
       "agent",
       "model",
       "reasoningEffort",
+      // A session record is spread from its whole selection, so every
+      // selection key has to be allowed here. Omitting one rejects the entire
+      // workflow snapshot and hides it from its own supervisor.
+      "fastMode",
       "sessionKey",
       "providerSessionId",
       "requestIds",

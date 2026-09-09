@@ -86,6 +86,7 @@ import {
   elapsedSinceLatest,
   discardSessionReviewReports,
 } from "./build-pipeline-service-helpers.js";
+import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
   /**
@@ -109,6 +110,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         stepSettings: (pipeline, sessionPhase) => this.stepSettings(pipeline, sessionPhase),
         settingsForSelection: (pipeline, selection) =>
           this.settingsForSelection(pipeline, selection),
+        settingsForSelections: (pipeline, selections) =>
+          this.settingsForSelections(pipeline, selections),
         refreshTranscript: (session, provider, messages) =>
           this.refreshTranscript(session, provider, messages),
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
@@ -1004,12 +1007,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       mode?: ProviderExecutionMode;
       schema?: JsonSchema;
       label?: string;
-      settings?: {
-        agent: BuildPipelineAgent;
-        model?: string;
-        effort?: string;
-        fastMode?: boolean;
-      };
+      settings?: BuildStepSelection;
     },
   ): Promise<void> {
     await this.refreshWorkflowRollout();

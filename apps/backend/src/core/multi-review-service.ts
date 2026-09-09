@@ -55,7 +55,12 @@ import {
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import { connectionDefaultsFor, fastModeForModel } from "./build-pipeline-service-helpers.js";
+import {
+  connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  resolveFastMode,
+  type AgentModelCatalogReader,
+} from "./build-pipeline-service-helpers.js";
 import {
   parseReviewPreparationResult,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
@@ -448,14 +453,14 @@ export class MultiReviewService {
     const reviewWorktreeSnapshot = await this.captureReviewWorktreeSnapshot(input.environmentId);
     const config = await this.storage.loadConfig();
     const repository = config.repositories[input.projectId] ?? {};
-    const catalog = await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-      environmentId: input.environmentId,
-    }).catch(() => []);
+    const readCatalog = this.catalogReaderFor(input.environmentId);
     const withFastMode = (selection: MultiReviewModelSelection) =>
-      this.configuredSelection(selection, environment, config, repository, catalog);
-    const reviewers = input.reviewers.map(withFastMode);
-    const reviewModelSelection = input.reviewModel ? withFastMode(input.reviewModel) : undefined;
-    const fixModel = withFastMode(input.fixModel);
+      this.configuredSelection(selection, environment, config, repository, readCatalog);
+    const [reviewers, reviewModelSelection, fixModel] = await Promise.all([
+      Promise.all(input.reviewers.map(withFastMode)),
+      input.reviewModel ? withFastMode(input.reviewModel) : undefined,
+      withFastMode(input.fixModel),
+    ]);
     const timestamp = nowIso();
     const workflow: MultiReviewWorkflow = {
       version: MULTI_REVIEW_WORKFLOW_VERSION,
@@ -582,15 +587,12 @@ export class MultiReviewService {
         if (!environment) throw new Error("Review environment no longer exists");
         const config = await this.storage.loadConfig();
         const repository = config.repositories[workflow.projectId] ?? {};
-        const catalog = await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-          environmentId: workflow.environmentId,
-        }).catch(() => []);
-        workflow.customFixModel = this.configuredSelection(
+        workflow.customFixModel = await this.configuredSelection(
           input.fixModel,
           environment,
           config,
           repository,
-          catalog,
+          this.catalogReaderFor(workflow.environmentId),
         );
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
@@ -2701,19 +2703,32 @@ export class MultiReviewService {
     return `${workflow.environmentId}:${selection.agent}`;
   }
 
-  private configuredSelection(
+  /**
+   * A catalogue reader scoped to one environment, shared by every selection.
+   *
+   * The read is lazy because most workflows configure no speed at all, and the
+   * command behind it can wait on live bridge catalogue fetches. Nothing on
+   * this path should pay for it unless a Fast choice actually needs narrowing.
+   */
+  private catalogReaderFor(environmentId: string): AgentModelCatalogReader {
+    return createAgentModelCatalogReader(() =>
+      this.invoke<AgentModel[]>("get_native_agent_model_catalog", { environmentId }),
+    );
+  }
+
+  private async configuredSelection(
     selection: MultiReviewModelSelection,
     environment: Environment,
     config: AppConfig,
     repository: { agentSettings?: AgentSettingsTier },
-    catalog: readonly AgentModel[],
-  ): MultiReviewModelSelection {
+    readCatalog: AgentModelCatalogReader,
+  ): Promise<MultiReviewModelSelection> {
     const defaults = connectionDefaultsFor(selection.agent, config, repository, environment);
-    const fastMode = fastModeForModel(
+    const fastMode = await resolveFastMode(
       selection.agent,
       selection.fastMode ?? defaults.fastMode,
       selection.model === "default" ? undefined : selection.model,
-      catalog,
+      readCatalog,
     );
     const { fastMode: _requestedFastMode, ...rest } = selection;
     return {

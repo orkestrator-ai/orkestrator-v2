@@ -24,6 +24,7 @@ import type {
 import {
   MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
+  isMultiReviewWorkflow,
   type MultiReviewModelSelection,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -1859,62 +1860,81 @@ test("MultiReviewService adopts a snapshot for a workflow persisted without one"
   );
 });
 
-test("MultiReviewService applies the coordinator platform's fast default per selection", async () => {
-  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-multi-review-fast-default-"));
-  const storage = new StorageService(dataDir);
-  await storage.init();
-  await storage.addEnvironment({
-    id: "env-fast-default",
-    projectId: "project-1",
-    name: "review",
-    branch: "change",
-    containerId: null,
-    status: "running",
-    prUrl: null,
-    prState: null,
-    hasMergeConflicts: null,
-    createdAt: new Date(0).toISOString(),
-    networkAccessMode: "full",
-    order: 0,
-    environmentType: "local",
-    worktreePath: "/tmp/review",
-    agentSettings: { platforms: { cursor: { fastMode: true } } },
-    setupScriptsComplete: true,
-  });
-  const service = new MultiReviewService(
-    storage,
-    async <T>(command: string): Promise<T> => {
-      expect(command).toBe("start_local_cursor_server_cmd");
-      return { port: 4123, authToken: "test-token" } as T;
+test("MultiReviewService persists a resolved speed its own supervisor can still load", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const catalogReads: string[] = [];
+  await withService(
+    "env-fast-round-trip",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      // The environment tier is the one a coordinator writes when it launches,
+      // so it has to reach the reviewer and fix selections.
+      await storage.updateEnvironment("env-fast-round-trip", {
+        agentSettings: { platforms: { claude: { fastMode: true } } },
+      });
+
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        const current = await snapshot(started.id);
+        return Boolean(current?.fixSession?.providerSessionId);
+      });
+
+      const current = (await snapshot(started.id))!;
+      expect(current.fixModel.fastMode).toBe(true);
+      expect(current.reviewers[0]?.fastMode).toBe(true);
+      // The session record is spread from its whole selection, so the speed
+      // lands in persisted state alongside the model and effort.
+      expect(current.fixSession?.fastMode).toBe(true);
+
+      // The guard gates `tick`, `advance`, and `claim`. A snapshot it rejects
+      // is not merely missing a field: the workflow stops being supervised at
+      // all, so this has to hold against the record as actually stored.
+      const stored = await storage.getMultiReviewWorkflow(started.id);
+      expect(isMultiReviewWorkflow(stored?.snapshot)).toBe(true);
+
+      // The catalogue read is best-effort. This harness rejects the command,
+      // and an unreadable catalogue must leave the Fast choice with the
+      // provider rather than downgrading it or failing the start.
+      expect(catalogReads).toEqual(["env-fast-round-trip"]);
     },
-    { autoAdvance: false },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        if (command === "get_native_agent_model_catalog") {
+          catalogReads.push(String(args?.environmentId));
+          throw new Error("catalogue unavailable");
+        }
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
   );
+});
 
-  try {
-    const storedEnvironment = (await storage.getEnvironment("env-fast-default"))!;
-    const selection = (
-      service as unknown as {
-        configuredSelection(
-          selection: MultiReviewModelSelection,
-          environment: typeof storedEnvironment,
-          config: Awaited<ReturnType<StorageService["loadConfig"]>>,
-          repository: object,
-          catalog: readonly [],
-        ): MultiReviewModelSelection;
-      }
-    ).configuredSelection(
-      { agent: "cursor", model: "cursor-grok-4.6", reasoningEffort: "high" },
-      storedEnvironment,
-      await storage.loadConfig(),
-      {},
-      [],
-    );
+test("MultiReviewService leaves the model catalogue unread when no speed is configured", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const commands: string[] = [];
+  await withService(
+    "env-no-speed-catalogue",
+    provider,
+    async ({ start, snapshot }) => {
+      const started = await start();
 
-    expect(selection.fastMode).toBe(true);
-  } finally {
-    await service.shutdown();
-    await fs.rm(dataDir, { recursive: true, force: true });
-  }
+      // Most workflows configure no speed at all, and the catalogue command can
+      // wait on live bridge fetches. Nothing should pay for it here.
+      expect((await snapshot(started.id))?.fixModel.fastMode).toBeUndefined();
+      expect(commands).not.toContain("get_native_agent_model_catalog");
+    },
+    {
+      packageFlow: true,
+      invoke: async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        commands.push(command);
+        return stableReviewInvoker<T>(command, args);
+      },
+    },
+  );
 });
 
 async function withService(

@@ -77,7 +77,11 @@ import {
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
-import { connectionDefaultsFor, fastModeForModel } from "./build-pipeline-service-helpers.js";
+import {
+  connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  resolveFastMode,
+} from "./build-pipeline-service-helpers.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -456,20 +460,16 @@ export class LoopedReviewService {
     const allowance = normalizeReviewAllowance(input.allowance);
     const config = await this.storage.loadConfig();
     const repository = config.repositories[input.projectId] ?? {};
-    const configuredFastMode =
-      input.fastMode ??
-      connectionDefaultsFor(input.agent, config, repository, environment).fastMode;
-    const catalog =
-      configuredFastMode === true && input.model !== "default"
-        ? await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-            environmentId: input.environmentId,
-          }).catch(() => [])
-        : [];
-    const fastMode = fastModeForModel(
+    const fastMode = await resolveFastMode(
       input.agent,
-      configuredFastMode,
+      input.fastMode ??
+        connectionDefaultsFor(input.agent, config, repository, environment).fastMode,
       input.model === "default" ? undefined : input.model,
-      catalog,
+      createAgentModelCatalogReader(() =>
+        this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+          environmentId: input.environmentId,
+        }),
+      ),
     );
     const timestamp = nowIso();
     const workflow: LoopedReviewWorkflow = {

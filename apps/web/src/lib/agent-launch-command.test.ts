@@ -46,6 +46,14 @@ describe("buildAgentLaunchCommand", () => {
     );
   });
 
+  test("omits a speed from harnesses whose launch command cannot carry one", () => {
+    // Grok's terminal command takes no arguments at all, so a Fast choice has
+    // nowhere to go. Recording one on the tab would drop it silently.
+    expect(buildAgentLaunchCommand({ tabType: "grok", fastMode: true })).toBe("grok");
+    expect(buildAgentLaunchCommand({ tabType: "grok", fastMode: false })).toBe("grok");
+    expect(buildAgentLaunchCommand({ tabType: "opencode", fastMode: true })).toBe("opencode");
+  });
+
   test("quotes untrusted model and prompt values as shell arguments", () => {
     expect(
       buildAgentLaunchCommand({

@@ -58,6 +58,7 @@ import {
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 import { createDiscoveryPrompt } from "./looped-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
@@ -95,16 +96,15 @@ export interface BuildPipelineReviewFanoutDeps {
   stepSettings(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
-  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string; fastMode?: boolean }>;
+  ): Promise<BuildStepSelection>;
   settingsForSelection(
     pipeline: BuildPipeline,
-    selection: {
-      agent: BuildPipelineAgent;
-      model?: string;
-      effort?: string;
-      fastMode?: boolean;
-    },
-  ): Promise<{ agent: BuildPipelineAgent; model?: string; effort?: string; fastMode?: boolean }>;
+    selection: BuildStepSelection,
+  ): Promise<BuildStepSelection>;
+  settingsForSelections(
+    pipeline: BuildPipeline,
+    selections: readonly BuildStepSelection[],
+  ): Promise<BuildStepSelection[]>;
   refreshTranscript(
     session: PipelineSession,
     provider: BuildPipelineProvider,
@@ -151,14 +151,15 @@ export class BuildPipelineReviewFanout {
     if (!pipeline.reviewPackage) {
       throw new Error(`${FANOUT_LABEL} cannot start because no immutable review package exists`);
     }
-    const selections = await Promise.all(
-      pipelineReviewerConfigs(pipeline).map((config) =>
-        this.deps.settingsForSelection(pipeline, {
-          agent: config.agent,
-          model: config.model,
-          effort: config.reasoningEffort,
-        }),
-      ),
+    // One batch, so the shared environment, config, and model catalogue are
+    // read once for the whole fan-out rather than once per reviewer.
+    const selections = await this.deps.settingsForSelections(
+      pipeline,
+      pipelineReviewerConfigs(pipeline).map((config) => ({
+        agent: config.agent,
+        model: config.model,
+        effort: config.reasoningEffort,
+      })),
     );
     pipeline.reviewFanout = { reviewers: selections.map(reviewerFromConfig) };
     pipeline.phase = "reviewing";
@@ -763,12 +764,7 @@ export class BuildPipelineReviewFanout {
   }
 }
 
-function reviewerFromConfig(config: {
-  agent: BuildPipelineAgent;
-  model?: string;
-  effort?: string;
-  fastMode?: boolean;
-}): ReviewerRecord {
+function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
   const model = config.model?.trim();
   return {
     id: randomUUID(),

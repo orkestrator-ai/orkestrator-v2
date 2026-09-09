@@ -376,6 +376,32 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
+  test("lets the environment tier override an inherited speed on an unpinned step", async () => {
+    await withService(async (service, storage, provider) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = { platforms: { claude: { fastMode: true } } };
+      config.repositories["project-1"] = {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        ...config.repositories["project-1"],
+        agentSettings: { platforms: { claude: { fastMode: false } } },
+      };
+      await storage.saveConfig(config);
+      // An unpinned step inherits its speed. Resolving the inherited value
+      // before the environment tier is consulted would let the repository
+      // shadow the environment, which is the narrower choice of the two.
+      await storage.updateEnvironment("env-1", {
+        agentSettings: { platforms: { claude: { fastMode: true } } },
+      });
+
+      const { session } = await startBuilding(service, storage);
+
+      expect(session.fastMode).toBe(true);
+      expect(provider.created[0]?.options?.fastMode).toBe(true);
+      expect(provider.sent[0]?.fastMode).toBe(true);
+    });
+  });
+
   test("applies an explicit Normal default to build sessions and turns", async () => {
     await withService(async (service, storage, provider) => {
       const config = await storage.loadConfig();

@@ -226,6 +226,68 @@ export function fastModeForModel(
 }
 
 /**
+ * One turn's harness, model, effort, and speed.
+ *
+ * Shared by every producer and consumer so a new axis cannot be added to one
+ * of them and quietly dropped by another on the way to the provider.
+ */
+export interface BuildStepSelection {
+  agent: BuildPipelineAgent;
+  model?: string;
+  effort?: string;
+  fastMode?: boolean;
+}
+
+/** Reads the environment's model catalogue at most once, and never throws. */
+export type AgentModelCatalogReader = () => Promise<readonly AgentModel[]>;
+
+/**
+ * Wrap a catalogue read so repeated speed resolutions share one fetch.
+ *
+ * The underlying command can peek bridges and wait on live ACP catalogue
+ * fetches, so a fan-out that resolves one selection per reviewer must not pay
+ * for it once per reviewer. A failure resolves to an empty catalogue rather
+ * than rejecting: the catalogue only ever narrows a Fast choice, so losing it
+ * must leave the provider as the authority instead of failing the caller.
+ */
+export function createAgentModelCatalogReader(
+  load: () => Promise<readonly AgentModel[]>,
+): AgentModelCatalogReader {
+  let pending: Promise<readonly AgentModel[]> | undefined;
+  return () => {
+    pending ??= (async () => {
+      try {
+        const models = await load();
+        return Array.isArray(models) ? models : [];
+      } catch {
+        return [];
+      }
+    })();
+    return pending;
+  };
+}
+
+/**
+ * `fastModeForModel`, with the catalogue read deferred until it can matter.
+ *
+ * Only a Fast choice on a speed-capable platform with a pinned model can be
+ * changed by the catalogue. Every other case is decided without touching it,
+ * which is what keeps a workflow that configured no speed off that path
+ * entirely.
+ */
+export async function resolveFastMode(
+  agent: BuildPipelineAgent,
+  configured: boolean | undefined,
+  model: string | undefined,
+  readCatalog: AgentModelCatalogReader,
+): Promise<boolean | undefined> {
+  if (configured !== true) return configured;
+  if (!nativeAgentCapabilities(agent).composer.speed) return undefined;
+  if (!model || model === "default") return true;
+  return fastModeForModel(agent, configured, model, await readCatalog());
+}
+
+/**
  * The harness a session runs on.
  *
  * Falls back to the pipeline agent for sessions recorded before steps could

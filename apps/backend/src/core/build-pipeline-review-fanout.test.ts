@@ -223,6 +223,7 @@ async function withPipeline(
     read: (id: string) => Promise<BuildPipeline>;
     worktree: { head: string; fingerprint: string; fail: boolean };
     packageGeneration: { count: number; verificationCount: number };
+    commands: string[];
   }) => Promise<void>,
   options: { transcriptPersistIntervalMs?: number } = {},
 ): Promise<void> {
@@ -256,7 +257,9 @@ async function withPipeline(
   ]);
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
   const packageGeneration = { count: 0, verificationCount: 0 };
+  const commands: string[] = [];
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
+    commands.push(command);
     if (command === "get_environment_uncommitted_paths") {
       if (worktree.fail) throw new Error("probe failed");
       return { head: worktree.head, paths: [], fingerprint: worktree.fingerprint } as T;
@@ -296,7 +299,16 @@ async function withPipeline(
     return record.snapshot as BuildPipeline;
   };
   try {
-    await run({ service, storage, provider, providers, read, worktree, packageGeneration });
+    await run({
+      service,
+      storage,
+      provider,
+      providers,
+      read,
+      worktree,
+      packageGeneration,
+      commands,
+    });
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -358,6 +370,33 @@ async function rewritePipeline(
 }
 
 describe("build pipeline multi-model review", () => {
+  test("reads the shared model catalogue once for the whole reviewer panel", async () => {
+    await withPipeline(async ({ service, storage, read, commands }) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = { platforms: { claude: { fastMode: true } } };
+      await storage.saveConfig(config);
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+
+      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+      expect(reviewing.reviewFanout?.reviewers.map((reviewer) => reviewer.fastMode)).toEqual([
+        true,
+        true,
+      ]);
+
+      // Every reviewer resolves against the same environment, and the command
+      // behind this can wait on live bridge catalogue fetches. One read for the
+      // panel, not one per reviewer.
+      expect(commands.filter((command) => command === "get_native_agent_model_catalog")).toEqual([
+        "get_native_agent_model_catalog",
+      ]);
+    });
+  });
+
   test("applies each reviewer's Fast or Normal platform default", async () => {
     await withPipeline(async ({ service, storage, read, provider, providers }) => {
       const config = await storage.loadConfig();

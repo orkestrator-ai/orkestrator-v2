@@ -11,7 +11,10 @@ import {
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
-import { fastModeForModel } from "./build-pipeline-service-helpers.js";
+import {
+  createAgentModelCatalogReader,
+  resolveFastMode,
+} from "./build-pipeline-service-helpers.js";
 
 function jobIdFor(environmentId: string, requestId: string): string {
   return createHash("sha256")
@@ -94,7 +97,7 @@ async function launchNativeAgentJob(
   const explicitModel = asOptionalString(args.modelId)?.trim();
   const explicitReasoningEffort = asOptionalString(args.reasoningId)?.trim();
   const model = explicitModel || defaults.model;
-  const reasoningEffort = explicitReasoningEffort || defaults.reasoningEffort;
+  let reasoningEffort = explicitReasoningEffort || defaults.reasoningEffort;
   if (explicitReasoningEffort && !explicitModel && options.validateModelCatalog) {
     throw new Error("reasoningId requires modelId");
   }
@@ -102,27 +105,54 @@ async function launchNativeAgentJob(
   if (requestedFastMode !== undefined && typeof requestedFastMode !== "boolean") {
     throw new Error("fastMode must be boolean");
   }
-  const needsCatalog =
-    (explicitModel && options.validateModelCatalog) || (requestedFastMode === true && model);
+
   const catalogCommand = dependencies.commands.get("get_native_agent_model_catalog");
-  if (needsCatalog && !catalogCommand) throw new Error("Agent model catalogue is unavailable");
-  const rawCatalog = needsCatalog ? await catalogCommand!({ environmentId }, context) : [];
-  const models = Array.isArray(rawCatalog) ? (rawCatalog as AgentModel[]) : [];
+  let catalogRead: Promise<AgentModel[]> | undefined;
+  const loadCatalog = (): Promise<AgentModel[]> => {
+    catalogRead ??= (async () => {
+      if (!catalogCommand) throw new Error("Agent model catalogue is unavailable");
+      const raw = await catalogCommand({ environmentId }, context);
+      return Array.isArray(raw) ? (raw as AgentModel[]) : [];
+    })();
+    return catalogRead;
+  };
+
   if (explicitModel && options.validateModelCatalog) {
+    // A validation read has to fail loudly. An unreadable catalogue is not
+    // evidence that the requested model exists.
+    const models = await loadCatalog();
     const selected = models.find(
       (candidate) =>
         candidate.platform === agent &&
         (candidate.id === explicitModel || candidate.aliases?.includes(explicitModel) === true),
     );
     if (!selected) throw new Error(`Model is not available for ${agent}: ${explicitModel}`);
-    if (
-      reasoningEffort &&
-      !(selected.reasoning ?? []).some((option) => option.id === reasoningEffort)
-    ) {
-      throw new Error(`Reasoning option is not available for ${explicitModel}: ${reasoningEffort}`);
+    const offersReasoning = (option: string): boolean =>
+      (selected.reasoning ?? []).some((candidate) => candidate.id === option);
+    if (explicitReasoningEffort && !offersReasoning(explicitReasoningEffort)) {
+      throw new Error(
+        `Reasoning option is not available for ${explicitModel}: ${explicitReasoningEffort}`,
+      );
+    }
+    // An inherited effort belongs to whichever model its tier was configured
+    // for. When the caller pinned a different model that has no such option,
+    // drop the inherited value rather than rejecting a launch that never asked
+    // for it.
+    if (!explicitReasoningEffort && reasoningEffort && !offersReasoning(reasoningEffort)) {
+      reasoningEffort = undefined;
     }
   }
-  const fastMode = fastModeForModel(agent, requestedFastMode as boolean | undefined, model, models);
+
+  // The catalogue can only ever narrow a Fast choice, so a read that fails or
+  // is unavailable leaves the provider as the authority instead of failing the
+  // launch. This also keeps the read off the path entirely when no Fast choice
+  // is in play.
+  const fastMode = await resolveFastMode(
+    agent,
+    requestedFastMode as boolean | undefined,
+    model,
+    createAgentModelCatalogReader(loadCatalog),
+  );
 
   let armedAt: string | null = null;
   const rollBackCompletionAction = async (): Promise<void> => {

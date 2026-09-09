@@ -24,7 +24,11 @@ import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { cursorMcpServers } from "./mcp.js";
-import { cursorLocalAgentStore, prewarmCursorWorkspace } from "./sdk-runtime.js";
+import {
+  cursorLocalAgentStore,
+  hasUnusedInitialRun,
+  prewarmCursorWorkspace,
+} from "./sdk-runtime.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import {
   clientSessionKeys,
@@ -277,7 +281,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     // is not fatal: the id may name an agent the store no longer has, and a new
     // agent with the transcript we already hold is a far better outcome than a
     // tab that can never send again.
-    if (state.agentId) {
+    // A warm-up detached before its first send has no conversation to resume.
+    // Keep its store record intact, but create a usable first-run handle under
+    // the current policy. This also repairs placeholders restored after exit.
+    if (state.agentId && !(await hasUnusedInitialRun(state.agentId))) {
       try {
         const resumed = await Agent.resume(state.agentId, options);
         state.agent = resumed;
@@ -552,6 +559,34 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
   return changed;
 }
 
+/** Store reads in flight while the picker screens one page of agents. */
+const RESUME_SCREEN_CONCURRENCY = 8;
+
+/**
+ * Drop agents that were warmed and replaced before they ever held a turn.
+ *
+ * Attach replaces such an agent rather than resuming it, and deliberately
+ * leaves the original record alone — a live handle elsewhere may still own
+ * that reservation, so deleting it is not the bridge's call. The record is
+ * empty by construction, though, so the picker is where it stops being
+ * offered. A read that fails keeps the row: an unreadable record is not
+ * evidence that there is nothing behind it.
+ */
+async function withoutUnusedWarmUps(items: SDKAgentInfo[]): Promise<SDKAgentInfo[]> {
+  const empty = Array.from({ length: items.length }, () => false);
+  let next = 0;
+  const screen = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      empty[index] = await hasUnusedInitialRun(items[index]!.agentId).catch(() => false);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(RESUME_SCREEN_CONCURRENCY, items.length) }, screen),
+  );
+  return items.filter((_item, index) => !empty[index]);
+}
+
 /**
  * Sessions this workspace can be resumed into.
  *
@@ -574,7 +609,8 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
     cursor = page.nextCursor;
   } while (cursor && items.length < 2_000);
 
-  return items.slice(0, 2_000).map((item) => ({
+  const offered = await withoutUnusedWarmUps(items.slice(0, 2_000));
+  return offered.map((item) => ({
     // This is the bridge wire shape, not the normalized service shape. The
     // shared backend provider reads `id` here and turns it into `sessionId` for
     // the renderer; returning `sessionId` directly makes it discard every row.

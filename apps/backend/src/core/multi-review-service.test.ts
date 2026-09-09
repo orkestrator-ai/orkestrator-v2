@@ -643,6 +643,9 @@ test("MultiReviewService hands the idle consolidation session to interactive add
       const disposalsAfterReady = provider.disposeCalls;
       const statusCallsAfterReady = provider.statusCalls;
       const sendsAfterReady = provider.sends.size;
+      expect(
+        provider.creates.find((entry) => entry.label === "Multi Review · Consolidation")?.options,
+      ).toMatchObject({ mode: "build", readOnly: true });
 
       const releaseMessages = provider.blockMessages();
       const transcript = service.reviewerTranscript(started.id, reviewer.id);

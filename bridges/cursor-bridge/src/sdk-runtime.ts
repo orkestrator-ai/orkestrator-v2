@@ -12,15 +12,63 @@ import { cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
 
 const storeRoot = cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
 
+let platform: Promise<CursorAgentPlatform> | undefined;
+
 /**
  * One store instance must serve every static Agent API. Mixing stores would
  * make create succeed while list, resume or rewind looked somewhere else.
+ *
+ * The binding is reassignable for one reason: this module is a process-wide
+ * singleton evaluated exactly once, so a test that wants the real SDK writing
+ * under its own temporary root cannot get there by setting an environment
+ * variable — an earlier suite in the same process may already have evaluated
+ * this file, and its store would be the one every later import received.
  */
-export const cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(storeRoot);
+export let cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(storeRoot);
 
 Cursor.configure({ local: { store: cursorLocalAgentStore } });
 
-let platform: Promise<CursorAgentPlatform> | undefined;
+/**
+ * Point the whole runtime at another store, returning the one it replaced.
+ *
+ * The memoized platform is dropped with it: it captured the previous store at
+ * construction, and leaving it in place is exactly the split-brain the comment
+ * above warns about.
+ */
+export function useCursorLocalAgentStoreForTests(store: LocalAgentStore): LocalAgentStore {
+  const previous = cursorLocalAgentStore;
+  cursorLocalAgentStore = store;
+  Cursor.configure({ local: { store } });
+  platform = undefined;
+  return previous;
+}
+
+/**
+ * Agent.create reserves a queued first run, but only the returned SDK handle
+ * knows to consume it. Agent.resume loses that handle and tries to create a
+ * second run, which the store rejects as "already has active run".
+ *
+ * Only this exact unused reservation is replaceable. A queued follow-up, a
+ * starting run or a conversation checkpoint may represent dispatched work.
+ * Read failures propagate; they are not evidence that a session is unused.
+ */
+export async function hasUnusedInitialRun(agentId: string): Promise<boolean> {
+  const agent = await cursorLocalAgentStore.agents.get({ agentId });
+  if (!agent || agent.status !== "idle" || !agent.activeRunId || agent.latestCheckpoint) {
+    return false;
+  }
+  const run = await cursorLocalAgentStore.runs.get({ agentId, runId: agent.activeRunId });
+  return Boolean(
+    run &&
+    run.turnNumber === 1 &&
+    run.status === "queued" &&
+    run.requestId == null &&
+    run.startedAt == null &&
+    run.endedAt == null &&
+    run.startCheckpointRef == null &&
+    run.latestCheckpointRef == null,
+  );
+}
 
 async function agentPlatform(): Promise<CursorAgentPlatform> {
   const pending =

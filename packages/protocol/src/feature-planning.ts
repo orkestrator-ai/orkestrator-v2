@@ -11,6 +11,8 @@
  * timestamps and ids, and the renderer only reads.
  */
 
+import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+
 /* ------------------------------------------------------------------ *
  * Structural plan shapes
  *
@@ -112,8 +114,25 @@ When generating cards, use (include "id" only when reusing a story from a previo
 {"phase":"stories","title":"short feature name","summary":"confirmed feature summary","stories":[{"id":"existing-story-id-if-any","title":"story title","description":"one paragraph","acceptanceCriteria":["criterion"]}]}
 </feature_planner_state>`;
 
-export function createFeaturePlannerInitialPrompt(userMessage: string): string {
-  return `${FEATURE_PLANNER_SYSTEM_PROMPT}
+export const FEATURE_PLANNER_TOOL_SYSTEM_PROMPT = `You are the Orkestrator feature discovery agent.
+
+Your job is to collect enough information to create implementable user stories.
+
+Rules:
+- Start from the user's feature description and ask concise follow-up questions until the feature is clear enough to split into user stories.
+- Ask no more than 3 questions in one response.
+- Use read-only codebase inspection tools when existing implementation details would clarify the feature, such as searching or reading files.
+- When you have enough information, describe the feature exactly as the user has described it and ask for confirmation before generating user stories.
+- When the user confirms, generate user story cards with a title, one-paragraph description, and acceptance criteria.
+- Do not write code, edit files, or run mutating commands in this planning chat.
+- When you regenerate or revise stories from an earlier accepted state, reuse each story's exact "id" value. Only omit "id" for brand-new stories.
+- Submit the complete current planning state through the assigned workflow result tool, then respond conversationally without a state block.`;
+
+export function createFeaturePlannerInitialPrompt(
+  userMessage: string,
+  options: { toolMode?: boolean } = {},
+): string {
+  return `${options.toolMode ? FEATURE_PLANNER_TOOL_SYSTEM_PROMPT : FEATURE_PLANNER_SYSTEM_PROMPT}
 
 The user has started describing a new feature. Continue the discovery conversation.
 
@@ -124,6 +143,7 @@ ${userMessage}`;
 export function createFeaturePlannerResumePrompt(
   feature: FeaturePlannerFeature,
   userMessage: string,
+  options: { toolMode?: boolean } = {},
 ): string {
   const transcript = feature.messages
     .map(
@@ -138,7 +158,7 @@ export function createFeaturePlannerResumePrompt(
         .join("\n")}`
     : "";
 
-  return `${FEATURE_PLANNER_SYSTEM_PROMPT}
+  return `${options.toolMode ? FEATURE_PLANNER_TOOL_SYSTEM_PROMPT : FEATURE_PLANNER_SYSTEM_PROMPT}
 
 This is a resumed planning session. Use the persisted transcript below as the full source of conversation history, then respond to the latest user message.${existingStories}
 
@@ -160,6 +180,7 @@ export function selectFeaturePlannerPrompt(params: {
   userMessage: string;
   previousSessionId: string | null | undefined;
   sessionId: string;
+  toolMode?: boolean;
 }): string {
   const { feature, userMessage, previousSessionId, sessionId } = params;
   const isContinuingSameSession = !!previousSessionId && previousSessionId === sessionId;
@@ -167,13 +188,14 @@ export function selectFeaturePlannerPrompt(params: {
 
   const userMessageCount = feature.messages.filter((message) => message.role === "user").length;
   return userMessageCount <= 1
-    ? createFeaturePlannerInitialPrompt(userMessage)
-    : createFeaturePlannerResumePrompt(feature, userMessage);
+    ? createFeaturePlannerInitialPrompt(userMessage, { toolMode: params.toolMode })
+    : createFeaturePlannerResumePrompt(feature, userMessage, { toolMode: params.toolMode });
 }
 
 export function createStoryRefinementPrompt(
   story: FeaturePlannerStory,
   userMessage: string,
+  options: { toolMode?: boolean } = {},
 ): string {
   const transcript = story.messages
     .map(
@@ -193,21 +215,23 @@ ${story.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n") || "-
 Refinement chat so far:
 ${transcript || "No refinement messages yet."}
 
-Apply the user's requested refinement. Respond conversationally, then end with exactly one updated story block:
+${
+  options.toolMode
+    ? "Apply the user's requested refinement. Submit the complete updated story through the assigned workflow result tool, then respond conversationally without a state block."
+    : `Apply the user's requested refinement. Respond conversationally, then end with exactly one updated story block:
 
 <story_refinement>
 {"storyId":"${story.id}","title":"updated title","description":"updated one paragraph description","acceptanceCriteria":["updated criterion"]}
-</story_refinement>
+</story_refinement>`
+}
 
 User message:
 ${userMessage}`;
 }
 
-export function parseFeaturePlannerState(content: string): ParsedFeaturePlannerState | null {
-  const payload = singleTerminalStatePayload(content, FEATURE_STATE_BLOCK_RE);
-  if (payload === null) return null;
+export function parseFeaturePlannerStateValue(value: unknown): ParsedFeaturePlannerState | null {
   try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    const parsed = value as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
@@ -259,7 +283,25 @@ export function parseStoryRefinement(content: string): ParsedStoryRefinement | n
   const payload = singleTerminalStatePayload(content, STORY_STATE_BLOCK_RE);
   if (payload === null) return null;
   try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    return parseStoryRefinementValue(JSON.parse(payload));
+  } catch {
+    return null;
+  }
+}
+
+export function parseFeaturePlannerState(content: string): ParsedFeaturePlannerState | null {
+  const payload = singleTerminalStatePayload(content, FEATURE_STATE_BLOCK_RE);
+  if (payload === null) return null;
+  try {
+    return parseFeaturePlannerStateValue(JSON.parse(payload));
+  } catch {
+    return null;
+  }
+}
+
+export function parseStoryRefinementValue(value: unknown): ParsedStoryRefinement | null {
+  try {
+    const parsed = value as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
@@ -395,13 +437,19 @@ export const FEATURE_PLANNING_PHASES = [
   "dispatching",
   "running",
   "persisting",
+  "cancelling",
   "complete",
   "failed",
 ] as const;
 export type FeaturePlanningPhase = (typeof FEATURE_PLANNING_PHASES)[number];
 
 /** Phases the backend advances on its own. */
-export const FEATURE_PLANNING_ACTIVE_PHASES = ["dispatching", "running", "persisting"] as const;
+export const FEATURE_PLANNING_ACTIVE_PHASES = [
+  "dispatching",
+  "running",
+  "persisting",
+  "cancelling",
+] as const;
 export type ActiveFeaturePlanningPhase = (typeof FEATURE_PLANNING_ACTIVE_PHASES)[number];
 
 export const FEATURE_PLANNING_FAILURE_CODES = [
@@ -449,6 +497,10 @@ export interface FeaturePlanningRecord {
    */
   dispatchId?: string;
   requestId?: string;
+  /** Result channel selected when this attempt was admitted. */
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+  /** Bounded backend-projected delivery state for the tool-mode result slot. */
+  resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
   dispatchState?: "prepared" | "sent";
   /**
    * Assistant message ids present before dispatch. The reply is the newest
@@ -466,6 +518,8 @@ export interface FeaturePlanningRecord {
   responseModelId?: string;
   /** Set once the reply has been appended to the plan, before it is applied. */
   responseMessageId?: string;
+  /** Domain state was applied; only durable result consumption remains. */
+  resultAppliedAt?: string;
   failure?: FeaturePlanningFailure;
   /** Start of the current retry attempt; reset whenever a failed exchange retries. */
   attemptStartedAt?: string;
@@ -578,6 +632,20 @@ export function isFeaturePlanningRecord(value: unknown): value is FeaturePlannin
     return false;
   }
   if (
+    candidate.resultTransport !== undefined &&
+    candidate.resultTransport !== "tool-v1" &&
+    candidate.resultTransport !== "structured-output-v1" &&
+    candidate.resultTransport !== "planner-block-v1"
+  ) {
+    return false;
+  }
+  if (
+    candidate.resultSubmission !== undefined &&
+    !isWorkflowResultSubmissionState(candidate.resultSubmission)
+  ) {
+    return false;
+  }
+  if (
     candidate.dispatchState !== undefined &&
     candidate.dispatchState !== "prepared" &&
     candidate.dispatchState !== "sent"
@@ -606,6 +674,7 @@ export function isFeaturePlanningRecord(value: unknown): value is FeaturePlannin
   return (
     isOptionalIsoTimestamp(candidate.attemptStartedAt) &&
     isOptionalIsoTimestamp(candidate.dispatchedAt) &&
+    isOptionalIsoTimestamp(candidate.resultAppliedAt) &&
     isIsoTimestamp(candidate.startedAt) &&
     isIsoTimestamp(candidate.updatedAt) &&
     typeof candidate.backendRevision === "number" &&

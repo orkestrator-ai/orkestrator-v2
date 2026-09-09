@@ -18,6 +18,7 @@ import {
   type AgentInteractionProvider,
   type AgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
+import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -306,6 +307,10 @@ export interface PipelineSession {
   turnStartedAt?: string;
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
+  /** Result channel selected when this session's structured attempt was admitted. */
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+  /** Bounded backend-projected delivery state for the tool-mode result slot. */
+  resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
   /**
    * Accepted report produced by this review session.
    *
@@ -446,6 +451,7 @@ export interface PipelineFailureContext {
   useTaskImages?: boolean;
   requestId?: string;
   structuredReview?: boolean;
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
 }
 
 export interface PipelineReconnectAttempt extends PipelineFailureContext {
@@ -475,6 +481,7 @@ export interface PipelinePromptAttempt {
   prompt: string;
   useTaskImages: boolean;
   structuredReview?: boolean;
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
   startedAt: string;
 }
 
@@ -525,6 +532,8 @@ export interface BuildPipeline {
   reconnectAttempt?: PipelineReconnectAttempt;
   pendingPromptAttempt?: PipelinePromptAttempt;
   activePromptContext?: PipelineFailureContext;
+  /** Accepted result keys whose domain transition is durable but consumption is pending. */
+  pendingResultConsumptions?: string[];
   /** One exact-once interaction currently crossing the provider boundary. */
   pendingInteractionResolution?: PendingPipelineInteractionResolution;
   /** Content-free totals across every stage attempt in this pipeline/ticket. */
@@ -846,6 +855,11 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.messagesPersistedAt === undefined || isIsoDate(value.messagesPersistedAt)) &&
     (value.turnStartedAt === undefined || isIsoDate(value.turnStartedAt)) &&
     isOptionalNonBlankString(value.structuredRequestId) &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
+    (value.resultSubmission === undefined ||
+      isWorkflowResultSubmissionState(value.resultSubmission)) &&
     (value.reviewReport === undefined ||
       (value.phase === "review" && isStructuredReviewReport(value.reviewReport))) &&
     (value.structuredResultStatus === undefined ||
@@ -1027,6 +1041,9 @@ function isFailureContext(value: unknown): value is PipelineFailureContext {
     (value.useTaskImages === undefined || typeof value.useTaskImages === "boolean") &&
     isOptionalNonBlankString(value.requestId) &&
     (value.structuredReview === undefined || typeof value.structuredReview === "boolean") &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
     (value.validationPlan === undefined || typeof value.validationPlan === "boolean")
   );
 }
@@ -1050,6 +1067,9 @@ function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
     typeof value.prompt === "string" &&
     typeof value.useTaskImages === "boolean" &&
     (value.structuredReview === undefined || typeof value.structuredReview === "boolean") &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
     (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
     isIsoDate(value.startedAt)
   );
@@ -1111,6 +1131,12 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     (value.reconnectAttempt !== undefined && !isReconnectAttempt(value.reconnectAttempt)) ||
     (value.pendingPromptAttempt !== undefined && !isPromptAttempt(value.pendingPromptAttempt)) ||
     (value.activePromptContext !== undefined && !isFailureContext(value.activePromptContext)) ||
+    (value.pendingResultConsumptions !== undefined &&
+      (!Array.isArray(value.pendingResultConsumptions) ||
+        value.pendingResultConsumptions.length > 64 ||
+        !value.pendingResultConsumptions.every(
+          (key) => isNonBlankString(key) && key.length <= 512,
+        ))) ||
     (value.pendingInteractionResolution !== undefined &&
       !isPendingPipelineInteractionResolution(value.pendingInteractionResolution)) ||
     (value.interactionSummary !== undefined &&

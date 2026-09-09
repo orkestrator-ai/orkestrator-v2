@@ -49,6 +49,7 @@ import {
 } from "./multi-review-address-dispatch.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 
 const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 const REVIEW_FINGERPRINT = "a".repeat(64);
@@ -1866,6 +1867,7 @@ async function withService(
     storage: StorageService;
     start: (reviewers?: MultiReviewModelSelection[]) => Promise<MultiReviewWorkflow>;
     snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>;
+    workflowResults?: WorkflowResultService;
   }) => Promise<void>,
   options: {
     packageFlow?: boolean;
@@ -1873,6 +1875,7 @@ async function withService(
     serviceOptions?: Partial<MultiReviewServiceOptions>;
     /** Backend command runner; defaults to a stable clean review snapshot. */
     invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+    toolMode?: boolean;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), `ork-multi-review-${environmentId}-`));
@@ -1895,15 +1898,26 @@ async function withService(
     worktreePath: "/tmp/review",
     setupScriptsComplete: true,
   });
+  const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
   const service = new MultiReviewService(storage, options.invoke ?? stableReviewInvoker, {
     autoAdvance: false,
     provider: options.createProvider ?? (async () => provider),
+    ...(workflowResults
+      ? {
+          workflowResults,
+          resolveAgentToolConnection: () => ({
+            url: "http://127.0.0.1:1234/mcp",
+            token: "test-token",
+          }),
+        }
+      : {}),
     ...options.serviceOptions,
   });
   try {
     await run({
       service,
       storage,
+      workflowResults,
       start: (reviewers = [{ agent: "claude", model: "opus" }]) =>
         (options.packageFlow
           ? service.start.bind(service)
@@ -1936,6 +1950,65 @@ async function waitUntil(
     await Bun.sleep(10);
   }
 }
+
+test("MultiReviewService uses and consumes tool-mode reviewer and consolidation slots", async () => {
+  const provider = new Provider(false);
+  await withService(
+    "env-tool-results",
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return Boolean((await snapshot(started.id))?.reviewers[0]?.requestId);
+      });
+      let current = (await snapshot(started.id))!;
+      const reviewerRequestId = current.reviewers[0]!.requestId!;
+      expect(current.reviewers[0]?.resultTransport).toBe("tool-v1");
+
+      await workflowResults!.submit(
+        { environmentId: "env-tool-results", projectId: "project-1" },
+        reviewerRequestId,
+        cleanReport,
+      );
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.status === "completed";
+      });
+      current = (await snapshot(started.id))!;
+      expect(current.reviewers[0]?.status).toBe("completed");
+      expect(
+        await workflowResults!.status(
+          { environmentId: "env-tool-results", projectId: "project-1" },
+          reviewerRequestId,
+        ),
+      ).toMatchObject({ lifecycle: "consumed" });
+
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.activeRequest?.kind === "consolidate";
+      });
+      current = (await snapshot(started.id))!;
+      const consolidationRequestId = current.activeRequest!.requestId;
+      expect(current.activeRequest?.resultTransport).toBe("tool-v1");
+      await workflowResults!.submit(
+        { environmentId: "env-tool-results", projectId: "project-1" },
+        consolidationRequestId,
+        cleanReport,
+      );
+      await service.advanceNow(started.id);
+
+      expect((await snapshot(started.id))?.phase).toBe("ready");
+      expect(
+        await workflowResults!.status(
+          { environmentId: "env-tool-results", projectId: "project-1" },
+          consolidationRequestId,
+        ),
+      ).toMatchObject({ lifecycle: "consumed" });
+    },
+    { toolMode: true },
+  );
+});
 
 async function mutateStoredWorkflow(
   storage: StorageService,

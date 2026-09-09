@@ -11,13 +11,19 @@ import {
   isStartFeaturePlanningInput,
   isTerminalFeaturePlanningPhase,
   parseFeaturePlannerState,
+  parseFeaturePlannerStateValue,
   parseStoryRefinement,
+  parseStoryRefinementValue,
   selectFeaturePlannerPrompt,
   type ActiveFeaturePlanningPhase,
   type FeaturePlanningFailureCode,
   type FeaturePlanningRecord,
   type StartFeaturePlanningInput,
 } from "@orkestrator/protocol/feature-planning";
+import {
+  workflowResultInstruction,
+  type WorkflowResultKind,
+} from "@orkestrator/protocol/workflow-results";
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
@@ -31,6 +37,9 @@ import {
   type StorageService,
 } from "./storage.js";
 import type { Environment } from "./models.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -162,6 +171,14 @@ export interface FeaturePlanningServiceOptions {
   idleWithoutReplyMs?: number;
   /** Test seam; production builds a codex provider per environment. */
   provider?: (environmentId: string) => Promise<BuildPipelineProvider>;
+  workflowResults?: WorkflowResultService;
+  workflowResultRollout?: WorkflowResultRollout;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKey: string,
+  ) => AgentToolConnection;
 }
 
 /**
@@ -175,6 +192,14 @@ export interface FeaturePlanningServiceOptions {
  * applied to the plan.
  */
 export class FeaturePlanningService {
+  private cachedWorkflowRollout: WorkflowResultRollout | null = null;
+
+  private get workflowRollout(): WorkflowResultRollout {
+    this.cachedWorkflowRollout ??=
+      this.options.workflowResultRollout ?? new WorkflowResultRollout(async () => undefined);
+    return this.cachedWorkflowRollout;
+  }
+
   private readonly locks = new Map<string, Promise<void>>();
   private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
@@ -288,6 +313,9 @@ export class FeaturePlanningService {
     if (!record) throw new Error("There is no planning request to retry");
     if (record.phase !== "failed") return record;
     const retryPhase = record.failure?.retryPhase ?? "dispatching";
+    if (retryPhase === "dispatching" && record.resultTransport === "tool-v1" && record.requestId) {
+      await this.options.workflowResults?.close(record.requestId, "superseded");
+    }
     await this.storage.mutateFeaturePlanning(featureId, record.operationId, (_plan, current) => {
       current.phase = retryPhase;
       delete current.failure;
@@ -329,7 +357,15 @@ export class FeaturePlanningService {
         if (!current || current.operationId !== record.operationId) return;
         await this.abortForCancellation(current);
         this.idleSince.delete(featureId);
-        await this.storage.clearFeaturePlanning(featureId, current.operationId);
+        await this.storage.mutateFeaturePlanning(
+          featureId,
+          current.operationId,
+          (_plan, candidate) => {
+            candidate.phase = "cancelling";
+          },
+        );
+        const cancelling = await this.read(featureId);
+        if (cancelling) await this.finalizeCancellation(cancelling);
       });
     } finally {
       if (this.cancellationRequests.get(featureId) === record.operationId) {
@@ -416,6 +452,7 @@ export class FeaturePlanningService {
   private async advance(featureId: string): Promise<void> {
     const record = await this.read(featureId);
     if (!record || !isActiveFeaturePlanningPhase(record.phase)) return;
+    if (record.phase === "cancelling") return await this.finalizeCancellation(record);
     if (await this.clearIfCancellationRequested(record)) return;
     if (record.phase === "dispatching") return await this.runDispatch(record);
     if (record.phase === "running") return await this.runAwaitReply(record);
@@ -462,7 +499,16 @@ export class FeaturePlanningService {
         this.messages(provider, sessionId),
       ),
     );
-    const prompt = this.buildPrompt(plan, record, sessionId, session.created);
+    const plannedResultKind: WorkflowResultKind =
+      record.kind === "story" ? "story-refinement" : "feature-plan-state";
+    await this.workflowRollout.refresh();
+    const toolMode =
+      this.options.workflowResults !== undefined &&
+      this.options.resolveAgentToolConnection !== undefined &&
+      // Planning always runs on Codex; the gate still names it explicitly so a
+      // rollout change can disable planning without touching this call site.
+      this.workflowRollout.allows("codex", plannedResultKind);
+    const prompt = this.buildPrompt(plan, record, sessionId, session.created, toolMode);
     const requestId = randomUUID();
     const dispatchId = randomUUID();
     // Recorded before the send, so a crash between the two is resolved by
@@ -470,16 +516,40 @@ export class FeaturePlanningService {
     await this.update(record, (_current, current) => {
       current.dispatchId = dispatchId;
       current.requestId = requestId;
+      current.resultTransport = toolMode ? "tool-v1" : "planner-block-v1";
+      if (toolMode) current.resultSubmission = "preparing";
+      else delete current.resultSubmission;
       current.dispatchState = "prepared";
       current.baselineAssistantIds = baseline;
       current.providerSessionId = sessionId;
     });
+    const resultKind = plannedResultKind;
+    if (toolMode && this.options.workflowResults) {
+      await this.options.workflowResults.prepare({
+        resultKey: requestId,
+        kind: resultKind,
+        environmentId: environment.id,
+        projectId: record.projectId,
+        provider: "codex",
+        ...(record.storyId ? { expectedStoryId: record.storyId } : {}),
+      });
+    }
     if (await this.clearIfCancellationRequested(record)) return;
     try {
       // Fast mode is deliberately not forced here. It is a per-session choice
       // the user makes in the model picker, not a stored default a background
       // planning turn should apply on their behalf.
-      await provider.send(sessionId, prompt, { requestId, mode: "plan" });
+      // Only a tool-mode attempt has a prepared slot. Handing the capability to
+      // a legacy dispatch would offer a second result channel for a turn whose
+      // transport was already decided.
+      const agentMcp = toolMode
+        ? this.agentMcp(environment, record.projectId, requestId)
+        : undefined;
+      await provider.send(
+        sessionId,
+        toolMode ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId)}` : prompt,
+        { requestId, mode: "plan", ...(agentMcp ? { agentMcp } : {}) },
+      );
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) {
         await this.evictProvider(environment.id, provider);
@@ -530,6 +600,23 @@ export class FeaturePlanningService {
     const messages = await this.providerOperation(record.environmentId, provider, () =>
       this.messages(provider, record.providerSessionId!),
     );
+    const toolAccepted =
+      record.resultTransport === "tool-v1" && record.requestId
+        ? await this.options.workflowResults?.structured(record.requestId)
+        : null;
+    if (record.resultTransport === "tool-v1" && record.requestId) {
+      const projected = await this.options.workflowResults?.projection(record.requestId);
+      if (projected !== record.resultSubmission) {
+        await this.update(record, (_plan, current) => {
+          if (projected) current.resultSubmission = projected;
+          else delete current.resultSubmission;
+        });
+        // The helper writes through storage without refreshing this copy, and
+        // the copy is what the next comparison reads.
+        if (projected) record.resultSubmission = projected;
+        else delete record.resultSubmission;
+      }
+    }
     const reply =
       record.kind === "story"
         ? // A story refinement only counts once the state block is present;
@@ -537,13 +624,15 @@ export class FeaturePlanningService {
           latestAssistantReply(
             messages,
             baseline,
-            (content) => {
-              const parsed = parseStoryRefinement(content);
-              return (
-                parsed !== null &&
-                (parsed.storyId === undefined || parsed.storyId === record.storyId)
-              );
-            },
+            record.resultTransport === "tool-v1"
+              ? undefined
+              : (content) => {
+                  const parsed = parseStoryRefinement(content);
+                  return (
+                    parsed !== null &&
+                    (parsed.storyId === undefined || parsed.storyId === record.storyId)
+                  );
+                },
             record.requestId ? undefined : record.startedAt,
           )
         : latestAssistantReply(
@@ -553,11 +642,19 @@ export class FeaturePlanningService {
             record.requestId ? undefined : record.startedAt,
           );
 
-    if (reply && activity === "idle") {
+    if (reply && activity === "idle" && (record.resultTransport !== "tool-v1" || toolAccepted)) {
       this.idleSince.delete(record.featureId);
       await this.update(record, (_plan, current) => {
         current.rawResponse = boundRawResponse(reply.content);
         if (reply.modelId) current.responseModelId = reply.modelId;
+        current.phase = "persisting";
+      });
+      return;
+    }
+    if (!reply && activity === "idle" && toolAccepted) {
+      this.idleSince.delete(record.featureId);
+      await this.update(record, (_plan, current) => {
+        current.rawResponse = "Planning result submitted.";
         current.phase = "persisting";
       });
       return;
@@ -594,6 +691,12 @@ export class FeaturePlanningService {
    * which is what makes a replay idempotent.
    */
   private async runPersist(record: FeaturePlanningRecord): Promise<void> {
+    if (record.resultTransport === "tool-v1" && record.requestId && record.resultAppliedAt) {
+      await this.options.workflowResults?.consume(record.requestId);
+      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+      this.idleSince.delete(record.featureId);
+      return;
+    }
     const raw = record.rawResponse;
     if (!raw) {
       throw new DefiniteFeaturePlanningError(
@@ -614,8 +717,17 @@ export class FeaturePlanningService {
       if (!refreshed) return;
       record = refreshed;
     }
-    const parsed =
-      record.kind === "story" ? parseStoryRefinement(raw) : parseFeaturePlannerState(raw);
+    const toolResult =
+      record.resultTransport === "tool-v1" && record.requestId
+        ? await this.options.workflowResults?.structured(record.requestId)
+        : null;
+    const parsed = toolResult?.ok
+      ? record.kind === "story"
+        ? parseStoryRefinementValue(toolResult.value)
+        : parseFeaturePlannerStateValue(toolResult.value)
+      : record.kind === "story"
+        ? parseStoryRefinement(raw)
+        : parseFeaturePlannerState(raw);
     if (!parsed) {
       // The reply is on the plan and on the record. Only the structured half
       // failed, so this stops for a user decision without losing anything.
@@ -627,14 +739,22 @@ export class FeaturePlanningService {
           : "The reply did not contain a feature planner state block",
       );
     }
-    // Applying the state block and detaching the record are one write: a
-    // `complete` record left attached by a crash between two writes would sit
-    // on the plan forever, since nothing sweeps terminal records.
+    // Tool-mode settlement deliberately retains the record as a durable
+    // consumption outbox. A restart can see resultAppliedAt, skip reapplying
+    // the domain transition, consume idempotently, and then detach it.
     await this.update(record, (plan, current) => {
-      if (current.kind === "story") this.applyStoryRefinement(plan, current);
-      else this.applyFeaturePlannerState(plan, current);
-      delete plan.planning;
+      if (current.kind === "story") this.applyStoryRefinement(plan, current, parsed);
+      else this.applyFeaturePlannerState(plan, current, parsed);
+      if (current.resultTransport === "tool-v1" && current.requestId) {
+        current.resultAppliedAt = nowIso();
+      } else {
+        delete plan.planning;
+      }
     });
+    if (record.resultTransport === "tool-v1" && record.requestId) {
+      await this.options.workflowResults?.consume(record.requestId);
+      await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+    }
     this.idleSince.delete(record.featureId);
   }
 
@@ -699,8 +819,11 @@ export class FeaturePlanningService {
     return undefined;
   }
 
-  private applyFeaturePlannerState(plan: FeaturePlan, record: FeaturePlanningRecord): void {
-    const parsed = parseFeaturePlannerState(record.rawResponse ?? "");
+  private applyFeaturePlannerState(
+    plan: FeaturePlan,
+    record: FeaturePlanningRecord,
+    parsed = parseFeaturePlannerState(record.rawResponse ?? ""),
+  ): void {
     if (!parsed) return;
     // A plan that has moved on to building must not be dragged back to an
     // earlier planning status by a reply that was in flight when it started.
@@ -721,8 +844,11 @@ export class FeaturePlanningService {
     this.resolveStateApplications(plan, record, preserveLaterBuildState ? "superseded" : "applied");
   }
 
-  private applyStoryRefinement(plan: FeaturePlan, record: FeaturePlanningRecord): void {
-    const parsed = parseStoryRefinement(record.rawResponse ?? "");
+  private applyStoryRefinement(
+    plan: FeaturePlan,
+    record: FeaturePlanningRecord,
+    parsed = parseStoryRefinement(record.rawResponse ?? ""),
+  ): void {
     const story = plan.stories.find((candidate) => candidate.id === record.storyId);
     if (!parsed) return;
     if (!story) {
@@ -879,11 +1005,26 @@ export class FeaturePlanningService {
     return { sessionId: created, created: true };
   }
 
+  private agentMcp(
+    environment: Environment | null,
+    projectId: string,
+    resultKey: string,
+  ): AgentToolConnection | undefined {
+    if (!environment || !this.options.resolveAgentToolConnection) return undefined;
+    return this.options.resolveAgentToolConnection(
+      environment.id,
+      projectId,
+      environment.environmentType === "local" ? "host" : "container",
+      resultKey,
+    );
+  }
+
   private buildPrompt(
     plan: FeaturePlan,
     record: FeaturePlanningRecord,
     sessionId: string,
     createdSession: boolean,
+    toolMode: boolean,
   ): string {
     if (record.kind === "story") {
       const story = plan.stories.find((candidate) => candidate.id === record.storyId);
@@ -899,6 +1040,7 @@ export class FeaturePlanningService {
         // the transcript that preceded it.
         { ...story, messages: story.messages.filter((entry) => entry.id !== record.userMessageId) },
         record.userMessage,
+        { toolMode },
       );
     }
     return selectFeaturePlannerPrompt({
@@ -911,6 +1053,7 @@ export class FeaturePlanningService {
       // this exchange has to be given the transcript.
       previousSessionId: createdSession ? null : sessionId,
       sessionId,
+      toolMode,
     });
   }
 
@@ -934,7 +1077,10 @@ export class FeaturePlanningService {
       environment.environmentType === "local"
         ? await this.localConnection(environment)
         : await this.containerConnection(environment);
-    const provider = createBuildPipelineProvider(connection, { autoAnswerRequests: false });
+    const provider = createBuildPipelineProvider(connection, {
+      autoAnswerRequests: false,
+      workflowResults: this.options.workflowResults,
+    });
     this.providers.set(environmentId, provider);
     return provider;
   }
@@ -1013,8 +1159,23 @@ export class FeaturePlanningService {
     if (this.cancellationRequests.get(record.featureId) !== record.operationId) return false;
     await this.abortForCancellation(record, provider, sessionId);
     this.idleSince.delete(record.featureId);
-    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+    await this.storage.mutateFeaturePlanning(
+      record.featureId,
+      record.operationId,
+      (_plan, current) => {
+        current.phase = "cancelling";
+      },
+    );
+    const cancelling = await this.read(record.featureId);
+    if (cancelling) await this.finalizeCancellation(cancelling);
     return true;
+  }
+
+  private async finalizeCancellation(record: FeaturePlanningRecord): Promise<void> {
+    if (record.resultTransport === "tool-v1" && record.requestId) {
+      await this.options.workflowResults?.close(record.requestId, "cancelled");
+    }
+    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
   }
 
   private async abortForCancellation(

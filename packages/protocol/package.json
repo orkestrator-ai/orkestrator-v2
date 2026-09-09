@@ -47,6 +47,7 @@
     "./ssh-agent-socket": "./src/ssh-agent-socket.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
+    "./workflow-results": "./src/workflow-results.ts",
     "./task-list": "./src/task-list.ts",
     "./tab-teardown": "./src/tab-teardown.ts",
     "./terminal-agent-launch": "./src/terminal-agent-launch.ts",

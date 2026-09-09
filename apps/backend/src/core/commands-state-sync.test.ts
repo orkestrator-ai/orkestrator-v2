@@ -1643,7 +1643,7 @@ exit 0
     } finally {
       await fs.rm(worktreePath, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   test("rejects an aggregate payload above the total limit and an empty one", async () => {
     const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-size-"));

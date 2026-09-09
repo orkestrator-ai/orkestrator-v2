@@ -1,4 +1,5 @@
 import { ReviewValidationStatus } from "../review/ReviewValidationStatus";
+import { WorkflowResultStatus } from "../review/WorkflowResultStatus";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -693,6 +694,19 @@ export function BuildChatTab({
             <span aria-hidden="true">·</span>
             <span className="truncate capitalize">{displayedAgent}</span>
           </div>
+          {selectedSession?.resultSubmission && (
+            <WorkflowResultStatus
+              state={selectedSession.resultSubmission}
+              kind={
+                selectedSession.phase === "review"
+                  ? "review-report"
+                  : selectedSession.phase === "verify"
+                    ? "verification-result"
+                    : "review-preparation"
+              }
+              className="mt-0.5"
+            />
+          )}
         </div>
         {headerControls.length > 0 && (
           <div

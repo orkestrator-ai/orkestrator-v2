@@ -29,6 +29,7 @@ import {
   type ReviewerStatus,
   type ReviewWorktreeSnapshotRecord,
 } from "./review-fanout.js";
+import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
@@ -250,6 +251,9 @@ export interface MultiReviewWorkflow {
     kind: MultiReviewStepKind;
     requestId: string;
     state: "prepared" | "dispatching" | "sent";
+    resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+    /** Bounded backend-projected delivery state for the tool-mode result slot. */
+    resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
     createdAt: string;
     /** Durable correction turn for a rejected consolidated report. */
     schemaRepairAttempts?: number;
@@ -258,6 +262,8 @@ export interface MultiReviewWorkflow {
     /** Bounded terminal polls while the provider finalizes cumulative usage. */
     usageFinalizationPolls?: number;
   };
+  /** Accepted result keys whose domain transition is durable but consumption is pending. */
+  pendingResultConsumptions?: string[];
   cancellingSince?: string;
   error?: string;
   createdAt: string;
@@ -509,6 +515,8 @@ function isActiveRequest(
       "kind",
       "requestId",
       "state",
+      "resultTransport",
+      "resultSubmission",
       "createdAt",
       "schemaRepairAttempts",
       "schemaRepairPrompt",
@@ -518,6 +526,11 @@ function isActiveRequest(
     MULTI_REVIEW_STEP_KINDS.includes(value.kind as MultiReviewStepKind) &&
     nonBlank(value.requestId) &&
     (value.state === "prepared" || value.state === "dispatching" || value.state === "sent") &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
+    (value.resultSubmission === undefined ||
+      isWorkflowResultSubmissionState(value.resultSubmission)) &&
     typeof value.createdAt === "string" &&
     Number.isFinite(Date.parse(value.createdAt)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
@@ -603,6 +616,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "fixTabId",
       "presentationError",
       "activeRequest",
+      "pendingResultConsumptions",
       "cancellingSince",
       "error",
       "createdAt",
@@ -641,6 +655,10 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
         value.reviewPackage.targetBranch !== value.targetBranch)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
+    (value.pendingResultConsumptions !== undefined &&
+      (!Array.isArray(value.pendingResultConsumptions) ||
+        value.pendingResultConsumptions.length > 64 ||
+        !value.pendingResultConsumptions.every((key) => nonBlank(key)))) ||
     !optionalDate(value.cancellingSince) ||
     (value.fixResult !== undefined && !isFixResult(value.fixResult)) ||
     (value.addressPromptPending !== undefined && typeof value.addressPromptPending !== "boolean") ||

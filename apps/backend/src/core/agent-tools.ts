@@ -9,6 +9,8 @@ import {
   registerAgentMessagingTools,
   type AgentMessagingRateLimitKind,
 } from "./agent-tools-messaging.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import { registerWorkflowResultTools } from "./workflow-result-tools.js";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
 const MAX_TITLE_LENGTH = 500;
@@ -36,6 +38,7 @@ export type AgentToolScope = {
   environmentId: string;
   projectId: string;
   tabId?: string;
+  workflowResultKey?: string;
 };
 
 type StoredCredential = AgentToolScope & {
@@ -70,7 +73,7 @@ function credentialDigest(token: string): string {
 function bearerToken(request: IncomingMessage): string | null {
   const authorization = request.headers.authorization;
   if (!authorization || Array.isArray(authorization)) return null;
-  const match = /^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(authorization);
+  const match = /^Bearer ([A-Za-z0-9_.-]{32,2048})$/.exec(authorization);
   return match?.[1] ?? null;
 }
 
@@ -234,7 +237,30 @@ async function createAgentToolServer(
   storage: StorageService,
   scope: AgentToolScope,
   consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
+  workflowResults?: WorkflowResultService,
 ): Promise<McpServer> {
+  if (scope.workflowResultKey) {
+    const server = new McpServer(
+      { name: "orkestrator-workflow-result", version: "1.0.0" },
+      {
+        instructions:
+          "Use these tools only to submit or check the result assigned to this workflow attempt.",
+      },
+    );
+    if (!workflowResults) throw new Error("Workflow result tools are unavailable");
+    const callerScope = {
+      environmentId: scope.environmentId,
+      projectId: scope.projectId,
+    };
+    const binding = await workflowResults.binding(callerScope, scope.workflowResultKey);
+    if (!binding) throw new Error("Workflow result capability is unavailable");
+    registerWorkflowResultTools(server, workflowResults, {
+      ...callerScope,
+      workflowResultKey: scope.workflowResultKey,
+      kind: binding.kind,
+    });
+    return server;
+  }
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
   const messagingScope = messagingEnabled ? scope : null;
   let messagingInstructions = "";
@@ -442,11 +468,13 @@ export class AgentToolsServer {
   constructor(
     private readonly storage: StorageService,
     private readonly bindAddress = "0.0.0.0",
+    private readonly workflowResults?: WorkflowResultService,
   ) {}
 
   async start(): Promise<void> {
     const start = this.lifecycle.then(async () => {
       if (this.server) return;
+      await this.workflowResults?.initializeCapabilityIdentity();
       const server = createServer((request, response) => {
         void this.handle(request, response).catch((error: unknown) => {
           if (!response.headersSent) {
@@ -459,17 +487,31 @@ export class AgentToolsServer {
         });
       });
 
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, this.bindAddress, () => {
-          server.off("error", reject);
-          resolve();
+      const listen = (port: number) =>
+        new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(port, this.bindAddress, () => {
+            server.off("error", reject);
+            resolve();
+          });
         });
-      });
+      const preferredPort = this.workflowResults?.capabilityPort() ?? 0;
+      try {
+        await listen(preferredPort);
+      } catch (error) {
+        if (preferredPort === 0 || (error as { code?: unknown }).code !== "EADDRINUSE") throw error;
+        await listen(0);
+      }
       const address = server.address();
       if (!address || typeof address === "string") {
         await new Promise<void>((resolve) => server.close(() => resolve()));
         throw new Error("Agent tools server did not receive a TCP port");
+      }
+      try {
+        await this.workflowResults?.recordCapabilityPort(address.port);
+      } catch (error) {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        throw error;
       }
       this.server = server;
       this.port = address.port;
@@ -516,6 +558,22 @@ export class AgentToolsServer {
     };
   }
 
+  workflowResultConnection(
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKey: string,
+  ): AgentToolConnection {
+    if (!this.server || !this.port) throw new Error("Agent tools server is not running");
+    if (!this.workflowResults) throw new Error("Workflow result tools are unavailable");
+    const token = this.workflowResults.capabilityToken({ environmentId, projectId }, resultKey);
+    const hostname = target === "container" ? "host.docker.internal" : "127.0.0.1";
+    return {
+      url: `http://${hostname}:${this.port}${AGENT_MCP_PATH}`,
+      token,
+    };
+  }
+
   revokeEnvironment(environmentId: string): void {
     for (const [key, credential] of Array.from(this.credentialsByEnvironment)) {
       if (credential.environmentId !== environmentId) continue;
@@ -549,10 +607,12 @@ export class AgentToolsServer {
     await stop;
   }
 
-  private authenticate(request: IncomingMessage): AgentToolScope | null {
+  private async authenticate(request: IncomingMessage): Promise<AgentToolScope | null> {
     const token = bearerToken(request);
     if (!token) return null;
-    return this.scopesByDigest.get(credentialDigest(token)) ?? null;
+    const processScope = this.scopesByDigest.get(credentialDigest(token));
+    if (processScope) return processScope;
+    return (await this.workflowResults?.authenticateCapability(token)) ?? null;
   }
 
   private consumeMailRateLimit(scope: AgentToolScope, kind: AgentMessagingRateLimitKind): void {
@@ -574,7 +634,7 @@ export class AgentToolsServer {
       return;
     }
 
-    const scope = this.authenticate(request);
+    const scope = await this.authenticate(request);
     if (!scope) {
       jsonResponse(
         response,
@@ -606,8 +666,11 @@ export class AgentToolsServer {
     // fallback. Both paths create an isolated tool server for this request.
     const handler = createMcpHandler(
       () =>
-        createAgentToolServer(this.storage, scope, (kind) =>
-          this.consumeMailRateLimit(scope, kind),
+        createAgentToolServer(
+          this.storage,
+          scope,
+          (kind) => this.consumeMailRateLimit(scope, kind),
+          this.workflowResults,
         ),
       { legacy: "stateless" },
     );

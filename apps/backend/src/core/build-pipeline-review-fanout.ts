@@ -45,7 +45,13 @@ import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
 } from "@orkestrator/protocol/structured-review";
-import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  workflowResultInstruction,
+  type WorkflowResultKind,
+} from "@orkestrator/protocol/workflow-results";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   AmbiguousPromptDispatchError,
   readProviderStatus,
@@ -62,6 +68,7 @@ import {
   consolidationReports,
   createReviewConsolidationPrompt,
   deriveConsolidatedProvenance,
+  consolidationResultContext,
   parseStructuredReportResult,
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
@@ -105,6 +112,10 @@ export interface BuildPipelineReviewFanoutDeps {
   progress: MultiReviewProgressTracker;
   stallWarningMs?: number;
   stallAbandonMs?: number;
+  workflowResults?: WorkflowResultService;
+  /** Backend-owned admission gate, evaluated once per attempt. */
+  workflowToolEnabled?(agent: ReviewerRecord["agent"], kind: WorkflowResultKind): boolean;
+  agentMcp?(pipeline: BuildPipeline, resultKey: string): AgentToolConnection | undefined;
 }
 
 /** What the supervisor should do after one fan-out pass. */
@@ -178,6 +189,44 @@ export class BuildPipelineReviewFanout {
       sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
       sessionLabelFor: (_reviewer, index) => `Review ${index + 1}`,
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
+      agentMcp: async (_selection, resultKey) => this.deps.agentMcp?.(pipeline, resultKey),
+      ...(this.deps.workflowResults && this.deps.agentMcp
+        ? {
+            supportsToolResult: (selection: ReviewerRecord) =>
+              this.deps.workflowToolEnabled?.(selection.agent, "review-report") ?? false,
+            prepareResult: async (
+              selection: ReviewerRecord,
+              requestId: string,
+              schema: JsonSchema,
+            ) =>
+              this.deps.workflowResults!.prepare({
+                resultKey: requestId,
+                kind: "review-report",
+                environmentId: pipeline.environmentId,
+                projectId: pipeline.projectId,
+                provider: selection.agent,
+                schema,
+              }),
+            projectResult: (requestId: string) => this.deps.workflowResults!.projection(requestId),
+            readResult: <T>(requestId: string) =>
+              this.deps.workflowResults!.structured<T>(requestId),
+            consumeResult: (requestId: string) => this.deps.workflowResults!.consume(requestId),
+            stageResultConsumption: (requestId: string) => {
+              pipeline.pendingResultConsumptions = Array.from(
+                new Set([...(pipeline.pendingResultConsumptions ?? []), requestId]),
+              );
+            },
+            finishResultConsumption: (requestId: string) => {
+              const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+                (candidate) => candidate !== requestId,
+              );
+              if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+              else delete pipeline.pendingResultConsumptions;
+            },
+            closeResult: (requestId: string) =>
+              this.deps.workflowResults!.close(requestId, "superseded"),
+          }
+        : {}),
       save: () => this.deps.save(pipeline),
       // The pipeline has no controller lease of its own: the supervisor holds
       // the pipeline lock for the whole pass, so there is no fence to lose
@@ -328,6 +377,21 @@ export class BuildPipelineReviewFanout {
   /**
    * Merges the reviewer reports on the same model that prepared their package.
    */
+  /**
+   * Reads the accepted consolidated report and refreshes the projected
+   * delivery state on the same poll, so a renderer rehydrating from the
+   * snapshot sees a status the controller wrote.
+   */
+  private async readConsolidationResult(
+    consolidation: NonNullable<ReviewFanoutState["consolidation"]>,
+  ): Promise<StructuredOutputResult<unknown> | null> {
+    if (!this.deps.workflowResults) return null;
+    consolidation.resultSubmission = await this.deps.workflowResults.projection(
+      consolidation.requestId,
+    );
+    return this.deps.workflowResults.structured<unknown>(consolidation.requestId);
+  }
+
   private async advanceConsolidation(
     pipeline: BuildPipeline,
     state: ReviewFanoutState,
@@ -364,6 +428,17 @@ export class BuildPipelineReviewFanout {
         state: "prepared",
         createdAt: reviewFanoutNowIso(),
         agent: step.agent,
+        resultTransport:
+          this.deps.workflowResults &&
+          this.deps.agentMcp &&
+          this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+            ? "tool-v1"
+            : "structured-output-v1",
+        ...(this.deps.workflowResults &&
+        this.deps.agentMcp &&
+        this.deps.workflowToolEnabled?.(step.agent, "consolidated-review")
+          ? { resultSubmission: "preparing" as const }
+          : {}),
         ...(step.model ? { model: step.model } : {}),
         ...(step.effort ? { reasoningEffort: step.effort } : {}),
       };
@@ -398,16 +473,41 @@ export class BuildPipelineReviewFanout {
         });
       }
       await attachAgentBeforeDispatch(provider, consolidation.providerSessionId);
+      const agentMcp =
+        consolidation.resultTransport === "tool-v1"
+          ? this.deps.agentMcp?.(pipeline, consolidation.requestId)
+          : undefined;
+      if (consolidation.resultTransport === "tool-v1" && this.deps.workflowResults) {
+        await this.deps.workflowResults.prepare({
+          resultKey: consolidation.requestId,
+          kind: "consolidated-review",
+          environmentId: pipeline.environmentId,
+          projectId: pipeline.projectId,
+          provider: consolidation.agent,
+          schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+          context: consolidationResultContext(state.reviewers),
+        });
+      }
       consolidation.state = "dispatching";
       await this.deps.save(pipeline);
       try {
-        await provider.send(consolidation.providerSessionId, prompt, {
-          requestId: consolidation.requestId,
-          schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-          mode: "plan",
-          model: consolidation.model,
-          effort: consolidation.reasoningEffort,
-        });
+        await provider.send(
+          consolidation.providerSessionId,
+          consolidation.resultTransport === "tool-v1"
+            ? `${prompt}\n\n${workflowResultInstruction("consolidated-review", consolidation.requestId)}`
+            : prompt,
+          {
+            requestId: consolidation.requestId,
+            schema:
+              consolidation.resultTransport === "tool-v1"
+                ? undefined
+                : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
+            mode: "plan",
+            model: consolidation.model,
+            effort: consolidation.reasoningEffort,
+            ...(agentMcp ? { agentMcp } : {}),
+          },
+        );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return { kind: "working" };
         throw error;
@@ -465,10 +565,13 @@ export class BuildPipelineReviewFanout {
       };
     }
 
-    const result = await provider.structured<unknown>(
-      consolidation.providerSessionId,
-      consolidation.requestId,
-    );
+    const result =
+      consolidation.resultTransport === "tool-v1"
+        ? ((await this.readConsolidationResult(consolidation)) ?? null)
+        : await provider.structured<unknown>(
+            consolidation.providerSessionId,
+            consolidation.requestId,
+          );
     if (!result) {
       return this.countIdlePoll(
         pipeline,
@@ -500,7 +603,31 @@ export class BuildPipelineReviewFanout {
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
     pipeline.structuredReviewRequestId = consolidation.requestId;
+    if (consolidation.resultTransport === "tool-v1") {
+      pipeline.pendingResultConsumptions = Array.from(
+        new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
+      );
+    }
     await this.deps.save(pipeline);
+    if (consolidation.resultTransport === "tool-v1") {
+      try {
+        await this.deps.workflowResults?.consume(consolidation.requestId);
+        delete consolidation.resultSubmission;
+        const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+          (candidate) => candidate !== consolidation.requestId,
+        );
+        if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+        else delete pipeline.pendingResultConsumptions;
+        await this.deps.save(pipeline);
+      } catch (error) {
+        pipeline.pendingResultConsumptions = Array.from(
+          new Set([...(pipeline.pendingResultConsumptions ?? []), consolidation.requestId]),
+        );
+        console.warn(
+          `[build-pipeline] Deferred consolidation result consumption: ${reviewFanoutErrorMessage(error)}`,
+        );
+      }
+    }
     return { kind: "consolidated" };
   }
 
@@ -590,6 +717,8 @@ export class BuildPipelineReviewFanout {
         error: `${error.message} The consolidation could not produce a valid report in ${MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
       };
     }
+    const previousRequestId = consolidation.requestId;
+    const previousTransport = consolidation.resultTransport;
     consolidation.schemaRepairAttempts = attempt;
     consolidation.schemaRepairPrompt = structuredReportRepairPrompt(
       error.issues,
@@ -599,6 +728,9 @@ export class BuildPipelineReviewFanout {
     consolidation.requestId = randomUUID();
     consolidation.state = "prepared";
     delete consolidation.idleResultPolls;
+    if (previousTransport === "tool-v1") {
+      await this.deps.workflowResults?.close(previousRequestId, "superseded");
+    }
     await this.deps.save(pipeline);
     return { kind: "working" };
   }

@@ -1,4 +1,5 @@
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
+import { WorkflowResultStatus } from "./WorkflowResultStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -861,6 +862,19 @@ function MultiReviewOverviewTab({
                   ? "No activity from the fix model"
                   : phaseCopy(workflow.phase)}
             </p>
+            {workflow.activeRequest?.resultSubmission && (
+              <WorkflowResultStatus
+                state={workflow.activeRequest.resultSubmission}
+                kind={
+                  workflow.activeRequest.kind === "prepare"
+                    ? "validation-plan"
+                    : workflow.activeRequest.kind === "consolidate"
+                      ? "consolidated-review"
+                      : "fix-result"
+                }
+                className="mt-0.5"
+              />
+            )}
           </div>
         </div>
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
@@ -990,6 +1004,11 @@ function MultiReviewOverviewTab({
                                 {runtimeSummary}
                               </p>
                             ) : null}
+                            <WorkflowResultStatus
+                              state={reviewer.resultSubmission}
+                              kind="review-report"
+                              className="mt-0.5 text-[11px]"
+                            />
                             {/* The workflow error generalizes a shared cause; this is
                             the only place the reviewer's own outcome is legible. */}
                             {note ? (

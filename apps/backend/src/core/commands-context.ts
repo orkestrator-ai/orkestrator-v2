@@ -47,6 +47,8 @@ export type CommandContext = {
   loopedReviews?: LoopedReviewService;
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
+  workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
+  workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
   projectGit?: ProjectGitService;
   controlMcp?: {

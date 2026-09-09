@@ -764,6 +764,12 @@ export interface AppConfig {
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
+    /**
+     * Backend-owned rollout gate for tool-mode workflow results. Internal
+     * operations setting rather than a user-facing transport choice; changes
+     * affect attempts admitted after the change only.
+     */
+    workflowResultTools?: import("@orkestrator/protocol/workflow-results").WorkflowResultToolsSettings;
   };
   repositories: Record<string, RepositoryConfig>;
 }

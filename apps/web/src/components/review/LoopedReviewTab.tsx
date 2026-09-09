@@ -12,6 +12,8 @@ import {
   RefreshCw,
   Square,
 } from "lucide-react";
+import { WorkflowResultStatus } from "./WorkflowResultStatus";
+import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import type { ReviewFindingPool } from "@orkestrator/protocol/structured-review";
 import type { PersistedReviewPackage } from "@orkestrator/protocol/review-workflow";
 import { Button } from "@/components/ui/button";
@@ -72,6 +74,17 @@ const STAGE_TAB_KEYS: Record<string, number | "first" | "last"> = {
   Home: "first",
   End: "last",
 };
+
+/** Mirrors the backend's dispatch-kind to result-kind mapping for status text. */
+function loopedDispatchResultKind(
+  kind: NonNullable<LoopedReviewWorkflow["dispatch"]>["kind"],
+): WorkflowResultKind {
+  if (kind === "prepare") return "review-preparation";
+  if (kind === "discover") return "review-report";
+  if (kind === "reconcile") return "review-reconciliation";
+  if (kind === "fix") return "fix-result";
+  return "pr-result";
+}
 
 function phaseLabel(workflow: LoopedReviewWorkflow): string {
   const labels: Record<LoopedReviewWorkflow["phase"], string> = {
@@ -670,6 +683,13 @@ export function LoopedReviewTab({
             {workflow.reasoningEffort ? ` · ${workflow.reasoningEffort}` : ""}
             {` · target ${workflow.targetBranch}`}
           </div>
+          {workflow.dispatch?.resultSubmission && (
+            <WorkflowResultStatus
+              state={workflow.dispatch.resultSubmission}
+              kind={loopedDispatchResultKind(workflow.dispatch.kind)}
+              className="mt-0.5 text-[11px]"
+            />
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {activeSession && (

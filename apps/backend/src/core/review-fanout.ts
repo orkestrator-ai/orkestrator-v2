@@ -41,6 +41,11 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
+  workflowResultInstruction,
+  type WorkflowResultSubmissionState,
+} from "@orkestrator/protocol/workflow-results";
+import type { AgentToolConnection } from "./agent-tools.js";
+import {
   AmbiguousPromptDispatchError,
   readProviderStatus,
   type BuildPipelineProvider,
@@ -315,6 +320,18 @@ function provenanceSources(
   return sources;
 }
 
+export function consolidationResultContext(reviewers: readonly ReviewerRecord[]): {
+  type: "consolidated-review";
+  sources: Record<string, SourceFindingKind>;
+} {
+  return {
+    type: "consolidated-review",
+    sources: Object.fromEntries(
+      Array.from(provenanceSources(reviewers), ([sourceId, source]) => [sourceId, source.kind]),
+    ),
+  };
+}
+
 export function deriveConsolidatedProvenance(
   report: StructuredReviewReport,
   reviewers: readonly ReviewerRecord[],
@@ -551,6 +568,24 @@ export interface ReviewFanoutHost {
   /** Pane title for one reviewer's session. */
   sessionLabelFor(reviewer: ReviewerRecord, index: number): string;
   provider(selection: ReviewerModelSelection): Promise<BuildPipelineProvider>;
+  agentMcp?(
+    selection: ReviewerModelSelection,
+    resultKey: string,
+  ): Promise<AgentToolConnection | undefined>;
+  prepareResult?(
+    selection: ReviewerModelSelection,
+    requestId: string,
+    schema: JsonSchema,
+  ): Promise<void>;
+  supportsToolResult?(selection: ReviewerModelSelection): boolean;
+  readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
+  /** Bounded delivery state for one slot, projected into the saved record. */
+  projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
+  consumeResult?(requestId: string): Promise<void>;
+  /** Adds/removes a durable owner-side outbox marker around consumption. */
+  stageResultConsumption?(requestId: string): void;
+  finishResultConsumption?(requestId: string): void;
+  closeResult?(requestId: string): Promise<void>;
   /** Persists the host's own record. Called after every durable mutation. */
   save(): Promise<void>;
   /** Throws if this process no longer owns the workflow. */
@@ -725,6 +760,11 @@ export class ReviewFanoutRunner {
       reviewer.providerSessionId = providerSessionId;
       reviewer.requestId = randomUUID();
       reviewer.dispatchState = "prepared";
+      reviewer.resultTransport =
+        host.prepareResult && (host.supportsToolResult?.(reviewer) ?? true)
+          ? "tool-v1"
+          : "structured-output-v1";
+      reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
       delete reviewer.tokenCount;
@@ -772,17 +812,38 @@ export class ReviewFanoutRunner {
       // inside the request is time the outcome is unknowable if it fails.
       await attachAgentBeforeDispatch(provider, reviewer.providerSessionId);
       await host.assertFence();
+      const agentMcp =
+        reviewer.resultTransport === "tool-v1"
+          ? await host.agentMcp?.(reviewer, reviewer.requestId)
+          : undefined;
+      if (reviewer.resultTransport === "tool-v1" && host.prepareResult) {
+        await host.prepareResult(
+          reviewer,
+          reviewer.requestId,
+          STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+        );
+      }
       reviewer.dispatchState = "dispatching";
       await host.save();
       try {
-        await provider.send(reviewer.providerSessionId, prompt, {
-          requestId: reviewer.requestId,
-          schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-          mode: host.reviewerMode ?? "build",
-          ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
-          model: reviewerModel(reviewer),
-          effort: reviewer.reasoningEffort,
-        });
+        await provider.send(
+          reviewer.providerSessionId,
+          reviewer.resultTransport === "tool-v1"
+            ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId)}`
+            : prompt,
+          {
+            requestId: reviewer.requestId,
+            schema:
+              reviewer.resultTransport === "tool-v1"
+                ? undefined
+                : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
+            mode: host.reviewerMode ?? "build",
+            ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
+            model: reviewerModel(reviewer),
+            effort: reviewer.reasoningEffort,
+            ...(agentMcp ? { agentMcp } : {}),
+          },
+        );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return "stop";
         throw error;
@@ -840,10 +901,13 @@ export class ReviewFanoutRunner {
       await host.save();
       return "continue";
     }
-    const result = await provider.structured<unknown>(
-      reviewer.providerSessionId,
-      reviewer.requestId,
-    );
+    if (reviewer.resultTransport === "tool-v1") {
+      reviewer.resultSubmission = await host.projectResult?.(reviewer.requestId);
+    }
+    const result =
+      reviewer.resultTransport === "tool-v1"
+        ? ((await host.readResult?.<unknown>(reviewer.requestId)) ?? null)
+        : await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
     await host.assertFence();
     if (!result) {
       return this.recordStall(
@@ -874,7 +938,23 @@ export class ReviewFanoutRunner {
     delete reviewer.stalledSince;
     this.host.progress.forget(reviewer.providerSessionId);
     delete reviewer.progressDigest;
+    if (reviewer.resultTransport === "tool-v1") {
+      host.stageResultConsumption?.(reviewer.requestId);
+    }
     await host.save();
+    if (reviewer.resultTransport === "tool-v1") {
+      try {
+        await host.consumeResult?.(reviewer.requestId);
+        delete reviewer.resultSubmission;
+        host.finishResultConsumption?.(reviewer.requestId);
+        await host.save();
+      } catch (error) {
+        host.stageResultConsumption?.(reviewer.requestId);
+        console.warn(
+          `[review-fanout] Deferred result consumption: ${reviewFanoutErrorMessage(error)}`,
+        );
+      }
+    }
     return "continue";
   }
 
@@ -1052,6 +1132,8 @@ export class ReviewFanoutRunner {
         `${error.message} The reviewer could not produce a valid report in ${MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
       );
     }
+    const previousRequestId = reviewer.requestId;
+    const previousTransport = reviewer.resultTransport;
     reviewer.schemaRepairAttempts = attempt;
     reviewer.schemaRepairPrompt = structuredReportRepairPrompt(
       error.issues,
@@ -1060,7 +1142,15 @@ export class ReviewFanoutRunner {
     );
     reviewer.requestId = randomUUID();
     reviewer.dispatchState = "prepared";
+    reviewer.resultTransport =
+      this.host.prepareResult && (this.host.supportsToolResult?.(reviewer) ?? true)
+        ? "tool-v1"
+        : "structured-output-v1";
+    reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
     delete reviewer.idleResultPolls;
+    if (previousTransport === "tool-v1" && previousRequestId) {
+      await this.host.closeResult?.(previousRequestId);
+    }
     await this.host.save();
     return "stop";
   }

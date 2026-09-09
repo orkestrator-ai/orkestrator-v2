@@ -20,6 +20,15 @@ export interface NativeAgentSyncCacheEntry {
 export interface NativeAgentProgressiveCacheEntry {
   identity?: NativeAgentViewIdentity;
   transcriptToken?: string;
+  /**
+   * The history epoch of the last transcript view installed for this session.
+   *
+   * A remount reads the cached projection but constructs fresh refs, so
+   * without this the epoch a rotation has to be compared against is gone and
+   * every rotation looks like an unchanged history. Cached here because it
+   * describes the messages the cache is holding, not the mount that read them.
+   */
+  transcriptHistoryEpoch?: string;
   stateToken?: string;
   discoveryToken?: string;
   transcriptAvailability: "unavailable" | "cached" | "current" | "empty";

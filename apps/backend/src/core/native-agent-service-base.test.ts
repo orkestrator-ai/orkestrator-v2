@@ -782,6 +782,82 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("offers earlier messages only when the count window is the binding constraint", async () => {
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: `body-${index}`,
+      parts: [],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }));
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-count-window-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-count-window",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection({ ...identity, messageLimit: 2 });
+
+        expect(projection?.messages).toHaveLength(2);
+        expect(projection?.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "count",
+          canLoadEarlier: true,
+        });
+      },
+    );
+  });
+
+  test("refuses to offer earlier messages once bytes have dropped whole messages", async () => {
+    // Widening the count slice cannot help here: the byte ceiling trims the
+    // widened slice back to the same tail, so a client told it could load more
+    // would render a control that can never produce anything.
+    const messages = Array.from({ length: 12 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant" as const,
+      content: `${index}:${"x".repeat(2 * 1024 * 1024)}`,
+      parts: [],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }));
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-byte-window-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-byte-window",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection({ ...identity, messageLimit: 10 });
+
+        expect(projection!.messages.length).toBeLessThan(10);
+        expect(projection?.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: false,
+        });
+        expect(Buffer.byteLength(JSON.stringify(projection?.messages))).toBeLessThanOrEqual(
+          NATIVE_PROJECTION_MAX_BYTES,
+        );
+      },
+    );
+  });
+
   test("startup rehydrates unattended interaction metadata and pending requests", async () => {
     const dataDir = await fs.mkdtemp(
       path.join(tmpdir(), "orkestrator-native-interaction-restart-"),

@@ -395,6 +395,29 @@ export function useNativeAgentSession<TMessage = unknown>({
   const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
   const progressiveTranscriptTokenRef = useRef(matchingProgressiveCache?.transcriptToken);
   const lastTranscriptViewRef = useRef<NativeAgentTranscriptView<TMessage> | null>(null);
+  /**
+   * The history epoch of the last transcript view this session installed,
+   * including the one a previous mount installed.
+   *
+   * `lastTranscriptViewRef` is rebuilt empty on every mount while the
+   * projection it describes is seeded from the shared store, so reading the
+   * epoch only from that ref left the first snapshot after a remount unable to
+   * tell a rotation from an ordinary poll — the one case where retaining aged
+   * out messages resurrects a history the provider has already rewritten.
+   */
+  const progressiveHistoryEpochRef = useRef<string | undefined>(
+    matchingProgressiveCache?.transcriptHistoryEpoch,
+  );
+  /**
+   * The store-side history eviction counter the progressive path has honoured.
+   *
+   * Kept separate from `historyEvictionRef`: that one is committed by sync
+   * materialization, and one transport acknowledging an eviction must not
+   * silence it for the other.
+   */
+  const progressiveHistoryEvictionRef = useRef(
+    useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0,
+  );
   /** Never seeded from the shared cache; see the remount reset below. */
   const progressiveStateTokenRef = useRef<string | undefined>(undefined);
   const progressiveDiscoveryTokenRef = useRef(matchingProgressiveCache?.discoveryToken);
@@ -789,7 +812,11 @@ export function useNativeAgentSession<TMessage = unknown>({
 
   /** Install transcript content without inventing action authority. */
   const applyProgressiveTranscript = useCallback(
-    (value: NativeAgentTranscriptView<TMessage>, token: string) => {
+    (
+      value: NativeAgentTranscriptView<TMessage>,
+      token: string,
+      deletedMessageIds?: readonly string[],
+    ) => {
       if (!identityBelongsToView(value.identity)) return null;
       const identityChanged =
         progressiveIdentityRef.current !== undefined &&
@@ -807,6 +834,70 @@ export function useNativeAgentSession<TMessage = unknown>({
       const current = providerChanged ? null : projectionRef.current;
       const hasAuthoritativeState =
         !identityChanged && sessionStateAvailabilityRef.current === "current" && current !== null;
+      /*
+       * Progressive snapshots are the live tail (100 messages / 512 KiB), not
+       * the whole conversation. Replacing the rendered list with that tail on
+       * every poll — including the refresh that runs when a hidden tab becomes
+       * active again — dropped every message that had aged out. Keep them unless
+       * the session identity or history epoch actually rotated.
+       *
+       * An unknown previous epoch counts as a rotation. A mount that holds a
+       * cached projection it cannot date has no way to tell aged-out messages
+       * from a history the provider rewrote while nothing was watching, and
+       * showing deleted messages is the worse of the two failures.
+       */
+      const previousEpoch =
+        lastTranscriptViewRef.current?.historyEpoch ?? progressiveHistoryEpochRef.current;
+      const historyEpochChanged = previousEpoch !== value.historyEpoch;
+      const evictionGeneration =
+        useNativeAgentProjectionStore.getState().historyEvictions.get(sessionKey) ?? 0;
+      const evicted = evictionGeneration !== progressiveHistoryEvictionRef.current;
+      const deleted = deletedMessageIds?.length ? new Set(deletedMessageIds) : undefined;
+      const liveIds = new Set(
+        value.messages
+          .map((message) => (message as { id?: unknown })?.id)
+          .filter((id): id is string => typeof id === "string"),
+      );
+      const firstLiveId = value.messages.find(
+        (message) => typeof (message as { id?: unknown })?.id === "string",
+      ) as { id?: unknown } | undefined;
+      const firstLiveIndex =
+        current && typeof firstLiveId?.id === "string"
+          ? current.messages.findIndex(
+              (message) => (message as { id?: unknown })?.id === firstLiveId.id,
+            )
+          : -1;
+      // Ageing out is a suffix window: keep the prefix before the live tail.
+      // A rewind or other prefix window starts at an earlier message we already
+      // hold, so that prefix is empty and the omitted suffix must drop.
+      let retained =
+        current && !identityChanged && !historyEpochChanged && !evicted && firstLiveIndex > 0
+          ? current.messages.slice(0, firstLiveIndex).filter((message) => {
+              const id = (message as { id?: unknown })?.id;
+              if (typeof id !== "string") return true;
+              // A delta deletes from the live tail it was diffed against, so an
+              // id it removes never appears in `liveIds`. Without this the
+              // retained prefix would reinstate exactly the messages the
+              // provider just deleted.
+              if (deleted?.has(id)) return false;
+              return !liveIds.has(id);
+            })
+          : [];
+      /*
+       * Retention is a client-side buffer and gets the same explicit ceiling
+       * sync materialization applies to its retained pages. Exceeding it
+       * collapses back to the bounded live tail rather than growing an array
+       * the shared store cannot evict — its trim loop refuses to drop the
+       * session it is currently writing, so nothing else would reclaim this.
+       */
+      if (
+        retained.length > 0 &&
+        (retained.length + value.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
+          encodedBytes(retained) > CLIENT_HISTORY_MAX_BYTES)
+      ) {
+        retained = [];
+      }
+      const messages = [...retained, ...value.messages];
       const next: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
@@ -814,7 +905,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         connection: hasAuthoritativeState ? current.connection : "connecting",
         turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
-        messages: value.messages,
+        messages,
         ...(value.messageWindow ? { messageWindow: value.messageWindow } : {}),
         interactions: hasAuthoritativeState ? current.interactions : [],
         composerControls: hasAuthoritativeState ? current.composerControls : [],
@@ -857,6 +948,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       };
       progressiveTranscriptTokenRef.current = token;
       lastTranscriptViewRef.current = value;
+      progressiveHistoryEpochRef.current = value.historyEpoch;
+      progressiveHistoryEvictionRef.current = evictionGeneration;
       progressiveIdentityRef.current = value.identity;
       const availability = value.freshness === "empty" ? "empty" : "current";
       setTranscriptAvailability(availability);
@@ -866,6 +959,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       updateProgressiveCache({
         identity: value.identity,
         transcriptToken: token,
+        transcriptHistoryEpoch: value.historyEpoch,
         transcriptAvailability: availability,
         transcriptRefreshing: false,
         transcriptError: undefined,
@@ -887,6 +981,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identityBelongsToView,
       platform,
       markSessionStateAvailability,
+      sessionKey,
       updateProgressiveCache,
     ],
   );
@@ -901,6 +996,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         setTranscriptAvailability("unavailable");
         progressiveTranscriptTokenRef.current = undefined;
         lastTranscriptViewRef.current = null;
+        progressiveHistoryEpochRef.current = undefined;
       }
       const current = projectionRef.current;
       const next: NativeAgentSessionProjection<TMessage> = {
@@ -1159,7 +1255,11 @@ export function useNativeAgentSession<TMessage = unknown>({
                 ) {
                   const merged = applyNativeAgentTranscriptDelta(current, update.delta);
                   if (merged) {
-                    applyProgressiveTranscript(merged, update.token);
+                    applyProgressiveTranscript(
+                      merged,
+                      update.token,
+                      update.delta.deletedMessageIds,
+                    );
                     return;
                   }
                 }
@@ -1613,6 +1713,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     resetSyncState();
     const store = useNativeAgentProjectionStore.getState();
     historyEvictionRef.current = store.historyEvictions.get(sessionKey) ?? 0;
+    progressiveHistoryEvictionRef.current = store.historyEvictions.get(sessionKey) ?? 0;
     const cached = store.syncCaches.get(sessionKey);
     if (
       cached &&
@@ -1638,6 +1739,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     ) {
       progressiveIdentityRef.current = progressive.identity;
       progressiveTranscriptTokenRef.current = progressive.transcriptToken;
+      progressiveHistoryEpochRef.current = progressive.transcriptHistoryEpoch;
       /*
        * The shared cache carries tokens, not the session-state value they
        * validate. Replaying the token would let the backend answer `unchanged`
@@ -1654,6 +1756,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     } else {
       progressiveIdentityRef.current = undefined;
       progressiveTranscriptTokenRef.current = undefined;
+      progressiveHistoryEpochRef.current = undefined;
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = undefined;
       progressiveDiscoveryRef.current = undefined;

@@ -584,13 +584,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     const omittedParts = messageWindow.omittedParts ?? 0;
     const truncatedByCount = messages.length > requested.length;
-    const truncatedByBytes = bounded.length < requested.length || omittedParts > 0;
+    const droppedByBytes = bounded.length < requested.length;
+    const truncatedByBytes = droppedByBytes || omittedParts > 0;
     const omittedMessages = messages.length - bounded.length;
+    const truncated = truncatedByCount || truncatedByBytes;
     return {
       messages: bounded,
       window: {
         limit,
-        truncated: truncatedByCount || truncatedByBytes,
+        truncated,
+        /*
+         * Whether a larger `limit` can actually reveal more messages, which is
+         * not the same question as whether anything was truncated. Only the
+         * count slice responds to the limit: once the byte ceiling has dropped
+         * whole messages, widening the slice returns the identical set, and a
+         * client that read `truncated` alone put an inert control on screen.
+         * Trimmed parts are not that case — every requested message is still
+         * present, so the limit is still the binding constraint.
+         *
+         * Reported only for a truncated window, where it is the answer to a
+         * question the caller is actually asking.
+         */
+        ...(truncated ? { canLoadEarlier: truncatedByCount && !droppedByBytes } : {}),
         ...(truncatedByBytes
           ? {
               truncationReason: "bytes" as const,

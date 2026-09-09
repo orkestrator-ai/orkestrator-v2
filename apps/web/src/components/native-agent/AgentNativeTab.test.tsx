@@ -6070,6 +6070,66 @@ describe("AgentNativeTab", () => {
       );
     });
 
+    test("offers to load earlier messages when the live window was trimmed by bytes", async () => {
+      seedProjection({
+        messageWindow: {
+          limit: 100,
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-byte-window" data={identity("cursor")} isActive />);
+
+      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
+      fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+      await waitFor(() =>
+        expect(
+          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),
+        ).toBe(true),
+      );
+    });
+
+    test("does not offer to load earlier messages past the hard transcript byte cap", async () => {
+      seedProjection({
+        messageWindow: {
+          limit: 100,
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: false,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-byte-cap" data={identity("cursor")} isActive />);
+
+      expect(
+        await screen.findByText(
+          "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+    });
+
+    test("does not offer to load earlier messages when a byte-capped window omits canLoadEarlier", async () => {
+      // The shape a backend that predates `canLoadEarlier` still sends. Raising
+      // the requested limit cannot widen a byte-bound window, so the control
+      // must stay off rather than become inert.
+      seedProjection({
+        messageWindow: {
+          limit: 100,
+          truncated: true,
+          truncationReason: "bytes",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-byte-legacy" data={identity("cursor")} isActive />);
+
+      expect(
+        await screen.findByText(
+          "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Load earlier messages" }) === null).toBe(true);
+    });
+
     test("refuses to load a queued prompt over an occupied composer", async () => {
       seedProjection({
         queue: { items: [{ id: "queued-1", text: "second prompt" }] },

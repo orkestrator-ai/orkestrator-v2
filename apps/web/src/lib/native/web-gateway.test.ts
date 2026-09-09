@@ -3807,7 +3807,9 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi();
 
     await expect(api.clipboard.readText()).resolves.toBe("");
-    await expect(api.clipboard.writeText("copy me")).resolves.toBeUndefined();
+    await expect(api.clipboard.writeText("copy me")).rejects.toThrow(
+      "Clipboard text writes are not supported by this browser",
+    );
     await expect(api.clipboard.readImage()).resolves.toBeNull();
     await expect(api.clipboard.writeImage("data:image/png;base64,AA==")).resolves.toBeUndefined();
     await expect(api.dialog.open()).resolves.toBeNull();

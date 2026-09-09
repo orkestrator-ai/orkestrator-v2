@@ -257,6 +257,81 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByText("Waiting for the backend to start a build stage.")).toBeTruthy();
   });
 
+  test("advances the live validation clock while the build tab is active", () => {
+    const originalNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    let now = Date.parse("2026-09-08T20:00:10.000Z");
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    window.setInterval = ((callback: TimerHandler) => {
+      tick = callback as () => void;
+      return 44;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      validationRun: {
+        id: "validation-1",
+        status: "running",
+        startedAt: "2026-09-08T20:00:04.000Z",
+        plan: {
+          headRef: "a".repeat(40),
+          commands: [
+            {
+              id: "check",
+              command: "bun run check",
+              cwd: ".",
+              dependsOn: [],
+              resources: ["*"],
+              weight: 2,
+              timeoutMs: 1_200_000,
+            },
+          ],
+          limitations: [],
+        },
+        results: [
+          {
+            id: "check",
+            command: "bun run check",
+            status: "running",
+            exitCode: null,
+            stdoutPath: ".orkestrator/check.stdout",
+            stderrPath: ".orkestrator/check.stderr",
+            stdoutBytes: 0,
+            stderrBytes: 0,
+            startedAt: "2026-09-08T20:00:05.000Z",
+            durationMs: 0,
+            limitation: null,
+          },
+        ],
+      },
+    });
+
+    const view = render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+        isActive
+      />,
+    );
+    try {
+      expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
+      now = Date.parse("2026-09-08T20:00:13.000Z");
+      act(() => tick?.());
+      expect(screen.getByText(/Validation: 9\.0s\./)).toBeTruthy();
+    } finally {
+      view.unmount();
+      Date.now = originalNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
   test("ignores malformed transcript entries and renders terminal errors", () => {
     useBuildPipelineStore.getState().replacePipeline({
       ...pipeline,

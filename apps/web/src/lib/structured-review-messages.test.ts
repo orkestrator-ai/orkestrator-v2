@@ -396,6 +396,125 @@ describe("hideMachineOutputText", () => {
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([prose]);
   });
 
+  test("removes a trailing system dataset appended to commentary", () => {
+    const commentary = "The tree is clean. Validation will run as separate commands.";
+    const dataset = JSON.stringify({
+      headRef: "a".repeat(40),
+      commands: [{ id: "check", command: "bun run check" }],
+    });
+    const combined = `${commentary} ${dataset}`;
+    const messages = hideMachineOutputText(
+      [
+        {
+          id: "preparation",
+          role: "assistant",
+          content: combined,
+          parts: [{ type: "text", content: combined }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(commentary);
+    expect(messages[0]?.parts).toEqual([{ type: "text", content: commentary }]);
+  });
+
+  test("removes incomplete object, array, and fenced datasets while they stream", () => {
+    const cases = [
+      'Preparing validation. {"headRef":"abc',
+      'Preparing validation.\n[{"headRef":"abc',
+      'Preparing validation.\n```json\n{"headRef":"abc',
+    ];
+
+    for (const combined of cases) {
+      const messages = hideMachineOutputText(
+        [
+          {
+            id: "streaming",
+            role: "assistant",
+            content: combined,
+            parts: [{ type: "text", content: combined }],
+            createdAt: "2026-08-17T13:00:00.000Z",
+          },
+        ],
+        { stripTrailingPayload: true },
+      );
+
+      expect(messages[0]?.content).toBe("Preparing validation.");
+      expect(messages[0]?.parts[0]?.content).toBe("Preparing validation.");
+    }
+  });
+
+  test("keeps inline JSON, sentence-ending values, and JSON followed by commentary", () => {
+    const prose = [
+      'The config {"strict":true} is correct.',
+      "Confidence must fall in the range [0, 1]",
+      "See the prior discussion [1]",
+      "The reviewer scores were [80, 90, 95]",
+      "Remaining work:\n- [ ]",
+      "Set the flag via config { }",
+      'The config is {"strict":true}',
+    ];
+
+    for (const content of prose) {
+      const messages = hideMachineOutputText(
+        [
+          {
+            id: "prose",
+            role: "assistant",
+            content,
+            parts: [{ type: "text", content }],
+            createdAt: "2026-08-17T13:00:00.000Z",
+          },
+        ],
+        { stripTrailingPayload: true },
+      );
+
+      expect(messages[0]?.content).toBe(content);
+      expect(messages[0]?.parts[0]?.content).toBe(content);
+    }
+  });
+
+  test("fails open after the trailing-payload candidate budget", () => {
+    const commentary = "Preparing validation.";
+    const decoys = Array.from({ length: 257 }, (_, index) => `[x] prose-${index}`).join(" ");
+    const content = `${commentary} ${decoys} {"headRef":"abc`;
+    const [message] = hideMachineOutputText(
+      [
+        {
+          id: "candidate-budget",
+          role: "assistant",
+          content,
+          parts: [{ type: "text", content }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(message?.content).toBe(content);
+  });
+
+  test("fails open when a trailing-payload root lies beyond the one MiB scan window", () => {
+    const content = `Preparing validation.\n{"headRef":"${"a".repeat(1024 * 1024)}`;
+    const [message] = hideMachineOutputText(
+      [
+        {
+          id: "character-budget",
+          role: "assistant",
+          content,
+          parts: [{ type: "text", content }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ],
+      { stripTrailingPayload: true },
+    );
+
+    expect(message?.content).toBe(content);
+  });
+
   test("never withholds the user's own text", () => {
     const prompt = '{"instruction":"review this"}';
     const messages = hideMachineOutputText([

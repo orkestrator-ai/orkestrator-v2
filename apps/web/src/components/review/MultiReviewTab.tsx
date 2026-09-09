@@ -109,6 +109,7 @@ export function multiReviewFixSessionTabOptions(
     resumeSessionId: session.providerSessionId,
     displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
+    hideStructuredOutput: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
     initialReasoningEffort: workflow.fixModel.reasoningEffort,
     initialConversationMode: "build",
@@ -134,6 +135,7 @@ export function multiReviewReviewSessionTabOptions(
     resumeSessionId: session.providerSessionId,
     displayTitle: MULTI_REVIEW_REVIEW_TAB_TITLE,
     isReviewTab: true,
+    hideStructuredOutput: true,
     initialAgentModel: selection.model === "default" ? undefined : selection.model,
     initialReasoningEffort: selection.reasoningEffort,
     initialConversationMode: "plan",
@@ -571,7 +573,9 @@ function MultiReviewOverviewTab({
     (workflow?.phase === "interactive" &&
       workflow.stepRuntimes?.fix !== undefined &&
       workflow.stepRuntimes.fix.completedAt === undefined);
-  const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession);
+  const hasRunningValidation =
+    workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
+  const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession || hasRunningValidation);
 
   useEffect(() => {
     if (!isActive || !hasLiveClock) return;
@@ -918,7 +922,9 @@ function MultiReviewOverviewTab({
             canOpen={canOpenReviewStep(packageStatus)}
             onOpen={() => presentReviewSession(workflow)}
           />
-          {workflow.validationRun && <ReviewValidationStatus run={workflow.validationRun} />}
+          {workflow.validationRun && (
+            <ReviewValidationStatus run={workflow.validationRun} now={reviewPanelNow} />
+          )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>

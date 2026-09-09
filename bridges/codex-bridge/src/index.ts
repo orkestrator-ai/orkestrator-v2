@@ -1297,6 +1297,7 @@ app.post("/session/:id/prompt", async (c) => {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;
+  const readOnly = body.readOnly;
   const agentMcp = body.agentMcp;
   const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
   if (
@@ -1329,12 +1330,16 @@ app.post("/session/:id/prompt", async (c) => {
   if (outputSchema !== undefined && !isJsonSchema(outputSchema)) {
     return c.json({ error: "outputSchema must be a JSON Schema object" }, 400);
   }
+  if (readOnly !== undefined && typeof readOnly !== "boolean") {
+    return c.json({ error: "readOnly must be a boolean" }, 400);
+  }
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
     requestId,
     attachments,
     outputSchema,
+    ...(typeof readOnly === "boolean" ? { readOnly } : {}),
     ...(agentMcp && typeof agentMcp === "object" && !Array.isArray(agentMcp)
       ? { agentMcp: agentMcp as { url: string; token: string } }
       : {}),

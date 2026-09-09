@@ -317,6 +317,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             requestId: options.requestId,
             attachments,
             outputSchema: options.schema,
+            readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
             parameterValues: options.parameterValues,
             persistDefaults: options.persistDefaults,
             ...(this.agent === "claude"
@@ -328,8 +329,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
                   agentMcp: options.agentMcp,
-                  permissionMode:
-                    options.mode === "plan"
+                  permissionMode: options.readOnly
+                    ? "dontAsk"
+                    : options.mode === "plan"
                       ? "plan"
                       : typeof options.parameterValues?.permissionMode === "string"
                         ? options.parameterValues.permissionMode
@@ -346,12 +348,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                       model: options.model ?? this.connection.model,
                       reasoningEffort: options.effort ?? this.connection.effort,
                       mode: options.mode,
-                      ...(this.agent === "pi"
-                        ? {
-                            readOnly:
-                              options.readOnly ?? (options.mode === "build" ? false : undefined),
-                          }
-                        : {}),
                       agentMcp: options.agentMcp,
                     }
                   : { fastMode: options.fastMode ?? this.connection.fastMode }),

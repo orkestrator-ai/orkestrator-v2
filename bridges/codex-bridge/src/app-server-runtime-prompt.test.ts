@@ -1239,6 +1239,26 @@ describe("at-most-once dispatch", () => {
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
+  test("a read-only build turn uses the sandbox without the plan preamble", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Consolidate the reports",
+        requestId: "review-1",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: true });
+
+    const turn = h.child().requests.find((request) => request.method === "turn/start")!;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+    expect(turn.params.input).toEqual([
+      { type: "text", text: "Consolidate the reports", text_elements: [] },
+    ]);
+  });
+
   test("an ambiguous request that did run is reconciled as already-processed", async () => {
     const h = await harness({
       "thread/read": () => ({

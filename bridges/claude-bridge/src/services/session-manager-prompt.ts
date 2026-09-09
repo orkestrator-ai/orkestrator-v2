@@ -48,6 +48,7 @@ import {
   AGENT_INTERACTION_LIMITS,
 } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -578,7 +579,17 @@ export async function sendPrompt(
     // Re-derived at every turn, not read once at create. A session restored
     // from disk, or configured before this process took over, must not carry a
     // policy weaker than the one this process was launched to enforce.
-    const policy = effectiveExecutionPolicy(session.executionPolicy);
+    const sessionPolicy = effectiveExecutionPolicy(session.executionPolicy);
+    const policy: NativeAgentExecutionPolicy | undefined = options?.readOnly
+      ? {
+          id: "coordinator-read-only",
+          sandbox: "provider",
+          approvals: "deny",
+          projectResources: false,
+          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+          networkAccess: "restricted",
+        }
+      : sessionPolicy;
     const includeProjectResources = policy?.projectResources !== false;
     // Load MCP servers and plugins from config files. Both resolutions read
     // the same on-disk config, so they run concurrently and each merges once.

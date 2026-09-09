@@ -24,6 +24,7 @@ import {
   recordTurnUsage,
   rememberPendingLateTurnUsage,
   resumeSession,
+  setSessionReadOnly,
 } from "./acp-session.js";
 import {
   AcpProcess,
@@ -299,6 +300,10 @@ export async function route(
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
     const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
+    const readOnly = body.readOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      return json(response, 400, { error: "readOnly must be a boolean" });
+    }
     // Shape validation happens before the turn is claimed: a malformed
     // attachment list is a caller error, not a turn that half-started.
     let attachments;
@@ -354,6 +359,7 @@ export async function route(
       // Read the attachments first: an unreadable image must fail before a
       // detached thread is reattached, and it is far cheaper than a spawn.
       promptContents = await readPromptContents(attachments, workingDirectory);
+      if (typeof readOnly === "boolean") await setSessionReadOnly(state, readOnly);
       child = await ensureSessionProcess(state, clientSignal);
       if (
         promptContents.some((attachment) => attachment.type === "file") &&

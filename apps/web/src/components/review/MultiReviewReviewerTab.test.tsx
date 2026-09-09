@@ -290,6 +290,23 @@ describe("toMultiReviewReviewerMessages machine output", () => {
     ]);
   });
 
+  test("removes a completed report appended to prose in one provider part", () => {
+    const commentary = "Validation passed; compiling the final report.";
+    const report = JSON.stringify({
+      reviewScope: { targetBranch: "main", filesReviewed: ["a.ts"] },
+      issues: [],
+    });
+    const combined = `${commentary} ${report}`;
+    const messages = toMultiReviewReviewerMessages(snapshot([{ type: "text", content: combined }]));
+
+    const rendered = messages.flatMap((message) => [
+      message.content,
+      ...message.parts.map((part) => part.content),
+    ]);
+    expect(rendered).toContain(commentary);
+    expect(rendered.join(" ")).not.toContain("reviewScope");
+  });
+
   test("drops a message whose only content was a draft", () => {
     const messages = toMultiReviewReviewerMessages(
       snapshot([{ type: "text", content: '{"reviewScope":{"targetBranch":"main"}}' }]),

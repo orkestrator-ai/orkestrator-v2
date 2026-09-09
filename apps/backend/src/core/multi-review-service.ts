@@ -79,6 +79,7 @@ import {
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
+
 import {
   ReviewFanoutRunner,
   ReviewSnapshotChangedError,
@@ -97,6 +98,8 @@ import {
 } from "./review-fanout.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+/** Structured reports need a mutation boundary without provider planning behavior. */
+const READ_ONLY_REPORT_TURN = Object.freeze({ mode: "build" as const, readOnly: true });
 const DEFAULT_POLL_MS = 1_000;
 const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
@@ -1958,7 +1961,7 @@ export class MultiReviewService {
         preparing ? "Multi Review · Prepare review package" : "Multi Review · Consolidation",
         {
           clientSessionKey: sessionKey,
-          mode: preparing ? "build" : "plan",
+          mode: "build",
           model: selection.model === "default" ? undefined : selection.model,
           effort: selection.reasoningEffort,
           interaction: {
@@ -2110,8 +2113,9 @@ export class MultiReviewService {
           {
             requestId: request.requestId,
             schema: request.resultTransport === "tool-v1" ? undefined : schema,
-            mode: request.kind === "consolidate" ? "plan" : "build",
-            readOnly: request.kind === "consolidate",
+            ...(request.kind === "consolidate"
+              ? READ_ONLY_REPORT_TURN
+              : { mode: "build" as const, readOnly: false }),
             model: selection.model === "default" ? undefined : selection.model,
             effort: selection.reasoningEffort,
             ...(agentMcp ? { agentMcp } : {}),

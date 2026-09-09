@@ -322,6 +322,7 @@ export function createClaudeNativeLikeTab({
   initialPrompt,
   displayTitle,
   isReviewTab,
+  hideStructuredOutput,
   initialAgentModel,
   initialReasoningEffort,
   initialConversationMode,
@@ -338,6 +339,7 @@ export function createClaudeNativeLikeTab({
   initialPrompt?: string;
   displayTitle?: string;
   isReviewTab?: boolean;
+  hideStructuredOutput?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
@@ -358,6 +360,7 @@ export function createClaudeNativeLikeTab({
       initialPrompt,
       displayTitle,
       isReviewTab,
+      ...(hideStructuredOutput === undefined ? {} : { hideStructuredOutput }),
       initialAgentModel,
       initialReasoningEffort,
       ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
@@ -378,6 +381,7 @@ export function createClaudeNativeLikeTab({
     initialPrompt,
     displayTitle,
     isReviewTab,
+    ...(hideStructuredOutput === undefined ? {} : { hideStructuredOutput }),
     initialAgentModel,
     initialReasoningEffort,
     initialConversationMode,
@@ -396,6 +400,7 @@ export function createAgentNativeTab({
   initialPrompt,
   displayTitle,
   isReviewTab,
+  hideStructuredOutput,
   initialAgentModel,
   initialReasoningEffort,
   initialConversationMode,
@@ -411,6 +416,7 @@ export function createAgentNativeTab({
   initialPrompt?: string;
   displayTitle?: string;
   isReviewTab?: boolean;
+  hideStructuredOutput?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
@@ -430,6 +436,7 @@ export function createAgentNativeTab({
     initialPrompt,
     displayTitle,
     isReviewTab,
+    ...(hideStructuredOutput === undefined ? {} : { hideStructuredOutput }),
     initialAgentModel,
     initialReasoningEffort,
     initialConversationMode,

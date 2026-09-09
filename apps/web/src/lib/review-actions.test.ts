@@ -3,6 +3,7 @@ import {
   MULTI_REVIEW_ADDRESS_PROMPT,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+  MULTI_REVIEW_PLAN_TOOL_PROHIBITION,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-actions";
@@ -20,8 +21,13 @@ describe("multiReviewCustomFixPrompt", () => {
     );
     expect(ADDRESS_ALL_REVIEW_PROMPT).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(MULTI_REVIEW_ADDRESS_PROMPT).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("Do not invoke EnterPlanMode");
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("make the necessary edits");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("This is an implementation turn");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain(MULTI_REVIEW_PLAN_TOOL_PROHIBITION);
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain(
+      "A plan, plan-review card, or approval request is not a valid response",
+    );
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("begin editing the files now");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toContain("complete the necessary edits");
   });
 
   test("retires both structured-output and read-only review-stage constraints", () => {

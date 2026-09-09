@@ -98,6 +98,7 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
+  OPENCODE_READ_ONLY_TURN_TOOLS,
   openCodePromptParts,
   openCodeReasoningVariant,
   openCodeRequestOptions,
@@ -741,6 +742,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 model,
                 agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
+                ...(options.readOnly ? { tools: OPENCODE_READ_ONLY_TURN_TOOLS } : {}),
               },
               this.requestOptions(),
             );

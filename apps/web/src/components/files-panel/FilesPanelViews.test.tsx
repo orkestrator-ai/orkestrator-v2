@@ -6,9 +6,12 @@ import { useFilesPanelStore } from "@/stores";
 import type { FileNode, GitFileChange } from "@/lib/backend";
 import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import { AllFilesView } from "./AllFilesView";
+import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangesView } from "./ChangesView";
 import { FileTreeNode } from "./FileTreeNode";
 import { FilesPanelHeader } from "./FilesPanelHeader";
+import { mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 
 const createFileTab = mock(() => undefined);
 
@@ -90,6 +93,8 @@ function fireDrag(target: Element, type: string, dataTransfer: DataTransfer): vo
 describe("files panel views", () => {
   beforeEach(() => {
     createFileTab.mockClear();
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => undefined);
     setMobileViewport(false);
     useFilesPanelStore.setState({
       isOpen: true,
@@ -150,6 +155,56 @@ describe("files panel views", () => {
     expect(useFilesPanelStore.getState().isOpen).toBe(false);
   });
 
+  test("ChangedFileItem copies a workspace-relative path for deleted files", async () => {
+    render(<ChangedFileItem change={{ ...change, status: "D" }} />);
+
+    fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
+    fireEvent.click(await screen.findByText("Copy path"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith("src/App.tsx"));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Path copied to clipboard", {
+      description: "src/App.tsx",
+    });
+  });
+
+  test("ChangedFileItem reports clipboard write failures", async () => {
+    const writeError = new Error("Clipboard unavailable");
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => undefined);
+    console.error = consoleError as typeof console.error;
+    mockWriteText.mockImplementation(async () => {
+      throw writeError;
+    });
+
+    try {
+      render(<ChangedFileItem change={change} />);
+
+      fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
+      fireEvent.click(await screen.findByText("Copy path"));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy path"));
+      expect(mockToastSuccess).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[files-panel] Failed to copy file path:",
+        writeError,
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("FileTreeNode exposes Copy path without optional action callbacks", async () => {
+    render(<FileTreeNode item={fileTree[0]!.children![0]!} depth={1} />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(await screen.findByText("Copy path"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith("src/App.tsx"));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Path copied to clipboard", {
+      description: "src/App.tsx",
+    });
+  });
+
   test("FileTreeNode expands folders and exposes changed-file actions", async () => {
     const onReveal = mock(() => undefined);
     const onRevert = mock(() => undefined);
@@ -168,6 +223,9 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
     const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    fireEvent.contextMenu(fileButton);
+    fireEvent.click(await screen.findByText("Copy path"));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith("src/App.tsx"));
     fireEvent.contextMenu(fileButton);
     fireEvent.click(await screen.findByText("Reveal in file manager"));
     expect(onReveal).toHaveBeenCalledWith("src/App.tsx");

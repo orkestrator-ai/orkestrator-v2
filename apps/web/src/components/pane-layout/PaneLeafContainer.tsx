@@ -315,6 +315,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                       ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                       initialPrompt={tab.initialPrompt}
                       isReviewTab={tab.isReviewTab}
+                      hideStructuredOutput={tab.hideStructuredOutput}
                       initialAgentModel={tab.initialAgentModel}
                       initialReasoningEffort={tab.initialReasoningEffort}
                       initialConversationMode={tab.initialConversationMode}

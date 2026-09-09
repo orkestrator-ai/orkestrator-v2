@@ -30,6 +30,7 @@ export interface FeatureBuildStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /** A reviewer row. The key is presentational: reviewers have no identity yet. */
@@ -60,6 +61,7 @@ export interface ConfiguredStepDefault {
   agent: AgentPlatform;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /**
@@ -89,6 +91,7 @@ export function resolveFeatureBuildStep(
     agent,
     model,
     ...(reasoningEffort === "default" ? {} : { reasoningEffort }),
+    ...(typeof configured.fastMode === "boolean" ? { fastMode: configured.fastMode } : {}),
   };
 }
 
@@ -139,6 +142,7 @@ function stepConfig(selection: FeatureBuildStepSelection): BuildStepConfig {
     agent: selection.agent,
     model: selection.model,
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
   };
 }
 

@@ -114,15 +114,20 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 choose Normal" }));
-    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBe(false);
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({
+      platform: "claude",
+      fastMode: false,
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("false");
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 inherit speed" }));
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({ platform: "claude" });
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
   });
 
-  test("writes Fast to the platform selected by a reviewer", () => {
+  test("writes Fast onto the selected reviewer only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness canInherit onChange={onChange} />);
 
@@ -132,9 +137,17 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 choose Fast" }));
     expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
-      actionDefaults: { review: { platform: "codex" } },
-      platforms: { codex: { fastMode: true } },
+      actionDefaults: { review: { platform: "codex", fastMode: true } },
     });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "multi-review-default-1 choose Normal" }));
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults).toEqual({
+      review: { platform: "codex", fastMode: true },
+      review2: { platform: "codex", fastMode: false },
+    });
+    expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
+    expect(screen.getByTestId("multi-review-default-1 speed-value").textContent).toBe("false");
   });
 
   test("labels the root-tier reset as the provider default", () => {

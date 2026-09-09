@@ -563,6 +563,7 @@ function ModelPicker({
           agent: selection.agent,
           model: selection.model,
           ...(effort === "default" ? {} : { reasoningEffort: effort }),
+          ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
         })
       }
       disabled={disabled}

@@ -428,9 +428,20 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             ? { [actionDefault.agent]: actionDefault.reasoningEffort }
             : {}),
         },
+        preferredFastModes: {
+          ...preferredFastModesByPlatform,
+          ...(actionDefault.fastMode !== undefined
+            ? { [actionDefault.agent]: actionDefault.fastMode }
+            : {}),
+        },
       };
     },
-    [actionDefaultFor, preferredEffortsByPlatform, preferredModelsByPlatform],
+    [
+      actionDefaultFor,
+      preferredEffortsByPlatform,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+    ],
   );
   /** Launch-dialog preferences only when this action names an enabled platform. */
   const configuredLaunchDialogDefaultsFor = useCallback(
@@ -482,7 +493,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
       const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
       const configuredFastMode =
-        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+        launchOptions?.initialFastMode ??
+        defaultForAgent?.fastMode ??
+        preferredFastModesByPlatform[agent];
       const initialFastMode =
         typeof configuredFastMode === "boolean" &&
         modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
@@ -765,7 +778,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       try {
         const { task } = findTaskForEnvironment(selectedEnvironmentId);
         const agent = getReviewAgent(selection.tabType);
-        const configuredFastMode = preferredFastModesByPlatform[agent];
+        const reviewDefault = actionDefaultFor("review");
+        const configuredFastMode =
+          (agent === reviewDefault.agent ? reviewDefault.fastMode : undefined) ??
+          preferredFastModesByPlatform[agent];
         const fastMode =
           typeof configuredFastMode === "boolean" &&
           modelSupportsSpeed(agent, reviewModelCatalog, selection.model)
@@ -878,6 +894,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
+      actionDefaultFor,
       canCreateTab,
       config.global.reviewInstruction,
       config.repositories,
@@ -1012,7 +1029,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
       const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
       const configuredFastMode =
-        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+        launchOptions?.initialFastMode ??
+        defaultForAgent?.fastMode ??
+        preferredFastModesByPlatform[agent];
       const initialFastMode =
         typeof configuredFastMode === "boolean" &&
         modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
@@ -1351,7 +1370,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
         const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
         const configuredFastMode =
-          launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+          launchOptions?.initialFastMode ??
+          defaultForAgent?.fastMode ??
+          preferredFastModesByPlatform[agent];
         const initialFastMode =
           typeof configuredFastMode === "boolean" &&
           modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
@@ -1522,7 +1543,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const agent = agentOverride || actionDefault.agent;
       const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
       const requestedModel = defaultForAgent?.model ?? preferredModelsByPlatform[agent];
-      const configuredFastMode = preferredFastModesByPlatform[agent];
+      const configuredFastMode = defaultForAgent?.fastMode ?? preferredFastModesByPlatform[agent];
       const fastMode =
         typeof configuredFastMode === "boolean" &&
         modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
@@ -1623,7 +1644,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
         const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
         const configuredFastMode =
-          launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+          launchOptions?.initialFastMode ??
+          defaultForAgent?.fastMode ??
+          preferredFastModesByPlatform[agent];
         const initialFastMode =
           typeof configuredFastMode === "boolean" &&
           modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)

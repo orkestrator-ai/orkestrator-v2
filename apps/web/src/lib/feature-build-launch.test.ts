@@ -96,6 +96,36 @@ describe("defaultFeatureBuildModels", () => {
       reasoningEffort: "high",
     });
   });
+
+  test("carries Fast independently on PR and consolidation defaults", () => {
+    const state = defaultFeatureBuildModels({
+      catalog,
+      build: { agent: "claude", model: "opus" },
+      review: { agent: "claude", model: "sonnet" },
+      review2: { agent: "codex", model: "gpt-5.6" },
+      reviewPreparation: { agent: "claude", model: "opus", fastMode: false },
+      address: { agent: "codex", model: "gpt-5.6" },
+      pr: { agent: "claude", model: "sonnet", fastMode: true },
+      resolve: { agent: "claude", model: "opus" },
+    });
+
+    expect(state.pr).toMatchObject({ agent: "claude", model: "sonnet", fastMode: true });
+    expect(state.reviewPreparation).toMatchObject({
+      agent: "claude",
+      model: "opus",
+      fastMode: false,
+    });
+    expect(featureBuildStepConfigs(state).steps.pr).toEqual({
+      agent: "claude",
+      model: "sonnet",
+      fastMode: true,
+    });
+    expect(featureBuildStepConfigs(state).reviewPreparation).toEqual({
+      agent: "claude",
+      model: "opus",
+      fastMode: false,
+    });
+  });
 });
 
 describe("featureBuildStepConfigs", () => {

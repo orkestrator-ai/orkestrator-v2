@@ -381,7 +381,7 @@ describe("AgentDefaultsPane speed defaults", () => {
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
   });
 
-  test("offers the same per-platform Fast setting from an action picker", () => {
+  test("writes Fast onto that action default only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness scope="global" onChange={onChange} />);
 
@@ -395,16 +395,44 @@ describe("AgentDefaultsPane speed defaults", () => {
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         actionDefaults: {
-          createScript: { platform: "codex", model: "codex-a" },
+          createScript: { platform: "codex", model: "codex-a", fastMode: true },
         },
-        platforms: { codex: { fastMode: true } },
       }),
     );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
 
     fireEvent.click(
       screen.getByRole("button", { name: "action-default-createScript inherit speed" }),
     );
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.createScript).toEqual({
+      platform: "codex",
+      model: "codex-a",
+    });
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
+  });
+
+  test("keeps Fast independent across action defaults that share a model", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Codex A" }));
+    fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Fast" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-reviewPreparation choose Codex A" }),
+    );
+
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults).toEqual({
+      pr: { platform: "codex", model: "codex-a", fastMode: true },
+      reviewPreparation: { platform: "codex", model: "codex-a" },
+    });
+    expect(screen.getByTestId("action-default-pr speed-value").textContent).toBe("true");
+    expect(screen.getByTestId("action-default-pr speed-inherit").textContent).toBe("false");
+    expect(screen.getByTestId("action-default-reviewPreparation speed-value").textContent).toBe(
+      "null",
+    );
+    expect(screen.getByTestId("action-default-reviewPreparation speed-inherit").textContent).toBe(
+      "true",
+    );
   });
 
   test("uses the platform default model to determine Fast availability for inherited actions", () => {

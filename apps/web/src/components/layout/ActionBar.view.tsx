@@ -390,6 +390,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           ...reviewLaunchDefaults.preferredReasoningEfforts,
           ...(entry.reasoningEffort ? { [entry.platform]: entry.reasoningEffort } : {}),
         },
+        preferredFastModes: {
+          ...reviewLaunchDefaults.preferredFastModes,
+          ...(entry.fastMode !== undefined ? { [entry.platform]: entry.fastMode } : {}),
+        },
       };
     },
   );
@@ -459,6 +463,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           catalog: state.reviewModelCatalog,
           preferredModels: state.reviewLaunchDefaults.preferredModels,
           preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
+          preferredFastModes: state.reviewLaunchDefaults.preferredFastModes,
           reviewerDefaults: state.multiReviewReviewerDefaults,
           reviewModelDefaults: state.reviewPreparationLaunchDefaults,
           fixModelDefaults: state.fixReviewIssuesLaunchDefaults,
@@ -852,6 +857,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                             preferredModels: reviewLaunchDefaults.preferredModels,
                             preferredReasoningEfforts:
                               reviewLaunchDefaults.preferredReasoningEfforts,
+                            preferredFastModes: reviewLaunchDefaults.preferredFastModes,
                             reviewerDefaults: multiReviewReviewerDefaults,
                             reviewModelDefaults: reviewPreparationLaunchDefaults,
                             fixModelDefaults: fixReviewIssuesLaunchDefaults,
@@ -1429,6 +1435,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         catalog={reviewModelCatalog}
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={reviewLaunchDefaults.preferredFastModes}
         reviewerDefaults={multiReviewReviewerDefaults}
         reviewModelDefaults={reviewPreparationLaunchDefaults}
         fixModelDefaults={fixReviewIssuesLaunchDefaults}

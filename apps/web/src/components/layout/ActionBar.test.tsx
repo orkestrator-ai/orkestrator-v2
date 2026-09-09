@@ -2751,6 +2751,37 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("uses the PR action Fast default even when the platform default is Normal", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { fastMode: false } },
+      },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      pr: { platform: "codex", model: "gpt-5.4", fastMode: true },
+      reviewPreparation: { platform: "codex", model: "gpt-5.4", fastMode: false },
+    };
+    currentCodexFastMode = false;
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "codex",
+          title: "PR",
+          fastMode: true,
+        }),
+      ),
+    );
+  });
+
   test("retains the launch prompt when durable PR enqueue fails", async () => {
     currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
     currentEnvironment = {

@@ -39,6 +39,7 @@ import { TIER_LABELS, withPlatformField, type AgentSettingsTierName } from "@/li
 import { cn } from "@/lib/utils";
 import {
   ACTION_DEFAULT_KEYS,
+  actionDefaultEntry,
   type ActionDefaultKey,
   type ActionDefaults,
   type AgentActionDefault,
@@ -369,8 +370,8 @@ export function AgentDefaultsPane({
         <div>
           <h3 className="text-sm font-medium text-foreground">Action defaults</h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The agent, model and reasoning level each toolbar workflow uses. Configure dialogs open
-            on the default set here, and confirming a single run never changes these settings.
+            The agent, model, reasoning level and Fast each toolbar workflow uses. Configure dialogs
+            open on the default set here, and confirming a single run never changes these settings.
           </p>
           <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
             An action default is what that action uses, whichever agent the environment was created
@@ -419,12 +420,12 @@ export function AgentDefaultsPane({
                       label: effortLabel(effort),
                     })),
                   ];
-            // Speed is a per-platform default rather than a second, action-only
-            // setting. Surface that same value from every action picker so all
-            // instances of the shared selector offer the same controls. A
-            // model that cannot honour Fast leaves the choices visible but
-            // disabled, without clearing the platform's setting for its other
-            // models.
+            // Fast is this action's own choice. The platform Fast default is
+            // only the fallback when this row has not named one, so setting
+            // PR to Fast cannot flip Consolidation (or any other row) too.
+            // A model that cannot honour Fast leaves the choices visible but
+            // disabled, without clearing a stored value for a later model
+            // that can.
             const actionSpeedCapable = platformOwnsSpeed(actionPlatform);
             const effectiveActionModel =
               (platform ? entry?.model : undefined) ??
@@ -435,11 +436,36 @@ export function AgentDefaultsPane({
               catalog,
               effectiveActionModel,
             );
-            const actionStoredSpeed = tier?.platforms?.[actionPlatform]?.fastMode;
-            const actionInheritedSpeed = resolveAgentPlatformSettings(
-              parentTiers,
+            const actionPlatformSpeed = resolveAgentPlatformSettings(
+              tiers,
               actionPlatform,
             ).fastMode;
+            const actionStoredSpeed = entry?.fastMode;
+            const actionInheritedSpeed =
+              entry == null
+                ? (inheritedEntry?.fastMode ?? actionPlatformSpeed)
+                : actionPlatformSpeed;
+            const persistAction = (
+              nextPlatform: AgentPlatform,
+              fields: Omit<AgentActionDefault, "platform"> = {},
+            ) => setAction(key, actionDefaultEntry(nextPlatform, fields));
+            const persistActionSpeed = (fastMode: boolean | undefined) => {
+              if (fastMode === undefined && entry == null) return;
+              persistAction(actionPlatform, {
+                ...(entry?.model ? { model: entry.model } : {}),
+                ...(entry?.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+                ...(fastMode !== undefined ? { fastMode } : {}),
+              });
+            };
+            const persistActionModel = (nextPlatform: AgentPlatform, nextModelId: string) =>
+              persistAction(nextPlatform, {
+                model: nextModelId,
+                ...(modelSupportsSpeed(nextPlatform, catalog, nextModelId)
+                  ? entry?.fastMode !== undefined
+                    ? { fastMode: entry.fastMode }
+                    : {}
+                  : {}),
+              });
             return (
               <div
                 key={key}
@@ -494,11 +520,9 @@ export function AgentDefaultsPane({
                           ? "Inherit"
                           : "App default"
                   }
-                  onModelChange={(nextModelId) =>
-                    setAction(key, { platform: actionPlatform, model: nextModelId })
-                  }
+                  onModelChange={(nextModelId) => persistActionModel(actionPlatform, nextModelId)}
                   onModelSelect={(nextModel) =>
-                    setAction(key, { platform: nextModel.platform, model: nextModel.id })
+                    persistActionModel(nextModel.platform, nextModel.id)
                   }
                   reasoningOptions={actionReasoning}
                   selectedReasoningId={entry?.reasoningEffort ?? INHERIT}
@@ -510,10 +534,10 @@ export function AgentDefaultsPane({
                   // Provider and model move together, so the reasoning level
                   // belongs to the model: choosing a new one resets it.
                   onReasoningChange={(nextId) =>
-                    setAction(key, {
-                      platform: actionPlatform,
+                    persistAction(actionPlatform, {
                       ...(entry?.model ? { model: entry.model } : {}),
                       ...(nextId === INHERIT ? {} : { reasoningEffort: nextId }),
+                      ...(entry?.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
                     })
                   }
                   speedCapable={actionSpeedCapable}
@@ -530,16 +554,10 @@ export function AgentDefaultsPane({
                       : undefined
                   }
                   onFastModeChange={
-                    actionSpeedCapable
-                      ? (enabled) =>
-                          onChange(withPlatformField(tier, actionPlatform, "fastMode", enabled))
-                      : undefined
+                    actionSpeedCapable ? (enabled) => persistActionSpeed(enabled) : undefined
                   }
                   onFastModeInherit={
-                    actionSpeedCapable
-                      ? () =>
-                          onChange(withPlatformField(tier, actionPlatform, "fastMode", undefined))
-                      : undefined
+                    actionSpeedCapable ? () => persistActionSpeed(undefined) : undefined
                   }
                 />
                 {actionModelMissing && (

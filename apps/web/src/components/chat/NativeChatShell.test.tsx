@@ -497,6 +497,48 @@ describe("NativeChatShell", () => {
   });
 
   describe("connection states", () => {
+    test("keeps cached transcript and composer visible while reconnecting", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connecting"
+          displayAvailable
+          messages={[
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "Previously visible answer",
+              createdAt: "2026-09-09T00:00:00.000Z",
+              parts: [{ type: "text", content: "Previously visible answer" }],
+            },
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("Previously visible answer")).toBeTruthy();
+      expect(screen.getByRole("textbox", { name: "Prompt" })).toBeTruthy();
+      expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+    });
+
+    test("keeps cached transcript readable and exposes compact retry after an error", () => {
+      const onRetry = mock(() => {});
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          connectionState="error"
+          displayAvailable
+          errorMessage="bridge unavailable"
+          onRetry={onRetry}
+        />,
+      );
+
+      expect(screen.getByTestId("compose-dock")).toBeTruthy();
+      expect(screen.getByText("bridge unavailable")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
     test("shows a connecting screen instead of the transcript", () => {
       const { container } = render(
         <NativeChatShell

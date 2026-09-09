@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { NATIVE_AGENT_DISCOVERY_SECTIONS } from "@orkestrator/protocol/native-agent";
 import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
 import {
   asString,
@@ -176,7 +177,90 @@ export function registerNativeAgentCommands(
   register("get_native_agent_sync_capabilities", () => ({
     projectionSyncVersions: [1],
     historyPagingVersions: [1],
+    progressiveViewVersions: [1],
   }));
+
+  register("get_native_agent_transcript_update", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
+    if (
+      !args.liveWindow ||
+      typeof args.liveWindow !== "object" ||
+      Array.isArray(args.liveWindow) ||
+      (args.liveWindow as { messages?: unknown }).messages !== 100 ||
+      (args.liveWindow as { targetBytes?: unknown }).targetBytes !== 512 * 1024
+    ) {
+      throw new Error("Native agent live window is unsupported");
+    }
+    return context.nativeAgents.getTranscriptUpdate({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      viewVersion: 1,
+      liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+      knownToken:
+        args.knownToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+      forceSnapshot:
+        args.forceSnapshot === undefined
+          ? undefined
+          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+    });
+  });
+
+  register("get_native_agent_session_state_update", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
+    return context.nativeAgents.getSessionStateUpdate({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      viewVersion: 1,
+      knownToken:
+        args.knownToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+      forceSnapshot:
+        args.forceSnapshot === undefined
+          ? undefined
+          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+    });
+  });
+
+  register("get_native_agent_discovery_update", async (args, context) => {
+    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+    if (args.viewVersion !== 1) throw new Error("Native agent progressive view is unsupported");
+    if (
+      !Array.isArray(args.sections) ||
+      args.sections.length === 0 ||
+      args.sections.length > NATIVE_AGENT_DISCOVERY_SECTIONS.length ||
+      args.sections.some(
+        (section) =>
+          typeof section !== "string" ||
+          !NATIVE_AGENT_DISCOVERY_SECTIONS.includes(section as never),
+      )
+    ) {
+      throw new Error("Native agent discovery sections are invalid");
+    }
+    return context.nativeAgents.getDiscoveryUpdate({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      viewVersion: 1,
+      sections: [
+        ...new Set(args.sections),
+      ] as import("@orkestrator/protocol/native-agent").NativeAgentDiscoverySection[],
+      knownToken:
+        args.knownToken === undefined
+          ? undefined
+          : asBoundedNonBlankString(args.knownToken, "knownToken", 1024),
+      forceSnapshot:
+        args.forceSnapshot === undefined
+          ? undefined
+          : asRequiredBoolean(args.forceSnapshot, "forceSnapshot"),
+    });
+  });
 
   register("get_native_agent_projection_update", async (args, context) => {
     if (!context.nativeAgents) throw new Error("Native agent service is unavailable");

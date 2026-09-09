@@ -1,4 +1,5 @@
 // Session management routes
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
@@ -53,9 +54,11 @@ import {
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 
 const session = new Hono();
+const TRANSCRIPT_GENERATION = randomUUID();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 // Leave room for the small `{ "answers": ... }` JSON envelope while keeping
 // the body consumed by Hono bounded before `c.req.json()` allocates a parsed
@@ -519,6 +522,37 @@ session.get("/:id/messages", async (c) => {
       ? await hydratePersistedSessionMessages(id)
       : getSessionMessages(id);
   return c.json(boundClaudeTranscriptResponse(messages));
+});
+
+// Transcript-first display route. Persisted hydration continues in the
+// background; callers keep the preview visible and poll its conditional token.
+session.get("/:id/transcript", (c) => {
+  const id = c.req.param("id");
+  const sessionData = peekSession(id);
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+  const loaded = sessionData.persistedMessagesLoaded !== false;
+  const messages = getSessionMessages(id);
+  if (!loaded) {
+    void hydratePersistedSessionMessages(id).catch((error) => {
+      console.warn(
+        "[session] Background transcript hydration failed:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    });
+  }
+  return c.json(
+    bridgeTranscriptUpdate(messages, {
+      sessionIdentity: id,
+      generation: TRANSCRIPT_GENERATION,
+      contentEpoch: loaded ? "hydrated" : "preview",
+      limit: Number(c.req.query("limit")),
+      targetBytes: Number(c.req.query("targetBytes")),
+      knownToken: c.req.query("knownToken"),
+      complete: loaded,
+      freshness: loaded ? "current" : "cached",
+      title: sessionData.title,
+    }),
+  );
 });
 
 // Send a prompt to a session

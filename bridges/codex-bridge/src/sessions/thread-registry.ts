@@ -125,6 +125,11 @@ export interface BridgeSession {
    */
   messageRevision: number;
   /**
+   * Advances when history is reconstructed or rewritten (hydrate, rewind, fork).
+   * Ordinary appends only bump `messageRevision`.
+   */
+  contentEpoch: number;
+  /**
    * True when `localMessages` contains history recovered from a rollout that
    * app-server could no longer resume. The first accepted turn on the replacement
    * thread carries a bounded copy so the model does not silently lose context.
@@ -255,6 +260,7 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
     >,
@@ -266,6 +272,7 @@ export class ThreadRegistry {
       localMessages: [],
       asyncQuestionItemIds: [],
       messageRevision: 0,
+      contentEpoch: 0,
       recoveredContextPending: false,
       lastAccessed: this.now(),
       createdAt: this.now(),
@@ -288,6 +295,7 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
     > & { lastAccessed: number; asyncQuestionItemIds?: string[] },
@@ -299,6 +307,7 @@ export class ThreadRegistry {
       localMessages: [],
       asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
       messageRevision: 0,
+      contentEpoch: 0,
       recoveredContextPending: false,
       createdAt: session.lastAccessed,
     };
@@ -332,6 +341,18 @@ export class ThreadRegistry {
     if (excess > 0) session.localMessages.splice(0, excess);
     appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
     session.messageRevision += 1;
+  }
+
+  /**
+   * Mark history as reconstructed rather than appended.
+   *
+   * This advances the epoch only. Every call site already advances the
+   * revision — through `appendLocalMessages`, `bumpMessageRevision`, or the
+   * rewind path — and bumping it a second time here made a single hydration
+   * look like two transcript changes to anything polling `messageRevision`.
+   */
+  bumpContentEpoch(session: BridgeSession): void {
+    session.contentEpoch += 1;
   }
 
   /** Incrementally indexes new transcript parts without rescanning history on polls. */

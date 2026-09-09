@@ -1293,6 +1293,149 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
 /** Current provider-neutral remote synchronization protocol. */
 export const NATIVE_AGENT_SYNC_VERSION = 1 as const;
 
+/** Additive transcript/state/discovery synchronization protocol. */
+export const NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION = 1 as const;
+
+/**
+ * Identity common to independently delivered view domains.
+ *
+ * Tokens are deliberately omitted from this descriptor. They are cache
+ * validators, not authority, and each domain advances on its own schedule.
+ */
+export interface NativeAgentViewIdentity {
+  backendInstanceId: string;
+  environmentId: string;
+  platform: AgentPlatform;
+  logicalSessionKey: string;
+  providerSessionId: string;
+  sourceGeneration: string | number;
+}
+
+export type NativeAgentTranscriptFreshness = "cached" | "current" | "empty";
+
+export interface NativeAgentTranscriptView<TMessage = unknown> {
+  identity: NativeAgentViewIdentity;
+  freshness: NativeAgentTranscriptFreshness;
+  messages: TMessage[];
+  messageWindow?: NativeAgentMessageWindow;
+  title?: string;
+  providerRevision?: number;
+  historyCursor?: string;
+  historyEpoch: string;
+  historyComplete: boolean;
+}
+
+/** Action-critical state which is safe to apply without transcript/discovery. */
+export interface NativeAgentSessionStateView {
+  identity: NativeAgentViewIdentity;
+  connection: NativeAgentConnectionState;
+  turn: NativeAgentTurnState;
+  interactions: AgentInteractionRequest[];
+  composerControls: NativeAgentComposerControl[];
+  /** Selected values are authoritative; catalogue rows may arrive later. */
+  composer?: NativeAgentComposerState;
+  readiness?: NativeAgentReadiness;
+  capabilities: NativeAgentCapabilities;
+  queue?: NativeAgentQueueSnapshot;
+  asyncQuestionResponses?: NativeAgentAsyncQuestionResponse[];
+  contextUsage?: NativeAgentContextUsage;
+  policy?: NativeAgentExecutionPolicy;
+  rateLimits?: NativeAgentRateLimitWindow[];
+  recoverableDispatch?: NativeAgentRecoverableDispatch;
+  backgroundTasks?: NativeAgentBackgroundTaskSummary[];
+  suggestedPrompt?: string;
+  completionBlockedByBackgroundTasks?: boolean;
+  shareUrl?: string | null;
+  title?: string;
+}
+
+export const NATIVE_AGENT_DISCOVERY_SECTIONS = [
+  "models",
+  "commands",
+  "mcp",
+  "auth",
+  "runtime",
+] as const;
+export type NativeAgentDiscoverySection = (typeof NATIVE_AGENT_DISCOVERY_SECTIONS)[number];
+export type NativeAgentDiscoveryAvailability = "loading" | "ready" | "stale" | "unavailable";
+
+export interface NativeAgentDiscoverySectionState<T> {
+  availability: NativeAgentDiscoveryAvailability;
+  /** Present for ready/stale, including successful empty arrays. */
+  value?: T;
+  revision: number;
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface NativeAgentDiscoveryView {
+  identity: NativeAgentViewIdentity;
+  sections: {
+    models?: NativeAgentDiscoverySectionState<AgentModel[]>;
+    commands?: NativeAgentDiscoverySectionState<NativeAgentSlashCommand[]>;
+    mcp?: NativeAgentDiscoverySectionState<NativeAgentMcpServer[]>;
+    auth?: NativeAgentDiscoverySectionState<NativeAgentAuthStatus | null>;
+    runtime?: NativeAgentDiscoverySectionState<{
+      summary: NativeAgentRuntimeSummary;
+      notices: NativeAgentRuntimeNotice[];
+    }>;
+  };
+}
+
+export type NativeAgentDomainUpdate<T> =
+  | {
+      viewVersion: typeof NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION;
+      status: "snapshot";
+      token: string;
+      value: T;
+      resetReason?: "initial" | "forced" | "unknown-token" | "expired" | "identity-changed";
+    }
+  | {
+      viewVersion: typeof NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION;
+      status: "unchanged";
+      token: string;
+      identity: NativeAgentViewIdentity;
+    }
+  | {
+      viewVersion: typeof NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION;
+      status: "missing";
+    }
+  | {
+      viewVersion: typeof NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION;
+      status: "unavailable";
+      retryable: boolean;
+      error?: string;
+      identity?: NativeAgentViewIdentity;
+    };
+
+/** Message-only delta for an already-held progressive transcript snapshot. */
+export interface NativeAgentTranscriptDelta<TMessage = unknown> {
+  messageUpserts: TMessage[];
+  /** Present only when the ordered membership of the live tail changed. */
+  liveMessageIds?: string[];
+  deletedMessageIds: string[];
+  freshness: NativeAgentTranscriptFreshness;
+  historyEpoch: string;
+  historyComplete: boolean;
+  historyCursor?: string;
+  title?: string;
+  messageWindow?: NativeAgentMessageWindow;
+  providerRevision?: number;
+}
+
+export type NativeAgentTranscriptUpdate<TMessage = unknown> =
+  | NativeAgentDomainUpdate<NativeAgentTranscriptView<TMessage>>
+  | {
+      viewVersion: typeof NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION;
+      status: "delta";
+      baseToken: string;
+      token: string;
+      identity: NativeAgentViewIdentity;
+      delta: NativeAgentTranscriptDelta<TMessage>;
+    };
+export type NativeAgentSessionStateUpdate = NativeAgentDomainUpdate<NativeAgentSessionStateView>;
+export type NativeAgentDiscoveryUpdate = NativeAgentDomainUpdate<NativeAgentDiscoveryView>;
+
 /** The fixed tail carried by the live synchronization surface. */
 export interface NativeAgentLiveWindow {
   /** Maximum number of newest messages. */
@@ -1575,6 +1718,238 @@ export function isNativeAgentProjectionUpdate(
       (field) => typeof field === "string" && OPTIONAL_PROJECTION_FIELD_SET.has(field),
     )
   );
+}
+
+function isNativeAgentViewIdentity(value: unknown): value is NativeAgentViewIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.backendInstanceId === "string" &&
+    candidate.backendInstanceId.length > 0 &&
+    candidate.backendInstanceId.length <= 128 &&
+    typeof candidate.environmentId === "string" &&
+    candidate.environmentId.length > 0 &&
+    candidate.environmentId.length <= 4_096 &&
+    isAgentPlatform(candidate.platform) &&
+    typeof candidate.logicalSessionKey === "string" &&
+    candidate.logicalSessionKey.length > 0 &&
+    candidate.logicalSessionKey.length <= 4_096 &&
+    typeof candidate.providerSessionId === "string" &&
+    candidate.providerSessionId.length > 0 &&
+    candidate.providerSessionId.length <= 4_096 &&
+    (typeof candidate.sourceGeneration === "string" ||
+      (typeof candidate.sourceGeneration === "number" &&
+        Number.isSafeInteger(candidate.sourceGeneration)))
+  );
+}
+
+function isNativeAgentDomainEnvelope(value: unknown): value is NativeAgentDomainUpdate<unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) return false;
+  if (candidate.status === "missing") return true;
+  if (candidate.status === "unavailable") {
+    return (
+      typeof candidate.retryable === "boolean" &&
+      (candidate.error === undefined ||
+        (typeof candidate.error === "string" && candidate.error.length <= 4_096)) &&
+      (candidate.identity === undefined || isNativeAgentViewIdentity(candidate.identity))
+    );
+  }
+  if (
+    (candidate.status !== "snapshot" && candidate.status !== "unchanged") ||
+    typeof candidate.token !== "string" ||
+    candidate.token.length === 0 ||
+    candidate.token.length > 1_024
+  ) {
+    return false;
+  }
+  return candidate.status === "snapshot"
+    ? candidate.value !== undefined
+    : isNativeAgentViewIdentity(candidate.identity);
+}
+
+function isNativeAgentTranscriptDelta(value: unknown): value is NativeAgentTranscriptDelta {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    !Array.isArray(candidate.messageUpserts) ||
+    candidate.messageUpserts.length > 4_096 ||
+    !Array.isArray(candidate.deletedMessageIds) ||
+    candidate.deletedMessageIds.length > 4_096 ||
+    (candidate.freshness !== "cached" &&
+      candidate.freshness !== "current" &&
+      candidate.freshness !== "empty") ||
+    typeof candidate.historyEpoch !== "string" ||
+    candidate.historyEpoch.length === 0 ||
+    candidate.historyEpoch.length > 128 ||
+    typeof candidate.historyComplete !== "boolean" ||
+    (candidate.historyCursor !== undefined &&
+      (typeof candidate.historyCursor !== "string" || candidate.historyCursor.length > 1_024)) ||
+    (candidate.liveMessageIds !== undefined &&
+      (!Array.isArray(candidate.liveMessageIds) || candidate.liveMessageIds.length > 4_096))
+  ) {
+    return false;
+  }
+  const deleted = candidate.deletedMessageIds;
+  return deleted.every((id) => typeof id === "string" && id.length > 0 && id.length <= 4_096);
+}
+
+export function applyNativeAgentTranscriptDelta<TMessage>(
+  current: NativeAgentTranscriptView<TMessage>,
+  delta: NativeAgentTranscriptDelta<TMessage>,
+): NativeAgentTranscriptView<TMessage> | null {
+  const currentMessages = new Map<string, TMessage>();
+  for (const message of current.messages) {
+    const id = (message as { id?: unknown })?.id;
+    if (typeof id !== "string" || currentMessages.has(id)) return null;
+    currentMessages.set(id, message);
+  }
+  for (const id of delta.deletedMessageIds) {
+    if (typeof id !== "string") return null;
+    currentMessages.delete(id);
+  }
+  for (const message of delta.messageUpserts) {
+    const id = (message as { id?: unknown })?.id;
+    if (typeof id !== "string") return null;
+    currentMessages.set(id, message);
+  }
+  const order =
+    delta.liveMessageIds ?? current.messages.map((message) => (message as { id: string }).id);
+  if (new Set(order).size !== order.length || order.some((id) => !currentMessages.has(id))) {
+    return null;
+  }
+  const ordered = new Set(order);
+  for (const message of delta.messageUpserts) {
+    if (!ordered.has((message as { id: string }).id)) return null;
+  }
+  return {
+    ...current,
+    freshness: delta.freshness,
+    messages: order.map((id) => currentMessages.get(id)!),
+    historyEpoch: delta.historyEpoch,
+    historyComplete: delta.historyComplete,
+    ...(delta.historyCursor === undefined ? {} : { historyCursor: delta.historyCursor }),
+    ...(delta.title === undefined ? {} : { title: delta.title }),
+    ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
+    ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),
+  };
+}
+
+export function isNativeAgentTranscriptUpdate(
+  value: unknown,
+): value is NativeAgentTranscriptUpdate {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const candidate = value as Record<string, unknown>;
+    if (
+      candidate.viewVersion === NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION &&
+      candidate.status === "delta"
+    ) {
+      return (
+        typeof candidate.baseToken === "string" &&
+        candidate.baseToken.length > 0 &&
+        candidate.baseToken.length <= 1_024 &&
+        typeof candidate.token === "string" &&
+        candidate.token.length > 0 &&
+        candidate.token.length <= 1_024 &&
+        isNativeAgentViewIdentity(candidate.identity) &&
+        isNativeAgentTranscriptDelta(candidate.delta)
+      );
+    }
+  }
+  if (!isNativeAgentDomainEnvelope(value)) return false;
+  if (value.status !== "snapshot") return true;
+  const transcript = value.value as unknown as Record<string, unknown>;
+  if (
+    !transcript ||
+    typeof transcript !== "object" ||
+    Array.isArray(transcript) ||
+    !isNativeAgentViewIdentity(transcript.identity) ||
+    (transcript.freshness !== "cached" &&
+      transcript.freshness !== "current" &&
+      transcript.freshness !== "empty") ||
+    !Array.isArray(transcript.messages) ||
+    transcript.messages.length > 4_096 ||
+    typeof transcript.historyEpoch !== "string" ||
+    transcript.historyEpoch.length === 0 ||
+    transcript.historyEpoch.length > 128 ||
+    typeof transcript.historyComplete !== "boolean"
+  ) {
+    return false;
+  }
+  const ids = new Set<string>();
+  return transcript.messages.every((message) => {
+    const id = (message as { id?: unknown })?.id;
+    if (typeof id !== "string" || id.length === 0 || id.length > 4_096 || ids.has(id)) {
+      return false;
+    }
+    ids.add(id);
+    return true;
+  });
+}
+
+export function isNativeAgentSessionStateUpdate(
+  value: unknown,
+): value is NativeAgentSessionStateUpdate {
+  if (!isNativeAgentDomainEnvelope(value)) return false;
+  if (value.status !== "snapshot") return true;
+  const state = value.value as unknown as Record<string, unknown>;
+  return Boolean(
+    state &&
+    typeof state === "object" &&
+    !Array.isArray(state) &&
+    isNativeAgentViewIdentity(state.identity) &&
+    (state.connection === "connecting" ||
+      state.connection === "connected" ||
+      state.connection === "error") &&
+    state.turn &&
+    typeof state.turn === "object" &&
+    !Array.isArray(state.turn) &&
+    Array.isArray(state.interactions) &&
+    state.interactions.length <= 512 &&
+    Array.isArray(state.composerControls) &&
+    state.composerControls.length <= 512 &&
+    state.capabilities &&
+    typeof state.capabilities === "object" &&
+    !Array.isArray(state.capabilities),
+  );
+}
+
+export function isNativeAgentDiscoveryUpdate(value: unknown): value is NativeAgentDiscoveryUpdate {
+  if (!isNativeAgentDomainEnvelope(value)) return false;
+  if (value.status !== "snapshot") return true;
+  const discovery = value.value as unknown as Record<string, unknown>;
+  if (
+    !discovery ||
+    typeof discovery !== "object" ||
+    Array.isArray(discovery) ||
+    !isNativeAgentViewIdentity(discovery.identity) ||
+    !discovery.sections ||
+    typeof discovery.sections !== "object" ||
+    Array.isArray(discovery.sections)
+  ) {
+    return false;
+  }
+  const sections = discovery.sections as Record<string, unknown>;
+  if (
+    Object.keys(sections).some((key) => !NATIVE_AGENT_DISCOVERY_SECTIONS.includes(key as never))
+  ) {
+    return false;
+  }
+  return Object.values(sections).every((section) => {
+    if (!section || typeof section !== "object" || Array.isArray(section)) return false;
+    const candidate = section as Record<string, unknown>;
+    return (
+      (candidate.availability === "loading" ||
+        candidate.availability === "ready" ||
+        candidate.availability === "stale" ||
+        candidate.availability === "unavailable") &&
+      Number.isSafeInteger(candidate.revision) &&
+      (candidate.revision as number) >= 0 &&
+      (candidate.error === undefined ||
+        (typeof candidate.error === "string" && candidate.error.length <= 4_096))
+    );
+  });
 }
 
 export function isNativeAgentMessagePage(value: unknown): value is NativeAgentMessagePage {

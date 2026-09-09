@@ -257,6 +257,29 @@ export interface ProviderInteractiveSnapshot {
   error?: string;
 }
 
+/** Transcript-only provider read. Optional metadata must never be fetched here. */
+export interface ProviderTranscriptSnapshot {
+  messages: unknown[];
+  /** False when the provider supplied only a bounded retained tail. */
+  complete?: boolean;
+  title?: string;
+  revision?: number;
+  generation?: string | number;
+  /** Stable across ordinary edits; changes when history continuity resets. */
+  historyEpoch?: string;
+  /** A bridge/backend cache may be displayed while exact recovery continues. */
+  freshness?: "cached" | "current";
+  /** Provider/bridge conditional token; scoped to this source session/window. */
+  sourceToken?: string;
+}
+
+/**
+ * Action-critical provider state without transcript or catalogue discovery.
+ * This intentionally reuses the established normalized fields while making a
+ * message array impossible to attach by accident.
+ */
+export type ProviderSessionStateSnapshot = Omit<ProviderInteractiveSnapshot, "messages">;
+
 /** Provider operations shared by workflows and interactive native-agent tabs. */
 export interface AgentSessionProvider {
   readonly agent: ProviderAgent;
@@ -347,6 +370,13 @@ export interface AgentSessionProvider {
  * Build-pipeline callers retain the deliberately smaller interface above.
  */
 export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
+  /** Highest-priority bounded display read; never performs optional discovery. */
+  transcriptSnapshot?(
+    sessionId: string,
+    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }>;
+  /** Action-critical state read; never fetches transcript or optional discovery. */
+  sessionStateSnapshot?(sessionId: string): Promise<ProviderSessionStateSnapshot>;
   /** Live, bounded model discovery for launch surfaces without a session yet. */
   modelCatalog?(): Promise<AgentModel[]>;
   /**

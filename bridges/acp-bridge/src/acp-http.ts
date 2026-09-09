@@ -50,6 +50,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
@@ -71,6 +72,8 @@ import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
+
+const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 
 export async function route(
   request: IncomingMessage,
@@ -167,7 +170,7 @@ export async function route(
     return json(response, 201, publicSession(state));
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|commands|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -191,6 +194,23 @@ export async function route(
       response,
       200,
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
+  }
+  if (action === "transcript" && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(
+      response,
+      200,
+      bridgeTranscriptUpdate(state.messages, {
+        sessionIdentity: state.id,
+        generation: `${provider}:${TRANSCRIPT_GENERATION}`,
+        contentEpoch: state.droppedMessages,
+        revision: state.revision,
+        limit: Number(url.searchParams.get("limit")),
+        targetBytes: Number(url.searchParams.get("targetBytes")),
+        knownToken: url.searchParams.get("knownToken") ?? undefined,
+        complete: !state.transcriptTruncated && state.droppedMessages === 0,
+      }),
     );
   }
   if (action === "status" && request.method === "GET") {

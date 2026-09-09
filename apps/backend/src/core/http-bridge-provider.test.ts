@@ -1816,3 +1816,147 @@ test("sends a read-only build turn without provider plan semantics", async () =>
     expect(prompt.permissionMode).not.toBe("plan");
   }
 });
+
+describe("HTTP bridge progressive transcript", () => {
+  const transcriptOptions = { limit: 100, targetBytes: 512 * 1024 };
+
+  test("falls back to the legacy messages route on a bridge without /transcript", async () => {
+    for (const status of [404, 405]) {
+      const { provider, requests } = httpProvider((url) => {
+        if (url.includes("/transcript")) return new Response("", { status });
+        return Response.json({
+          messages: [{ id: "m1", content: "legacy", parts: [] }],
+          revision: 7,
+        });
+      }, codexConnection);
+
+      const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+      if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+      expect(snapshot.messages).toHaveLength(1);
+      expect(snapshot.complete).toBe(true);
+      expect(snapshot.revision).toBe(7);
+      expect(snapshot.freshness).toBe("current");
+      expect(requests.at(-1)!.url).toContain("/session/session-1/messages");
+    }
+  });
+
+  test("trims the legacy fallback to the requested tail and reports it incomplete", async () => {
+    const { provider } = httpProvider(
+      (url) =>
+        url.includes("/transcript")
+          ? new Response("", { status: 404 })
+          : Response.json({
+              messages: Array.from({ length: 5 }, (_, index) => ({
+                id: `m${index}`,
+                content: `body-${index}`,
+                parts: [],
+              })),
+            }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", {
+      limit: 2,
+      targetBytes: 512 * 1024,
+    });
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.messages.map((message) => (message as { id: string }).id)).toEqual([
+      "m3",
+      "m4",
+    ]);
+    // The caller asked for a tail and got one, so the history it holds is not
+    // the whole conversation and must not claim to be.
+    expect(snapshot.complete).toBe(false);
+  });
+
+  test("answers unchanged from the bridge's conditional token", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ version: 1, status: "unchanged", token: "bt1.abc" }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", {
+      ...transcriptOptions,
+      knownSourceToken: "bt1.abc",
+    });
+    expect(snapshot).toEqual({ unchanged: true, sourceToken: "bt1.abc" });
+    expect(requests[0]!.url).toContain("knownToken=bt1.abc");
+  });
+
+  test("binds the source generation and content epoch into the history epoch", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          version: 1,
+          status: "snapshot",
+          token: "bt1.def",
+          value: {
+            messages: [{ id: "m1", content: "hello", parts: [] }],
+            complete: true,
+            generation: 4,
+            contentEpoch: 2,
+            revision: 9,
+            title: "  Titled  ",
+            freshness: "cached",
+          },
+        }),
+      codexConnection,
+    );
+
+    const snapshot = await provider.transcriptSnapshot!("session-1", transcriptOptions);
+    if ("unchanged" in snapshot) throw new Error("expected a snapshot");
+    expect(snapshot.historyEpoch).toBe("4:2");
+    expect(snapshot.sourceToken).toBe("bt1.def");
+    expect(snapshot.title).toBe("Titled");
+    expect(snapshot.revision).toBe(9);
+    expect(snapshot.freshness).toBe("cached");
+  });
+
+  test("rejects a malformed transcript envelope instead of showing an empty tab", async () => {
+    for (const body of [
+      { version: 1, status: "snapshot" },
+      { version: 1, status: "snapshot", token: "bt1.x", value: { messages: "not-an-array" } },
+      { version: 1, status: "unchanged" },
+    ]) {
+      const { provider } = httpProvider(() => Response.json(body), codexConnection);
+      await expect(provider.transcriptSnapshot!("session-1", transcriptOptions)).rejects.toThrow(
+        ProviderUnavailableError,
+      );
+    }
+  });
+
+  test("reports a missing session state without failing the read", async () => {
+    const { provider } = httpProvider(() => new Response("", { status: 404 }), codexConnection);
+    await expect(provider.sessionStateSnapshot!("session-1")).resolves.toEqual({
+      status: "missing",
+    });
+  });
+
+  test("carries phase, policy and interaction kinds without a transcript", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.includes("/config")) return Response.json({ model: "gpt-5.5", mode: "plan" });
+      return Response.json({
+        status: "running",
+        phase: "running",
+        title: "Session title",
+        messageRevision: 12,
+        capabilities: { interactions: { kinds: ["question", 42] } },
+        policy: { readOnly: true },
+      });
+    }, codexConnection);
+
+    const state = await provider.sessionStateSnapshot!("session-1");
+    expect(state).toMatchObject({
+      status: "running",
+      phase: "running",
+      title: "Session title",
+      providerRevision: 12,
+      interactionKinds: ["question"],
+      controls: { modelId: "gpt-5.5", mode: "plan" },
+    });
+    // A state read must never touch the transcript surface: that route is a
+    // liveness touch on some bridges and is the slow path this split avoids.
+    expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
+    expect(state).not.toHaveProperty("messages");
+  });
+});

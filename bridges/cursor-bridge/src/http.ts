@@ -44,6 +44,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
@@ -242,8 +243,9 @@ async function startLogin(response: ServerResponse): Promise<void> {
   json(response, 200, { url: loginUrl, loginUrl });
 }
 
+const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|steer|structured-output|interactions|config|approvals|runtime-health|commands|mcp|rewind-messages))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -290,6 +292,23 @@ async function routeSession(
       response,
       200,
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
+  }
+  if (action === "transcript" && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(
+      response,
+      200,
+      bridgeTranscriptUpdate(state.messages, {
+        sessionIdentity: state.id,
+        generation: TRANSCRIPT_GENERATION,
+        contentEpoch: state.droppedMessages,
+        revision: state.revision,
+        limit: Number(url.searchParams.get("limit")),
+        targetBytes: Number(url.searchParams.get("targetBytes")),
+        knownToken: url.searchParams.get("knownToken") ?? undefined,
+        complete: !state.transcriptTruncated && state.droppedMessages === 0,
+      }),
     );
   }
   if (action === "status" && request.method === "GET") {

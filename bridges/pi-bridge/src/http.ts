@@ -48,6 +48,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
@@ -90,6 +91,7 @@ class HttpError extends Error {
 }
 
 const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
+const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 let deleteCancelTimeoutMs = DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
 
 /** Shorten the best-effort DELETE cancellation budget in deterministic tests. */
@@ -303,7 +305,7 @@ function globalSlashCommands(): Array<{ name: string; description: string }> {
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -378,6 +380,24 @@ async function routeSession(
       response,
       200,
       messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
+  }
+  if (action === "transcript" && request.method === "GET") {
+    boundTranscriptForRead(state);
+    return json(
+      response,
+      200,
+      bridgeTranscriptUpdate(state.messages, {
+        sessionIdentity: state.id,
+        generation: TRANSCRIPT_GENERATION,
+        contentEpoch: state.droppedMessages,
+        revision: state.revision,
+        limit: Number(url.searchParams.get("limit")),
+        targetBytes: Number(url.searchParams.get("targetBytes")),
+        knownToken: url.searchParams.get("knownToken") ?? undefined,
+        complete: !state.transcriptTruncated && state.droppedMessages === 0,
+        title: state.title,
+      }),
     );
   }
   if (action === "status" && request.method === "GET") {

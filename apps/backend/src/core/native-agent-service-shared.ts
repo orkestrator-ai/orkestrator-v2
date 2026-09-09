@@ -50,6 +50,11 @@ import type {
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
   NativeAgentToolDetails,
+  NativeAgentTranscriptUpdate,
+  NativeAgentSessionStateUpdate,
+  NativeAgentDiscoveryUpdate,
+  NativeAgentDiscoverySection,
+  NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import {
   isFallbackExecutionProfileId,
@@ -83,6 +88,8 @@ import {
   type NativeAgentRuntimeProvider,
   type ProviderNativeAgentSessionAction,
   type ProviderInteractiveSnapshot,
+  type ProviderSessionStateSnapshot,
+  type ProviderTranscriptSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./native-agent-provider.js";
@@ -217,6 +224,30 @@ export interface NativeAgentProjectionUpdateInput {
   knownToken?: string;
   forceSnapshot?: boolean;
 }
+
+export interface NativeAgentProgressiveInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}
+
+export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
+  liveWindow: NativeAgentLiveWindow;
+}
+
+export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {
+  sections: NativeAgentDiscoverySection[];
+}
+
+export type NativeAgentProgressiveProtocolTypes = [
+  NativeAgentTranscriptUpdate,
+  NativeAgentSessionStateUpdate,
+  NativeAgentDiscoveryUpdate,
+  NativeAgentViewIdentity,
+];
 
 export interface NativeAgentMessagePageInput {
   environmentId: string;
@@ -784,6 +815,8 @@ export type {
   NativeAgentRuntimeProvider,
   ProviderNativeAgentSessionAction,
   ProviderInteractiveSnapshot,
+  ProviderSessionStateSnapshot,
+  ProviderTranscriptSnapshot,
   ProviderInteractionObservationEvent,
   ProviderExecutionMode,
   PromptAttachment,

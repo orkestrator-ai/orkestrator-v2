@@ -4,6 +4,7 @@
  */
 import { describe, expect, mock, test } from "bun:test";
 
+import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
@@ -115,6 +116,166 @@ import {
 } from "./native-agent-service-projection-test-support.js";
 
 describe("NativeAgentService", () => {
+  test("joins equivalent progressive transcript reads at the provider boundary", async () => {
+    let releaseTranscript!: () => void;
+    const transcriptHeld = new Promise<void>((resolve) => {
+      releaseTranscript = resolve;
+    });
+    const transcriptSnapshot = mock(async () => {
+      await transcriptHeld;
+      return {
+        messages: [],
+        complete: true,
+        revision: 1,
+        sourceToken: "source-1",
+        freshness: "current" as const,
+      };
+    });
+    const stub = createProviderStub("cursor", { transcriptSnapshot });
+    await withService(
+      { prefix: "orkestrator-progressive-join-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-join",
+          viewVersion: 1 as const,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        };
+        await service.ensureSession(input);
+        const first = service.getTranscriptUpdate(input);
+        const second = service.getTranscriptUpdate(input);
+        await waitForCondition(() => transcriptSnapshot.mock.calls.length === 1);
+        expect(transcriptSnapshot).toHaveBeenCalledTimes(1);
+        releaseTranscript();
+        expect((await first).status).toBe("snapshot");
+        expect((await second).status).toBe("snapshot");
+      },
+    );
+  });
+
+  test("delivers transcript while optional discovery is still held", async () => {
+    let releaseModels!: () => void;
+    const modelsHeld = new Promise<void>((resolve) => {
+      releaseModels = resolve;
+    });
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            content: "ready",
+            parts: [],
+            createdAt: "2026-09-09T00:00:00.000Z",
+          },
+        ],
+        complete: true,
+        revision: 1,
+        sourceToken: "source-1",
+        freshness: "current",
+      }),
+      sessionStateSnapshot: async () => ({ status: "idle", phase: "idle" }),
+      modelCatalog: async () => {
+        await modelsHeld;
+        return [];
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-discovery-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-discovery",
+        };
+        await service.ensureSession(identity);
+        const discovery = await service.getDiscoveryUpdate({
+          ...identity,
+          viewVersion: 1,
+          sections: ["models"],
+        });
+        expect(discovery.status).toBe("snapshot");
+        if (discovery.status !== "snapshot") throw new Error("expected discovery snapshot");
+        expect(discovery.value.sections.models?.availability).toBe("loading");
+
+        const transcript = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        });
+        expect(transcript.status).toBe("snapshot");
+        if (transcript.status !== "snapshot") throw new Error("expected transcript snapshot");
+        expect(transcript.value.messages).toHaveLength(1);
+        releaseModels();
+      },
+    );
+  });
+
+  test("does not make transcript wait for action-state reconciliation", async () => {
+    let releaseInteractions!: () => void;
+    const interactionsHeld = new Promise<void>((resolve) => {
+      releaseInteractions = resolve;
+    });
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            content: "visible",
+            parts: [],
+            createdAt: "2026-09-09T00:00:00.000Z",
+          },
+        ],
+        complete: true,
+        revision: 1,
+        sourceToken: "source-1",
+        freshness: "current",
+      }),
+      sessionStateSnapshot: async () => ({ status: "idle", phase: "idle" }),
+      interactions: {
+        listPendingInteractions: async () => {
+          await interactionsHeld;
+          return { version: AGENT_INTERACTION_CONTRACT_VERSION, requests: [], revision: 0 };
+        },
+        resolveInteraction: async (sessionId, interactionId) => ({
+          result: "stale" as const,
+          sessionId,
+          interactionId,
+          revision: 0,
+        }),
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-state-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-state",
+        };
+        await service.ensureSession(identity);
+        let stateSettled = false;
+        const state = service
+          .getSessionStateUpdate({ ...identity, viewVersion: 1 })
+          .then((value) => {
+            stateSettled = true;
+            return value;
+          });
+        const transcript = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow: { messages: 100, targetBytes: 512 * 1024 },
+        });
+        expect(transcript.status).toBe("snapshot");
+        expect(stateSettled).toBe(false);
+        releaseInteractions();
+        expect((await state).status).toBe("snapshot");
+      },
+    );
+  });
+
   test("projects sign-in metadata without blocking a new unauthenticated session", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => ({

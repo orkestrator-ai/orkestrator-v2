@@ -340,9 +340,15 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [transcriptError, setTranscriptError] = useState<string | null>(
     matchingProgressiveCache?.transcriptError ?? null,
   );
-  const [sessionStateAvailability, setSessionStateAvailability] = useState<
-    NativeAgentProgressiveCacheEntry["stateAvailability"]
-  >(matchingProgressiveCache?.stateAvailability ?? "unavailable");
+  /*
+   * Action authority is only ever granted by a live session-state read, so a
+   * remount starts unavailable even when the shared cache still holds the
+   * previous mount's snapshot. The cached *transcript* is readable regardless;
+   * that separation is the point of the progressive view.
+   */
+  const [sessionStateAvailability, setSessionStateAvailability] =
+    useState<NativeAgentProgressiveCacheEntry["stateAvailability"]>("unavailable");
+  const [sessionStateRefreshing, setSessionStateRefreshing] = useState(false);
   const [sessionStateError, setSessionStateError] = useState<string | null>(
     matchingProgressiveCache?.stateError ?? null,
   );
@@ -354,6 +360,24 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [],
   );
+  /**
+   * Begin a state read without surrendering authority.
+   *
+   * A refresh is not evidence that the last known state became wrong: the
+   * session is still whatever the previous authoritative read said until a new
+   * one contradicts it. Dropping to `refreshing` while a snapshot is already
+   * held would blank pending approvals and lock the composer on every poll —
+   * once every 500 ms during an active turn. Only a tab that has never had an
+   * authoritative read shows `refreshing`, which is the genuine first-load
+   * case the connecting state exists for.
+   */
+  const beginSessionStateRefresh = useCallback(() => {
+    setSessionStateRefreshing(true);
+    if (sessionStateAvailabilityRef.current !== "current") {
+      markSessionStateAvailability("refreshing");
+    }
+    return sessionStateAvailabilityRef.current;
+  }, [markSessionStateAvailability]);
   const [isDispatching, setIsDispatching] = useState(false);
   /**
    * How much transcript this tab has asked for. Undefined keeps the backend
@@ -371,7 +395,8 @@ export function useNativeAgentSession<TMessage = unknown>({
   const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
   const progressiveTranscriptTokenRef = useRef(matchingProgressiveCache?.transcriptToken);
   const lastTranscriptViewRef = useRef<NativeAgentTranscriptView<TMessage> | null>(null);
-  const progressiveStateTokenRef = useRef(matchingProgressiveCache?.stateToken);
+  /** Never seeded from the shared cache; see the remount reset below. */
+  const progressiveStateTokenRef = useRef<string | undefined>(undefined);
   const progressiveDiscoveryTokenRef = useRef(matchingProgressiveCache?.discoveryToken);
   const progressiveIdentityRef = useRef<NativeAgentViewIdentity | undefined>(
     matchingProgressiveCache?.identity,
@@ -474,9 +499,11 @@ export function useNativeAgentSession<TMessage = unknown>({
     projectionOperationEpochRef.current += 1;
     refreshSequenceRef.current += 1;
     progressiveStateTokenRef.current = undefined;
-    markSessionStateAvailability("refreshing");
+    // The token is dropped so the next read returns a full snapshot, but the
+    // state already on screen stays authoritative until that snapshot lands.
+    beginSessionStateRefresh();
     return projectionOperationEpochRef.current;
-  }, [markSessionStateAvailability]);
+  }, [beginSessionStateRefresh]);
 
   const applyProjection = useCallback(
     (
@@ -1005,6 +1032,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     (next: NativeAgentSessionProjection<TMessage> | null) => {
       progressiveStateTokenRef.current = undefined;
       markSessionStateAvailability(next ? "current" : "unavailable");
+      setSessionStateRefreshing(false);
       setSessionStateError(null);
       const live = syncLiveProjectionRef.current;
       const retained = historyMessagesRef.current;
@@ -1092,12 +1120,12 @@ export function useNativeAgentSession<TMessage = unknown>({
         if (await nativeAgentProgressiveSupported()) {
           setTranscriptRefreshing(true);
           setTranscriptError(null);
-          markSessionStateAvailability("refreshing");
+          const retainedStateAvailability = beginSessionStateRefresh();
           setSessionStateError(null);
           updateProgressiveCache({
             transcriptRefreshing: true,
             transcriptError: undefined,
-            stateAvailability: "refreshing",
+            stateAvailability: retainedStateAvailability,
             stateError: undefined,
           });
 
@@ -1129,9 +1157,9 @@ export function useNativeAgentSession<TMessage = unknown>({
                   progressiveTranscriptTokenRef.current === update.baseToken &&
                   sameProgressiveIdentity(current.identity, update.identity)
                 ) {
-                  const next = applyNativeAgentTranscriptDelta(current, update.delta);
-                  if (next) {
-                    applyProgressiveTranscript(next, update.token);
+                  const merged = applyNativeAgentTranscriptDelta(current, update.delta);
+                  if (merged) {
+                    applyProgressiveTranscript(merged, update.token);
                     return;
                   }
                 }
@@ -1234,6 +1262,9 @@ export function useNativeAgentSession<TMessage = unknown>({
             .catch(() => undefined);
 
           await Promise.allSettled([transcriptRead, stateRead]);
+          // A superseding refresh owns the flag from here on; clearing it would
+          // report that tab as settled while its newer read is still running.
+          if (stillCurrent()) setSessionStateRefreshing(false);
           if (
             stillCurrent() &&
             transcriptMissing &&
@@ -1347,6 +1378,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           commit?.();
           if (!syncLiveProjectionRef.current || !next) applyProjection(next);
           markSessionStateAvailability(next ? "current" : "unavailable");
+          setSessionStateRefreshing(false);
           setTranscriptAvailability(
             next ? (next.messages.length === 0 ? "empty" : "current") : "unavailable",
           );
@@ -1391,6 +1423,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       applyProgressiveDiscovery,
       applyProgressiveState,
       applyProgressiveTranscript,
+      beginSessionStateRefresh,
       commitSyncMaterialization,
       enabled,
       environmentId,
@@ -1536,6 +1569,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       setIsRefreshing(false);
       setTranscriptRefreshing(false);
       markSessionStateAvailability("unavailable");
+      setSessionStateRefreshing(false);
       setHasCompletedRead(true);
       return null;
     } finally {
@@ -1604,7 +1638,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     ) {
       progressiveIdentityRef.current = progressive.identity;
       progressiveTranscriptTokenRef.current = progressive.transcriptToken;
-      progressiveStateTokenRef.current = progressive.stateToken;
+      /*
+       * The shared cache carries tokens, not the session-state value they
+       * validate. Replaying the token would let the backend answer `unchanged`
+       * and grant this mount authority over controls it never read, so the
+       * first state read after a remount always asks for a full snapshot.
+       */
+      progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
       progressiveDiscoveryRef.current = progressive.discovery;
       setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
@@ -2095,6 +2135,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     transcriptRefreshing,
     transcriptError,
     sessionStateAvailability,
+    sessionStateRefreshing,
     sessionStateError,
     isDispatching,
     refresh,

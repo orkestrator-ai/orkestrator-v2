@@ -36,12 +36,15 @@ export class ProgressiveReadMetrics {
       ...(metric.schedulerWaitMs === undefined
         ? {}
         : { schedulerWaitMs: Math.max(0, Math.round(metric.schedulerWaitMs)) }),
-      ...(metric.sourceMs === undefined ? {} : { sourceMs: Math.max(0, Math.round(metric.sourceMs)) }),
+      ...(metric.sourceMs === undefined
+        ? {}
+        : { sourceMs: Math.max(0, Math.round(metric.sourceMs)) }),
       ...(metric.normalizeMs === undefined
         ? {}
         : { normalizeMs: Math.max(0, Math.round(metric.normalizeMs)) }),
     });
-    if (this.samples.length > MAX_METRICS) this.samples.splice(0, this.samples.length - MAX_METRICS);
+    if (this.samples.length > MAX_METRICS)
+      this.samples.splice(0, this.samples.length - MAX_METRICS);
   }
 
   list(): readonly ProgressiveReadMetric[] {

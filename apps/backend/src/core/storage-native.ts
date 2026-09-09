@@ -708,9 +708,12 @@ export abstract class StorageNative extends StorageReviews {
       );
       if (Object.keys(retained).length === Object.keys(store).length) return;
       await this.saveSensitiveJson(this.nativeAgentDisplayTailsFile(), retained);
-      await this.scrubSensitiveJsonBackups(this.nativeAgentDisplayTailsFile(), (_storedKey, record) => {
-        return isNativeAgentDisplayTail(record) && record.environmentId !== environmentId;
-      });
+      await this.scrubSensitiveJsonBackups(
+        this.nativeAgentDisplayTailsFile(),
+        (_storedKey, record) => {
+          return isNativeAgentDisplayTail(record) && record.environmentId !== environmentId;
+        },
+      );
     });
   }
 

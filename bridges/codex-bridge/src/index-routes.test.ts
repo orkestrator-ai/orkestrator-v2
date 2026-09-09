@@ -1513,3 +1513,138 @@ describe("usage route", () => {
     );
   });
 });
+
+describe("progressive transcript route", () => {
+  const message = (id: string) => ({
+    id,
+    role: "assistant" as const,
+    content: `body-${id}`,
+    parts: [],
+    createdAt: "2026-09-09T00:00:00.000Z",
+  });
+  const status = {
+    status: "idle" as const,
+    phase: "idle" as const,
+    title: "Codex session",
+    engineGeneration: 3,
+    messageRevision: 5,
+    contentEpoch: 2,
+  };
+
+  test("serves an attached tail as current so the backend can persist it", async () => {
+    await withRuntimeMethod(
+      "getStatus",
+      () => status,
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => ({ messages: [message("m1")], freshness: "current" }),
+          async () => {
+            const response = await app.request(
+              "/session/session-1/transcript?version=1&limit=100&targetBytes=524288",
+            );
+            expect(response.status).toBe(200);
+            const body = await response.json();
+            expect(body).toMatchObject({
+              version: 1,
+              status: "snapshot",
+              value: {
+                complete: true,
+                // "cached" here would tell the backend the tail is only a
+                // preview, and it would refuse to persist a display tail for
+                // every Codex tab.
+                freshness: "current",
+                generation: 3,
+                contentEpoch: 2,
+                revision: 5,
+                title: "Codex session",
+              },
+            });
+            expect(body.value.messages.map((entry: { id: string }) => entry.id)).toEqual(["m1"]);
+            expect(typeof body.token).toBe("string");
+          },
+        ),
+    );
+  });
+
+  test("reports the detached local tail as cached", async () => {
+    await withRuntimeMethod(
+      "getStatus",
+      () => status,
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => ({ messages: [message("m1")], freshness: "cached" }),
+          async () => {
+            const response = await app.request("/session/session-1/transcript?version=1");
+            expect((await response.json()).value.freshness).toBe("cached");
+          },
+        ),
+    );
+  });
+
+  test("answers unchanged for a matching token and never touches liveness", async () => {
+    const touches: boolean[] = [];
+    await withRuntimeMethod(
+      "getStatus",
+      (_sessionId: string, touch = true) => {
+        touches.push(touch);
+        return status;
+      },
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => ({ messages: [message("m1")], freshness: "current" }),
+          async () => {
+            const first = await app.request("/session/session-1/transcript?version=1");
+            const token = (await first.json()).token as string;
+            const second = await app.request(
+              `/session/session-1/transcript?version=1&knownToken=${encodeURIComponent(token)}`,
+            );
+            expect(await second.json()).toEqual({ version: 1, status: "unchanged", token });
+            expect(touches).toEqual([false, false]);
+          },
+        ),
+    );
+  });
+
+  test("compresses with a Vary header so a cache cannot serve gzip to a plain client", async () => {
+    await withRuntimeMethod(
+      "getStatus",
+      () => status,
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => ({
+            messages: Array.from({ length: 40 }, (_, index) => message(`m${index}`)),
+            freshness: "current",
+          }),
+          async () => {
+            const request = new Request("http://localhost/session/session-1/transcript?version=1");
+            request.headers.set("Accept-Encoding", "gzip");
+            const response = await app.request(request);
+            expect(response.status).toBe(200);
+            expect(response.headers.get("Content-Encoding")).toBe("gzip");
+            expect(response.headers.get("Vary")).toContain("Accept-Encoding");
+          },
+        ),
+    );
+  });
+
+  test("reports an unknown session as missing", async () => {
+    await withRuntimeMethod(
+      "getStatus",
+      () => null,
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => null,
+          async () => {
+            const response = await app.request("/session/missing/transcript?version=1");
+            expect(response.status).toBe(404);
+            expect(await response.json()).toEqual({ error: "Session not found" });
+          },
+        ),
+    );
+  });
+});

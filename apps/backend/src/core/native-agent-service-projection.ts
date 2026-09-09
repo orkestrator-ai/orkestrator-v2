@@ -876,11 +876,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   }
 
   /** Join equivalent source work; one renderer leaving never cancels the read. */
-  private progressiveRead<T>(
-    key: string,
-    read: () => Promise<T>,
-    sessionKey?: string,
-  ): Promise<T> {
+  private progressiveRead<T>(key: string, read: () => Promise<T>, sessionKey?: string): Promise<T> {
     const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
     if (pending) {
       const waiters = this.progressiveReadWaiters.get(key) ?? 0;
@@ -930,7 +926,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const value = await this.progressiveRead(key, read, sessionKey);
     const latest = this.projectionEpochs.get(sessionKey) ?? 0;
     if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) return value;
-    this.progressiveDirtyFollowUps.set(key, Math.max(this.progressiveDirtyFollowUps.get(key) ?? 0, latest));
+    this.progressiveDirtyFollowUps.set(
+      key,
+      Math.max(this.progressiveDirtyFollowUps.get(key) ?? 0, latest),
+    );
     return this.scheduleProgressiveTrailing(key, sessionKey, read);
   }
 
@@ -949,10 +948,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         this.progressiveDirtyFollowUps.set(key, latest);
         return this.progressiveRead(key, read, sessionKey);
       }
-      this.progressiveDirtyFollowUps.delete(key);
       return value;
     })().finally(() => {
       if (this.progressiveTrailing.get(key) === trailing) this.progressiveTrailing.delete(key);
+      // The marker is what `pruneProjectionEpoch` reads to decide the session
+      // is still busy, so it has to clear on every exit — including the second
+      // re-read above and a thrown read. Leaving it set on one branch pinned
+      // the session's epoch in memory for the lifetime of the process.
+      this.progressiveDirtyFollowUps.delete(key);
     });
     this.progressiveTrailing.set(key, trailing);
     return trailing;
@@ -1009,7 +1012,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const beforeIndex = history.messages.findIndex(
       (message) => (message as { id?: unknown })?.id === first.id,
     );
-    return beforeIndex > 0 ? this.historyCursor(sessionKey, first.id, history.epoch, sessionId) : undefined;
+    return beforeIndex > 0
+      ? this.historyCursor(sessionKey, first.id, history.epoch, sessionId)
+      : undefined;
   }
 
   private transcriptDelta(
@@ -2419,13 +2424,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     for (const candidate of Array.from(this.interactiveSnapshotShares.keys())) {
       if (candidate.startsWith(`${key}\0`)) this.interactiveSnapshotShares.delete(candidate);
     }
+    /*
+     * Only transcript and state reads are covered by `progressiveReadCovering`,
+     * so only they have a trailing read that can consume — and then clear — a
+     * follow-up marker. Marking a discovery key would strand it: discovery goes
+     * through `progressiveRead` directly, never reaches the trailing path, and
+     * the stranded marker would block `pruneProjectionEpoch` forever. Discovery
+     * needs no marker anyway; its cache entries were dropped above, so the next
+     * read reschedules it.
+     */
     for (const candidate of Array.from(this.progressiveReads.keys())) {
-      if (candidate.startsWith(progressivePrefix)) {
-        this.progressiveDirtyFollowUps.set(
-          candidate,
-          this.projectionEpochs.get(key) ?? 0,
-        );
-      }
+      if (!candidate.startsWith(progressivePrefix)) continue;
+      if (candidate.includes("\0progressive-v1\0discovery:")) continue;
+      this.progressiveDirtyFollowUps.set(candidate, this.projectionEpochs.get(key) ?? 0);
     }
   }
 

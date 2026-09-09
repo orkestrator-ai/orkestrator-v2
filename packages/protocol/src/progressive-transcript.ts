@@ -102,17 +102,27 @@ export function bridgeTranscriptUpdate<T extends { content: string; parts: unkno
     contentFallbackBytes: 64 * 1024,
   });
   const omittedMessages = messages.length - bounded.messages.length;
-  const truncated = !options.complete || bounded.messageWindow.truncated || omittedMessages > 0;
+  /*
+   * Two independent reasons a reader may be missing history, kept apart.
+   *
+   * `windowTruncated` is what *this* response cut to fit its window, and is
+   * the only thing `truncationReason` can honestly describe. A source that
+   * already lost older history reports `complete: false`; that also leaves the
+   * window truncated for the reader, but attributing it to bytes or count
+   * would name a trim that never happened.
+   */
+  const windowTruncated = bounded.messageWindow.truncated || omittedMessages > 0;
+  const truncated = !options.complete || windowTruncated;
   return {
     version: 1,
     status: "snapshot",
     token,
     value: {
       messages: bounded.messages,
-      complete: options.complete && !truncated,
+      complete: options.complete && !windowTruncated,
       messageWindow: {
         truncated,
-        ...(truncated
+        ...(windowTruncated
           ? {
               truncationReason:
                 messages.length > limit && candidates.length === bounded.messages.length

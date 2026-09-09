@@ -285,6 +285,7 @@ export function SharedNativeAgentController({
     transcriptRefreshing,
     transcriptError,
     sessionStateAvailability,
+    sessionStateRefreshing,
     sessionStateError,
     isDispatching,
     connect,
@@ -987,6 +988,17 @@ export function SharedNativeAgentController({
         );
         return false;
       }
+      /*
+       * The composer stays editable while a cached transcript is on screen, so
+       * a draft can be written before the session state that authorizes
+       * sending has arrived. Dropping the keystroke silently there would be
+       * indistinguishable from a broken Enter key; the draft is preserved and
+       * the user is told to retry.
+       */
+      if (prompt && !sessionStateAuthoritative) {
+        setSendError(`Still reading the ${label} session. Nothing was sent — try again shortly.`);
+        return false;
+      }
       if (!prompt || sendLocked || isDispatching) return false;
       submitInFlightRef.current = true;
       setIsSubmitting(true);
@@ -1119,6 +1131,7 @@ export function SharedNativeAgentController({
       sendLocked,
       serializeForLLM,
       sessionKey,
+      sessionStateAuthoritative,
       tabId,
       updateDraft,
       visibleAuthoritativeMessageIds,
@@ -1482,7 +1495,10 @@ export function SharedNativeAgentController({
     transcriptError || sessionStateError
       ? ("error" as const)
       : ((sessionStateAuthoritative ? projection?.connection : undefined) ??
-        (isRefreshing || transcriptRefreshing || sessionStateAvailability === "refreshing"
+        (isRefreshing ||
+        transcriptRefreshing ||
+        sessionStateRefreshing ||
+        sessionStateAvailability === "refreshing"
           ? ("connecting" as const)
           : runtimeError || hasCompletedRead
             ? ("error" as const)

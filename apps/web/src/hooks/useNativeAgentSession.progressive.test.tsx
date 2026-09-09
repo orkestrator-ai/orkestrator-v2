@@ -38,6 +38,7 @@ let discoveryUpdates: Array<
   () => NativeAgentDiscoveryUpdate | Promise<NativeAgentDiscoveryUpdate>
 > = [];
 let transcriptCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
+let stateCalls: Array<{ knownToken?: string; forceSnapshot?: boolean }> = [];
 
 const identity: NativeAgentViewIdentity = {
   backendInstanceId: "backend-1",
@@ -68,18 +69,21 @@ const getNativeAgentTranscriptUpdateMock = mock(
     return next();
   },
 );
-const getNativeAgentSessionStateUpdateMock = mock(async () => {
-  const next = stateUpdates.shift();
-  if (!next) {
-    return {
-      viewVersion: 1,
-      status: "unchanged",
-      token: "state-unscripted",
-      identity,
-    } satisfies NativeAgentSessionStateUpdate;
-  }
-  return next();
-});
+const getNativeAgentSessionStateUpdateMock = mock(
+  async (input: { knownToken?: string; forceSnapshot?: boolean }) => {
+    stateCalls.push({ knownToken: input.knownToken, forceSnapshot: input.forceSnapshot });
+    const next = stateUpdates.shift();
+    if (!next) {
+      return {
+        viewVersion: 1,
+        status: "unchanged",
+        token: "state-unscripted",
+        identity,
+      } satisfies NativeAgentSessionStateUpdate;
+    }
+    return next();
+  },
+);
 const getNativeAgentDiscoveryUpdateMock = mock(async () => {
   const next = discoveryUpdates.shift();
   if (!next) {
@@ -153,9 +157,7 @@ function transcriptSnapshot(
   };
 }
 
-function stateView(
-  extras: Partial<NativeAgentSessionStateView> = {},
-): NativeAgentSessionStateView {
+function stateView(extras: Partial<NativeAgentSessionStateView> = {}): NativeAgentSessionStateView {
   return {
     identity,
     connection: "connected",
@@ -194,6 +196,7 @@ beforeEach(() => {
   stateUpdates = [];
   discoveryUpdates = [];
   transcriptCalls = [];
+  stateCalls = [];
   getNativeAgentTranscriptUpdateMock.mockClear();
   getNativeAgentSessionStateUpdateMock.mockClear();
   getNativeAgentDiscoveryUpdateMock.mockClear();
@@ -228,7 +231,9 @@ describe("useNativeAgentSession progressive view", () => {
     discoveryUpdates = [() => heldDiscovery];
 
     const { result } = renderSession();
-    await waitFor(() => expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]));
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]),
+    );
     expect(result.current.transcriptAvailability).toBe("current");
     expect(getNativeAgentDiscoveryUpdateMock).toHaveBeenCalled();
     releaseDiscovery();
@@ -243,7 +248,9 @@ describe("useNativeAgentSession progressive view", () => {
     stateUpdates = [() => heldState];
 
     const { result } = renderSession();
-    await waitFor(() => expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]));
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]),
+    );
     expect(result.current.sessionStateAvailability).not.toBe("current");
     expect(result.current.projection?.turn.phase).toBe("recovering");
     expect(result.current.projection?.interactions).toEqual([]);
@@ -278,7 +285,9 @@ describe("useNativeAgentSession progressive view", () => {
     stateUpdates = [() => stateSnapshot("state-1"), () => stateSnapshot("state-2")];
 
     const { result } = renderSession();
-    await waitFor(() => expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]));
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]),
+    );
     await act(async () => {
       await result.current.refresh();
     });
@@ -306,5 +315,120 @@ describe("useNativeAgentSession progressive view", () => {
     const remount = renderSession();
     expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]);
     expect(remount.result.current.transcriptAvailability).toBe("cached");
+  });
+
+  test("keeps session state authoritative while a later refresh is in flight", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [
+      () =>
+        ({
+          viewVersion: 1,
+          status: "snapshot",
+          token: "state-1",
+          value: stateView({
+            turn: { phase: "running" },
+            interactions: [
+              {
+                id: "approval-1",
+                kind: "command-approval",
+                createdAt: "2026-09-09T00:00:00.000Z",
+              },
+            ] as unknown as NativeAgentSessionStateView["interactions"],
+            composerControls: [
+              { id: "stop", label: "Stop", kind: "stop" },
+            ] as unknown as NativeAgentSessionStateView["composerControls"],
+          }),
+        }) satisfies NativeAgentSessionStateUpdate,
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.interactions).toHaveLength(1);
+
+    /*
+     * The second refresh returns a changed transcript while the state read is
+     * held. Transcript is the deliberately faster domain, so this ordering is
+     * the ordinary one, not a rare race: if a refresh dropped authority the
+     * pending approval would unmount on every poll.
+     */
+    let releaseState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+      releaseState = () =>
+        resolve({ viewVersion: 1, status: "unchanged", token: "state-1", identity });
+    });
+    transcriptUpdates = [() => transcriptSnapshot("transcript-2", [message("m1"), message("m2")])];
+    stateUpdates = [() => heldState];
+
+    let refreshed!: Promise<unknown>;
+    await act(async () => {
+      refreshed = result.current.refresh();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+    );
+
+    expect(result.current.sessionStateAvailability).toBe("current");
+    expect(result.current.sessionStateRefreshing).toBe(true);
+    expect(result.current.projection?.turn.phase).toBe("running");
+    expect(result.current.projection?.connection).toBe("connected");
+    expect(result.current.projection?.interactions).toHaveLength(1);
+    expect(result.current.projection?.composerControls).toHaveLength(1);
+
+    releaseState();
+    await act(async () => {
+      await refreshed;
+    });
+    await waitFor(() => expect(result.current.sessionStateRefreshing).toBe(false));
+    expect(result.current.sessionStateAvailability).toBe("current");
+  });
+
+  test("drops authority when the session state read fails", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+
+    transcriptUpdates = [];
+    stateUpdates = [
+      () =>
+        ({
+          viewVersion: 1,
+          status: "unavailable",
+          retryable: true,
+          error: "status endpoint timed out",
+        }) satisfies NativeAgentSessionStateUpdate,
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.sessionStateAvailability).toBe("unavailable");
+    expect(result.current.sessionStateError).toBe("status endpoint timed out");
+    // The transcript is unaffected: a failed state read is not evidence the
+    // conversation is gone.
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]);
+  });
+
+  test("a remount re-reads session state instead of replaying its token", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
+    first.unmount();
+
+    stateCalls = [];
+    transcriptUpdates = [];
+    stateUpdates = [() => stateSnapshot("state-2")];
+    const remount = renderSession();
+    // Cached transcript text is readable on the first paint; action authority
+    // is not inherited with it.
+    expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]);
+    expect(remount.result.current.sessionStateAvailability).not.toBe("current");
+
+    await waitFor(() => expect(stateCalls.length).toBeGreaterThan(0));
+    expect(stateCalls[0]?.knownToken).toBeUndefined();
   });
 });

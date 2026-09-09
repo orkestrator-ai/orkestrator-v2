@@ -85,4 +85,63 @@ describe("progressive bridge transcript", () => {
     expect(update.value.messageWindow.truncated).toBe(true);
     expect(new TextEncoder().encode(JSON.stringify(update)).byteLength).toBeLessThan(600 * 1024);
   });
+
+  test("attributes truncation to the window only when the window actually trimmed", () => {
+    // A source that already dropped older history reports `complete: false`.
+    // The reader is genuinely missing messages, but naming a byte or count trim
+    // would describe a cut this response never made.
+    const incomplete = bridgeTranscriptUpdate([message("1"), message("2")], {
+      sessionIdentity: "session-1",
+      generation: "generation-1",
+      contentEpoch: "epoch-1",
+      revision: 3,
+      limit: 100,
+      targetBytes: 512 * 1024,
+      complete: false,
+    });
+    expect(incomplete.status).toBe("snapshot");
+    if (incomplete.status !== "snapshot") throw new Error("expected snapshot");
+    expect(incomplete.value.messages).toHaveLength(2);
+    expect(incomplete.value.complete).toBe(false);
+    expect(incomplete.value.messageWindow.truncated).toBe(true);
+    expect(incomplete.value.messageWindow.truncationReason).toBeUndefined();
+    expect(incomplete.value.messageWindow.omittedMessages).toBeUndefined();
+
+    // The same source once the window does cut: now the reason is real.
+    const trimmed = bridgeTranscriptUpdate(
+      Array.from({ length: 5 }, (_, index) => message(String(index))),
+      {
+        sessionIdentity: "session-1",
+        generation: "generation-1",
+        contentEpoch: "epoch-1",
+        revision: 3,
+        limit: 2,
+        targetBytes: 512 * 1024,
+        complete: false,
+      },
+    );
+    expect(trimmed.status).toBe("snapshot");
+    if (trimmed.status !== "snapshot") throw new Error("expected snapshot");
+    expect(trimmed.value.messageWindow).toMatchObject({
+      truncated: true,
+      truncationReason: "count",
+      omittedMessages: 3,
+    });
+  });
+
+  test("reports a complete untruncated window without a reason", () => {
+    const update = bridgeTranscriptUpdate([message("1")], {
+      sessionIdentity: "session-1",
+      generation: "generation-1",
+      contentEpoch: "epoch-1",
+      revision: 1,
+      limit: 100,
+      targetBytes: 512 * 1024,
+      complete: true,
+    });
+    expect(update.status).toBe("snapshot");
+    if (update.status !== "snapshot") throw new Error("expected snapshot");
+    expect(update.value.complete).toBe(true);
+    expect(update.value.messageWindow).toEqual({ truncated: false });
+  });
 });

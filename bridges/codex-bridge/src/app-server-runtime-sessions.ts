@@ -1104,11 +1104,19 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * detached app-server thread. The ordinary getMessages path remains the
    * exact recovery surface; progressive display uses this preview first.
    */
-  getCachedMessages(sessionId: string): NormalizedMessage[] | null {
+  getCachedMessages(
+    sessionId: string,
+  ): { messages: NormalizedMessage[]; freshness: "cached" | "current" } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
     const context = this.registry.getThreadForSession(sessionId);
-    return context ? this.messagesForSession(session, context) : [...session.localMessages];
+    // An attached thread's transcript is the same array `getMessages` would
+    // return, so it is current; only the detached fallback to the retained
+    // local tail is a cache. Reporting the difference is what lets the backend
+    // decide whether the tail is worth persisting for the next cold start.
+    if (context)
+      return { messages: this.messagesForSession(session, context), freshness: "current" };
+    return { messages: [...session.localMessages], freshness: "cached" };
   }
 
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {

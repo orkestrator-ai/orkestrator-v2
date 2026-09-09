@@ -343,9 +343,16 @@ export class ThreadRegistry {
     session.messageRevision += 1;
   }
 
+  /**
+   * Mark history as reconstructed rather than appended.
+   *
+   * This advances the epoch only. Every call site already advances the
+   * revision — through `appendLocalMessages`, `bumpMessageRevision`, or the
+   * rewind path — and bumping it a second time here made a single hydration
+   * look like two transcript changes to anything polling `messageRevision`.
+   */
   bumpContentEpoch(session: BridgeSession): void {
     session.contentEpoch += 1;
-    session.messageRevision += 1;
   }
 
   /** Incrementally indexes new transcript parts without rescanning history on polls. */

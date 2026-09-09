@@ -548,8 +548,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /**
-   * Observe without touching liveness. A 404 means an old bridge; missing
-   * sessions are reported in-band so callers cannot accidentally delete one.
+   * Read activity from the bridge's dedicated observation route.
+   *
+   * This deliberately does not reuse `status()` plus the pending-input routes.
+   * Those are the routes a *tab* reads, so each one is a liveness touch: the
+   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
+   * the claude bridge additionally hydrates the persisted transcript. This
+   * method is polled every couple of seconds for every session in every
+   * environment, so it must have no side effect at all — `/activity` exists
+   * only to answer it.
+   *
+   * The route reports an unknown session in-band as `missing` and never 404s.
+   * A 404 here therefore means the route itself is absent — an older bridge —
+   * and must surface as a failure rather than as "this session is gone", which
+   * the caller would act on by deleting the user's session mapping.
    */
   async observeActivity(sessionId: string): Promise<ProviderActivityObservation> {
     return readProviderActivityObservation(this.connection, sessionId, this.fetchImpl);

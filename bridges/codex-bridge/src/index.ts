@@ -1070,6 +1070,10 @@ app.use("/session/:id/messages", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/messages", compress({ encoding: "gzip" }));
+app.use("/session/:id/transcript", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
 app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
 
 app.get("/global/health", (c) => {
@@ -1257,12 +1261,12 @@ app.get("/session/:id/messages", async (c) => {
 app.get("/session/:id/transcript", (c) => {
   const sessionId = c.req.param("id");
   const status = appServerRuntime.getStatus(sessionId, false);
-  const messages = appServerRuntime.getCachedMessages(sessionId);
-  if (!status || !messages) return c.json({ error: "Session not found" }, 404);
+  const cached = appServerRuntime.getCachedMessages(sessionId);
+  if (!status || !cached) return c.json({ error: "Session not found" }, 404);
   const limit = Number(c.req.query("limit"));
   const targetBytes = Number(c.req.query("targetBytes"));
   return c.json(
-    bridgeTranscriptUpdate(messages, {
+    bridgeTranscriptUpdate(cached.messages, {
       sessionIdentity: sessionId,
       generation: status.engineGeneration,
       contentEpoch: status.contentEpoch,
@@ -1271,7 +1275,7 @@ app.get("/session/:id/transcript", (c) => {
       targetBytes,
       knownToken: c.req.query("knownToken"),
       complete: true,
-      freshness: "cached",
+      freshness: cached.freshness,
       title: status.title,
     }),
   );

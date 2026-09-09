@@ -292,3 +292,221 @@ describe("native agent progressive remainder", () => {
     );
   });
 });
+
+describe("native agent progressive failure and lifecycle", () => {
+  test("reports an unavailable transcript rather than an absent session", async () => {
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => {
+        throw new Error("bridge refused the transcript read");
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-transcript-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-transcript-error",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        // `missing` would tell the renderer the session is gone, which it would
+        // act on by dropping the tab. A failed read is not that answer.
+        expect(update.status).toBe("unavailable");
+        if (update.status !== "unavailable") throw new Error("expected unavailable");
+        expect(update.retryable).toBe(true);
+        expect(update.error).toContain("bridge refused the transcript read");
+      },
+    );
+  });
+
+  test("keeps the cached identity when a session-state read fails", async () => {
+    let failing = false;
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [],
+        complete: true,
+        revision: 1,
+        freshness: "current" as const,
+      }),
+      sessionStateSnapshot: async () => {
+        if (failing) throw new Error("status endpoint timed out");
+        return { status: "idle" as const };
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-state-error-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-state-error",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(first.status).toBe("snapshot");
+        failing = true;
+        const second = await service.getSessionStateUpdate({
+          ...identity,
+          viewVersion: 1,
+          forceSnapshot: true,
+        });
+        expect(second.status).toBe("unavailable");
+        if (second.status !== "unavailable") throw new Error("expected unavailable");
+        expect(second.retryable).toBe(true);
+        expect(second.error).toContain("status endpoint timed out");
+        // The identity is what lets the renderer tell "this session failed a
+        // read" apart from "some other session answered".
+        expect(second.identity?.logicalSessionKey).toBe(identity.logicalSessionKey);
+      },
+    );
+  });
+
+  test("reports a missing session once the provider has no session to read", async () => {
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [],
+        complete: true,
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-missing-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const update = await service.getTranscriptUpdate({
+          environmentId: "env-1",
+          agent: "cursor",
+          logicalSessionKey: "env-env-1:never-created",
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(update.status).toBe("missing");
+      },
+    );
+  });
+
+  test("an invalidation during a discovery read leaves the epoch prunable", async () => {
+    let releaseDiscovery!: () => void;
+    const heldDiscovery = new Promise<null>((resolve) => {
+      releaseDiscovery = () => resolve(null);
+    });
+    const stub = createProviderStub("cursor", {
+      authStatus: async () => heldDiscovery as never,
+      transcriptSnapshot: async () => ({
+        messages: [],
+        complete: true,
+        freshness: "current" as const,
+      }),
+      sessionStateSnapshot: async () => ({ status: "idle" as const }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-prune-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-prune",
+        };
+        await service.ensureSession(identity);
+        const sessionKey = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        await service.getDiscoveryUpdate({
+          ...identity,
+          viewVersion: 1,
+          sections: ["auth"],
+        });
+        const view = internals(service);
+        await waitForCondition(() =>
+          Array.from(view.progressiveReads.keys()).some((key) => key.includes("discovery:")),
+        );
+        view.invalidateProjection(sessionKey);
+        // Discovery has no trailing read that could ever consume a follow-up
+        // marker, so marking it would pin this session's epoch forever.
+        expect(
+          Array.from(view.progressiveDirtyFollowUps.keys()).filter((key) =>
+            key.includes("discovery:"),
+          ),
+        ).toEqual([]);
+        releaseDiscovery();
+        await waitForCondition(() => view.progressiveReads.size === 0);
+        view.projectionCache.delete(sessionKey);
+        view.projectionEpochs.set(sessionKey, 4);
+        view.pruneProjectionEpoch(sessionKey);
+        expect(view.projectionEpochs.has(sessionKey)).toBe(false);
+      },
+    );
+  });
+
+  test("clears the trailing follow-up marker even when a second read is needed", async () => {
+    // Two invalidations, each landing while a read is in flight. The first
+    // schedules the trailing read; the second lands inside it, which is the
+    // only path that re-reads and used to return without clearing the marker.
+    let calls = 0;
+    const gates = new Map<number, () => void>();
+    const held = (call: number) =>
+      new Promise<void>((resolve) => {
+        gates.set(call, resolve);
+      });
+    const holds = new Map<number, Promise<void>>([
+      [1, held(1)],
+      [2, held(2)],
+    ]);
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => {
+        calls += 1;
+        await holds.get(calls);
+        return {
+          messages: [
+            {
+              id: `m${calls}`,
+              role: "assistant",
+              content: `round-${calls}`,
+              parts: [],
+              createdAt: "2026-09-09T00:00:00.000Z",
+            },
+          ],
+          complete: true,
+          revision: calls,
+          freshness: "current" as const,
+        };
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-marker-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-marker",
+        };
+        await service.ensureSession(identity);
+        const sessionKey = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        const view = internals(service);
+        const inFlight = service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
+        await waitForCondition(() => calls === 1);
+        view.invalidateProjection(sessionKey);
+        gates.get(1)!();
+
+        await waitForCondition(() => calls === 2);
+        view.invalidateProjection(sessionKey);
+        gates.get(2)!();
+
+        await inFlight;
+        await waitForCondition(() => view.progressiveTrailing.size === 0);
+        expect(calls).toBeGreaterThanOrEqual(3);
+        expect(Array.from(view.progressiveDirtyFollowUps.keys())).toEqual([]);
+      },
+    );
+  });
+});

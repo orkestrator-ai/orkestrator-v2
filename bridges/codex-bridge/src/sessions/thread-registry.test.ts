@@ -260,6 +260,26 @@ describe("local slash-command transcript", () => {
     expect(session.messageRevision).toBe(1);
   });
 
+  test("a content epoch advances history continuity without a second revision bump", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1");
+
+    // Every caller pairs this with an append or an explicit revision bump.
+    // Advancing the revision here too made one hydration look like two
+    // transcript changes to anything polling `messageRevision`.
+    registry.appendLocalMessages(session, localMessage("m1"));
+    expect(session.messageRevision).toBe(1);
+    expect(session.contentEpoch).toBe(0);
+
+    registry.bumpContentEpoch(session);
+    expect(session.contentEpoch).toBe(1);
+    expect(session.messageRevision).toBe(1);
+
+    registry.bumpContentEpoch(session);
+    expect(session.contentEpoch).toBe(2);
+    expect(session.messageRevision).toBe(1);
+  });
+
   test("a capped batch advances the revision once and keeps the newest entries", () => {
     const registry = makeRegistry();
     const session = createSession(registry, "s1");

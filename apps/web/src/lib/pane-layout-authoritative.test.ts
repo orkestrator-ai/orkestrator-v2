@@ -28,6 +28,7 @@ mock.module("@/lib/looped-review-persistence", () => ({ hydrateLoopedReviewWorkf
 mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflow }));
 
 const {
+  armStartupAgentTabActivation,
   beginPaneTabActivationRequest,
   collectPaneDependencyIds,
   hydratePaneLayoutDependencies,
@@ -101,6 +102,7 @@ function paneState(
 }
 
 beforeEach(() => {
+  localStorage.clear();
   hydrateBuildPipeline.mockClear();
   hydrateLoopedReviewWorkflow.mockClear();
   hydrateMultiReviewWorkflow.mockClear();
@@ -356,6 +358,144 @@ describe("reconcileAuthoritativePaneLayout", () => {
 
       expect(restored?.activePaneId).toBe("default");
       expect(restored?.root).toMatchObject({ activeTabId: "agent-job-pr" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("hands an isolated Electron window from setup to its provider-bound startup agent", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const pendingAgentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: { environmentId: "env-1", platform: "codex" as const },
+      };
+      const currentRoot = leaf("default", [setupTab, pendingAgentTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "default";
+
+      const readyAgentTab = {
+        ...pendingAgentTab,
+        nativeAgentData: {
+          ...pendingAgentTab.nativeAgentData,
+          sessionId: "provider-session",
+        },
+      };
+      const backendRoot = leaf("default", [setupTab, readyAgentTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "startup-agent";
+
+      armStartupAgentTabActivation("env-1");
+      const awaitingProvider = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(currentRoot),
+        paneState(currentRoot),
+      );
+      expect(awaitingProvider?.root).toMatchObject({ activeTabId: "default" });
+      if (!awaitingProvider) throw new Error("expected a pending layout");
+
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        awaitingProvider,
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "startup-agent" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not steal focus from another tab when the startup agent becomes ready", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const otherTab = { id: "notes", type: "plain" as const };
+      const agentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: {
+          environmentId: "env-1",
+          platform: "codex" as const,
+          sessionId: "provider-session",
+        },
+      };
+      const currentRoot = leaf("default", [setupTab, otherTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "notes";
+      const backendRoot = leaf("default", [setupTab, otherTab, agentTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "startup-agent";
+
+      armStartupAgentTabActivation("env-1");
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "notes" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not reactivate a startup agent after its setup handoff was consumed", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const agentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: {
+          environmentId: "env-1",
+          platform: "codex" as const,
+          sessionId: "provider-session",
+        },
+      };
+      const backendRoot = leaf("default", [setupTab, agentTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "startup-agent";
+      const setupRoot = leaf("default", [setupTab, agentTab]);
+      if (setupRoot.kind !== "leaf") throw new Error("expected leaf");
+      setupRoot.activeTabId = "default";
+
+      armStartupAgentTabActivation("env-1");
+      const handedOff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(setupRoot),
+      );
+      if (!handedOff) throw new Error("expected a restored layout");
+      const returnedToSetup = {
+        ...handedOff,
+        root: { ...handedOff.root, activeTabId: "default" } as PaneNode,
+      };
+
+      const restoredAgain = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        returnedToSetup,
+      );
+
+      expect(restoredAgain?.root).toMatchObject({ activeTabId: "default" });
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

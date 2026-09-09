@@ -3,7 +3,10 @@ import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
 import {
   applyStoredPaneSelection,
+  armWindowStartupAgentActivation,
   clearStoredPaneSelection,
+  clearWindowStartupAgentActivation,
+  consumeWindowStartupAgentActivation,
   readStoredPaneSelection,
   readWindowPaneSelection,
   writeWindowPaneSelection,
@@ -60,6 +63,26 @@ afterEach(() => {
 });
 
 describe("read/clear", () => {
+  test("persists and consumes a startup-agent activation exactly once", () => {
+    armWindowStartupAgentActivation("env-1");
+    armWindowStartupAgentActivation("env-2");
+    armWindowStartupAgentActivation("env-1");
+
+    expect(consumeWindowStartupAgentActivation("env-1")).toBe(true);
+    expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
+    expect(consumeWindowStartupAgentActivation("env-2")).toBe(true);
+  });
+
+  test("clears a pending startup-agent activation without consuming another", () => {
+    armWindowStartupAgentActivation("env-1");
+    armWindowStartupAgentActivation("env-2");
+
+    clearWindowStartupAgentActivation("env-1");
+
+    expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
+    expect(consumeWindowStartupAgentActivation("env-2")).toBe(true);
+  });
+
   test("stores current window selection separately from legacy migration state", () => {
     const state = paneState(
       split(leaf("left", ["a", "b"], "b"), leaf("right", ["c", "d"], "d")),

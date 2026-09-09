@@ -31,6 +31,7 @@ import type {
   PrState,
 } from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
+import { clearStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
 
 /**
  * Extract error message from various error types.
@@ -333,6 +334,7 @@ function reconcileEnvironmentLifecycleErrors(): void {
     // and the transient renderer-side one, or a launch that can never happen
     // auto-dispatches the original prompt the next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
+    clearStartupAgentTabActivation(environment.id);
     const claudeOptions = useClaudeOptionsStore.getState();
     if (claudeOptions.pendingNativeLaunches[environment.id]) {
       claudeOptions.clearPendingNativeLaunch(environment.id);
@@ -509,6 +511,7 @@ export function useEnvironmentLifecycleService(): void {
             // omitted the environment, so a failed setup cannot leave this renderer
             // holding a launch it will never be able to perform.
             store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
+            clearStartupAgentTabActivation(environment_id);
           }
         },
       );
@@ -828,6 +831,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // at. The bounded store would evict it eventually; dropping it now
         // keeps that budget for environments the user still has.
         clearStoredPaneSelection(environmentId);
+        clearStartupAgentTabActivation(environmentId);
         // The unread marker lives on the environment record, so deleting the
         // environment takes it with it — nothing to prune here any more.
         toast.success("Environment deleted");

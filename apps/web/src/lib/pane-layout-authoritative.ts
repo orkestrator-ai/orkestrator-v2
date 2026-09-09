@@ -11,8 +11,20 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { LEGACY_PANE_LAYOUT_VERSION, type PersistedPaneLayout } from "@/types/paneLayout";
-import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-selection-storage";
+import {
+  getNativeAgentData,
+  LEGACY_PANE_LAYOUT_VERSION,
+  type PaneLeaf,
+  type PaneNode,
+  type PersistedPaneLayout,
+} from "@/types/paneLayout";
+import {
+  applyStoredPaneSelection,
+  armWindowStartupAgentActivation,
+  clearWindowStartupAgentActivation,
+  consumeWindowStartupAgentActivation,
+  readWindowPaneSelection,
+} from "@/lib/pane-selection-storage";
 
 /**
  * The one way a backend-owned pane snapshot becomes renderer state.
@@ -92,6 +104,66 @@ function activateTabInState(
     };
   };
   return { ...state, root: select(state.root), activePaneId: paneId };
+}
+
+function findLeaf(root: PaneNode, predicate: (leaf: PaneLeaf) => boolean): PaneLeaf | null {
+  if (root.kind === "leaf") return predicate(root) ? root : null;
+  return findLeaf(root.children[0], predicate) ?? findLeaf(root.children[1], predicate);
+}
+
+function selectedTabIsSetupHandoffSource(leaf: PaneLeaf | null): boolean {
+  if (!leaf) return false;
+  const selected = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
+  return !selected || selected.isSetupTab === true;
+}
+
+/**
+ * Let the provider-binding layout revision perform the one setup-to-agent
+ * focus handoff requested by this Electron window.
+ *
+ * The tab is published before setup, so presence alone is too early. A
+ * provider session id is the durable boundary that setup has completed and
+ * the agent can render. Consume the request at that boundary even when focus
+ * has moved elsewhere; a later reconcile must not steal an intentional choice.
+ */
+function applyStartupAgentSetupHandoff(
+  environmentId: string,
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const authoritativeLeaf = findLeaf(authoritative.root, (leaf) =>
+    leaf.tabs.some((tab) => tab.id === "startup-agent"),
+  );
+  const authoritativeTab = authoritativeLeaf?.tabs.find((tab) => tab.id === "startup-agent");
+  const providerSessionId = authoritativeTab
+    ? getNativeAgentData(authoritativeTab)?.sessionId
+    : undefined;
+  if (!providerSessionId || !consumeWindowStartupAgentActivation(environmentId)) return selected;
+
+  const targetLeaf = authoritativeLeaf
+    ? findLeaf(selected.root, (leaf) => leaf.id === authoritativeLeaf.id)
+    : null;
+  const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
+  if (
+    authoritativeLeaf?.activeTabId !== "startup-agent" ||
+    !selectedTabIsSetupHandoffSource(targetLeaf) ||
+    (focusedLeaf !== targetLeaf && !selectedTabIsSetupHandoffSource(focusedLeaf))
+  ) {
+    return selected;
+  }
+  return activateTabInState(selected, "startup-agent") ?? selected;
+}
+
+/** Arm the post-setup focus handoff in the Electron window that created the environment. */
+export function armStartupAgentTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  armWindowStartupAgentActivation(environmentId);
+}
+
+/** Cancel a handoff whose start failed or whose environment was deleted. */
+export function clearStartupAgentTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  clearWindowStartupAgentActivation(environmentId);
 }
 
 /**
@@ -296,7 +368,8 @@ export function reconcileAuthoritativePaneLayout(
       environmentId,
       readWindowPaneSelection(environmentId),
     );
-    return applyPendingTabActivation(environmentId, selected);
+    const startupSelected = applyStartupAgentSetupHandoff(environmentId, restored, selected);
+    return applyPendingTabActivation(environmentId, startupSelected);
   }
 
   // V1 stored canonical first-pane/first-tab placeholders, not real focus.

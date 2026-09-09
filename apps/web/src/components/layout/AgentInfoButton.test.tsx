@@ -5917,6 +5917,8 @@ describe("AgentInfoButton ACP agents", () => {
   });
 
   test("draws Cursor plan-quota windows with the shared account bars", () => {
+    const windowMinutes = 31 * 24 * 60;
+    const resetsAt = new Date(Date.now() + (windowMinutes / 2) * 60_000).toISOString();
     useNativeAgentProjectionStore.getState().setProjection(
       ACP_KEY,
       acpProjection("cursor", {
@@ -5924,8 +5926,20 @@ describe("AgentInfoButton ACP agents", () => {
           usedTokens: 15_675,
           source: "cursor",
           account: [
-            { window: "cursor-internal-auto", label: "Cursor Models", usedPercent: 0 },
-            { window: "cursor-internal-api", label: "Other Models", usedPercent: 46.444 },
+            {
+              window: "cursor-internal-auto",
+              label: "Cursor Models",
+              usedPercent: 0,
+              resetsAt,
+              windowMinutes,
+            },
+            {
+              window: "cursor-internal-api",
+              label: "Other Models",
+              usedPercent: 46.444,
+              resetsAt,
+              windowMinutes,
+            },
             { window: "agent", label: "Agent total", tokens: 1_300_000, spendUsd: 1.25 },
           ],
         },
@@ -5946,6 +5960,11 @@ describe("AgentInfoButton ACP agents", () => {
     expect(
       within(account).getByRole("progressbar", { name: "Other Models: 46% used" }),
     ).toBeTruthy();
+    expect(
+      within(account).getAllByRole("img", {
+        name: /Current point in the (Cursor Models|Other Models) period: 50%/,
+      }),
+    ).toHaveLength(2);
     expect(within(account).getByText("Agent total")).toBeTruthy();
     expect(within(account).getByText("1.3M")).toBeTruthy();
     expect(within(account).getByText("$1.25")).toBeTruthy();

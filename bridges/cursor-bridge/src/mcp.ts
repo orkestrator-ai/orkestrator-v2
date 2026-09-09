@@ -33,22 +33,83 @@ export async function cursorMcpServers(): Promise<Record<string, McpServerConfig
 }
 
 export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServer[] {
-  return (state.mcpServerNames ?? []).map((name) => {
-    const prefix = `mcp__${name}__`;
-    const tools = (state.runTools ?? [])
-      .filter((tool) => tool.startsWith(prefix))
-      .map((tool) => tool.slice(prefix.length))
-      .filter(Boolean)
-      .slice(0, MAX_MCP_TOOLS);
+  const configured = new Set(state.mcpServerNames ?? []);
+  const inventory = new Map<string, Set<string>>(
+    [...configured].map((name) => [name, new Set<string>()]),
+  );
+  // The system message is Cursor's advertised tool inventory, so counts from
+  // it are exact. Some runtimes expose only the generic `mcp` tool there; the
+  // settled call cards below can still reveal those server names, but seeing
+  // one call must not pretend that one tool is the server's complete inventory.
+  const reportedInventory = new Set<string>();
+  for (const toolName of state.runTools ?? []) {
+    const parsed = parseMcpToolName(toolName, configured);
+    if (!parsed) continue;
+    const tools = ensureServer(inventory, parsed.server);
+    if (!tools) continue;
+    if (tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
+    reportedInventory.add(parsed.server);
+  }
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation" || !nonBlank(part.toolName)) continue;
+      const parsed = parseMcpToolName(part.toolName, configured);
+      if (!parsed) continue;
+      const tools = ensureServer(inventory, parsed.server);
+      if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
+    }
+  }
+
+  return [...inventory].map(([name, toolSet]) => {
+    const tools = [...toolSet];
     return {
       id: name,
       name,
       status: tools.length > 0 ? "connected" : "unknown",
-      scope: name === "orkestrator" ? "orkestrator" : "project",
-      ...(tools.length > 0 ? { toolCount: tools.length, tools } : {}),
+      ...(name === "orkestrator"
+        ? { scope: "orkestrator" as const }
+        : configured.has(name)
+          ? { scope: "project" as const }
+          : {}),
+      ...(reportedInventory.has(name) ? { toolCount: tools.length, tools } : {}),
       actions: [],
     };
   });
+}
+
+function ensureServer(
+  inventory: Map<string, Set<string>>,
+  server: string,
+): Set<string> | undefined {
+  const existing = inventory.get(server);
+  if (existing) return existing;
+  if (inventory.size >= MAX_MCP_SERVERS) return undefined;
+  const tools = new Set<string>();
+  inventory.set(server, tools);
+  return tools;
+}
+
+/**
+ * Cursor exposes MCP calls as `mcp__<server>__<tool>` names. Prefer an exact
+ * configured-server prefix (server ids may themselves contain `__`), then use
+ * the first separator for servers loaded from Cursor's user/team settings.
+ */
+function parseMcpToolName(
+  value: string,
+  configured: ReadonlySet<string>,
+): { server: string; tool: string } | undefined {
+  if (!value.startsWith("mcp__")) return undefined;
+  for (const server of [...configured].sort((left, right) => right.length - left.length)) {
+    const prefix = `mcp__${server}__`;
+    if (value.startsWith(prefix) && nonBlank(value.slice(prefix.length))) {
+      return { server, tool: value.slice(prefix.length) };
+    }
+  }
+  const separator = value.indexOf("__", "mcp__".length);
+  if (separator < 0) return undefined;
+  const server = value.slice("mcp__".length, separator);
+  const tool = value.slice(separator + 2);
+  return nonBlank(server) && nonBlank(tool) && server.length <= 128 ? { server, tool } : undefined;
 }
 
 async function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {

@@ -254,12 +254,17 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
       for (const key of [
         "tokens",
         "usedPercent",
+        "windowMinutes",
         "spendUsd",
         "creditsRemaining",
         "limitUsd",
       ] as const) {
         const value = window[key];
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+        if (
+          typeof value === "number" &&
+          Number.isFinite(value) &&
+          (key === "windowMinutes" ? value > 0 : value >= 0)
+        )
           normalized[key] = value;
       }
       if (typeof window.creditBalance === "string" && window.creditBalance.length > 0) {

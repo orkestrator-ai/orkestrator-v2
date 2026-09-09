@@ -30,6 +30,23 @@ describe("normalizeProviderContextUsage", () => {
       { window: "ignored" },
     ]);
   });
+
+  test("preserves a positive account-window duration for the elapsed-time marker", () => {
+    expect(
+      normalizeProviderContextUsage({
+        usedTokens: 1,
+        account: [
+          { window: "billing", windowMinutes: 44_640 },
+          { window: "zero", windowMinutes: 0 },
+          { window: "invalid", windowMinutes: Number.NaN },
+        ],
+      })?.account,
+    ).toEqual([
+      { window: "billing", windowMinutes: 44_640 },
+      { window: "zero" },
+      { window: "invalid" },
+    ]);
+  });
 });
 
 describe("normalizeProviderDrift", () => {

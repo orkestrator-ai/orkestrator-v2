@@ -22,6 +22,7 @@ describe("accountWindowsFromPlanUsage", () => {
   test("maps provider-reported pool percentages onto generic account windows", () => {
     expect(
       accountWindowsFromPlanUsage({
+        billingCycleStart: Date.UTC(2026, 7, 1),
         billingCycleEnd: Date.UTC(2026, 8, 1),
         planUsage: {
           autoPercentUsed: 0,
@@ -37,12 +38,14 @@ describe("accountWindowsFromPlanUsage", () => {
         label: "Cursor Models",
         usedPercent: 0,
         resetsAt: "2026-09-01T00:00:00.000Z",
+        windowMinutes: 44_640,
       },
       {
         window: CURSOR_PLAN_WINDOW.api,
         label: "Other Models",
         usedPercent: 46.444,
         resetsAt: "2026-09-01T00:00:00.000Z",
+        windowMinutes: 44_640,
       },
     ]);
   });
@@ -67,6 +70,23 @@ describe("accountWindowsFromPlanUsage", () => {
         planUsage: { includedSpend: 23_222, remaining: 16_778, limit: 40_000 },
       }),
     ).toEqual([]);
+  });
+
+  test("omits the period duration when Cursor does not report a valid cycle start", () => {
+    expect(
+      accountWindowsFromPlanUsage({
+        billingCycleStart: "invalid",
+        billingCycleEnd: Date.UTC(2026, 8, 1),
+        planUsage: { autoPercentUsed: 12 },
+      }),
+    ).toEqual([
+      {
+        window: CURSOR_PLAN_WINDOW.auto,
+        label: "Cursor Models",
+        usedPercent: 12,
+        resetsAt: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
   });
 
   test("returns nothing when planUsage is missing", () => {

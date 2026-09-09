@@ -895,17 +895,16 @@ describe("update drift", () => {
     });
   });
 
-  test("a known-but-unrendered type is counted distinguishably from an SDK addition", () => {
-    // "we chose not to show this" and "we never heard of this" must not look
-    // the same to whoever reads the counter after an SDK bump.
+  test("known lifecycle boundaries are accepted without hiding an SDK addition", () => {
     const state = newSessionState();
     applyInteractionUpdate(state, { type: "step-started" });
+    applyInteractionUpdate(state, { type: "step-completed" });
     applyInteractionUpdate(state, { type: "invented-by-the-sdk" });
 
-    expect(state.health.drift()?.unknownKinds).toEqual([
-      "unrendered:step-started",
-      "invented-by-the-sdk",
-    ]);
+    expect(state.health.drift()).toEqual({
+      unknownEvents: 1,
+      unknownKinds: ["invented-by-the-sdk"],
+    });
   });
 
   test("the payload is never recorded, only the type name", () => {

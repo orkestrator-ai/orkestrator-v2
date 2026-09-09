@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { newSessionState } from "./agent-session.js";
 import { cursorMcpServers, publicCursorMcpServers } from "./mcp.js";
+import { applyInteractionUpdate } from "./translate.js";
 
 const previousUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
@@ -39,5 +40,36 @@ describe("Cursor MCP inventory", () => {
       },
     ]);
     expect(published).not.toContain("private-test-token");
+  });
+
+  test("includes servers Cursor loaded from its own settings once their tools are observed", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["orkestrator"];
+    state.runTools = ["shell", "mcp"];
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "paper-list",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "paper", toolName: "list_files", args: {} },
+        result: { status: "success", value: { content: [] } },
+      },
+    });
+
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "unknown",
+        scope: "orkestrator",
+        actions: [],
+      },
+      {
+        id: "paper",
+        name: "paper",
+        status: "connected",
+        actions: [],
+      },
+    ]);
   });
 });

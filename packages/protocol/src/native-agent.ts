@@ -728,6 +728,8 @@ export interface NativeAgentAccountUsageWindow {
   tokens?: number;
   usedPercent?: number;
   resetsAt?: string;
+  /** Length of the quota period, used to place the current-time marker. */
+  windowMinutes?: number;
   spendUsd?: number;
   creditsRemaining?: number;
   /** Provider-formatted balance when credits are not a plain numeric count. */

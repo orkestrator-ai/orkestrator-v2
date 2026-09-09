@@ -57,6 +57,12 @@ function finitePercent(value: unknown): number | undefined {
 }
 
 function unixMsToIso(value: unknown): string | undefined {
+  const milliseconds = unixMilliseconds(value);
+  if (milliseconds === undefined) return undefined;
+  return new Date(milliseconds).toISOString();
+}
+
+function unixMilliseconds(value: unknown): number | undefined {
   const milliseconds =
     typeof value === "number"
       ? value
@@ -70,8 +76,7 @@ function unixMsToIso(value: unknown): string | undefined {
   ) {
     return undefined;
   }
-  const date = new Date(milliseconds);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+  return milliseconds;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -93,7 +98,17 @@ export function accountWindowsFromPlanUsage(
   const planUsage = record(currentPeriod?.planUsage);
   if (!planUsage) return [];
 
-  const resetsAt = unixMsToIso(currentPeriod?.billingCycleEnd);
+  const cycleStartMs = unixMilliseconds(currentPeriod?.billingCycleStart);
+  const cycleEndMs = unixMilliseconds(currentPeriod?.billingCycleEnd);
+  const resetsAt = unixMsToIso(cycleEndMs);
+  const windowMinutes =
+    cycleStartMs !== undefined && cycleEndMs !== undefined && cycleEndMs > cycleStartMs
+      ? (cycleEndMs - cycleStartMs) / 60_000
+      : undefined;
+  const timing = {
+    ...(resetsAt ? { resetsAt } : {}),
+    ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+  };
   const windows: NativeAgentAccountUsageWindow[] = [];
   const autoPercentUsed = finitePercent(planUsage.autoPercentUsed);
   const apiPercentUsed = finitePercent(planUsage.apiPercentUsed);
@@ -104,7 +119,7 @@ export function accountWindowsFromPlanUsage(
       window: CURSOR_PLAN_WINDOW.auto,
       label: labels.auto,
       usedPercent: autoPercentUsed,
-      ...(resetsAt ? { resetsAt } : {}),
+      ...timing,
     });
   }
   if (apiPercentUsed !== undefined) {
@@ -112,7 +127,7 @@ export function accountWindowsFromPlanUsage(
       window: CURSOR_PLAN_WINDOW.api,
       label: labels.api,
       usedPercent: apiPercentUsed,
-      ...(resetsAt ? { resetsAt } : {}),
+      ...timing,
     });
   }
   if (windows.length === 0 && totalPercentUsed !== undefined) {
@@ -120,7 +135,7 @@ export function accountWindowsFromPlanUsage(
       window: CURSOR_PLAN_WINDOW.total,
       label: labels.total,
       usedPercent: totalPercentUsed,
-      ...(resetsAt ? { resetsAt } : {}),
+      ...timing,
     });
   }
   return windows;
@@ -145,9 +160,7 @@ export function mergeAccountWindows(
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-let cachedPlan:
-  | { windows: NativeAgentAccountUsageWindow[]; expiresAt: number }
-  | undefined;
+let cachedPlan: { windows: NativeAgentAccountUsageWindow[]; expiresAt: number } | undefined;
 let inFlight: Promise<NativeAgentAccountUsageWindow[] | undefined> | undefined;
 let accessToken: { value: string; expiresAt: number } | undefined;
 let testFetchImpl: FetchLike | undefined;

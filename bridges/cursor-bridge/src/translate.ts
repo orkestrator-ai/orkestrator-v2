@@ -78,11 +78,11 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
     // rather than only once it is done.
     "summary-started": true,
     "summary-completed": true,
-    // Internal turn segmentation. No transcript value: a step boundary is not
-    // something a reader can act on, and the work inside it is already
+    // Internal turn segmentation. These are accepted no-ops below: a step
+    // boundary has no transcript value, and the work inside it is already
     // rendered by the deltas and tool calls it contains.
-    "step-started": false,
-    "step-completed": false,
+    "step-started": true,
+    "step-completed": true,
   };
 
 /**
@@ -157,6 +157,12 @@ export function applyInteractionUpdate(
       // unrelated window and can double-count work the SDK later reports on
       // the parent run.
       if (!context.parentTaskUseId) applyTurnUsage(state, update.usage);
+      break;
+    case "step-started":
+    case "step-completed":
+      // Known lifecycle frames, not bridge drift. Counting these as
+      // `unrendered:*` made every ordinary Cursor turn display an alarming
+      // "did not recognise" warning even though no user-visible data was lost.
       break;
     default:
       // A type the table names as `false` is a documented gap; one it does not

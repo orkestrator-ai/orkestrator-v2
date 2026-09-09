@@ -18,7 +18,10 @@ describe("ACP bridge", () => {
   // The fake agent records its own argv, so these assert the exact command line
   // the bridge builds. They cannot prove the real CLIs accept those flags —
   // `docs/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
+  async function readAgentArgs(
+    env: NodeJS.ProcessEnv,
+    createBody?: Record<string, unknown>,
+  ): Promise<string[]> {
     const argsFile = resolve(await temporaryDirectory(), "args.log");
     const { base, headers } = await spawnBridge({
       env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
@@ -26,7 +29,8 @@ describe("ACP bridge", () => {
 
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
-      headers,
+      headers: { ...headers, "content-type": "application/json" },
+      ...(createBody ? { body: JSON.stringify(createBody) } : {}),
     });
     expect(created.status).toBe(201);
 
@@ -48,6 +52,73 @@ describe("ACP bridge", () => {
       "agent",
       "stdio",
     ]);
+  });
+
+  test("a session created read-only starts its agent without automatic approval", async () => {
+    // The child is spawned by session creation itself, so a boundary learned
+    // from the first prompt would arrive after the agent had already been told
+    // to approve its own tools.
+    expect(await readAgentArgs({ ACP_PROVIDER: "grok" }, { readOnly: true })).toEqual([
+      "agent",
+      "stdio",
+    ]);
+  });
+
+  test("rejects a malformed read-only boundary at session creation", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+
+    const response = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ readOnly: "yes" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "readOnly must be a boolean" });
+  });
+
+  test("recreating a session under a stricter boundary restarts its agent", async () => {
+    const argsFile = resolve(await temporaryDirectory(), "args.log");
+    const { base, headers } = await spawnBridge({
+      env: { ACP_PROVIDER: "grok", FAKE_ACP_ARGS_FILE: argsFile },
+    });
+    const create = async (body: Record<string, unknown>) => {
+      const response = await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(201);
+      return (await response.json()) as { id: string };
+    };
+
+    const first = await create({ clientSessionKey: "tab-1" });
+    const permissive = await waitFor(
+      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.trim().length > 0,
+    );
+    expect(JSON.parse(permissive.trim().split("\n")[0]!) as string[]).toContain("--always-approve");
+
+    // Idempotent by client key, so this returns the same session — under the
+    // boundary the caller asked for the second time, not the first.
+    const again = await create({ clientSessionKey: "tab-1", readOnly: true });
+    expect(again.id).toBe(first.id);
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${first.id}/attach`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+    ).toBe(200);
+    const invocations = await waitFor(
+      () => fs.readFile(argsFile, "utf8").catch(() => ""),
+      (value) => value.trim().split("\n").length >= 2,
+    );
+    expect(JSON.parse(invocations.trim().split("\n").at(-1)!) as string[]).not.toContain(
+      "--always-approve",
+    );
   });
 
   test("closes an outstanding Cursor replay process when the bridge shuts down", async () => {

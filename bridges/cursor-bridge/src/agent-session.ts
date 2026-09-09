@@ -88,12 +88,16 @@ export async function createSession(
   clientSessionKey: string | undefined,
   patch: ComposerPatch | undefined,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
+  readOnly?: boolean,
 ): Promise<SessionState> {
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
     if (existing) {
       if (policy) existing.policy = resolveCursorExecutionPolicy(policy);
+      // The boundary of a session that already exists is moved by the caller
+      // of this function, which owns the HTTP status a conflicting move
+      // deserves. `readOnly` here only seeds a session being created.
       return existing;
     }
     const inFlight = sessionCreations.get(clientSessionKey);
@@ -102,6 +106,7 @@ export async function createSession(
 
   const work = (async () => {
     const state = newSessionState(clientSessionKey, resolveCursorExecutionPolicy(policy));
+    if (typeof readOnly === "boolean") state.readOnly = readOnly;
     applyComposerPatch(state, patch);
     state.composer = await hydrateComposer(state.composer);
     sessions.set(state.id, state);

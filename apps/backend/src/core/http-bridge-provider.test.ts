@@ -1774,26 +1774,28 @@ describe("HTTP bridge provider", () => {
   });
 });
 
-test("forwards an explicit read-only tool policy to Pi on creation and every review turn", async () => {
-  const { provider, requests } = httpProvider(
-    () => Response.json({ sessionId: "review-session" }),
-    piConnection,
-  );
-  await provider.createSession("review", "Review", { mode: "plan", readOnly: true });
-  await provider.send("review-session", "Read the package", {
-    requestId: "review-1",
-    mode: "plan",
-    readOnly: true,
-  });
-  expect(requests.map((request) => JSON.parse(String(request.init.body)).readOnly)).toEqual([
-    true,
-    true,
-  ]);
-  await provider.send("review-session", "Implement the fixes", {
-    requestId: "fix-1",
-    mode: "build",
-  });
-  expect(JSON.parse(String(requests.at(-1)!.init.body)).readOnly).toBe(false);
+test("forwards an explicit read-only tool policy on creation and every review turn", async () => {
+  for (const connection of [cursorConnection, grokConnection, piConnection]) {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "review-session" }),
+      connection,
+    );
+    await provider.createSession("review", "Review", { mode: "plan", readOnly: true });
+    await provider.send("review-session", "Read the package", {
+      requestId: "review-1",
+      mode: "plan",
+      readOnly: true,
+    });
+    expect(requests.map((request) => JSON.parse(String(request.init.body)).readOnly)).toEqual([
+      true,
+      true,
+    ]);
+    await provider.send("review-session", "Implement the fixes", {
+      requestId: "fix-1",
+      mode: "build",
+    });
+    expect(JSON.parse(String(requests.at(-1)!.init.body)).readOnly).toBe(false);
+  }
 });
 
 test("sends a read-only build turn without provider plan semantics", async () => {

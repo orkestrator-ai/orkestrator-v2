@@ -173,10 +173,32 @@ async function routeGlobal(
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
+    const readOnly = body.readOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      throw new HttpError(400, "readOnly must be a boolean");
+    }
     if (!isNativeAgentExecutionPolicy(body.policy)) {
       throw new HttpError(400, "policy is required");
     }
-    const state = await createSession(clientSessionKey, parseComposerPatch(body), body.policy);
+    const state = await createSession(
+      clientSessionKey,
+      parseComposerPatch(body),
+      body.policy,
+      readOnly,
+    );
+    // Creation is idempotent by client key, so this can be a session that
+    // already exists under the other boundary. Move it rather than answering
+    // 201 with the old one: an attach would otherwise warm an agent the caller
+    // has just asked not to have. A busy session cannot be moved underneath
+    // its own turn, and says so.
+    if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
+      if (state.status === "running" || state.dispatching) {
+        throw new HttpError(409, "Session is already running");
+      }
+      await detachAgent(state);
+      state.readOnly = readOnly;
+      schedulePersist();
+    }
     json(response, 201, publicSession(state));
     return true;
   }

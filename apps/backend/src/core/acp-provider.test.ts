@@ -169,6 +169,9 @@ describe("HTTP bridge provider (ACP)", () => {
       model: "gpt-5.5",
       reasoningEffort: "medium",
       mode: "build",
+      // A build turn states the boundary rather than leaving it inherited, so
+      // a bridge holding a read-only session widens it for this turn.
+      readOnly: false,
     });
   });
 

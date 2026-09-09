@@ -52,6 +52,14 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   connectionState: NativeConnectionState;
   /** Cached or authoritative transcript content can render before transport settles. */
   displayAvailable?: boolean;
+  /**
+   * Whether a provider session already existed before the current connect.
+   * Connecting is then a refresh, and cached content stays readable behind a
+   * notice. A tab still creating its first session has no conversation to
+   * hold and a composer that cannot send yet, so it waits on the connecting
+   * screen instead of a ready layout that would read as an idle tab.
+   */
+  sessionEstablished?: boolean;
   errorMessage?: string | null;
   desynced?: boolean;
   serverLog?: string | null;
@@ -163,6 +171,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentExpansionScope,
   connectionState,
   displayAvailable = false,
+  sessionEstablished = true,
   errorMessage,
   desynced = false,
   serverLog,
@@ -233,7 +242,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     };
   }, [composeDockElement]);
 
-  if (connectionState === "connecting" && !displayAvailable) {
+  /*
+   * Establishment is not a refresh. A first session is still being created, so
+   * there is no cached transcript to protect and nothing the composer can send
+   * — the pulsing platform logo says "wait" where the ready layout would say
+   * "go ahead". An optimistic or replayed message ends the window: once there
+   * is conversation on screen, showing it beats replacing it with a logo.
+   */
+  const establishingFirstSession = !sessionEstablished && messages.length === 0;
+  if (connectionState === "connecting" && (!displayAvailable || establishingFirstSession)) {
     return (
       <div
         role="status"
@@ -306,7 +323,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
   const composerCentered = centerCompose && !hasTranscriptCards;
   const connectionNotice =
-    displayAvailable && connectionState !== "connected" ? (
+    displayAvailable &&
+    (connectionState === "error" || (connectionState === "connecting" && sessionEstablished)) ? (
       <div
         role={connectionState === "error" ? "alert" : "status"}
         className={cn(

@@ -228,6 +228,7 @@ export function SharedNativeAgentController({
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const initialPromptSentRef = useRef(false);
+  const hasConnectedSessionRef = useRef(false);
   // The projection rewrites `data.sessionId` to whatever session the tab ends
   // up connected to, so the id the tab was *asked* to resume has to be captured
   // before that can happen.
@@ -1503,6 +1504,18 @@ export function SharedNativeAgentController({
           : runtimeError || hasCompletedRead
             ? ("error" as const)
             : ("connecting" as const)));
+  useEffect(() => {
+    if (connectionState === "connected") hasConnectedSessionRef.current = true;
+  }, [connectionState]);
+  /*
+   * A tab has a session behind it once it was asked to resume one, or once it
+   * has connected at least once — the created id lands in `data.sessionId`
+   * only after the fact, so the ref is what covers a tab for the rest of its
+   * mount. Anything before that is first-time creation, which is a wait to
+   * show rather than a conversation to refresh.
+   */
+  const hasEstablishedSession =
+    Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current;
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1700,6 +1713,7 @@ export function SharedNativeAgentController({
       // bare paths instead of pictures.
       containerId={data.containerId}
       connectionState={connectionState}
+      sessionEstablished={hasEstablishedSession}
       displayAvailable={
         Boolean(projection?.messages.length) ||
         (connectionState !== "error" &&

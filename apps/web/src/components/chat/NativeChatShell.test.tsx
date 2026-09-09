@@ -521,6 +521,56 @@ describe("NativeChatShell", () => {
       expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
     });
 
+    test("waits on the connecting logo while a first session is created", () => {
+      // `displayAvailable` is set, but there is nothing established behind it.
+      // A composer that cannot send yet would present the tab as idle and
+      // ready, and reconnect copy would name a session that never existed.
+      const { container } = render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Cursor Agent"
+          platform="cursor"
+          connectionState="connecting"
+          displayAvailable
+          sessionEstablished={false}
+        />,
+      );
+
+      expect(screen.getByRole("status").textContent).toBe("Connecting to Cursor Agent...");
+      expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
+      expect(screen.queryByTestId("compose-dock") === null).toBe(true);
+      expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    });
+
+    test("shows an establishing tab's own messages instead of the connecting logo", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Cursor Agent"
+          platform="cursor"
+          connectionState="connecting"
+          displayAvailable
+          sessionEstablished={false}
+          messages={[
+            {
+              id: "optimistic-1",
+              role: "user",
+              content: "Review the current changes",
+              createdAt: "2026-09-09T00:00:00.000Z",
+              parts: [{ type: "text", content: "Review the current changes" }],
+            },
+          ]}
+        />,
+      );
+
+      // Replacing conversation that is already on screen with a logo would be
+      // a regression in the other direction.
+      expect(screen.getByText("Review the current changes")).toBeTruthy();
+      expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+      // Still no refresh copy: this session is being created, not refreshed.
+      expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    });
+
     test("keeps cached transcript readable and exposes compact retry after an error", () => {
       const onRetry = mock(() => {});
       render(

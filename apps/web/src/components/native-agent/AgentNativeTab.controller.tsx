@@ -1507,6 +1507,15 @@ export function SharedNativeAgentController({
   useEffect(() => {
     if (connectionState === "connected") hasConnectedSessionRef.current = true;
   }, [connectionState]);
+  /*
+   * A tab has a session behind it once it was asked to resume one, or once it
+   * has connected at least once — the created id lands in `data.sessionId`
+   * only after the fact, so the ref is what covers a tab for the rest of its
+   * mount. Anything before that is first-time creation, which is a wait to
+   * show rather than a conversation to refresh.
+   */
+  const hasEstablishedSession =
+    Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current;
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1691,9 +1700,7 @@ export function SharedNativeAgentController({
       // bare paths instead of pictures.
       containerId={data.containerId}
       connectionState={connectionState}
-      showRefreshNotice={
-        Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current
-      }
+      sessionEstablished={hasEstablishedSession}
       displayAvailable={
         Boolean(projection?.messages.length) ||
         (connectionState !== "error" &&

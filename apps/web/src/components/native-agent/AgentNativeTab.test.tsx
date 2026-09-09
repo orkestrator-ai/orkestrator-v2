@@ -3403,7 +3403,7 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
-  test("keeps a new tab free of refresh copy before its initial prompt is injected", async () => {
+  test("waits on the connecting logo until a new tab's first session exists", async () => {
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
@@ -3421,7 +3421,7 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    render(
+    const { container } = render(
       <AgentNativeTab
         tabId="tab-new-cursor"
         data={freshTab("cursor")}
@@ -3447,10 +3447,14 @@ describe("AgentNativeTab", () => {
       });
     });
 
-    // Cursor is still being spawned. There is no established conversation to
-    // refresh yet, and the opening prompt cannot be injected until creation
-    // finishes, so keep the normal new-tab presentation free of reconnect copy.
-    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    // Cursor is still being spawned. There is no conversation to refresh, and
+    // the opening prompt cannot be injected until creation finishes, so the tab
+    // waits on the pulsing logo. A ready composer would invite a message the
+    // session cannot accept, and reconnect copy would name a session that has
+    // never existed.
+    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
+    expect(screen.queryByText("Ready to build!") === null).toBe(true);
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -3465,6 +3469,37 @@ describe("AgentNativeTab", () => {
     });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
+  test("keeps refresh copy on a created tab that has already connected once", async () => {
+    // A tab that was created rather than resumed carries no session id in its
+    // pane data, so nothing in the props tells its second connect apart from
+    // its first. Having reached `connected` is the only evidence that there is
+    // a conversation behind this one; without it a background refresh would
+    // render as the establishment wait and hide the transcript it already has.
+    render(<AgentNativeTab tabId="tab-new-cursor-reconnect" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy());
+    // A refresh keeps the conversation reachable. Falling back to the
+    // connecting screen here would take the composer away mid-session.
+    expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
 
   test("keeps a creation failure that raced an invalidation instead of a generic one", async () => {
@@ -3639,6 +3674,7 @@ describe("AgentNativeTab", () => {
 
     // The second connect has not returned, so there is still nothing to resolve.
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
     expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
 

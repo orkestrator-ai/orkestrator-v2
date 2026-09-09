@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { newSessionState } from "./agent-session.js";
-import { cursorMcpServers, publicCursorMcpServers } from "./mcp.js";
+import { MAX_MESSAGES } from "./config.js";
+import { cursorMcpServers, publicCursorMcpServers, seedObservedMcpTools } from "./mcp.js";
+import type { SessionState } from "./state.js";
+import { boundTranscript } from "./transcript.js";
+import { applyInteractionUpdate } from "./translate.js";
+
+function callMcpTool(state: SessionState, args: Record<string, unknown>, callId: string): void {
+  applyInteractionUpdate(state, {
+    type: "tool-call-completed",
+    callId,
+    toolCall: { type: "mcp", args, result: { status: "success", value: { content: [] } } },
+  });
+}
 
 const previousUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
 const previousToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
@@ -39,5 +51,135 @@ describe("Cursor MCP inventory", () => {
       },
     ]);
     expect(published).not.toContain("private-test-token");
+  });
+
+  test("includes servers Cursor loaded from its own settings once their tools are observed", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["orkestrator"];
+    state.runTools = ["shell", "mcp"];
+    callMcpTool(state, { providerIdentifier: "paper", toolName: "list_files", args: {} }, "paper");
+
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "orkestrator",
+        name: "orkestrator",
+        status: "unknown",
+        scope: "orkestrator",
+        actions: [],
+      },
+      {
+        id: "paper",
+        name: "paper",
+        status: "connected",
+        actions: [],
+      },
+    ]);
+  });
+
+  test("keeps a discovered server after the card that revealed it is evicted", () => {
+    const state = newSessionState();
+    state.mcpServerNames = [];
+    callMcpTool(state, { providerIdentifier: "paper", toolName: "list_files", args: {} }, "paper");
+    expect(publicCursorMcpServers(state).map((server) => server.id)).toEqual(["paper"]);
+
+    // The transcript is a display buffer, not the inventory: pushing the card
+    // out of the window must not read as the server having disconnected.
+    for (let index = 0; index <= MAX_MESSAGES; index += 1) {
+      state.messages.push({
+        id: `filler-${index}`,
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: new Date().toISOString(),
+      });
+    }
+    expect(boundTranscript(state)).toBe(true);
+    expect(
+      state.messages.some((message) =>
+        message.parts.some(
+          (part) => part.type === "tool-invocation" && part.toolName === "mcp__paper__list_files",
+        ),
+      ),
+    ).toBe(false);
+
+    expect(publicCursorMcpServers(state)).toEqual([
+      { id: "paper", name: "paper", status: "connected", actions: [] },
+    ]);
+  });
+
+  test("a restore re-observes the calls its recovered transcript still holds", () => {
+    const source = newSessionState();
+    callMcpTool(source, { providerIdentifier: "paper", toolName: "list_files", args: {} }, "paper");
+
+    // What `restoreSession` rebuilds: the transcript survives, the runtime
+    // accumulator does not.
+    const restored = newSessionState();
+    restored.messages = source.messages;
+    expect(publicCursorMcpServers(restored)).toEqual([]);
+
+    seedObservedMcpTools(restored);
+    expect(publicCursorMcpServers(restored)).toEqual([
+      { id: "paper", name: "paper", status: "connected", actions: [] },
+    ]);
+  });
+
+  test("a call without a provider identifier does not invent a server", () => {
+    const state = newSessionState();
+    state.mcpServerNames = [];
+    callMcpTool(state, { toolName: "list_files", args: {} }, "anonymous");
+
+    expect(publicCursorMcpServers(state)).toEqual([]);
+  });
+
+  test("a configured server id containing the separator wins over the generic split", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["team__docs"];
+    state.runTools = ["mcp__team__docs__search"];
+
+    expect(publicCursorMcpServers(state)).toEqual([
+      {
+        id: "team__docs",
+        name: "team__docs",
+        status: "connected",
+        scope: "project",
+        toolCount: 1,
+        tools: ["search"],
+        actions: [],
+      },
+    ]);
+  });
+
+  test("a name with no tool segment or no server segment is not a server", () => {
+    const state = newSessionState();
+    state.mcpServerNames = [];
+    state.runTools = ["mcp__lonely", "mcp____tool", "mcp__paper__"];
+
+    expect(publicCursorMcpServers(state)).toEqual([]);
+  });
+
+  test("discovery stops at the server cap and the per-server tool cap", () => {
+    const state = newSessionState();
+    state.mcpServerNames = [];
+    state.runTools = Array.from({ length: 200 }, (_, index) => `mcp__server-${index}__tool`);
+
+    const published = publicCursorMcpServers(state);
+    expect(published).toHaveLength(64);
+    expect(published.at(-1)?.id).toBe("server-63");
+
+    const crowded = newSessionState();
+    crowded.mcpServerNames = ["paper"];
+    crowded.runTools = Array.from({ length: 300 }, (_, index) => `mcp__paper__tool-${index}`);
+    expect(publicCursorMcpServers(crowded)[0]?.toolCount).toBe(128);
+  });
+
+  test("bounds the tool segment a provider supplies rather than publishing it whole", () => {
+    const state = newSessionState();
+    state.mcpServerNames = ["paper"];
+    state.runTools = ["mcp__paper__list_files"];
+    callMcpTool(state, { providerIdentifier: "paper", toolName: "x".repeat(4096) }, "long");
+
+    const tools = publicCursorMcpServers(state)[0]?.tools ?? [];
+    expect(tools).toHaveLength(2);
+    expect(Math.max(...tools.map((tool) => tool.length))).toBe(128);
   });
 });

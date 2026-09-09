@@ -20,6 +20,7 @@ import {
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
 import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
+import { recordObservedMcpTool } from "./mcp.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import { appendBounded, boundText, chargeTranscript } from "./transcript.js";
 import {
@@ -78,11 +79,11 @@ const HANDLED_UPDATE_TYPES: Record<InteractionUpdate["type"] | NestedTaskUpdate[
     // rather than only once it is done.
     "summary-started": true,
     "summary-completed": true,
-    // Internal turn segmentation. No transcript value: a step boundary is not
-    // something a reader can act on, and the work inside it is already
+    // Internal turn segmentation. These are accepted no-ops below: a step
+    // boundary has no transcript value, and the work inside it is already
     // rendered by the deltas and tool calls it contains.
-    "step-started": false,
-    "step-completed": false,
+    "step-started": true,
+    "step-completed": true,
   };
 
 /**
@@ -158,6 +159,12 @@ export function applyInteractionUpdate(
       // the parent run.
       if (!context.parentTaskUseId) applyTurnUsage(state, update.usage);
       break;
+    case "step-started":
+    case "step-completed":
+      // Known lifecycle frames, not bridge drift. Counting these as
+      // `unrendered:*` made every ordinary Cursor turn display an alarming
+      // "did not recognise" warning even though no user-visible data was lost.
+      break;
     default:
       // A type the table names as `false` is a documented gap; one it does not
       // name is an SDK addition. Both are counted, and distinguishably so.
@@ -225,6 +232,9 @@ function applyToolCall(
   }
 
   part.toolName = rendered.toolName;
+  // Outside the transcript, so the MCP panel keeps the server after
+  // `boundTranscript` evicts the card that revealed it.
+  recordObservedMcpTool(state, rendered.toolName);
   part.content = rendered.toolTitle
     ? boundText(rendered.toolTitle, MAX_TOOL_TITLE_BYTES)
     : rendered.toolName;

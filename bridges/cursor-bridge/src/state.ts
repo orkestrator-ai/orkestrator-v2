@@ -341,6 +341,16 @@ export interface SessionState {
   /** Tool *names* the run was given. Never their descriptions or schemas. */
   runTools?: string[];
   /**
+   * Qualified `mcp__<server>__<tool>` names this session has actually called.
+   *
+   * Held beside the transcript rather than derived from it. `boundTranscript`
+   * evicts cards for display, and an MCP server must not vanish from the panel
+   * because its last call scrolled out of the window — the transcript module
+   * says as much itself. Names only, never arguments or results, and
+   * runtime-only: a restore re-seeds this from the transcript it recovered.
+   */
+  observedMcpTools: Set<string>;
+  /**
    * What this bridge saw and did not understand, and what the SDK reported.
    *
    * `@cursor/sdk` is a fast-moving dependency whose update and tool-call unions

@@ -73,6 +73,7 @@ export function newSessionState(
     uncheckedTranscriptBytes: 0,
     currentTurnOutput: null,
     lastAccessed: Date.now(),
+    observedMcpTools: new Set(),
     health: new RuntimeHealthRecorder(),
   };
 }

@@ -945,6 +945,7 @@ function buildAccountRows({
       Object.assign(merged, facts, {
         usedPercent: merged.usedPercent ?? window.usedPercent,
         resetsAt: merged.resetsAt ?? window.resetsAt,
+        windowMinutes: merged.windowMinutes ?? window.windowMinutes,
       });
       if (window.window === "credits" && windowCredit !== undefined) {
         creditValueEmbedded = true;
@@ -957,6 +958,7 @@ function buildAccountRows({
       kind: "window",
       ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
       ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
+      ...(window.windowMinutes !== undefined ? { windowMinutes: window.windowMinutes } : {}),
       ...facts,
     });
     if (window.window === "credits" && windowCredit !== undefined) creditValueEmbedded = true;

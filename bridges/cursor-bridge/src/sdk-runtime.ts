@@ -9,10 +9,12 @@ import {
   type LocalAgentStore,
 } from "@cursor/sdk";
 import { cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
+import { createCursorSandboxBootstrap } from "./sandbox-bootstrap.js";
 
 const storeRoot = cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
 
 let platform: Promise<CursorAgentPlatform> | undefined;
+let initializeSandbox = createCursorSandboxBootstrap();
 
 /**
  * One store instance must serve every static Agent API. Mixing stores would
@@ -40,6 +42,7 @@ export function useCursorLocalAgentStoreForTests(store: LocalAgentStore): LocalA
   cursorLocalAgentStore = store;
   Cursor.configure({ local: { store } });
   platform = undefined;
+  initializeSandbox = createCursorSandboxBootstrap();
   return previous;
 }
 
@@ -94,9 +97,14 @@ async function agentPlatform(): Promise<CursorAgentPlatform> {
  */
 export async function prewarmCursorWorkspace(
   options: AgentOptions,
+  sandboxBoundary: "none" | "provider" | "container",
 ): Promise<(() => Promise<void>) | undefined> {
   try {
-    return await (await agentPlatform()).prewarmLocalWorkspace(options);
+    const runtime = await agentPlatform();
+    // Containers use their outer boundary and never need the nested sandbox.
+    // All host sessions share this barrier, including concurrent warm-ups.
+    await initializeSandbox(runtime, options, sandboxBoundary);
+    return await runtime.prewarmLocalWorkspace(options);
   } catch {
     // Prewarming is only an optimization. Agent.send() can rebuild the same
     // executor and remains the authoritative place to report a real failure.

@@ -10,6 +10,32 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## Cursor SDK mocks in a shared-process run (2026-09-10)
+
+- **Status:** open; isolated workers pass.
+- **Original command:** `mise exec -- bun test bridges/cursor-bridge/src`
+  (no worker isolation), 316 passed / 13 failed in 10.76 seconds.
+- **Owners and failures:** `agent-session.test.ts`: `configures one JSONL store
+  below the bridge state directory` received an empty constructor-call array;
+  `rewindSessionHistory > uses the selected message run id instead of its bounded
+  transcript position` reported no checkpoint; `ensureAgent > two concurrent
+  callers share one attach` received a different store instance.
+  `credentials.test.ts`: both stored-login `resolveCredential` cases, four
+  `authStatus` cases, the `beginLogin` case, and the `runLogin` case used another
+  suite's credential implementation. All eleven failed within 1 ms.
+- **Isolated reruns:** `mise exec -- bun test
+  bridges/cursor-bridge/src/agent-session.test.ts` passed 32 tests in 441 ms;
+  `mise exec -- bun test bridges/cursor-bridge/src/credentials.test.ts` passed
+  21 tests in 346 ms.
+- **Hypothesis:** process-wide SDK mocks and cached runtime singletons leak
+  between owners without the per-file workers used by the repository runner.
+- **Additional failures:** two diagnostics assertions came from the inherited
+  `ORKESTRATOR_BRIDGE_DEBUG=1`, which overrides each test's provider-specific
+  debug setting. These are environment-dependent, not confirmed flakes.
+- **Verification:** `env -u ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
+  ./bridges/cursor-bridge/src --parallel=4` passed 329 tests across all 17
+  owners in 8.96 seconds. No assertions were removed or relaxed.
+
 ## 2026-09-08 review validation preparation
 
 - **Original command:** `mise exec -- bun run test:logged -- --name validation-full-suite -- bun run test`.

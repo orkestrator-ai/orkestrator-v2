@@ -31,12 +31,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Validate mise tasks
+        run: mise tasks validate
+
       # Both steps run even when the first fails, so one push reports every
       # violation instead of hiding lint behind a formatting diff.
       - name: Check formatting
         id: format
-        run: bun run format:check
+        run: mise run format:check
 
       - name: Lint
         if: ${{ !cancelled() }}
-        run: bun run lint
+        run: mise run lint

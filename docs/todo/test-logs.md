@@ -28,22 +28,22 @@ The aggregate runner streams each group to a private file and retains only a
 bounded tail in memory:
 
 ```bash
-bun run test       # complete non-iOS suite
-bun run test:all   # complete suite, including iOS when Xcode is available
+mise run test       # complete non-iOS suite
+mise run test:all   # complete suite, including iOS when Xcode is available
 ```
 
 Use the logged wrapper for a focused test, typecheck, build, smoke test, or
 Playwright suite:
 
 ```bash
-bun run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
 
-bun run test:logged -- --name terminal-container -- \
+mise run test:logged --name terminal-container -- \
   bun --cwd=apps/web test 'src/components/terminal/TerminalContainer*.test.tsx' \
   --parallel=2 --only-failures
 
-bun run test:logged -- --name agent-browser -- \
-  bun run test:agent:browser
+mise run test:logged --name agent-browser -- \
+  mise run test:agent:browser
 ```
 
 The wrapper preserves the child exit status. Do not wrap these commands in a

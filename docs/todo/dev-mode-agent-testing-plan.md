@@ -15,10 +15,10 @@ become misleading after the profile launcher and real-stack suites shipped.
 An isolated profile can be started, inspected, tested, stopped, and reset with:
 
 ```bash
-bun run dev:test -- --profile agent-123 --fixture
-bun run dev:status -- --profile agent-123 --json
-bun run dev:stop -- --profile agent-123
-bun run dev:reset -- --profile agent-123
+mise run dev:test --profile agent-123 --fixture
+mise run dev:status --profile agent-123 --json
+mise run dev:stop --profile agent-123
+mise run dev:reset --profile agent-123
 ```
 
 The launcher selects free loopback ports, compiles and starts Vite/Electron and
@@ -32,13 +32,13 @@ The browser, Electron, and optional Docker agent suites exercise the real stack:
 ```bash
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-123 \
 ORKESTRATOR_AGENT_TEST_RUN_ID=agent-123 \
-bun run test:logged -- --name agent-browser -- bun run test:agent:browser
+mise run test:logged --name agent-browser -- mise run test:agent:browser
 
-bun run test:logged -- --name agent-electron -- bun run test:agent:electron
+mise run test:logged --name agent-electron -- mise run test:agent:electron
 
 # Profile must have been seeded with local,container environments.
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-container \
-bun run test:logged -- --name agent-docker -- bun run test:agent:docker
+mise run test:logged --name agent-docker -- mise run test:agent:docker
 ```
 
 ## Isolation model

@@ -60,7 +60,7 @@ export async function mintAgentTestLoginUrl(options: {
   }
   if (status.status !== "ready") {
     throw new Error(
-      `Profile ${status.profile} is ${status.status}; start it with bun run dev:test first`,
+      `Profile ${status.profile} is ${status.status}; start it with mise run dev:test first`,
     );
   }
   if (!status.browserUrl) throw new Error(`Profile ${status.profile} has no browser gateway URL`);

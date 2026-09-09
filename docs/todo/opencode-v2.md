@@ -391,7 +391,7 @@ When revisiting this document:
 4. Run the existing version/legacy smoke probe:
 
    ```sh
-   bun run verify:opencode:live
+   mise run verify:opencode:live
    ```
 
 5. Add or run a V2-only live probe covering the qualification cases above. Do

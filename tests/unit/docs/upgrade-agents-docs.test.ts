@@ -67,33 +67,41 @@ describe("agent upgrade runbook contracts", () => {
     expect(liveContractBlock).toContain("RUN_LIVE_CODEX_APP_SERVER=1");
   });
 
-  test("every command the runbook tells you to run actually exists", async () => {
-    // The point of this guard: the runbook naming a script that was renamed or
+  test("every task the runbook tells you to run actually exists", async () => {
+    // The point of this guard: the runbook naming a task that was renamed or
     // deleted is exactly the drift the consolidation was meant to end, and
     // asserting the prose alone cannot catch it.
     const runbook = await read("docs/upgrade-agents.md");
 
     // `download:<claude|codex|opencode>` is a documented placeholder, not a
-    // script name. Capture any trailing `<` so those are recognisable and drop
+    // task name. Capture any trailing `<` so those are recognisable and drop
     // them — a lookahead would just backtrack into the shorter `download`.
-    const invocations = [...runbook.matchAll(/\bbun run (?:--cwd (\S+) )?([\w:-]+<?)/g)]
-      .map((match) => ({ workspace: match[1], script: match[2] }))
-      .filter(({ script }) => !script.includes("<"));
+    const invocations = [...runbook.matchAll(/\bmise run ([\w:-]+<?)/g)]
+      .map((match) => match[1])
+      .filter((task) => !task.includes("<"));
 
     expect(invocations.length).toBeGreaterThan(0);
+    const config = Bun.TOML.parse(await read("mise.toml")) as {
+      tasks?: Record<string, { run?: string | string[] }>;
+    };
     const seen = new Set<string>();
-    for (const { workspace, script } of invocations) {
-      const manifestPath = workspace ? `${workspace}/package.json` : "package.json";
-      if (seen.has(`${manifestPath} ${script}`)) continue;
-      seen.add(`${manifestPath} ${script}`);
+    for (const task of invocations) {
+      if (seen.has(task)) continue;
+      seen.add(task);
+      expect(
+        config.tasks?.[task]?.run,
+        `docs/upgrade-agents.md runs \`mise run ${task}\``,
+      ).toBeTruthy();
+    }
 
-      const manifest = (await Bun.file(path.join(root, manifestPath)).json()) as {
+    for (const match of runbook.matchAll(/\bbun run --cwd (\S+) ([\w:-]+)/g)) {
+      const [, workspace, script] = match;
+      const manifest = (await Bun.file(path.join(root, workspace, "package.json")).json()) as {
         scripts?: Record<string, string>;
       };
-      const invocation = workspace ? `--cwd ${workspace} ${script}` : script;
       expect(
         manifest.scripts?.[script],
-        `docs/upgrade-agents.md runs \`bun run ${invocation}\``,
+        `docs/upgrade-agents.md runs \`bun run --cwd ${workspace} ${script}\``,
       ).toBeTruthy();
     }
   });
@@ -121,7 +129,7 @@ describe("agent upgrade runbook contracts", () => {
       read("docker/Dockerfile"),
     ]);
 
-    expect(runbook).toContain("bun run verify:toolchains:live");
+    expect(runbook).toContain("mise run verify:toolchains:live");
 
     const codexSyncComment = dockerfile.match(/^#   CODEX_CLI_VERSION.*$/m)?.[0];
     expect(codexSyncComment).toContain("config/codex-version.json");

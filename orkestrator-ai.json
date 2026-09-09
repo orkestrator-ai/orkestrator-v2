@@ -1,5 +1,5 @@
 {
   "setupContainer": ["bun install"],
-  "setupLocal": ["bun run setup"],
-  "run": ["bun run dev"]
+  "setupLocal": ["mise run setup"],
+  "run": ["mise run dev"]
 }

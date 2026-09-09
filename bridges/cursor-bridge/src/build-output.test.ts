@@ -35,7 +35,7 @@ describe("the build script", () => {
  *
  * Be aware of what that costs: there is no CI job that runs this suite, so on
  * a machine that has never built this package these assertions do not run at
- * all and the block above is the whole check. Run `bun run build:cursor-bridge`
+ * all and the block above is the whole check. Run `mise run build:cursor-bridge`
  * before trusting a green result here, and treat the packaging guard in
  * `tests/unit/bridge-packaging.test.ts` — which is unconditional — as the one
  * that holds the shape of this package in place.

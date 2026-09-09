@@ -81,7 +81,7 @@ export async function prepareContainerWorkspace(
   if (!support.includes(CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL)) {
     throw new Error(
       `Container base image is out of date and cannot prepare the workspace safely. ` +
-        `Rebuild it with \`bun run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
+        `Rebuild it with \`mise run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
     );
   }
 

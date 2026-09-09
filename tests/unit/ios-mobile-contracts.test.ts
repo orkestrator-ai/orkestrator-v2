@@ -118,9 +118,11 @@ describe("iOS simulator orchestration", () => {
 });
 
 describe("iOS project and deployment contracts", () => {
-  test("root package exposes the tested Bun simulator command", () => {
-    const packageJson = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
-    expect(packageJson.scripts["dev:ios"]).toBe("bun scripts/run-ios-simulator.ts");
+  test("mise exposes the tested Bun simulator command", () => {
+    const config = Bun.TOML.parse(read("mise.toml")) as {
+      tasks: Record<string, { run?: string }>;
+    };
+    expect(config.tasks["dev:ios"].run).toBe("bun scripts/run-ios-simulator.ts");
   });
 
   test("project and shared scheme include the app and unit-test targets", () => {
@@ -186,7 +188,7 @@ describe("iOS project and deployment contracts", () => {
 
   test("documentation and ignore policy cover prerequisites, secure storage, and build artifacts", () => {
     const docs = read("apps/ios/README.md");
-    expect(docs).toContain("bun run dev:ios");
+    expect(docs).toContain("mise run dev:ios");
     expect(docs).toContain("kSecAttrAccessibleWhenUnlockedThisDeviceOnly");
     expect(docs).toContain("Plain HTTP and invalid TLS certificates are intentionally rejected");
     expect(docs).toContain("Switch saved server");

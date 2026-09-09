@@ -53,8 +53,8 @@ mise exec -- bun install
 # Build the Docker base image (required for container functionality)
 docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 
-# Run the application with the repository-pinned Bun
-mise exec -- bun run dev
+# Run the application
+mise run dev
 ```
 
 ### Packaging the desktop app
@@ -65,14 +65,14 @@ For a fast local build, package and install the unpacked app with local ad-hoc
 signing, without Apple Developer ID signing, notarization, or DMG creation:
 
 ```bash
-mise exec -- bun run package:mac
+mise run package:mac
 ```
 
 For a distributable DMG, opt into both Developer ID signing and Apple
 notarization:
 
 ```bash
-mise exec -- bun run package:release
+mise run package:release
 ```
 
 The release command relies on electron-builder's standard signing identity and
@@ -84,7 +84,7 @@ required certificate or notarization credentials are unavailable.
 Package and install the app for the current user:
 
 ```bash
-mise exec -- bun run package:linux
+mise run package:linux
 ```
 
 The Linux installer uses the freedesktop/XDG layout. It installs the unpacked
@@ -173,7 +173,7 @@ Both the machine running Orkestrator and the device with the browser must be sig
 For a standalone backend without Electron, run:
 
 ```bash
-bun run start:web-public
+mise run start:web-public
 ```
 
 To install Bun when necessary and run the published backend without cloning the
@@ -196,7 +196,7 @@ bunx orkestrator \
 On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:
 
 ```bash
-ORKESTRATOR_TAILSCALE_BIN="/custom/path/to/tailscale" bun run start:web-public
+ORKESTRATOR_TAILSCALE_BIN="/custom/path/to/tailscale" mise run start:web-public
 ```
 
 With the standalone macOS Tailscale client, you can instead install its [command-line integration](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) from **Tailscale > Settings > CLI integration** and then use the shorter command on future runs.
@@ -221,7 +221,7 @@ The backend address is remembered in the browser. The token lasts for the curren
 If the connection fails:
 
 - **Could not reach the backend:** Confirm the backend process is still running, both devices are on the same tailnet, and the address starts with `https://`.
-- **Site is not in the backend's allowed origins:** Enable web access in Electron settings, or start the standalone backend with `bun run start:web-public`; both allow the apex and `www` Orkestrator origins.
+- **Site is not in the backend's allowed origins:** Enable web access in Electron settings, or start the standalone backend with `mise run start:web-public`; both allow the apex and `www` Orkestrator origins.
 - **Gateway token was rejected:** Reopen the current `gateway-auth.json` file and copy its `token` value without quotes or extra whitespace.
 - **`Executable not found in $PATH: "tailscale"`:** Install Tailscale's CLI integration or set `ORKESTRATOR_TAILSCALE_BIN` to the executable's absolute path.
 - **Tailscale Serve fails to start:** Confirm the Tailscale app is connected and that HTTPS/Serve is enabled for the tailnet. The first Serve setup may require approval from a tailnet administrator.
@@ -232,13 +232,13 @@ For custom ports, origins, service management, and more troubleshooting, see [St
 
 The backend is a standalone-capable Bun service in `apps/backend` and is the authoritative owner of Docker, terminal, storage, and agent state. There are two supported launch modes:
 
-- `bun run dev` starts Electron, and Electron supervises one backend instance. Electron talks to an ephemeral loopback control listener, while authenticated browser clients use a separate Tailscale listener on port `34121` (or a local-only fallback). Losing Tailscale or encountering a browser-port conflict does not take down the desktop control channel.
-- `bun run start:web` builds and starts the backend without Electron. The backend serves the built React app directly to authenticated browsers.
+- `mise run dev` starts Electron, and Electron supervises one backend instance. Electron talks to an ephemeral loopback control listener, while authenticated browser clients use a separate Tailscale listener on port `34121` (or a local-only fallback). Losing Tailscale or encountering a browser-port conflict does not take down the desktop control channel.
+- `mise run start:web` builds and starts the backend without Electron. The backend serves the built React app directly to authenticated browsers.
 
 For local web development with Vite and the backend in one Turbo invocation:
 
 ```bash
-bun run dev:web
+mise run dev:web
 ```
 
 Open the backend URL printed in the logs (normally `http://127.0.0.1:34121/` without Tailscale), not the internal Vite URL on port `1420`.
@@ -246,7 +246,7 @@ Open the backend URL printed in the logs (normally `http://127.0.0.1:34121/` wit
 To build and start the standalone service on a machine connected to your tailnet:
 
 ```bash
-bun run start:web
+mise run start:web
 ```
 
 By default the service detects and binds to the first Tailscale address on port `34121`. For a local-only development instance, bind explicitly:
@@ -269,7 +269,7 @@ To deploy a static frontend separately, use `apps/web-public`. Vercel only deliv
 The standalone backend can configure the tailnet-only HTTPS listener itself. The convenience script assumes the public client is hosted at `https://orkestrator.dev`:
 
 ```bash
-bun run start:web-public
+mise run start:web-public
 ```
 
 ### Configuration
@@ -308,13 +308,13 @@ cleanup, see [Isolated development and agent testing](docs/development/agent-tes
 
 ```bash
 # Run with hot reload
-bun run dev
+mise run dev
 
 # Run tests
 bun test
 
 # Build for production
-bun run build
+mise run build
 ```
 
 ## Monorepo Layout

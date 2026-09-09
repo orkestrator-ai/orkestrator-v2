@@ -74,6 +74,10 @@ const {
   startResourceSync,
 } = await import("./resource-sync");
 const { startStoreResourceSync } = await import("./store-resource-sync");
+const { armStartupAgentTabActivation } = await import("./pane-layout-authoritative");
+const { hasWindowStartupAgentActivation } = await import("./pane-selection-storage");
+const { startEnvironmentInBackground } =
+  await import("@/components/environments/CreateEnvironmentFlowDialog");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useConfigStore } = await import("@/stores/configStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
@@ -145,6 +149,7 @@ function pipeline(id: string, backendRevision: number) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   resetResourceSync();
   hydrateLoopedReviewWorkflow.mockClear();
   hydrateLoopedReviewWorkflow.mockImplementation(async () => undefined);
@@ -1439,6 +1444,93 @@ describe("pane-layout binding", () => {
     settledBinding.notify?.("env-1");
     await tick();
     expect(getPaneLayout).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps an ambiguous startup handoff through declined adoption and focuses on retry", async () => {
+    detach?.();
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    try {
+      useEnvironmentStore.setState({ environments: [environment("env-1")] });
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.initialize(null, "env-1");
+      paneStore.addTab("default", { id: "setup", type: "plain", isSetupTab: true }, "env-1");
+      paneStore.beginHydration("env-1");
+      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+
+      armStartupAgentTabActivation("env-1");
+      startEnvironmentInBackground(async () => {
+        // Admission happened in the backend, but the renderer lost the reply.
+        throw new Error("response lost after admission");
+      }, "env-1");
+      await tick(0);
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
+
+      const readyLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf" as const,
+          id: "default",
+          tabs: [
+            { id: "setup", type: "plain" as const, isSetupTab: true },
+            {
+              id: "startup-agent",
+              type: "agent-native" as const,
+              nativeAgentData: {
+                environmentId: "env-1",
+                platform: "codex" as const,
+                sessionId: "provider-session",
+                isLocal: true,
+              },
+            },
+          ],
+          activeTabId: "startup-agent",
+        },
+        updatedAt: "2026-09-09T08:00:00.000Z",
+        revision: 5,
+      };
+      const getPaneLayout = mock(async () => readyLayout);
+      const adoptPaneLayout = mock(() => adoptPaneLayout.mock.calls.length > 1);
+      const settledBinding: { notify: ((environmentId: string) => void) | null } = {
+        notify: null,
+      };
+      detach = startTestStoreResourceSync({
+        getPaneLayout: getPaneLayout as never,
+        adoptPaneLayout,
+        onPaneLayoutWriteSettled: ((handler: (environmentId: string) => void) => {
+          settledBinding.notify = handler;
+          return () => {
+            settledBinding.notify = null;
+          };
+        }) as never,
+      });
+
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
+      await tick();
+      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("setup");
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
+
+      settledBinding.notify?.("env-1");
+      await tick();
+
+      expect(adoptPaneLayout).toHaveBeenCalledTimes(2);
+      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+        "startup-agent",
+      );
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
+    } finally {
+      console.error = originalConsoleError;
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 
   test("ignores a change for an environment this client has not loaded", async () => {

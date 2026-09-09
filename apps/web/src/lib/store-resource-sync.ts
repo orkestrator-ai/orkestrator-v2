@@ -13,6 +13,7 @@ import {
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-layout-persistence";
 import {
+  commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
@@ -247,6 +248,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     declinedPaneLayoutRefreshes.delete(environmentId);
     latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
+    commitStartupAgentSetupHandoff(environmentId, selected);
   };
 
   const requestPaneLayoutRefresh = (environmentId: string): void => {

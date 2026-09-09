@@ -31,6 +31,7 @@ const {
   armStartupAgentTabActivation,
   beginPaneTabActivationRequest,
   collectPaneDependencyIds,
+  commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
   requestPaneTabActivation,
@@ -40,6 +41,7 @@ const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
+const { consumeWindowStartupAgentActivation } = await import("./pane-selection-storage");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
 type PersistedPaneLayout = import("@/types/paneLayout").PersistedPaneLayout;
@@ -63,6 +65,11 @@ function split(left: PaneNode, right: PaneNode): PaneNode {
     sizes: [50, 50],
     depth: 1,
   } as PaneNode;
+}
+
+function findLeafForTest(root: PaneNode, id: string): Extract<PaneNode, { kind: "leaf" }> | null {
+  if (root.kind === "leaf") return root.id === id ? root : null;
+  return findLeafForTest(root.children[0], id) ?? findLeafForTest(root.children[1], id);
 }
 
 function environment(overrides: Partial<Environment> = {}): Environment {
@@ -286,6 +293,22 @@ describe("reconcileAuthoritativePaneLayout", () => {
     { id: "tab-2", type: "plain" },
   ]);
 
+  test("does not arm a renderer-local startup handoff in a browser client", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: undefined,
+    });
+    try {
+      armStartupAgentTabActivation("env-1");
+
+      expect(consumeWindowStartupAgentActivation("env-1")).toBe(false);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
   test("installs the backend tree and its selection", () => {
     const current = paneState(leaf("default", [{ id: "tab-2", type: "plain" }]));
     current.root = { ...current.root, activeTabId: "tab-2" } as PaneNode;
@@ -484,6 +507,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
         paneState(setupRoot),
       );
       if (!handedOff) throw new Error("expected a restored layout");
+      commitStartupAgentSetupHandoff("env-1", handedOff);
       const returnedToSetup = {
         ...handedOff,
         root: { ...handedOff.root, activeTabId: "default" } as PaneNode,
@@ -496,6 +520,49 @@ describe("reconcileAuthoritativePaneLayout", () => {
       );
 
       expect(restoredAgain?.root).toMatchObject({ activeTabId: "default" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not steal split-pane focus when the user selected a non-setup tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      const setupTab = { id: "setup", type: "plain" as const, isSetupTab: true };
+      const agentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: {
+          environmentId: "env-1",
+          platform: "codex" as const,
+          sessionId: "provider-session",
+        },
+      };
+      const agentPane = leaf("agent-pane", [setupTab, agentTab]);
+      const notesPane = leaf("notes-pane", [{ id: "notes", type: "plain" as const }]);
+      if (agentPane.kind !== "leaf") throw new Error("expected agent leaf");
+      agentPane.activeTabId = "setup";
+      const current = paneState(split(agentPane, notesPane));
+      current.activePaneId = "notes-pane";
+
+      const authoritativeAgentPane = leaf("agent-pane", [setupTab, agentTab]);
+      if (authoritativeAgentPane.kind !== "leaf") throw new Error("expected agent leaf");
+      authoritativeAgentPane.activeTabId = "startup-agent";
+      const authoritativeRoot = split(authoritativeAgentPane, notesPane);
+      const saved = persisted(authoritativeRoot);
+      saved.activePaneId = "agent-pane";
+
+      armStartupAgentTabActivation("env-1");
+      const restored = reconcileAuthoritativePaneLayout("env-1", saved, current);
+
+      expect(restored?.activePaneId).toBe("notes-pane");
+      const restoredAgentPane = restored ? findLeafForTest(restored.root, "agent-pane") : null;
+      expect(restoredAgentPane?.activeTabId).toBe("setup");
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

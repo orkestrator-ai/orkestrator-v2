@@ -23,10 +23,7 @@ import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-buil
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
-import {
-  armStartupAgentTabActivation,
-  clearStartupAgentTabActivation,
-} from "@/lib/pane-layout-authoritative";
+import { armStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
 import type {
@@ -133,6 +130,27 @@ export function usesNativeStartupAgentTab(
     launch.mode === "native" &&
     !(launch.agent === "claude" && launch.claudeNativeBackend === "tmux")
   );
+}
+
+/**
+ * Start accepted work without treating a renderer transport failure as an
+ * authoritative admission refusal.
+ */
+export function startEnvironmentInBackground(
+  startEnvironment: CreateEnvironmentFlowOperations["startEnvironment"],
+  environmentId: string,
+  initialPrompt?: string,
+): void {
+  void startEnvironment(environmentId, initialPrompt, {
+    background: true,
+    silent: true,
+  }).catch((startError) => {
+    // The backend detaches accepted background work before replying. A
+    // rejected renderer request can therefore mean the response was lost, not
+    // that admission failed. Durable lifecycle failure and deletion paths
+    // retire the bounded handoff marker authoritatively.
+    console.error("Failed to auto-start environment:", startError);
+  });
 }
 
 /**
@@ -292,13 +310,11 @@ export function CreateEnvironmentFlowDialog({
       // and prompt-based naming can continue without blocking the UI.
       onOpenChange(false);
 
-      void startEnvironment(configuredEnvironment.id, options.initialPrompt, {
-        background: true,
-        silent: true,
-      }).catch((startError) => {
-        clearStartupAgentTabActivation(configuredEnvironment.id);
-        console.error("Failed to auto-start environment:", startError);
-      });
+      startEnvironmentInBackground(
+        startEnvironment,
+        configuredEnvironment.id,
+        options.initialPrompt,
+      );
 
       return true;
     } finally {

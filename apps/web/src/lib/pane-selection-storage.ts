@@ -193,6 +193,11 @@ export function armWindowStartupAgentActivation(environmentId: string): void {
   writeStartupAgentActivations(environmentIds);
 }
 
+/** Check a one-shot activation without retiring it before a layout is installed. */
+export function hasWindowStartupAgentActivation(environmentId: string): boolean {
+  return readStartupAgentActivations().includes(environmentId);
+}
+
 /** Consume the one-shot activation once the provider-bound tab is observable. */
 export function consumeWindowStartupAgentActivation(environmentId: string): boolean {
   const environmentIds = readStartupAgentActivations();

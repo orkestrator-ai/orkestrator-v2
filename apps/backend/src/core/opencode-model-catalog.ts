@@ -341,16 +341,6 @@ export function normalizeOpenCodeComposerCatalog(
       providerLabel: providerId,
       reasoning: [{ id: "default", label: "Default" }, ...reasoning],
       defaultReasoningId: "default",
-      parameters: [
-        {
-          id: "reasoning",
-          label: "Reasoning",
-          kind: "select",
-          options: [{ id: "default", label: "Default" }, ...reasoning],
-          defaultValue: "default",
-          scope: "turn",
-        },
-      ],
       supportsSpeed: false,
       // OpenCode has primary agents, not a Build/Plan permission mode.
       supportsMode: false,

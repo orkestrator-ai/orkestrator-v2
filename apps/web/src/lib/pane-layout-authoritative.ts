@@ -11,8 +11,25 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { usePaneLayoutStore, type EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { LEGACY_PANE_LAYOUT_VERSION, type PersistedPaneLayout } from "@/types/paneLayout";
-import { applyStoredPaneSelection, readWindowPaneSelection } from "@/lib/pane-selection-storage";
+import {
+  getNativeAgentData,
+  LEGACY_PANE_LAYOUT_VERSION,
+  type PaneLeaf,
+  type PaneNode,
+  type PersistedPaneLayout,
+} from "@/types/paneLayout";
+import {
+  applyStoredPaneSelection,
+  armWindowStartupAgentActivation,
+  clearWindowStartupAgentActivation,
+  consumeWindowStartupAgentActivation,
+  hasWindowStartupAgentActivation,
+  readWindowPaneSelection,
+} from "@/lib/pane-selection-storage";
+import {
+  paneSelectionIsSetupHandoffSource,
+  STARTUP_AGENT_TAB_ID,
+} from "@/lib/startup-agent-handoff";
 
 /**
  * The one way a backend-owned pane snapshot becomes renderer state.
@@ -43,6 +60,7 @@ export interface PaneTabActivationRequest {
 // request per environment: a later foreground action supersedes an earlier one.
 const pendingTabActivations = new Map<string, string>();
 const latestTabActivationRequests = new Map<string, PaneTabActivationRequest>();
+const startupAgentActivationCommits = new WeakMap<EnvironmentPaneState, string>();
 
 function boundActivationMap<T>(map: Map<string, T>): void {
   while (map.size > MAX_PENDING_TAB_ACTIVATIONS) {
@@ -92,6 +110,80 @@ function activateTabInState(
     };
   };
   return { ...state, root: select(state.root), activePaneId: paneId };
+}
+
+function findLeaf(root: PaneNode, predicate: (leaf: PaneLeaf) => boolean): PaneLeaf | null {
+  if (root.kind === "leaf") return predicate(root) ? root : null;
+  return findLeaf(root.children[0], predicate) ?? findLeaf(root.children[1], predicate);
+}
+
+/**
+ * Let the provider-binding layout revision perform the one setup-to-agent
+ * focus handoff requested by this Electron window.
+ *
+ * The tab is published before setup, so presence alone is too early. A
+ * provider session id is the durable boundary that setup has completed and
+ * the agent can render. Resolve the request at that boundary even when focus
+ * has moved elsewhere; once the result is installed, a later reconcile must
+ * not steal an intentional choice.
+ */
+function applyStartupAgentSetupHandoff(
+  environmentId: string,
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+): { state: EnvironmentPaneState; retireActivationAfterInstall: boolean } {
+  const authoritativeLeaf = findLeaf(authoritative.root, (leaf) =>
+    leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID),
+  );
+  const authoritativeTab = authoritativeLeaf?.tabs.find((tab) => tab.id === STARTUP_AGENT_TAB_ID);
+  const providerSessionId = authoritativeTab
+    ? getNativeAgentData(authoritativeTab)?.sessionId
+    : undefined;
+  if (!providerSessionId || !hasWindowStartupAgentActivation(environmentId)) {
+    return { state: selected, retireActivationAfterInstall: false };
+  }
+
+  const targetLeaf = authoritativeLeaf
+    ? findLeaf(selected.root, (leaf) => leaf.id === authoritativeLeaf.id)
+    : null;
+  const focusedLeaf = findLeaf(selected.root, (leaf) => leaf.id === selected.activePaneId);
+  if (
+    authoritativeLeaf?.activeTabId !== STARTUP_AGENT_TAB_ID ||
+    !paneSelectionIsSetupHandoffSource(targetLeaf) ||
+    (focusedLeaf !== targetLeaf && !paneSelectionIsSetupHandoffSource(focusedLeaf))
+  ) {
+    return { state: selected, retireActivationAfterInstall: true };
+  }
+  return {
+    state: activateTabInState(selected, STARTUP_AGENT_TAB_ID) ?? selected,
+    retireActivationAfterInstall: true,
+  };
+}
+
+/** Arm the post-setup focus handoff in the Electron window that created the environment. */
+export function armStartupAgentTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  armWindowStartupAgentActivation(environmentId);
+}
+
+/** Cancel a handoff whose start failed or whose environment was deleted. */
+export function clearStartupAgentTabActivation(environmentId: string): void {
+  if (!window.orkestrator?.isolatedViewState) return;
+  clearWindowStartupAgentActivation(environmentId);
+}
+
+/**
+ * Retire a setup handoff only after the reconciled state carrying its decision
+ * has actually been installed. A discarded reconciliation intentionally leaves
+ * the persisted intent available for the retry.
+ */
+export function commitStartupAgentSetupHandoff(
+  environmentId: string,
+  state: EnvironmentPaneState,
+): void {
+  if (startupAgentActivationCommits.get(state) !== environmentId) return;
+  startupAgentActivationCommits.delete(state);
+  consumeWindowStartupAgentActivation(environmentId);
 }
 
 /**
@@ -296,7 +388,12 @@ export function reconcileAuthoritativePaneLayout(
       environmentId,
       readWindowPaneSelection(environmentId),
     );
-    return applyPendingTabActivation(environmentId, selected);
+    const startupHandoff = applyStartupAgentSetupHandoff(environmentId, restored, selected);
+    const reconciled = applyPendingTabActivation(environmentId, startupHandoff.state);
+    if (startupHandoff.retireActivationAfterInstall) {
+      startupAgentActivationCommits.set(reconciled, environmentId);
+    }
+    return reconciled;
   }
 
   // V1 stored canonical first-pane/first-tab placeholders, not real focus.

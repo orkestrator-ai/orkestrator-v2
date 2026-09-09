@@ -1,4 +1,5 @@
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,10 +21,18 @@ import {
 } from "@/lib/backend";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
+import { agentSettingsTiers } from "@/lib/agent-settings";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
+import { armStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
-import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
+import type {
+  AppConfig,
+  Environment,
+  EnvironmentType,
+  NetworkAccessMode,
+  PortMapping,
+} from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
@@ -107,6 +116,41 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
   };
+}
+
+export function usesNativeStartupAgentTab(
+  config: Pick<AppConfig, "global" | "repositories">,
+  projectId: string,
+  agentSettings: AgentSettingsTier,
+): boolean {
+  const launch = resolveStartupLaunchFromSettings(
+    agentSettingsTiers(config, projectId, { agentSettings }),
+  );
+  return (
+    launch.mode === "native" &&
+    !(launch.agent === "claude" && launch.claudeNativeBackend === "tmux")
+  );
+}
+
+/**
+ * Start accepted work without treating a renderer transport failure as an
+ * authoritative admission refusal.
+ */
+export function startEnvironmentInBackground(
+  startEnvironment: CreateEnvironmentFlowOperations["startEnvironment"],
+  environmentId: string,
+  initialPrompt?: string,
+): void {
+  void startEnvironment(environmentId, initialPrompt, {
+    background: true,
+    silent: true,
+  }).catch((startError) => {
+    // The backend detaches accepted background work before replying. A
+    // rejected renderer request can therefore mean the response was lost, not
+    // that admission failed. Durable lifecycle failure and deletion paths
+    // retire the bounded handoff marker authoritatively.
+    console.error("Failed to auto-start environment:", startError);
+  });
 }
 
 /**
@@ -240,6 +284,12 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialPromptAttachments,
       );
       updateEnvironment(environment.id, configuredEnvironment);
+      if (
+        launchSettings.pendingAgentLaunch &&
+        usesNativeStartupAgentTab(config, projectId, agentSettings)
+      ) {
+        armStartupAgentTabActivation(configuredEnvironment.id);
+      }
 
       setOptions(configuredEnvironment.id, {
         launchAgent: options.launchAgent,
@@ -260,12 +310,11 @@ export function CreateEnvironmentFlowDialog({
       // and prompt-based naming can continue without blocking the UI.
       onOpenChange(false);
 
-      void startEnvironment(configuredEnvironment.id, options.initialPrompt, {
-        background: true,
-        silent: true,
-      }).catch((startError) => {
-        console.error("Failed to auto-start environment:", startError);
-      });
+      startEnvironmentInBackground(
+        startEnvironment,
+        configuredEnvironment.id,
+        options.initialPrompt,
+      );
 
       return true;
     } finally {

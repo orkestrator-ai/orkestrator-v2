@@ -19,6 +19,12 @@ import {
 } from "@/types/paneLayout";
 import type { ClaudeNativeBackend } from "@/types";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  paneSelectionIsSetupHandoffSource,
+  STARTUP_AGENT_TAB_ID,
+} from "@/lib/startup-agent-handoff";
+
+export { paneSelectionIsSetupHandoffSource, STARTUP_AGENT_TAB_ID };
 
 export const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
 export const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
@@ -106,8 +112,6 @@ export function createUniqueTabId(prefix: string): string {
  * the flag. The stable id makes pane-layout merging, bridge session creation,
  * and prompt dispatch all converge on one launch.
  */
-export const STARTUP_AGENT_TAB_ID = "startup-agent";
-
 /**
  * Which tab types count as "the agent a post-setup launch was asking for".
  *
@@ -154,12 +158,6 @@ export function findStartupAgentTabId(state: { root: PaneNode }): string | null 
   return candidates.some((tab) => tab.id === STARTUP_AGENT_TAB_ID)
     ? STARTUP_AGENT_TAB_ID
     : candidates[0]!.id;
-}
-
-/** True when a pane is still showing the setup terminal, or nothing valid. */
-export function paneSelectionIsSetupHandoffSource(leaf: PaneLeaf): boolean {
-  const selected = leaf.tabs.find((tab) => tab.id === leaf.activeTabId);
-  return !selected || selected.isSetupTab === true;
 }
 
 /**

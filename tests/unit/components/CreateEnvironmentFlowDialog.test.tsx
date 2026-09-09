@@ -13,6 +13,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { mockToastError } from "../../mocks/sonner";
+import { consumeWindowStartupAgentActivation } from "@/lib/pane-selection-storage";
 
 // Snapshot the real module before replacing it, and restore it afterwards, so
 // other suites that need the genuine backend wrappers are unaffected.
@@ -112,11 +113,13 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
   fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
   await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
+  await waitFor(() => expect(startEnvironment).toHaveBeenCalled());
   return updateEnvironmentAgentSettingsMock.mock.calls[0]!;
 }
 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
+    localStorage.clear();
     updateEnvironmentAgentSettingsMock.mockClear();
     createFeatureBuildMock.mockClear();
     createFeatureBuildMock.mockResolvedValue({
@@ -838,6 +841,59 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("sonnet");
     expect(call[4]).toBeUndefined();
+  });
+
+  test("arms the creating Electron window for the post-setup agent handoff", async () => {
+    const config = structuredClone(useConfigStore.getState().config);
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      defaultAgent: "codex",
+    };
+    useConfigStore.setState({ config });
+
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      await submitCreateFlow();
+
+      expect(consumeWindowStartupAgentActivation("env-created")).toBe(true);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not arm the native-tab handoff for a terminal agent launch", async () => {
+    const config = structuredClone(useConfigStore.getState().config);
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      defaultAgent: "claude",
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        claude: {
+          ...config.global.agentSettings?.platforms?.claude,
+          mode: "terminal",
+        },
+      },
+    };
+    useConfigStore.setState({ config });
+
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      await submitCreateFlow();
+
+      expect(consumeWindowStartupAgentActivation("env-created")).toBe(false);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
   });
 
   test("starts a newly created environment as a backend-owned background task", async () => {

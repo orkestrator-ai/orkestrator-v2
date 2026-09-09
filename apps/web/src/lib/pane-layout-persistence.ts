@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection, writeWindowPaneSelection } from "@/lib/pane-selection-storage";
 import {
+  commitStartupAgentSetupHandoff,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
@@ -450,6 +451,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
       revision: saved.revision,
     });
     paneStore.applyAuthoritativeLayout(environmentId, restored);
+    commitStartupAgentSetupHandoff(environmentId, restored);
   };
 
   const persistWithRebase = async (

@@ -3,26 +3,58 @@ import type { PaneNode } from "@/types/paneLayout";
 import { desktopConnectionStorageKey } from "@/lib/desktop-storage-key";
 
 /**
- * Renderer-local storage for which pane and tab this client focused.
+ * Renderer-local pane presentation state.
  *
- * Selection is now backend-owned as part of the pane-layout snapshot. These
- * helpers remain only to read/apply v1 records during migration and clean them
- * up afterward; current clients never update this storage.
+ * Shared selection is backend-owned, while Electron keeps a connection-scoped
+ * window selection and one-shot presentation intents here. The legacy helpers
+ * remain only to read/apply v1 records during migration and clean them up.
  *
- * Everything here is best-effort. A browser that denies storage, a quota
- * failure, or a corrupt record costs the user their remembered selection and
- * nothing else, so every path falls back to the layout's own defaults rather
- * than surfacing an error.
+ * Everything is best-effort. A browser that denies storage, a quota failure,
+ * or a corrupt record costs the user remembered presentation state and nothing
+ * else, so every path falls back without surfacing an error.
  */
 
 const STORAGE_KEY = "orkestrator.pane-selection.v1";
 const WINDOW_STORAGE_KEY = "orkestrator.window-pane-selection.v1";
+const WINDOW_STARTUP_AGENT_ACTIVATION_KEY = "orkestrator.window-startup-agent-activation.v1";
 
 /** Bounds on the record, so an app that has opened many environments over its
  * lifetime cannot grow this without limit. Oldest-written entries are evicted
  * first. */
 const MAX_ENVIRONMENTS = 64;
 const MAX_SERIALIZED_BYTES = 64 * 1024;
+
+function readStartupAgentActivations(): string[] {
+  const store = storage();
+  if (!store) return [];
+  try {
+    const raw = store.getItem(desktopConnectionStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || !Array.isArray(parsed.environmentIds)) return [];
+    return parsed.environmentIds.filter(
+      (environmentId): environmentId is string =>
+        typeof environmentId === "string" && environmentId.length > 0,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeStartupAgentActivations(environmentIds: string[]): void {
+  const store = storage();
+  if (!store) return;
+  const bounded = Array.from(new Set(environmentIds)).slice(-MAX_ENVIRONMENTS);
+  try {
+    store.setItem(
+      desktopConnectionStorageKey(WINDOW_STARTUP_AGENT_ACTIVATION_KEY),
+      JSON.stringify({ version: 1, environmentIds: bounded }),
+    );
+  } catch {
+    // Best-effort window presentation state. The backend launch remains
+    // authoritative even when this client cannot remember to focus its tab.
+  }
+}
 
 export interface StoredPaneSelection {
   activePaneId: string;
@@ -142,6 +174,43 @@ export function writeWindowPaneSelection(environmentId: string, state: Environme
   );
   entries.push({ environmentId, activePaneId: state.activePaneId, activeTabIds });
   writeEntries(entries, storageKey);
+}
+
+/**
+ * Remember that this Electron window initiated an environment whose startup
+ * agent should take over from setup once its provider session is ready.
+ *
+ * This is connection-scoped and persisted because setup continues while the
+ * environment is inactive and can outlive a renderer reload. Browser clients
+ * adopt the backend's shared selection and never arm this intent.
+ */
+export function armWindowStartupAgentActivation(environmentId: string): void {
+  if (!environmentId) return;
+  const environmentIds = readStartupAgentActivations().filter(
+    (candidate) => candidate !== environmentId,
+  );
+  environmentIds.push(environmentId);
+  writeStartupAgentActivations(environmentIds);
+}
+
+/** Check a one-shot activation without retiring it before a layout is installed. */
+export function hasWindowStartupAgentActivation(environmentId: string): boolean {
+  return readStartupAgentActivations().includes(environmentId);
+}
+
+/** Consume the one-shot activation once the provider-bound tab is observable. */
+export function consumeWindowStartupAgentActivation(environmentId: string): boolean {
+  const environmentIds = readStartupAgentActivations();
+  if (!environmentIds.includes(environmentId)) return false;
+  writeStartupAgentActivations(environmentIds.filter((candidate) => candidate !== environmentId));
+  return true;
+}
+
+/** Drop an activation whose environment failed to start or was deleted. */
+export function clearWindowStartupAgentActivation(environmentId: string): void {
+  const environmentIds = readStartupAgentActivations();
+  if (!environmentIds.includes(environmentId)) return;
+  writeStartupAgentActivations(environmentIds.filter((candidate) => candidate !== environmentId));
 }
 
 /**

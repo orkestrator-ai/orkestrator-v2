@@ -31,6 +31,7 @@ import type {
   PrState,
 } from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
+import { clearStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
 
 /**
  * Extract error message from various error types.
@@ -170,10 +171,11 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
-/** Stop store-owned background subscriptions after backend deletion succeeds. */
+/** Stop store-owned background state after authoritative deletion. */
 export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
   useClaudeStore.getState().closeEventSubscription(environmentId);
   useOpenCodeStore.getState().closeEventSubscription(environmentId);
+  clearStartupAgentTabActivation(environmentId);
 }
 
 /**
@@ -308,7 +310,7 @@ function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
  * Every path that writes environments into the store calls this: the project
  * list load, both setup lifecycle events, and the snapshot reconciliation.
  */
-function reconcileEnvironmentLifecycleErrors(): void {
+export function reconcileEnvironmentLifecycleErrors(): void {
   const store = useEnvironmentStore.getState();
   const liveEnvironmentIds = new Set(store.environments.map((environment) => environment.id));
   for (const environmentId of reportedLifecycleErrorByEnvironment.keys()) {
@@ -333,6 +335,7 @@ function reconcileEnvironmentLifecycleErrors(): void {
     // and the transient renderer-side one, or a launch that can never happen
     // auto-dispatches the original prompt the next time this env is started.
     store.updateEnvironment(environment.id, { pendingAgentLaunch: false });
+    clearStartupAgentTabActivation(environment.id);
     const claudeOptions = useClaudeOptionsStore.getState();
     if (claudeOptions.pendingNativeLaunches[environment.id]) {
       claudeOptions.clearPendingNativeLaunch(environment.id);
@@ -440,6 +443,31 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
   return setupSnapshotReconciliation;
 }
 
+/** Apply one incremental setup-completion event to the authoritative stores. */
+export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompletePayload): void {
+  const { environment_id, success, environment } = payload;
+  console.info("[setup-terminal] received environment-setup-complete", {
+    environmentId: environment_id,
+    success,
+    hasEnvironment: !!environment,
+    setupScriptsComplete: environment?.setupScriptsComplete ?? null,
+    error: payload.error ?? null,
+  });
+  const store = useEnvironmentStore.getState();
+  if (environment) {
+    store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
+    reconcileEnvironmentLifecycleErrors();
+  }
+  if (!success) {
+    // The backend clears the durable launch intent on failure and normally
+    // sends the updated environment above. Mirror it locally even when the
+    // payload omitted the environment, so a failed setup cannot leave this
+    // renderer holding a launch it will never be able to perform.
+    store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
+    clearStartupAgentTabActivation(environment_id);
+  }
+}
+
 /**
  * Global environment lifecycle listeners.
  *
@@ -489,28 +517,7 @@ export function useEnvironmentLifecycleService(): void {
 
       const stopComplete = await listen<EnvironmentSetupCompletePayload>(
         "environment-setup-complete",
-        (event) => {
-          const { environment_id, success, environment } = event.payload;
-          console.info("[setup-terminal] received environment-setup-complete", {
-            environmentId: environment_id,
-            success,
-            hasEnvironment: !!environment,
-            setupScriptsComplete: environment?.setupScriptsComplete ?? null,
-            error: event.payload.error ?? null,
-          });
-          const store = useEnvironmentStore.getState();
-          if (environment) {
-            store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
-            reconcileEnvironmentLifecycleErrors();
-          }
-          if (!success) {
-            // The backend clears the durable launch intent on failure and sends the
-            // updated environment above. Mirror it locally even when the payload
-            // omitted the environment, so a failed setup cannot leave this renderer
-            // holding a launch it will never be able to perform.
-            store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
-          }
-        },
+        (event) => applyEnvironmentSetupComplete(event.payload),
       );
       if (disposed) stopComplete();
       else unlistenComplete = stopComplete;

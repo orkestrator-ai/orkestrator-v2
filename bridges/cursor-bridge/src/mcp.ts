@@ -8,6 +8,13 @@ import { isObject, nonBlank, type SessionState } from "./state.js";
 const MAX_MCP_CONFIG_BYTES = 1024 * 1024;
 const MAX_MCP_SERVERS = 64;
 const MAX_MCP_TOOLS = 128;
+/** Server and tool segments alike, matching the bound `runTools` already uses. */
+const MAX_MCP_NAME_LENGTH = 128;
+/** `mcp__` + server + `__` + tool, so a recorded name cannot outgrow its parts. */
+const MAX_MCP_QUALIFIED_NAME_LENGTH =
+  "mcp__".length + MAX_MCP_NAME_LENGTH + 2 + MAX_MCP_NAME_LENGTH;
+/** Distinct call names retained per session. Names only, so this is small. */
+const MAX_OBSERVED_MCP_TOOLS = 512;
 
 /**
  * Resolve the MCP launch set handed to Cursor's SDK.
@@ -37,27 +44,27 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
   const inventory = new Map<string, Set<string>>(
     [...configured].map((name) => [name, new Set<string>()]),
   );
+  // Longest-first, so a configured id that itself contains `__` still beats
+  // the generic split below. Sorted once here rather than per name.
+  const configuredByLength = [...configured].sort((left, right) => right.length - left.length);
   // The system message is Cursor's advertised tool inventory, so counts from
   // it are exact. Some runtimes expose only the generic `mcp` tool there; the
-  // settled call cards below can still reveal those server names, but seeing
+  // observed call names below can still reveal those server names, but seeing
   // one call must not pretend that one tool is the server's complete inventory.
   const reportedInventory = new Set<string>();
   for (const toolName of state.runTools ?? []) {
-    const parsed = parseMcpToolName(toolName, configured);
+    const parsed = parseMcpToolName(toolName, configuredByLength);
     if (!parsed) continue;
     const tools = ensureServer(inventory, parsed.server);
     if (!tools) continue;
     if (tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
     reportedInventory.add(parsed.server);
   }
-  for (const message of state.messages) {
-    for (const part of message.parts) {
-      if (part.type !== "tool-invocation" || !nonBlank(part.toolName)) continue;
-      const parsed = parseMcpToolName(part.toolName, configured);
-      if (!parsed) continue;
-      const tools = ensureServer(inventory, parsed.server);
-      if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
-    }
+  for (const toolName of state.observedMcpTools) {
+    const parsed = parseMcpToolName(toolName, configuredByLength);
+    if (!parsed) continue;
+    const tools = ensureServer(inventory, parsed.server);
+    if (tools && tools.size < MAX_MCP_TOOLS) tools.add(parsed.tool);
   }
 
   return [...inventory].map(([name, toolSet]) => {
@@ -77,6 +84,37 @@ export function publicCursorMcpServers(state: SessionState): NativeAgentMcpServe
   });
 }
 
+/**
+ * Remember one MCP call by name, outside the transcript.
+ *
+ * The inventory used to be recovered by scanning `state.messages`, but that is
+ * a display buffer `boundTranscript` trims: a server left the panel the moment
+ * its last card was evicted, which reads as the server having gone away rather
+ * than the card having scrolled off. Only the qualified name is kept — a
+ * call's arguments and results never come near this.
+ */
+export function recordObservedMcpTool(state: SessionState, toolName: string | undefined): void {
+  if (toolName === undefined || !toolName.startsWith("mcp__")) return;
+  if (state.observedMcpTools.size >= MAX_OBSERVED_MCP_TOOLS) return;
+  state.observedMcpTools.add(toolName.slice(0, MAX_MCP_QUALIFIED_NAME_LENGTH));
+}
+
+/**
+ * Re-observe MCP calls from a transcript a restart recovered.
+ *
+ * The accumulator is runtime state, like `runTools`, so a new process starts
+ * with nothing. The persisted transcript is the only surviving record of what
+ * the previous one called, so read it once here instead of leaving the panel
+ * short a server until the next turn happens to use it again.
+ */
+export function seedObservedMcpTools(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-invocation") recordObservedMcpTool(state, part.toolName);
+    }
+  }
+}
+
 function ensureServer(
   inventory: Map<string, Set<string>>,
   server: string,
@@ -93,23 +131,27 @@ function ensureServer(
  * Cursor exposes MCP calls as `mcp__<server>__<tool>` names. Prefer an exact
  * configured-server prefix (server ids may themselves contain `__`), then use
  * the first separator for servers loaded from Cursor's user/team settings.
+ * Both segments are bounded: a provider names its own tools, and the published
+ * inventory is not the place to discover how long one of those names can get.
  */
 function parseMcpToolName(
   value: string,
-  configured: ReadonlySet<string>,
+  configuredByLength: readonly string[],
 ): { server: string; tool: string } | undefined {
   if (!value.startsWith("mcp__")) return undefined;
-  for (const server of [...configured].sort((left, right) => right.length - left.length)) {
+  for (const server of configuredByLength) {
     const prefix = `mcp__${server}__`;
-    if (value.startsWith(prefix) && nonBlank(value.slice(prefix.length))) {
-      return { server, tool: value.slice(prefix.length) };
-    }
+    if (!value.startsWith(prefix)) continue;
+    const tool = value.slice(prefix.length, prefix.length + MAX_MCP_NAME_LENGTH);
+    if (nonBlank(tool)) return { server, tool };
   }
   const separator = value.indexOf("__", "mcp__".length);
   if (separator < 0) return undefined;
   const server = value.slice("mcp__".length, separator);
-  const tool = value.slice(separator + 2);
-  return nonBlank(server) && nonBlank(tool) && server.length <= 128 ? { server, tool } : undefined;
+  const tool = value.slice(separator + 2, separator + 2 + MAX_MCP_NAME_LENGTH);
+  return nonBlank(server) && nonBlank(tool) && server.length <= MAX_MCP_NAME_LENGTH
+    ? { server, tool }
+    : undefined;
 }
 
 async function readProjectMcpServers(): Promise<Record<string, McpServerConfig>> {

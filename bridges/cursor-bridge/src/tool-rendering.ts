@@ -324,8 +324,12 @@ function renderMcp(rendered: RenderedToolCall, args: JsonObject, result: ToolRes
   const provider = readString(args.providerIdentifier);
   const tool = readString(args.toolName);
   // Name the card after the MCP tool rather than "mcp": a session with several
-  // servers attached is otherwise a column of identical cards.
-  rendered.toolName = tool ? `mcp__${provider ?? "server"}__${tool}` : "mcp";
+  // servers attached is otherwise a column of identical cards. The qualified
+  // `mcp__<server>__<tool>` form is also how `publicCursorMcpServers` learns
+  // which servers a run reached, so a call whose `providerIdentifier` the SDK
+  // left out — it is optional — must not borrow that shape. A placeholder
+  // segment there published an MCP server literally named "server".
+  rendered.toolName = tool ? (provider ? `mcp__${provider}__${tool}` : `mcp:${tool}`) : "mcp";
   rendered.toolTitle = tool ? `${provider ? `${provider}: ` : ""}${tool}` : "mcp";
   rendered.toolArgs = isObject(args.args) ? boundArgs(args.args) : undefined;
   const value = successValue(result);

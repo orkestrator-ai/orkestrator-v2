@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
+import { seedObservedMcpTools } from "./mcp.js";
 import { readTodos } from "./tool-rendering.js";
 import { settleDetachedSubagentPart } from "./translate.js";
 import {
@@ -198,6 +199,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
     }
   }
   state.todos = restoreTodos(state);
+  seedObservedMcpTools(state);
   settleRestoredSubagents(state);
   return state;
 }

@@ -89,6 +89,25 @@ describe("accountWindowsFromPlanUsage", () => {
     ]);
   });
 
+  test("omits the period duration when the cycle does not end after it starts", () => {
+    for (const billingCycleStart of [Date.UTC(2026, 8, 1), Date.UTC(2026, 9, 1)]) {
+      expect(
+        accountWindowsFromPlanUsage({
+          billingCycleStart,
+          billingCycleEnd: Date.UTC(2026, 8, 1),
+          planUsage: { autoPercentUsed: 12 },
+        }),
+      ).toEqual([
+        {
+          window: CURSOR_PLAN_WINDOW.auto,
+          label: "Cursor Models",
+          usedPercent: 12,
+          resetsAt: "2026-09-01T00:00:00.000Z",
+        },
+      ]);
+    }
+  });
+
   test("returns nothing when planUsage is missing", () => {
     expect(accountWindowsFromPlanUsage({ billingCycleEnd: Date.UTC(2026, 8, 1) })).toEqual([]);
     expect(accountWindowsFromPlanUsage(undefined)).toEqual([]);

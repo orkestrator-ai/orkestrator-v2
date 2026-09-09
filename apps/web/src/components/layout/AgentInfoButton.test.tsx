@@ -2091,6 +2091,34 @@ describe("AgentInfoButton usage panel", () => {
     expect(within(account).getByText("4")).toBeTruthy();
   });
 
+  test("takes a period length from the account window a limit row absorbs", () => {
+    // The limit read says when the period ends, the account window naming the
+    // same period says how long it is, and the elapsed marker needs both. The
+    // label carries no duration of its own, so a merge that dropped
+    // `windowMinutes` would leave the bar unplaceable in time.
+    const windowMinutes = 31 * 24 * 60;
+    const resetsAt = new Date(Date.now() + (windowMinutes / 4) * 60_000).toISOString();
+    useClaudeStore.setState({
+      contextUsage: new Map([
+        [
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [{ label: "Plan quota", usedPercent: 25, resetsAt }],
+            account: [{ window: "billing_cycle", label: "Plan quota", windowMinutes }],
+          }),
+        ],
+      ]),
+    } as never);
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    const account = screen.getByRole("region", { name: "Account usage" });
+    expect(within(account).getAllByText("Plan quota")).toHaveLength(1);
+    expect(
+      within(account).getByRole("img", { name: "Current point in the Plan quota period: 75%" }),
+    ).toBeTruthy();
+  });
+
   test("names each account progress bar with its window and displayed percentage", () => {
     useClaudeStore.setState({
       contextUsage: new Map([

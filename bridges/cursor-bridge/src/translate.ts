@@ -20,6 +20,7 @@ import {
   MAX_TOOL_TITLE_BYTES,
 } from "./config.js";
 import type { InteractionUpdate, NestedTaskUpdate } from "@cursor/sdk";
+import { recordObservedMcpTool } from "./mcp.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import { appendBounded, boundText, chargeTranscript } from "./transcript.js";
 import {
@@ -231,6 +232,9 @@ function applyToolCall(
   }
 
   part.toolName = rendered.toolName;
+  // Outside the transcript, so the MCP panel keeps the server after
+  // `boundTranscript` evicts the card that revealed it.
+  recordObservedMcpTool(state, rendered.toolName);
   part.content = rendered.toolTitle
     ? boundText(rendered.toolTitle, MAX_TOOL_TITLE_BYTES)
     : rendered.toolName;

@@ -41,6 +41,8 @@ import {
   type ProviderCreateSessionOptions,
   type ProviderDispatchStatus,
   type ProviderInteractiveSnapshot,
+  type ProviderSessionStateSnapshot,
+  type ProviderTranscriptSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderSendOptions,
   type ProviderSessionRegistration,
@@ -77,7 +79,11 @@ import {
   openCodeStructuredPrompt,
   parseOpenCodeStructuredText,
 } from "./opencode-messages.js";
-import { boundedOwnedOpenCodeCollection } from "./opencode-snapshots.js";
+import {
+  boundedOwnedOpenCodeCollection,
+  openCodeSessionStateSnapshot,
+  openCodeTranscriptSnapshot,
+} from "./opencode-snapshots.js";
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
@@ -138,6 +144,19 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       shareUrl?: string | null;
     }
   >();
+  private discoveryMetadataGeneration = 0;
+  private readonly discoveryMetadataRefreshes = new Map<
+    string,
+    Promise<{
+      executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
+      runtime: NativeAgentRuntimeSummary;
+      models: AgentModel[];
+      selectedModelId?: string;
+      selectedReasoningId?: string;
+      title?: string;
+      shareUrl?: string | null;
+    }>
+  >();
   private catalogMetadata: {
     expiresAt: number;
     providersKey: string;
@@ -152,13 +171,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly now: () => number;
   private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
-  /**
-   * SSE event types this provider had no branch for.
-   *
-   * Shared across sessions because the subscription is: one stream serves the
-   * whole OpenCode server, so drift is a property of the connection rather than
-   * of any one session.
-   */
   private readonly health = new RuntimeHealthRecorder();
   private readonly streamState = new OpenCodeStreamState();
   private activeStreamController: AbortController | null = null;
@@ -290,22 +302,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return catalog;
   }
 
-  /**
-   * `promptAsync` returns before OpenCode resolves the requested model. When a
-   * provider is disconnected, OpenCode can therefore accept and persist only
-   * the user message, publish a transient error, and leave the session idle.
-   * Preflight the live connectivity snapshot so that failure is definitive and
-   * no apparently stuck turn is created.
-   *
-   * The preflight only ever *rejects* on the positive signal it exists for: a
-   * catalogue that was read successfully and that reports the selected model's
-   * provider as not connected. An unreadable catalogue — a thrown transport
-   * error, a timeout, an error envelope, or a build that does not serve
-   * `/provider` — is no evidence about the model, so dispatch proceeds. Failing
-   * closed there would let one flaky read on a *secondary* endpoint block every
-   * prompt, which is strictly worse than the stuck turn this guards against;
-   * `readComposerCatalog` tolerates the same call failing for the same reason.
-   */
+  /** Reject only a confirmed disconnected model; an unreadable catalogue is inconclusive. */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
     if (!model || !model.includes("/")) return;
     const provider = asRecord(asRecord(this.client)?.provider);
@@ -336,7 +333,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         providersKey: openCodeCatalogCacheKey(allowedProviders, true),
         catalog,
       };
-      this.interactiveMetadata.clear();
+      this.invalidateInteractiveMetadata();
     }
     // Judged unfiltered: the allowlist governs what the picker offers, not what
     // OpenCode can serve, and an unreported connectivity set still dispatches.
@@ -465,7 +462,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.lifecycle.observeEvent(effect.sessionId, effect.status);
       }
       if (effect.refreshMcp) {
-        this.interactiveMetadata.clear();
+        this.invalidateInteractiveMetadata();
       }
       if (effect.refreshInteractions) {
         await this.interactionAdapter
@@ -473,7 +470,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           .catch(() => undefined);
       }
       if (effect.reconnect) {
-        this.interactiveMetadata.clear();
+        this.invalidateInteractiveMetadata();
         this.lifecycle.invalidateEvents();
         this.activeStreamController?.abort();
         return;
@@ -593,7 +590,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const sessionIds = Array.from(this.lifecycle.ownedSessions);
     if (sessionIds.length === 0) return;
     this.streamState.markGap();
-    this.interactiveMetadata.clear();
+    this.invalidateInteractiveMetadata();
     await this.lifecycle.readSessionLifecycle(sessionIds, true, true);
     let cursor = 0;
     const worker = async (): Promise<void> => {
@@ -927,6 +924,34 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  async transcriptSnapshot(
+    sessionId: string,
+    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+    return openCodeTranscriptSnapshot({
+      sessionId,
+      options,
+      revision: () => this.streamState.revision(sessionId),
+      currentMessages: () => this.streamState.currentMessages(sessionId),
+      readMessages: (limit) => this.readMessagesSnapshot(sessionId, limit),
+      replaceMessages: (messages) => this.streamState.replaceMessages(sessionId, messages),
+      title: () => this.streamState.title(sessionId),
+      recordUnknown: (type) => this.health.recordUnknown(`part:${type}`),
+    });
+  }
+
+  async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
+    const status = await this.projectedStatus(sessionId);
+    return openCodeSessionStateSnapshot({
+      status,
+      revision: this.streamState.revision(sessionId),
+      title: this.streamState.title(sessionId),
+      policy: this.sessionPolicies.get(sessionId),
+      runtime: this.streamState.runtime(sessionId),
+      notices: this.streamState.notices(sessionId),
+    });
+  }
+
   private async projectedMessages(sessionId: string, limit: number): Promise<unknown[]> {
     const current = this.streamState.currentMessages(sessionId);
     if (current) return [...boundedOpenCodeMessageHistory(current, { count: limit })];
@@ -1017,21 +1042,22 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  /**
-   * Bounded inventory, drift and diagnostics for one session.
-   *
-   * The inventory comes from the same cached fan-out the interactive snapshot
-   * uses, so asking for health does not multiply SDK calls. A read that fails
-   * answers empty rather than throwing: health is optional metadata, and the
-   * authoritative liveness answer is the session status.
-   */
+  /** Optional health reuses the cached metadata fan-out and never replaces liveness. */
   async runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
-    try {
-      const metadata = await this.readInteractiveMetadata(sessionId);
+    const cached = this.interactiveMetadata.get(sessionId);
+    if (cached) {
+      const metadata = this.applyStreamMetadata(sessionId, cached);
+      if (cached.expiresAt <= Date.now()) {
+        void this.refreshDiscoveryMetadata(sessionId).catch(() => undefined);
+      }
       return { summary: metadata.runtime, notices: metadata.runtime.notices ?? [] };
-    } catch {
-      return { summary: {}, notices: [] };
     }
+    void this.refreshDiscoveryMetadata(sessionId).catch(() => undefined);
+    const streamed = this.applyStreamMetadata(sessionId, {
+      runtime: { ...this.streamState.runtime(sessionId) },
+      title: this.streamState.title(sessionId),
+    });
+    return { summary: streamed.runtime, notices: [] };
   }
 
   private async readInteractiveMetadata(sessionId: string): Promise<{
@@ -1054,7 +1080,65 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     if (cached && cached.expiresAt > Date.now() && cached.providersKey === providersKey) {
       return this.applyStreamMetadata(sessionId, cached);
     }
+    return this.refreshDiscoveryMetadata(sessionId, allowedProviders, providersKey);
+  }
 
+  private invalidateInteractiveMetadata(): void {
+    this.discoveryMetadataGeneration += 1;
+    this.interactiveMetadata.clear();
+    this.discoveryMetadataRefreshes.clear();
+  }
+
+  private forgetInteractiveMetadata(sessionId: string): void {
+    this.interactiveMetadata.delete(sessionId);
+    this.discoveryMetadataRefreshes.delete(sessionId);
+  }
+
+  private refreshDiscoveryMetadata(
+    sessionId: string,
+    allowedProviders?: readonly string[],
+    providersKey?: string,
+  ): Promise<{
+    executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
+    runtime: NativeAgentRuntimeSummary;
+    models: AgentModel[];
+    selectedModelId?: string;
+    selectedReasoningId?: string;
+    title?: string;
+    shareUrl?: string | null;
+  }> {
+    const existing = this.discoveryMetadataRefreshes.get(sessionId);
+    if (existing) return existing;
+    const generation = this.discoveryMetadataGeneration;
+    const attempt = this.readDiscoveryMetadata(sessionId, allowedProviders, providersKey).finally(
+      () => {
+        if (this.discoveryMetadataRefreshes.get(sessionId) === attempt) {
+          this.discoveryMetadataRefreshes.delete(sessionId);
+        }
+      },
+    );
+    if (generation === this.discoveryMetadataGeneration) {
+      this.discoveryMetadataRefreshes.set(sessionId, attempt);
+    }
+    return attempt;
+  }
+
+  private async readDiscoveryMetadata(
+    sessionId: string,
+    allowedProviders?: readonly string[],
+    providersKey?: string,
+  ): Promise<{
+    executionProfiles: NonNullable<NativeAgentComposerState["executionProfiles"]>;
+    runtime: NativeAgentRuntimeSummary;
+    models: AgentModel[];
+    selectedModelId?: string;
+    selectedReasoningId?: string;
+    title?: string;
+    shareUrl?: string | null;
+  }> {
+    const generation = this.discoveryMetadataGeneration;
+    const providers = allowedProviders ?? (await this.allowedModelProviders());
+    const cacheKey = providersKey ?? openCodeCatalogCacheKey(providers, true);
     const directory = this.connection.directory;
     const results = await Promise.allSettled([
       this.optionalSdkCall("app", "agents", { directory }),
@@ -1065,7 +1149,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.optionalSdkCall("session", "todo", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "diff", { sessionID: sessionId, directory }),
       this.optionalSdkCall("session", "get", { sessionID: sessionId, directory }),
-      this.readComposerCatalog(allowedProviders, true),
+      this.readComposerCatalog(providers, true),
     ]);
     const data = (index: number, fallback: unknown): unknown => {
       const result = results[index];
@@ -1100,7 +1184,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const catalog = catalogResult?.status === "fulfilled" ? catalogResult.value : { models: [] };
     const entry = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-      providersKey,
+      providersKey: cacheKey,
       executionProfiles,
       runtime,
       models: catalog.models,
@@ -1109,12 +1193,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ...(catalog.selectedModelId ? { selectedModelId: catalog.selectedModelId } : {}),
       ...(catalog.selectedReasoningId ? { selectedReasoningId: catalog.selectedReasoningId } : {}),
     };
-    setBoundedMapEntry(
-      this.interactiveMetadata,
-      sessionId,
-      entry,
-      MAX_TRACKED_INTERACTION_SESSIONS,
-    );
+    if (generation === this.discoveryMetadataGeneration) {
+      setBoundedMapEntry(
+        this.interactiveMetadata,
+        sessionId,
+        entry,
+        MAX_TRACKED_INTERACTION_SESSIONS,
+      );
+    }
     return this.applyStreamMetadata(sessionId, entry);
   }
 
@@ -1203,17 +1289,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   refreshCatalog(): void {
     this.catalogMetadata = null;
     this.commandNames = null;
-    this.interactiveMetadata.clear();
+    this.invalidateInteractiveMetadata();
   }
 
-  /**
-   * Match a submission against the commands this runtime can execute.
-   *
-   * Discovery is only attempted for text that actually starts with a slash, and
-   * the result is cached, so an ordinary prompt never pays for a command list.
-   * A discovery failure resolves to "not a command": sending the text to the
-   * model is recoverable, refusing the user's prompt is not.
-   */
+  /** Match slash-prefixed text against cached provider commands; discovery failure is nonfatal. */
   private async resolveProviderCommand(prompt: string): Promise<ParsedSlashCommand | null> {
     const parsed = parseLeadingSlashCommand(prompt);
     if (!parsed) return null;
@@ -1345,7 +1424,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { ...this.requestOptions(), throwOnError: true },
         );
         const share = asRecord(asRecord(response.data)?.share);
-        this.interactiveMetadata.delete(sessionId);
+        this.forgetInteractiveMetadata(sessionId);
         return {
           outcome: "applied",
           ...(typeof share?.url === "string" ? { shareUrl: share.url } : {}),
@@ -1356,7 +1435,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           { sessionID: sessionId },
           { ...this.requestOptions(), throwOnError: true },
         );
-        this.interactiveMetadata.delete(sessionId);
+        this.forgetInteractiveMetadata(sessionId);
         return { outcome: "applied" };
       }
     } catch (error) {

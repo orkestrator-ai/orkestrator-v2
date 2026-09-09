@@ -11,11 +11,17 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentToolDetails,
+  NativeAgentViewIdentity,
+  NativeAgentDiscoveryView,
+  NativeAgentSessionStateView,
+  NativeAgentTranscriptView,
 } from "@orkestrator/protocol/native-agent";
 import {
   applyNativeAgentProjectionDelta,
+  applyNativeAgentTranscriptDelta,
   DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
   isNativeAgentSessionProjection,
+  nativeAgentCapabilities,
 } from "@orkestrator/protocol/native-agent";
 import {
   adoptNativeAgentSession,
@@ -27,6 +33,9 @@ import {
   getNativeAgentProjectionUpdate,
   getNativeAgentMessagePage,
   getNativeAgentSyncCapabilities,
+  getNativeAgentTranscriptUpdate,
+  getNativeAgentSessionStateUpdate,
+  getNativeAgentDiscoveryUpdate,
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
@@ -50,6 +59,7 @@ import {
   evictNativeAgentHistoryCaches,
   useNativeAgentProjectionStore,
   type NativeAgentSyncCacheEntry,
+  type NativeAgentProgressiveCacheEntry,
 } from "@/stores/nativeAgentProjectionStore";
 
 /** Mirrors the backend's default window; only used to size the first expansion. */
@@ -64,7 +74,12 @@ const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
 /** Mirrors the backend page ceiling so a request is never silently clamped. */
 const HISTORY_PAGE_MAX_MESSAGES = 200;
 
-let syncCapability: { supported: boolean; checkedAt: number; generation: number } | null = null;
+let syncCapability: {
+  supported: boolean;
+  progressive: boolean;
+  checkedAt: number;
+  generation: number;
+} | null = null;
 let syncCapabilityGeneration = 0;
 let syncCapabilityInvalidationQueued = false;
 let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | null = null;
@@ -87,15 +102,21 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
     try {
       const capabilities = await getNativeAgentSyncCapabilities();
       const supported = capabilities.projectionSyncVersions?.includes(1) === true;
+      const progressive = capabilities.progressiveViewVersions?.includes(1) === true;
       if (generation === syncCapabilityGeneration) {
-        syncCapability = { supported, checkedAt: Date.now(), generation };
+        syncCapability = { supported, progressive, checkedAt: Date.now(), generation };
       }
       return supported;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("Unknown backend command: get_native_agent_sync_capabilities")) {
         if (generation === syncCapabilityGeneration) {
-          syncCapability = { supported: false, checkedAt: Date.now(), generation };
+          syncCapability = {
+            supported: false,
+            progressive: false,
+            checkedAt: Date.now(),
+            generation,
+          };
         }
         return false;
       }
@@ -109,6 +130,28 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
   } finally {
     if (syncCapabilityRequest === request) syncCapabilityRequest = null;
   }
+}
+
+async function nativeAgentProgressiveSupported(): Promise<boolean> {
+  await nativeAgentSyncSupported();
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.progressive,
+  );
+}
+
+function sameProgressiveIdentity(
+  left: NativeAgentViewIdentity | undefined,
+  right: NativeAgentViewIdentity,
+): boolean {
+  return Boolean(
+    left &&
+    left.backendInstanceId === right.backendInstanceId &&
+    left.environmentId === right.environmentId &&
+    left.platform === right.platform &&
+    left.logicalSessionKey === right.logicalSessionKey &&
+    left.providerSessionId === right.providerSessionId &&
+    left.sourceGeneration === right.sourceGeneration,
+  );
 }
 
 function invalidateNativeAgentSyncCapability(): void {
@@ -251,6 +294,23 @@ export function useNativeAgentSession<TMessage = unknown>({
   const sharedSyncCache = useNativeAgentProjectionStore((state) =>
     state.syncCaches.get(sessionKey),
   );
+  const sharedProgressiveCache = useNativeAgentProjectionStore((state) =>
+    state.progressiveCaches.get(sessionKey),
+  );
+  const matchingSharedProjection =
+    sharedProjection?.platform === platform &&
+    sharedProjection.environmentId === environmentId &&
+    (!initialProviderSessionId || sharedProjection.sessionId === initialProviderSessionId)
+      ? sharedProjection
+      : undefined;
+  const matchingProgressiveCache =
+    sharedProgressiveCache?.identity?.environmentId === environmentId &&
+    sharedProgressiveCache.identity.platform === platform &&
+    sharedProgressiveCache.identity.logicalSessionKey === sessionKey &&
+    (!initialProviderSessionId ||
+      sharedProgressiveCache.identity.providerSessionId === initialProviderSessionId)
+      ? sharedProgressiveCache
+      : undefined;
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [resumeSessionReplacement, setResumeSessionReplacement] = useState<{
     requestedProviderSessionId: string;
@@ -267,6 +327,33 @@ export function useNativeAgentSession<TMessage = unknown>({
    * every absent projection the same way.
    */
   const [hasCompletedRead, setHasCompletedRead] = useState(false);
+  const [transcriptAvailability, setTranscriptAvailability] = useState<
+    NativeAgentProgressiveCacheEntry["transcriptAvailability"]
+  >(
+    matchingSharedProjection
+      ? matchingProgressiveCache?.transcriptAvailability === "empty"
+        ? "empty"
+        : "cached"
+      : "unavailable",
+  );
+  const [transcriptRefreshing, setTranscriptRefreshing] = useState(enabled);
+  const [transcriptError, setTranscriptError] = useState<string | null>(
+    matchingProgressiveCache?.transcriptError ?? null,
+  );
+  const [sessionStateAvailability, setSessionStateAvailability] = useState<
+    NativeAgentProgressiveCacheEntry["stateAvailability"]
+  >(matchingProgressiveCache?.stateAvailability ?? "unavailable");
+  const [sessionStateError, setSessionStateError] = useState<string | null>(
+    matchingProgressiveCache?.stateError ?? null,
+  );
+  const sessionStateAvailabilityRef = useRef(sessionStateAvailability);
+  const markSessionStateAvailability = useCallback(
+    (availability: NativeAgentProgressiveCacheEntry["stateAvailability"]) => {
+      sessionStateAvailabilityRef.current = availability;
+      setSessionStateAvailability(availability);
+    },
+    [],
+  );
   const [isDispatching, setIsDispatching] = useState(false);
   /**
    * How much transcript this tab has asked for. Undefined keeps the backend
@@ -279,9 +366,19 @@ export function useNativeAgentSession<TMessage = unknown>({
   // remount start its authoritative transcript read immediately instead of
   // waiting for a redundant provider-adoption probe first.
   const projectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
-    sharedProjection ?? null,
+    matchingSharedProjection ?? null,
   );
   const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
+  const progressiveTranscriptTokenRef = useRef(matchingProgressiveCache?.transcriptToken);
+  const lastTranscriptViewRef = useRef<NativeAgentTranscriptView<TMessage> | null>(null);
+  const progressiveStateTokenRef = useRef(matchingProgressiveCache?.stateToken);
+  const progressiveDiscoveryTokenRef = useRef(matchingProgressiveCache?.discoveryToken);
+  const progressiveIdentityRef = useRef<NativeAgentViewIdentity | undefined>(
+    matchingProgressiveCache?.identity,
+  );
+  const progressiveDiscoveryRef = useRef<NativeAgentDiscoveryView | undefined>(
+    matchingProgressiveCache?.discovery,
+  );
   const syncLiveProjectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
     (sharedSyncCache?.liveProjection as NativeAgentSessionProjection<TMessage> | undefined) ?? null,
   );
@@ -357,7 +454,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     prompt: string;
     requestId: string;
   } | null>(null);
-  const effectiveProjection = sharedProjection ?? runtimeProjection;
+  const effectiveProjection = matchingSharedProjection ?? runtimeProjection;
   const clearTabInitialAgentOptions = usePaneLayoutStore(
     (state) => state.clearTabInitialAgentOptions,
   );
@@ -376,8 +473,10 @@ export function useNativeAgentSession<TMessage = unknown>({
   const beginProjectionMutation = useCallback(() => {
     projectionOperationEpochRef.current += 1;
     refreshSequenceRef.current += 1;
+    progressiveStateTokenRef.current = undefined;
+    markSessionStateAvailability("refreshing");
     return projectionOperationEpochRef.current;
-  }, []);
+  }, [markSessionStateAvailability]);
 
   const applyProjection = useCallback(
     (
@@ -637,6 +736,261 @@ export function useNativeAgentSession<TMessage = unknown>({
     historyCompleteRef.current = false;
   }, []);
 
+  const updateProgressiveCache = useCallback(
+    (patch: Partial<NativeAgentProgressiveCacheEntry>) => {
+      const store = useNativeAgentProjectionStore.getState();
+      const previous = store.progressiveCaches.get(sessionKey);
+      store.setProgressiveCache(sessionKey, {
+        transcriptAvailability: previous?.transcriptAvailability ?? "unavailable",
+        transcriptRefreshing: previous?.transcriptRefreshing ?? false,
+        stateAvailability: previous?.stateAvailability ?? "unavailable",
+        ...previous,
+        ...patch,
+      });
+    },
+    [sessionKey],
+  );
+
+  const identityBelongsToView = useCallback(
+    (candidate: NativeAgentViewIdentity): boolean =>
+      candidate.environmentId === environmentId &&
+      candidate.platform === platform &&
+      candidate.logicalSessionKey === sessionKey &&
+      (!initialProviderSessionId || candidate.providerSessionId === initialProviderSessionId),
+    [environmentId, initialProviderSessionId, platform, sessionKey],
+  );
+
+  /** Install transcript content without inventing action authority. */
+  const applyProgressiveTranscript = useCallback(
+    (value: NativeAgentTranscriptView<TMessage>, token: string) => {
+      if (!identityBelongsToView(value.identity)) return null;
+      const identityChanged =
+        progressiveIdentityRef.current !== undefined &&
+        !sameProgressiveIdentity(progressiveIdentityRef.current, value.identity);
+      const providerChanged =
+        progressiveIdentityRef.current !== undefined &&
+        progressiveIdentityRef.current.providerSessionId !== value.identity.providerSessionId;
+      if (identityChanged) {
+        progressiveStateTokenRef.current = undefined;
+        progressiveDiscoveryTokenRef.current = undefined;
+        progressiveDiscoveryRef.current = undefined;
+        markSessionStateAvailability("unavailable");
+        setSessionStateError(null);
+      }
+      const current = providerChanged ? null : projectionRef.current;
+      const hasAuthoritativeState =
+        !identityChanged && sessionStateAvailabilityRef.current === "current" && current !== null;
+      const next: NativeAgentSessionProjection<TMessage> = {
+        platform,
+        environmentId,
+        sessionId: value.identity.providerSessionId,
+        ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
+        connection: hasAuthoritativeState ? current.connection : "connecting",
+        turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
+        messages: value.messages,
+        ...(value.messageWindow ? { messageWindow: value.messageWindow } : {}),
+        interactions: hasAuthoritativeState ? current.interactions : [],
+        composerControls: hasAuthoritativeState ? current.composerControls : [],
+        ...(hasAuthoritativeState && current.composer ? { composer: current.composer } : {}),
+        ...(hasAuthoritativeState && current.readiness ? { readiness: current.readiness } : {}),
+        capabilities: hasAuthoritativeState
+          ? current.capabilities
+          : nativeAgentCapabilities(platform),
+        ...(hasAuthoritativeState && current.queue ? { queue: current.queue } : {}),
+        ...(hasAuthoritativeState && current.asyncQuestionResponses
+          ? { asyncQuestionResponses: current.asyncQuestionResponses }
+          : {}),
+        ...(hasAuthoritativeState && current.contextUsage
+          ? { contextUsage: current.contextUsage }
+          : {}),
+        ...(hasAuthoritativeState && current.policy ? { policy: current.policy } : {}),
+        ...(hasAuthoritativeState && current.rateLimits ? { rateLimits: current.rateLimits } : {}),
+        ...(current?.runtime ? { runtime: current.runtime } : {}),
+        ...(current?.runtimeHealthAuthoritative === undefined
+          ? {}
+          : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }),
+        ...(current?.auth ? { auth: current.auth } : {}),
+        ...(current?.notices ? { notices: current.notices } : {}),
+        ...(hasAuthoritativeState && current.recoverableDispatch
+          ? { recoverableDispatch: current.recoverableDispatch }
+          : {}),
+        ...(hasAuthoritativeState && current.backgroundTasks
+          ? { backgroundTasks: current.backgroundTasks }
+          : {}),
+        ...(hasAuthoritativeState && current.suggestedPrompt
+          ? { suggestedPrompt: current.suggestedPrompt }
+          : {}),
+        ...(hasAuthoritativeState && current.completionBlockedByBackgroundTasks !== undefined
+          ? { completionBlockedByBackgroundTasks: current.completionBlockedByBackgroundTasks }
+          : {}),
+        ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
+        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        revision: (current?.revision ?? 0) + 1,
+        generation: value.identity.sourceGeneration,
+      };
+      progressiveTranscriptTokenRef.current = token;
+      lastTranscriptViewRef.current = value;
+      progressiveIdentityRef.current = value.identity;
+      const availability = value.freshness === "empty" ? "empty" : "current";
+      setTranscriptAvailability(availability);
+      setTranscriptRefreshing(false);
+      setTranscriptError(null);
+      applyProjection(next);
+      updateProgressiveCache({
+        identity: value.identity,
+        transcriptToken: token,
+        transcriptAvailability: availability,
+        transcriptRefreshing: false,
+        transcriptError: undefined,
+        ...(identityChanged
+          ? {
+              stateToken: undefined,
+              discoveryToken: undefined,
+              stateAvailability: "unavailable",
+              stateError: undefined,
+              discovery: undefined,
+            }
+          : {}),
+      });
+      return next;
+    },
+    [
+      applyProjection,
+      environmentId,
+      identityBelongsToView,
+      platform,
+      markSessionStateAvailability,
+      updateProgressiveCache,
+    ],
+  );
+
+  /** Install action-critical state while preserving the transcript array. */
+  const applyProgressiveState = useCallback(
+    (value: NativeAgentSessionStateView, token: string) => {
+      if (!identityBelongsToView(value.identity)) return null;
+      const knownIdentity = progressiveIdentityRef.current;
+      if (knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId) {
+        applyProjection(null);
+        setTranscriptAvailability("unavailable");
+        progressiveTranscriptTokenRef.current = undefined;
+        lastTranscriptViewRef.current = null;
+      }
+      const current = projectionRef.current;
+      const next: NativeAgentSessionProjection<TMessage> = {
+        platform,
+        environmentId,
+        sessionId: value.identity.providerSessionId,
+        ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
+        ...(value.shareUrl === undefined ? {} : { shareUrl: value.shareUrl }),
+        connection: value.connection,
+        turn: value.turn,
+        messages: current?.messages ?? [],
+        ...(current?.messageWindow ? { messageWindow: current.messageWindow } : {}),
+        interactions: value.interactions,
+        composerControls: value.composerControls,
+        ...(value.composer ? { composer: value.composer } : {}),
+        ...(value.readiness ? { readiness: value.readiness } : {}),
+        capabilities: value.capabilities,
+        ...(value.queue ? { queue: value.queue } : {}),
+        ...(value.asyncQuestionResponses
+          ? { asyncQuestionResponses: value.asyncQuestionResponses }
+          : {}),
+        ...(value.contextUsage ? { contextUsage: value.contextUsage } : {}),
+        ...(value.policy ? { policy: value.policy } : {}),
+        ...(value.rateLimits ? { rateLimits: value.rateLimits } : {}),
+        ...(current?.runtime ? { runtime: current.runtime } : {}),
+        ...(current?.runtimeHealthAuthoritative === undefined
+          ? {}
+          : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }),
+        ...(current?.auth ? { auth: current.auth } : {}),
+        ...(current?.notices ? { notices: current.notices } : {}),
+        ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),
+        ...(value.backgroundTasks ? { backgroundTasks: value.backgroundTasks } : {}),
+        ...(value.suggestedPrompt ? { suggestedPrompt: value.suggestedPrompt } : {}),
+        ...(value.completionBlockedByBackgroundTasks === undefined
+          ? {}
+          : { completionBlockedByBackgroundTasks: value.completionBlockedByBackgroundTasks }),
+        ...(current?.turnBoundaries ? { turnBoundaries: current.turnBoundaries } : {}),
+        ...(current?.slashCommands ? { slashCommands: current.slashCommands } : {}),
+        revision: (current?.revision ?? 0) + 1,
+        generation: value.identity.sourceGeneration,
+      };
+      progressiveStateTokenRef.current = token;
+      progressiveIdentityRef.current = value.identity;
+      markSessionStateAvailability("current");
+      setSessionStateError(null);
+      applyProjection(next);
+      updateProgressiveCache({
+        identity: value.identity,
+        stateToken: token,
+        stateAvailability: "current",
+        stateError: undefined,
+      });
+      return next;
+    },
+    [
+      applyProjection,
+      environmentId,
+      identityBelongsToView,
+      markSessionStateAvailability,
+      platform,
+      updateProgressiveCache,
+    ],
+  );
+
+  const applyProgressiveDiscovery = useCallback(
+    (value: NativeAgentDiscoveryView, token: string) => {
+      if (!identityBelongsToView(value.identity)) return;
+      const knownIdentity = progressiveIdentityRef.current;
+      if (knownIdentity && !sameProgressiveIdentity(knownIdentity, value.identity)) return;
+      progressiveDiscoveryTokenRef.current = token;
+      progressiveDiscoveryRef.current = value;
+      const current = projectionRef.current;
+      if (current) {
+        const models = value.sections.models?.value;
+        const commands = value.sections.commands?.value;
+        const mcp = value.sections.mcp?.value;
+        const auth = value.sections.auth?.value;
+        const runtime = value.sections.runtime?.value;
+        const next: NativeAgentSessionProjection<TMessage> = {
+          ...current,
+          ...(models
+            ? {
+                composer: current.composer
+                  ? { ...current.composer, models }
+                  : {
+                      models,
+                      fastModeEnabled: null,
+                      fastModeAvailable: false,
+                      modes: [],
+                    },
+              }
+            : {}),
+          ...(commands ? { slashCommands: commands } : {}),
+          ...(runtime || mcp
+            ? {
+                runtime: {
+                  ...current.runtime,
+                  ...runtime?.summary,
+                  ...(runtime ? { notices: runtime.notices } : {}),
+                  ...(mcp ? { mcp, mcpServers: mcp.length } : {}),
+                },
+              }
+            : {}),
+          ...(auth !== undefined ? { auth: auth ?? undefined } : {}),
+          revision: current.revision + 1,
+        };
+        applyProjection(next);
+      }
+      updateProgressiveCache({
+        identity: value.identity,
+        discoveryToken: token,
+        discovery: value,
+      });
+    },
+    [applyProjection, identityBelongsToView, updateProgressiveCache],
+  );
+
   /**
    * Install an authoritative projection returned by a mutation.
    *
@@ -649,6 +1003,9 @@ export function useNativeAgentSession<TMessage = unknown>({
    */
   const applyMutationProjection = useCallback(
     (next: NativeAgentSessionProjection<TMessage> | null) => {
+      progressiveStateTokenRef.current = undefined;
+      markSessionStateAvailability(next ? "current" : "unavailable");
+      setSessionStateError(null);
       const live = syncLiveProjectionRef.current;
       const retained = historyMessagesRef.current;
       if (
@@ -692,7 +1049,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       applyProjection(merged);
       return merged;
     },
-    [applyProjection, environmentId, platform],
+    [applyProjection, environmentId, markSessionStateAvailability, platform],
   );
 
   /**
@@ -732,6 +1089,173 @@ export function useNativeAgentSession<TMessage = unknown>({
       const operationEpoch = projectionOperationEpochRef.current;
       setIsRefreshing(true);
       try {
+        if (await nativeAgentProgressiveSupported()) {
+          setTranscriptRefreshing(true);
+          setTranscriptError(null);
+          markSessionStateAvailability("refreshing");
+          setSessionStateError(null);
+          updateProgressiveCache({
+            transcriptRefreshing: true,
+            transcriptError: undefined,
+            stateAvailability: "refreshing",
+            stateError: undefined,
+          });
+
+          const stillCurrent = () =>
+            sequence === refreshSequenceRef.current &&
+            operationEpoch === projectionOperationEpochRef.current;
+          let transcriptMissing = false;
+          let stateMissing = false;
+          const transcriptRead = getNativeAgentTranscriptUpdate<TMessage>({
+            ...identity,
+            viewVersion: 1,
+            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+            ...(progressiveTranscriptTokenRef.current
+              ? { knownToken: progressiveTranscriptTokenRef.current }
+              : {}),
+            ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          })
+            .then((update) => {
+              if (!stillCurrent()) return;
+              if (update.status === "snapshot") {
+                applyProgressiveTranscript(
+                  update.value as NativeAgentTranscriptView<TMessage>,
+                  update.token,
+                );
+              } else if (update.status === "delta") {
+                const current = lastTranscriptViewRef.current;
+                if (
+                  current &&
+                  progressiveTranscriptTokenRef.current === update.baseToken &&
+                  sameProgressiveIdentity(current.identity, update.identity)
+                ) {
+                  const next = applyNativeAgentTranscriptDelta(current, update.delta);
+                  if (next) {
+                    applyProgressiveTranscript(next, update.token);
+                    return;
+                  }
+                }
+                progressiveTranscriptTokenRef.current = undefined;
+                lastTranscriptViewRef.current = null;
+              } else if (update.status === "unchanged") {
+                progressiveTranscriptTokenRef.current = update.token;
+                setTranscriptAvailability((current) =>
+                  current === "empty" ? "empty" : projectionRef.current ? "current" : "unavailable",
+                );
+                setTranscriptRefreshing(false);
+                setTranscriptError(null);
+                updateProgressiveCache({
+                  identity: update.identity,
+                  transcriptToken: update.token,
+                  transcriptAvailability:
+                    projectionRef.current?.messages.length === 0 ? "empty" : "current",
+                  transcriptRefreshing: false,
+                  transcriptError: undefined,
+                });
+              } else if (update.status === "missing") {
+                transcriptMissing = true;
+                setTranscriptRefreshing(false);
+              } else {
+                const message = update.error ?? "Transcript is temporarily unavailable";
+                setTranscriptRefreshing(false);
+                setTranscriptError(message);
+                updateProgressiveCache({
+                  transcriptRefreshing: false,
+                  transcriptError: message,
+                });
+              }
+            })
+            .catch((error) => {
+              if (!stillCurrent()) return;
+              const message = error instanceof Error ? error.message : String(error);
+              setTranscriptRefreshing(false);
+              setTranscriptError(message);
+              updateProgressiveCache({ transcriptRefreshing: false, transcriptError: message });
+            });
+
+          const stateRead = getNativeAgentSessionStateUpdate({
+            ...identity,
+            viewVersion: 1,
+            ...(progressiveStateTokenRef.current
+              ? { knownToken: progressiveStateTokenRef.current }
+              : {}),
+            ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          })
+            .then((update) => {
+              if (!stillCurrent()) return;
+              if (update.status === "snapshot") {
+                applyProgressiveState(update.value, update.token);
+              } else if (update.status === "unchanged") {
+                progressiveStateTokenRef.current = update.token;
+                markSessionStateAvailability("current");
+                setSessionStateError(null);
+                updateProgressiveCache({
+                  identity: update.identity,
+                  stateToken: update.token,
+                  stateAvailability: "current",
+                  stateError: undefined,
+                });
+              } else if (update.status === "missing") {
+                stateMissing = true;
+                markSessionStateAvailability("unavailable");
+                updateProgressiveCache({ stateAvailability: "unavailable" });
+              } else {
+                const message = update.error ?? "Session state is temporarily unavailable";
+                markSessionStateAvailability("unavailable");
+                setSessionStateError(message);
+                updateProgressiveCache({ stateAvailability: "unavailable", stateError: message });
+              }
+            })
+            .catch((error) => {
+              if (!stillCurrent()) return;
+              const message = error instanceof Error ? error.message : String(error);
+              markSessionStateAvailability("unavailable");
+              setSessionStateError(message);
+              updateProgressiveCache({ stateAvailability: "unavailable", stateError: message });
+            });
+
+          void getNativeAgentDiscoveryUpdate({
+            ...identity,
+            viewVersion: 1,
+            sections: ["models", "commands", "mcp", "auth", "runtime"],
+            ...(progressiveDiscoveryTokenRef.current
+              ? { knownToken: progressiveDiscoveryTokenRef.current }
+              : {}),
+            ...(options?.manual === true ? { forceSnapshot: true } : {}),
+          })
+            .then((update) => {
+              if (!stillCurrent()) return;
+              if (update.status === "snapshot") {
+                applyProgressiveDiscovery(update.value, update.token);
+              } else if (update.status === "unchanged") {
+                progressiveDiscoveryTokenRef.current = update.token;
+              }
+            })
+            .catch(() => undefined);
+
+          await Promise.allSettled([transcriptRead, stateRead]);
+          if (
+            stillCurrent() &&
+            transcriptMissing &&
+            stateMissing &&
+            establishingSessionRef.current === 0
+          ) {
+            applyProjection(null);
+            setTranscriptAvailability("unavailable");
+            setTranscriptRefreshing(false);
+            updateProgressiveCache({
+              transcriptAvailability: "unavailable",
+              transcriptRefreshing: false,
+              stateAvailability: "unavailable",
+            });
+          }
+          if (stillCurrent()) {
+            if (projectionRef.current) establishmentFailureRef.current = false;
+            if (projectionRef.current || !establishmentFailureRef.current) setRuntimeError(null);
+          }
+          return projectionRef.current;
+        }
+
         let next: NativeAgentSessionProjection<TMessage> | null;
         /*
          * Every sync side effect is deferred behind the fence below.
@@ -822,6 +1346,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         ) {
           commit?.();
           if (!syncLiveProjectionRef.current || !next) applyProjection(next);
+          markSessionStateAvailability(next ? "current" : "unavailable");
+          setTranscriptAvailability(
+            next ? (next.messages.length === 0 ? "empty" : "current") : "unavailable",
+          );
+          setTranscriptRefreshing(false);
+          setTranscriptError(null);
+          setSessionStateError(null);
           // A session that exists supersedes any earlier creation failure. One
           // that still does not exist is exactly what that failure described, so
           // its message survives instead of decaying into a generic failure.
@@ -857,15 +1388,20 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [
       applyProjection,
+      applyProgressiveDiscovery,
+      applyProgressiveState,
+      applyProgressiveTranscript,
       commitSyncMaterialization,
       enabled,
       environmentId,
       flushPendingReconcile,
       identity,
       messageLimit,
+      markSessionStateAvailability,
       planSyncMaterialization,
       platform,
       resetSyncState,
+      updateProgressiveCache,
     ],
   );
 
@@ -998,6 +1534,8 @@ export function useNativeAgentSession<TMessage = unknown>({
       establishmentFailureRef.current = true;
       setRuntimeError(error instanceof Error ? error.message : String(error));
       setIsRefreshing(false);
+      setTranscriptRefreshing(false);
+      markSessionStateAvailability("unavailable");
       setHasCompletedRead(true);
       return null;
     } finally {
@@ -1019,6 +1557,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialExecutionProfileId,
     initialProviderSessionId,
     initialReasoningEffort,
+    markSessionStateAvailability,
     requireExistingResumeSession,
     onResumeSessionReplaced,
     enabled,
@@ -1055,7 +1594,44 @@ export function useNativeAgentSession<TMessage = unknown>({
       historyCompleteRef.current = cached.historyComplete;
       historyMessagesRef.current = cached.historyMessages as TMessage[];
     }
-  }, [enabled, environmentId, identity, platform, resetSyncState, sessionKey]);
+    const progressive = store.progressiveCaches.get(sessionKey);
+    if (
+      progressive?.identity?.environmentId === environmentId &&
+      progressive.identity.platform === platform &&
+      progressive.identity.logicalSessionKey === sessionKey &&
+      (!initialProviderSessionId ||
+        progressive.identity.providerSessionId === initialProviderSessionId)
+    ) {
+      progressiveIdentityRef.current = progressive.identity;
+      progressiveTranscriptTokenRef.current = progressive.transcriptToken;
+      progressiveStateTokenRef.current = progressive.stateToken;
+      progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
+      progressiveDiscoveryRef.current = progressive.discovery;
+      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      setTranscriptError(progressive.transcriptError ?? null);
+      markSessionStateAvailability("unavailable");
+      setSessionStateError(null);
+    } else {
+      progressiveIdentityRef.current = undefined;
+      progressiveTranscriptTokenRef.current = undefined;
+      progressiveStateTokenRef.current = undefined;
+      progressiveDiscoveryTokenRef.current = undefined;
+      progressiveDiscoveryRef.current = undefined;
+      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      setTranscriptError(null);
+      markSessionStateAvailability("unavailable");
+      setSessionStateError(null);
+    }
+  }, [
+    enabled,
+    environmentId,
+    identity,
+    initialProviderSessionId,
+    markSessionStateAvailability,
+    platform,
+    resetSyncState,
+    sessionKey,
+  ]);
 
   useEffect(() => {
     if (!enabled || !isActive) {
@@ -1205,17 +1781,17 @@ export function useNativeAgentSession<TMessage = unknown>({
   );
 
   useEffect(() => {
-    if (!sharedProjection || sharedProjection === projectionRef.current) return;
+    if (!matchingSharedProjection || matchingSharedProjection === projectionRef.current) return;
     const current = projectionRef.current;
     if (
       current &&
-      current.generation === sharedProjection.generation &&
-      sharedProjection.revision < current.revision
+      current.generation === matchingSharedProjection.generation &&
+      matchingSharedProjection.revision < current.revision
     )
       return;
-    projectionRef.current = sharedProjection;
-    setRuntimeProjection(sharedProjection);
-  }, [sharedProjection]);
+    projectionRef.current = matchingSharedProjection;
+    setRuntimeProjection(matchingSharedProjection);
+  }, [matchingSharedProjection]);
 
   const resolveInteraction = useCallback(
     async (
@@ -1358,6 +1934,32 @@ export function useNativeAgentSession<TMessage = unknown>({
    * the session never had.
    */
   const loadEarlierMessages = useCallback(async () => {
+    if ((await nativeAgentProgressiveSupported()) && !syncLiveProjectionRef.current) {
+      const update = await getNativeAgentProjectionUpdate<TMessage>({
+        ...identity,
+        syncVersion: 1,
+        liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+        forceSnapshot: true,
+      });
+      if (update.status === "snapshot") {
+        const live = update.projection;
+        if (
+          isNativeAgentSessionProjection(live) &&
+          live.platform === platform &&
+          live.environmentId === environmentId
+        ) {
+          commitSyncMaterialization(
+            planSyncMaterialization({
+              live,
+              token: update.token,
+              historyEpoch: update.historyEpoch,
+              historyComplete: update.historyComplete,
+              boundary: { cursor: update.historyCursor },
+            }),
+          );
+        }
+      }
+    }
     if (await nativeAgentSyncSupported()) {
       const before = historyCursorRef.current;
       if (!before) return projectionRef.current;
@@ -1474,6 +2076,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     identity,
     messageLimit,
     planSyncMaterialization,
+    environmentId,
+    platform,
     refresh,
     resetSyncState,
     sessionKey,
@@ -1487,6 +2091,11 @@ export function useNativeAgentSession<TMessage = unknown>({
     resumeSessionReplacement,
     isRefreshing,
     hasCompletedRead,
+    transcriptAvailability,
+    transcriptRefreshing,
+    transcriptError,
+    sessionStateAvailability,
+    sessionStateError,
     isDispatching,
     refresh,
     connect,

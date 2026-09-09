@@ -6,12 +6,89 @@ import {
   nonEmptyString,
   serializedByteLength,
 } from "./agent-provider-runtime.js";
-import { ProviderUnavailableError } from "./agent-provider-contract.js";
+import {
+  ProviderUnavailableError,
+  type ProviderSessionStateSnapshot,
+  type ProviderStatus,
+  type ProviderTranscriptSnapshot,
+} from "./agent-provider-contract.js";
+import type {
+  NativeAgentExecutionPolicy,
+  NativeAgentNotice,
+  NativeAgentRuntimeSummary,
+} from "@orkestrator/protocol/native-agent";
+import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
 // room to observe that the provider returned an extra entry.
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS = MAX_TRACKED_INTERACTION_SESSIONS + 1;
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+
+export async function openCodeTranscriptSnapshot(input: {
+  sessionId: string;
+  options: { limit: number; targetBytes: number; knownSourceToken?: string };
+  revision: () => number;
+  currentMessages: () => unknown[] | undefined;
+  readMessages: (limit: number) => Promise<unknown[]>;
+  replaceMessages: (messages: unknown[]) => void;
+  title: () => string | undefined;
+  recordUnknown: (type: string) => void;
+}): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+  try {
+    const revision = input.revision();
+    const sourceToken = `opencode:${revision}:${input.options.limit}:${input.options.targetBytes}`;
+    const current = input.currentMessages();
+    if (current && input.options.knownSourceToken === sourceToken) {
+      return { unchanged: true, sourceToken };
+    }
+    const rawMessages = current ?? (await input.readMessages(input.options.limit));
+    if (!current) input.replaceMessages(rawMessages);
+    const messages = rawMessages.slice(-input.options.limit).flatMap((message, index) => {
+      const normalized = normalizeOpenCodeInteractiveMessage(message, index, input.recordUnknown);
+      return normalized ? [normalized] : [];
+    });
+    const title = input.title();
+    return {
+      messages,
+      sourceToken,
+      complete: rawMessages.length < input.options.limit,
+      revision: input.revision(),
+      freshness: "current",
+      ...(title ? { title } : {}),
+    };
+  } catch (error) {
+    throw new ProviderUnavailableError("OpenCode transcript is unavailable", { cause: error });
+  }
+}
+
+export function openCodeSessionStateSnapshot(input: {
+  status: ProviderStatus;
+  revision: number;
+  title?: string;
+  policy?: NativeAgentExecutionPolicy;
+  runtime: NativeAgentRuntimeSummary;
+  notices: NativeAgentNotice[];
+}): ProviderSessionStateSnapshot {
+  const streamedError = input.notices.find((notice) => notice.kind === "error");
+  return {
+    status: streamedError ? "error" : input.status,
+    providerRevision: input.revision,
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.policy ? { policy: input.policy } : {}),
+    ...(Object.keys(input.runtime).length > 0 ? { runtime: input.runtime } : {}),
+    ...(input.notices.length > 0 ? { notices: input.notices } : {}),
+    ...(streamedError
+      ? { phase: "error", error: streamedError.message }
+      : {
+          phase:
+            input.status === "running"
+              ? "running"
+              : input.status === "blocked"
+                ? "blocked"
+                : "idle",
+        }),
+  };
+}
 
 export function boundedOwnedOpenCodeCollection(
   value: unknown,

@@ -3314,7 +3314,7 @@ describe("AgentNativeTab", () => {
       // has no failure to report, and the destructive state would be a lie the
       // user cannot act on.
       const label = platform === "cursor" ? "Cursor Agent" : "Codex";
-      expect(screen.getByText(`Connecting to ${label}...`)).toBeTruthy();
+      expect(screen.getByText(`Refreshing ${label} session…`)).toBeTruthy();
       expect(screen.queryByText("Connection Failed") === null).toBe(true);
       expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     },
@@ -3341,7 +3341,7 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Connecting to Pi...")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Refreshing Pi session…")).toBeTruthy());
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
@@ -3396,8 +3396,8 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Connecting to Pi...")).toBeTruthy());
-    await waitFor(() => expect(screen.queryByText("Connecting to Pi...") === null).toBe(true), {
+    await waitFor(() => expect(screen.getByText("Refreshing Pi session…")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true), {
       timeout: 5_000,
     });
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
@@ -3443,7 +3443,7 @@ describe("AgentNativeTab", () => {
     // Cursor is still being spawned. "No session" is not something the backend
     // can assert yet, and a failure the user cannot act on — on a tab that goes
     // on to connect — is worse than showing the wait it is already in.
-    expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
+    expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
 
@@ -3629,7 +3629,7 @@ describe("AgentNativeTab", () => {
 
     // The second connect has not returned, so there is still nothing to resolve.
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
-    expect(screen.getByText("Connecting to Codex...")).toBeTruthy();
+    expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
 
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
@@ -3838,7 +3838,7 @@ describe("AgentNativeTab", () => {
 
     // Retry starts work immediately. Staying on Connection Failed would leave
     // the only recovery control on screen for the whole reconnect.
-    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy());
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {
@@ -3870,7 +3870,7 @@ describe("AgentNativeTab", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(screen.getByText("Connecting to Codex...")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Refreshing Codex session…")).toBeTruthy());
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByText("bridge refused the session") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
@@ -3899,7 +3899,7 @@ describe("AgentNativeTab", () => {
 
     // The cursor read answered "no session". That must not keep vouching for
     // OpenCode, which has not been asked yet.
-    await waitFor(() => expect(screen.getByText("Connecting to OpenCode...")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Refreshing OpenCode session…")).toBeTruthy());
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {

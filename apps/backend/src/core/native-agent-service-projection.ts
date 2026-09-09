@@ -1,8 +1,19 @@
 import * as shared from "./native-agent-service-shared.js";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import {
+  NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   nativeAsyncQuestionItemId,
   recoverBackgroundTaskLaunchId,
+  type NativeAgentDiscoverySection,
+  type NativeAgentDiscoverySectionState,
+  type NativeAgentDiscoveryUpdate,
+  type NativeAgentDiscoveryView,
+  type NativeAgentSessionStateUpdate,
+  type NativeAgentSessionStateView,
+  type NativeAgentTranscriptDelta,
+  type NativeAgentTranscriptUpdate,
+  type NativeAgentTranscriptView,
+  type NativeAgentViewIdentity,
   type NativeAgentAsyncQuestionResponse,
   type NativeAgentContextUsage,
 } from "@orkestrator/protocol/native-agent";
@@ -50,6 +61,15 @@ import {
   resolveReasoningId,
   withSessionActionSlashCommands,
 } from "./native-agent-service-shared.js";
+import {
+  createNativeAgentDisplayTail,
+  NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS,
+} from "./native-agent-display-tails.js";
+import {
+  ProgressiveReadMetrics,
+  type ProgressiveCacheTier,
+  type ProgressiveReadOutcome,
+} from "./native-agent-progressive-metrics.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -84,6 +104,8 @@ type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
 type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
 type ProviderInteractiveSnapshot = shared.ProviderInteractiveSnapshot;
+type ProviderSessionStateSnapshot = shared.ProviderSessionStateSnapshot;
+type ProviderTranscriptSnapshot = shared.ProviderTranscriptSnapshot;
 type ProviderInteractionObservationEvent = shared.ProviderInteractionObservationEvent;
 type ProviderExecutionMode = shared.ProviderExecutionMode;
 type PromptAttachment = shared.PromptAttachment;
@@ -96,6 +118,9 @@ type NativeAgentProjectionCacheEntry = shared.NativeAgentProjectionCacheEntry;
 type NativeAgentProjectionUpdateInput = shared.NativeAgentProjectionUpdateInput;
 type NativeAgentMessagePageInput = shared.NativeAgentMessagePageInput;
 type NativeAgentProjectionUpdate = shared.NativeAgentProjectionUpdate;
+type NativeAgentTranscriptUpdateInput = shared.NativeAgentTranscriptUpdateInput;
+type NativeAgentProgressiveInput = shared.NativeAgentProgressiveInput;
+type NativeAgentDiscoveryUpdateInput = shared.NativeAgentDiscoveryUpdateInput;
 type NativeAgentProjectionDelta = shared.NativeAgentProjectionDelta;
 type NativeAgentMessagePage = shared.NativeAgentMessagePage;
 type NativeAgentActivityTransition = shared.NativeAgentActivityTransition;
@@ -264,6 +289,74 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
 }
 
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
+  private readonly progressiveInstanceId = randomUUID();
+  private readonly progressiveTranscriptCache = new Map<
+    string,
+    { token: string; sourceToken?: string; value: NativeAgentTranscriptView; bytes: number }
+  >();
+  private progressiveTranscriptBytes = 0;
+  private readonly progressiveSourceTokens = new Map<string, string>();
+  private readonly progressiveStateCache = new Map<
+    string,
+    { token: string; value: NativeAgentSessionStateView }
+  >();
+  private readonly progressiveReads = new Map<string, Promise<unknown>>();
+  private readonly progressiveReadWaiters = new Map<string, number>();
+  private progressiveReadWaiterCount = 0;
+  private readonly progressiveDiscoveryJobsByProvider = new Map<string, number>();
+  private readonly progressiveDiscoveryCache = new Map<
+    string,
+    {
+      value: unknown;
+      revision: number;
+      expiresAt: number;
+      bytes: number;
+      availability: "ready" | "stale" | "unavailable";
+      error?: string;
+    }
+  >();
+  private progressiveDiscoveryBytes = 0;
+  private readonly progressiveReadEpochs = new Map<string, number>();
+  private readonly progressiveDirtyFollowUps = new Map<string, number>();
+  private readonly progressiveTrailing = new Map<string, Promise<unknown>>();
+  private readonly interactiveSnapshotShares = new Map<
+    string,
+    {
+      promise: Promise<ProviderInteractiveSnapshot>;
+      sessionKey: string;
+      epoch: number;
+      degraded: true;
+    }
+  >();
+  private readonly displayTailWriteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingDisplayTails = new Map<
+    string,
+    { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
+  >();
+  private readonly progressiveMetrics = new ProgressiveReadMetrics();
+
+  protected async settleAndClearProgressiveReads(): Promise<void> {
+    for (const timer of this.displayTailWriteTimers.values()) clearTimeout(timer);
+    this.displayTailWriteTimers.clear();
+    this.pendingDisplayTails.clear();
+    await Promise.allSettled(this.progressiveReads.values());
+    await Promise.allSettled(this.progressiveTrailing.values());
+    this.progressiveReads.clear();
+    this.progressiveTranscriptCache.clear();
+    this.progressiveSourceTokens.clear();
+    this.progressiveTranscriptBytes = 0;
+    this.progressiveStateCache.clear();
+    this.progressiveReadWaiters.clear();
+    this.progressiveReadWaiterCount = 0;
+    this.progressiveDiscoveryJobsByProvider.clear();
+    this.progressiveDiscoveryCache.clear();
+    this.progressiveDiscoveryBytes = 0;
+    this.progressiveReadEpochs.clear();
+    this.progressiveDirtyFollowUps.clear();
+    this.progressiveTrailing.clear();
+    this.interactiveSnapshotShares.clear();
+    this.progressiveMetrics.clear();
+  }
   protected async recordAsyncQuestionAttention(
     environmentId: string,
     sessionKey: string,
@@ -759,6 +852,987 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     };
   }
 
+  private progressiveKey(input: NativeAgentProgressiveInput, domain: string): string {
+    return `${nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    )}\0progressive-v1\0${domain}`;
+  }
+
+  private progressiveIdentity(
+    input: NativeAgentProgressiveInput,
+    providerSessionId: string,
+    sourceGeneration: string | number,
+  ): NativeAgentViewIdentity {
+    return {
+      backendInstanceId: this.progressiveInstanceId,
+      environmentId: input.environmentId,
+      platform: input.agent,
+      logicalSessionKey: input.logicalSessionKey,
+      providerSessionId,
+      sourceGeneration,
+    };
+  }
+
+  /** Join equivalent source work; one renderer leaving never cancels the read. */
+  private progressiveRead<T>(
+    key: string,
+    read: () => Promise<T>,
+    sessionKey?: string,
+  ): Promise<T> {
+    const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
+    if (pending) {
+      const waiters = this.progressiveReadWaiters.get(key) ?? 0;
+      if (waiters >= 32 || this.progressiveReadWaiterCount >= 512) {
+        return Promise.reject(new ProviderUnavailableError("Native agent read is overloaded"));
+      }
+      this.progressiveReadWaiters.set(key, waiters + 1);
+      this.progressiveReadWaiterCount += 1;
+      return pending.finally(() => {
+        const remaining = Math.max(0, (this.progressiveReadWaiters.get(key) ?? 1) - 1);
+        if (remaining === 0) this.progressiveReadWaiters.delete(key);
+        else this.progressiveReadWaiters.set(key, remaining);
+        this.progressiveReadWaiterCount = Math.max(0, this.progressiveReadWaiterCount - 1);
+      });
+    }
+    const sourceReads = Array.from(this.progressiveReads.keys()).filter(
+      (candidate) => !candidate.includes("\0progressive-v1\0discovery:"),
+    ).length;
+    if (!key.includes("\0progressive-v1\0discovery:") && sourceReads >= 8) {
+      return Promise.reject(new ProviderUnavailableError("Native agent read is overloaded"));
+    }
+    if (sessionKey) this.progressiveReadEpochs.set(key, this.projectionEpochs.get(sessionKey) ?? 0);
+    const operation = read();
+    const tracked = operation.finally(() => {
+      if (this.progressiveReads.get(key) === tracked) this.progressiveReads.delete(key);
+    });
+    this.progressiveReads.set(key, tracked);
+    return tracked;
+  }
+
+  /**
+   * Join equivalent work, then run at most one trailing read when the session
+   * epoch moved. A forced refresh never settles from an older joined read.
+   */
+  private async progressiveReadCovering<T>(
+    key: string,
+    sessionKey: string,
+    requestedEpoch: number,
+    force: boolean,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
+    const startedEpoch = this.progressiveReadEpochs.get(key);
+    if (pending && force && startedEpoch !== undefined && startedEpoch < requestedEpoch) {
+      await pending.catch(() => undefined);
+    }
+    const value = await this.progressiveRead(key, read, sessionKey);
+    const latest = this.projectionEpochs.get(sessionKey) ?? 0;
+    if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) return value;
+    this.progressiveDirtyFollowUps.set(key, Math.max(this.progressiveDirtyFollowUps.get(key) ?? 0, latest));
+    return this.scheduleProgressiveTrailing(key, sessionKey, read);
+  }
+
+  private scheduleProgressiveTrailing<T>(
+    key: string,
+    sessionKey: string,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const existing = this.progressiveTrailing.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+    const trailing = (async () => {
+      const required = this.progressiveDirtyFollowUps.get(key) ?? 0;
+      const value = await this.progressiveRead(key, read, sessionKey);
+      const latest = this.projectionEpochs.get(sessionKey) ?? 0;
+      if (latest > required) {
+        this.progressiveDirtyFollowUps.set(key, latest);
+        return this.progressiveRead(key, read, sessionKey);
+      }
+      this.progressiveDirtyFollowUps.delete(key);
+      return value;
+    })().finally(() => {
+      if (this.progressiveTrailing.get(key) === trailing) this.progressiveTrailing.delete(key);
+    });
+    this.progressiveTrailing.set(key, trailing);
+    return trailing;
+  }
+
+  private sharedInteractiveSnapshot(
+    input: NativeAgentProgressiveInput,
+    provider: NativeAgentRuntimeProvider,
+    sessionId: string,
+  ): Promise<ProviderInteractiveSnapshot> {
+    if (!provider.interactiveSnapshot) {
+      return Promise.reject(new ProviderUnavailableError("Provider snapshot is unavailable"));
+    }
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    const key = `${sessionKey}\0${sessionId}`;
+    const existing = this.interactiveSnapshotShares.get(key);
+    if (existing && existing.epoch === epoch) return existing.promise;
+    const promise = provider.interactiveSnapshot(sessionId);
+    this.interactiveSnapshotShares.set(key, { promise, sessionKey, epoch, degraded: true });
+    return promise;
+  }
+
+  private recordProgressiveMetric(
+    domain: "transcript" | "state" | "discovery",
+    startedAt: number,
+    cacheTier: ProgressiveCacheTier,
+    outcome: ProgressiveReadOutcome,
+    extras: { joined?: boolean; degraded?: boolean } = {},
+  ): void {
+    this.progressiveMetrics.record({
+      domain,
+      cacheTier,
+      outcome,
+      durationMs: this.now() - startedAt,
+      ...extras,
+    });
+  }
+
+  private transcriptHistoryCursor(
+    sessionKey: string,
+    messages: unknown[],
+    historyEpoch: string,
+    sessionId: string,
+  ): string | undefined {
+    const first = messages[0] as { id?: unknown } | undefined;
+    if (typeof first?.id !== "string") return undefined;
+    const history = this.projectionHistory.get(sessionKey);
+    if (!history || history.epoch !== historyEpoch) return undefined;
+    const beforeIndex = history.messages.findIndex(
+      (message) => (message as { id?: unknown })?.id === first.id,
+    );
+    return beforeIndex > 0 ? this.historyCursor(sessionKey, first.id, history.epoch, sessionId) : undefined;
+  }
+
+  private transcriptDelta(
+    previous: NativeAgentTranscriptView,
+    current: NativeAgentTranscriptView,
+  ): NativeAgentTranscriptDelta {
+    const previousById = new Map(
+      previous.messages.map((message) => [(message as { id: string }).id, message] as const),
+    );
+    const currentIds = current.messages.map((message) => (message as { id: string }).id);
+    const previousIds = previous.messages.map((message) => (message as { id: string }).id);
+    const messageUpserts = current.messages.filter((message) => {
+      const id = (message as { id: string }).id;
+      const existing = previousById.get(id);
+      return !existing || JSON.stringify(existing) !== JSON.stringify(message);
+    });
+    return {
+      messageUpserts,
+      ...(JSON.stringify(previousIds) === JSON.stringify(currentIds)
+        ? {}
+        : { liveMessageIds: currentIds }),
+      deletedMessageIds: previousIds.filter((id) => !currentIds.includes(id)),
+      freshness: current.freshness,
+      historyEpoch: current.historyEpoch,
+      historyComplete: current.historyComplete,
+      ...(current.historyCursor ? { historyCursor: current.historyCursor } : {}),
+      ...(current.title ? { title: current.title } : {}),
+      ...(current.messageWindow ? { messageWindow: current.messageWindow } : {}),
+      ...(current.providerRevision === undefined
+        ? {}
+        : { providerRevision: current.providerRevision }),
+    };
+  }
+
+  private scheduleDisplayTailPersist(
+    input: NativeAgentProgressiveInput,
+    value: NativeAgentTranscriptView,
+  ): void {
+    if (value.freshness !== "current" && value.freshness !== "empty") return;
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const previous = this.displayTailWriteTimers.get(sessionKey);
+    if (previous) clearTimeout(previous);
+    this.pendingDisplayTails.set(sessionKey, { input, value });
+    const timer = setTimeout(() => {
+      void this.flushDisplayTailPersist(sessionKey);
+    }, NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS);
+    this.displayTailWriteTimers.set(sessionKey, timer);
+  }
+
+  private async flushDisplayTailPersist(sessionKey: string): Promise<void> {
+    const timer = this.displayTailWriteTimers.get(sessionKey);
+    if (timer) clearTimeout(timer);
+    this.displayTailWriteTimers.delete(sessionKey);
+    const pending = this.pendingDisplayTails.get(sessionKey);
+    this.pendingDisplayTails.delete(sessionKey);
+    if (!pending) return;
+    const tail = createNativeAgentDisplayTail({
+      environmentId: pending.input.environmentId,
+      agent: pending.input.agent,
+      logicalSessionKey: pending.input.logicalSessionKey,
+      providerSessionId: pending.value.identity.providerSessionId,
+      historyEpoch: pending.value.historyEpoch,
+      ...(pending.value.title ? { title: pending.value.title } : {}),
+      messages: pending.value.messages,
+      updatedAt: new Date(this.now()).toISOString(),
+    });
+    if (!tail) return;
+    await this.storage.putNativeAgentDisplayTail(sessionKey, tail).catch(() => undefined);
+  }
+
+  private trimProgressiveTranscriptCache(): void {
+    while (
+      this.progressiveTranscriptCache.size > 128 ||
+      this.progressiveTranscriptBytes > 64 * 1024 * 1024
+    ) {
+      const oldest = this.progressiveTranscriptCache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      const entry = this.progressiveTranscriptCache.get(oldest);
+      if (entry) this.progressiveTranscriptBytes -= entry.bytes;
+      this.progressiveTranscriptCache.delete(oldest);
+    }
+  }
+
+  private async readProgressiveTranscript(
+    input: NativeAgentTranscriptUpdateInput,
+    key: string,
+  ): Promise<NativeAgentTranscriptView | null> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    const providerGeneration =
+      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      `in-process:${input.agent}`;
+    const previous = this.progressiveTranscriptCache.get(key);
+    const providerResult = resolved.provider.transcriptSnapshot
+      ? await resolved.provider.transcriptSnapshot(resolved.session.providerSessionId, {
+          limit: input.liveWindow.messages,
+          targetBytes: input.liveWindow.targetBytes,
+          ...(previous?.sourceToken ? { knownSourceToken: previous.sourceToken } : {}),
+        })
+      : resolved.provider.interactiveSnapshot
+        ? await this.sharedInteractiveSnapshot(
+            input,
+            resolved.provider,
+            resolved.session.providerSessionId,
+          ).then(
+            (snapshot) =>
+              ({
+                messages: snapshot.messages,
+                complete: snapshot.messagesComplete,
+                freshness: "current" as const,
+                ...(snapshot.title ? { title: snapshot.title } : {}),
+                ...(snapshot.providerRevision === undefined
+                  ? {}
+                  : { revision: snapshot.providerRevision }),
+              }) satisfies ProviderTranscriptSnapshot,
+          )
+        : ({
+            messages: await resolved.provider.messages(resolved.session.providerSessionId, {
+              limit: input.liveWindow.messages,
+            }),
+            freshness: "current" as const,
+          } satisfies ProviderTranscriptSnapshot);
+    if ("unchanged" in providerResult) {
+      if (!previous) {
+        throw new ProviderUnavailableError("Provider returned unchanged without a transcript base");
+      }
+      this.progressiveTranscriptCache.delete(key);
+      this.progressiveTranscriptCache.set(key, {
+        ...previous,
+        sourceToken: providerResult.sourceToken,
+      });
+      this.progressiveSourceTokens.set(key, providerResult.sourceToken);
+      return previous.value;
+    }
+    const snapshot: ProviderTranscriptSnapshot = providerResult;
+    if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
+    // The common identity must be identical across independently delivered
+    // domains. Bridge/source generations remain bound into the transcript's
+    // source token; the backend connection generation is the shared fence.
+    const sourceGeneration = providerGeneration;
+    const identity = this.progressiveIdentity(
+      input,
+      resolved.session.providerSessionId,
+      sourceGeneration,
+    );
+    const normalized = this.projectionMessages(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      snapshot.messages,
+      input.liveWindow.messages,
+      NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
+      resolved.session.initialPromptPresentation,
+    );
+    const bounded = this.boundedProjectedMessages(
+      normalized.messages,
+      input.liveWindow.messages,
+      input.liveWindow.targetBytes,
+    );
+    const complete = snapshot.complete !== false && !normalized.window.truncated;
+    const historyEpoch =
+      snapshot.historyEpoch ??
+      (previous?.value.identity.providerSessionId === resolved.session.providerSessionId
+        ? previous.value.historyEpoch
+        : randomUUID());
+    const historyCursor = this.transcriptHistoryCursor(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      bounded.messages,
+      historyEpoch,
+      resolved.session.providerSessionId,
+    );
+    const value: NativeAgentTranscriptView = {
+      identity,
+      freshness:
+        bounded.messages.length === 0 && complete
+          ? "empty"
+          : snapshot.freshness === "cached"
+            ? "cached"
+            : "current",
+      messages: bounded.messages,
+      messageWindow: {
+        ...bounded.window,
+        canLoadEarlier: !complete || bounded.window.truncated,
+      },
+      ...(snapshot.title ? { title: snapshot.title } : {}),
+      ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
+      ...(historyCursor ? { historyCursor } : {}),
+      historyEpoch,
+      historyComplete: complete,
+    };
+    return value;
+  }
+
+  async getTranscriptUpdate(
+    input: NativeAgentTranscriptUpdateInput,
+  ): Promise<NativeAgentTranscriptUpdate> {
+    this.assertProjectionInput(input);
+    if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
+      throw new Error("Native agent progressive view version is unsupported");
+    }
+    const key = this.progressiveKey(
+      input,
+      `transcript:${input.liveWindow.messages}:${input.liveWindow.targetBytes}`,
+    );
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    const startedAt = this.now();
+    const cached = this.progressiveTranscriptCache.get(key);
+    const commit = (value: NativeAgentTranscriptView): string => {
+      const observed = this.progressiveTranscriptCache.get(key);
+      if (observed?.value === value) return observed.token;
+      const token = createHash("sha256")
+        .update(
+          JSON.stringify([
+            value.identity,
+            value.historyEpoch,
+            value.providerRevision,
+            this.progressiveSourceTokens.get(key),
+            value.messages,
+          ]),
+        )
+        .digest("base64url")
+        .slice(0, 43);
+      const current = this.progressiveTranscriptCache.get(key);
+      if (!current || current.token !== token) {
+        const bytes = Buffer.byteLength(JSON.stringify(value));
+        if (current) this.progressiveTranscriptBytes -= current.bytes;
+        this.progressiveTranscriptCache.delete(key);
+        this.progressiveTranscriptCache.set(key, {
+          token,
+          sourceToken: this.progressiveSourceTokens.get(key),
+          value,
+          bytes,
+        });
+        this.progressiveTranscriptBytes += bytes;
+        this.trimProgressiveTranscriptCache();
+        this.scheduleDisplayTailPersist(input, value);
+      }
+      return token;
+    };
+    const publish = async (): Promise<NativeAgentTranscriptView | null> => {
+      const value = await this.progressiveReadCovering(
+        key,
+        sessionKey,
+        epoch,
+        input.forceSnapshot === true,
+        () => this.readProgressiveTranscript(input, key),
+      );
+      if (!value) return null;
+      commit(value);
+      return value;
+    };
+    if (!cached && !input.forceSnapshot) {
+      const persisted = await this.storage.getNativeAgentDisplayTail(sessionKey).catch(() => null);
+      if (persisted && persisted.logicalSessionKey === input.logicalSessionKey) {
+        const value: NativeAgentTranscriptView = {
+          identity: this.progressiveIdentity(
+            input,
+            persisted.providerSessionId,
+            this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+              `in-process:${input.agent}`,
+          ),
+          freshness: persisted.messages.length === 0 ? "empty" : "cached",
+          messages: persisted.messages,
+          historyEpoch: persisted.historyEpoch,
+          historyComplete: false,
+          ...(persisted.title ? { title: persisted.title } : {}),
+        };
+        const token = commit(value);
+        void publish().catch(() => undefined);
+        this.recordProgressiveMetric("transcript", startedAt, "persisted", "cached");
+        return { viewVersion: 1, status: "snapshot", token, value };
+      }
+    }
+    if (cached && !input.forceSnapshot && input.knownToken !== cached.token) {
+      void publish().catch(() => undefined);
+      this.recordProgressiveMetric("transcript", startedAt, "memory", "cached");
+      return {
+        viewVersion: 1,
+        status: "snapshot",
+        token: cached.token,
+        value: { ...cached.value, freshness: "cached" },
+      };
+    }
+    try {
+      const previous = cached;
+      const value = await publish();
+      if (!value) {
+        this.recordProgressiveMetric("transcript", startedAt, "provider", "missing");
+        return { viewVersion: 1, status: "missing" };
+      }
+      const entry = this.progressiveTranscriptCache.get(key)!;
+      if (!input.forceSnapshot && input.knownToken === entry.token) {
+        this.recordProgressiveMetric("transcript", startedAt, "provider", "unchanged");
+        return {
+          viewVersion: 1,
+          status: "unchanged",
+          token: entry.token,
+          identity: entry.value.identity,
+        };
+      }
+      if (
+        previous &&
+        input.knownToken === previous.token &&
+        previous.token !== entry.token &&
+        previous.value.identity.providerSessionId === value.identity.providerSessionId &&
+        previous.value.historyEpoch === value.historyEpoch
+      ) {
+        const delta = this.transcriptDelta(previous.value, value);
+        const operationCount =
+          delta.messageUpserts.length +
+          delta.deletedMessageIds.length +
+          (delta.liveMessageIds?.length ?? 0);
+        const deltaBytes = Buffer.byteLength(JSON.stringify(delta));
+        const snapshotBytes = Buffer.byteLength(JSON.stringify(value));
+        if (operationCount <= 1024 && deltaBytes < snapshotBytes) {
+          this.recordProgressiveMetric("transcript", startedAt, "provider", "delta");
+          return {
+            viewVersion: 1,
+            status: "delta",
+            baseToken: previous.token,
+            token: entry.token,
+            identity: value.identity,
+            delta,
+          };
+        }
+      }
+      this.recordProgressiveMetric("transcript", startedAt, "provider", "snapshot");
+      return {
+        viewVersion: 1,
+        status: "snapshot",
+        token: entry.token,
+        value,
+        resetReason: input.forceSnapshot
+          ? "forced"
+          : input.knownToken
+            ? "unknown-token"
+            : "initial",
+      };
+    } catch (error) {
+      this.recordProgressiveMetric("transcript", startedAt, "provider", "unavailable");
+      return {
+        viewVersion: 1,
+        status: "unavailable",
+        retryable: true,
+        error: error instanceof Error ? error.message.slice(0, 4_000) : "Transcript unavailable",
+      };
+    }
+  }
+
+  private async readProgressiveSessionState(
+    input: NativeAgentProgressiveInput,
+  ): Promise<NativeAgentSessionStateView | null> {
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return null;
+    const advertisedCapabilities = nativeCapabilities(input.agent);
+    const [snapshot, interactionSnapshot, queue, steerSupported] = await Promise.all([
+      resolved.provider.sessionStateSnapshot
+        ? resolved.provider.sessionStateSnapshot(resolved.session.providerSessionId)
+        : resolved.provider.interactiveSnapshot
+          ? this.sharedInteractiveSnapshot(
+              input,
+              resolved.provider,
+              resolved.session.providerSessionId,
+            )
+          : readProviderStatus(resolved.provider, resolved.session.providerSessionId),
+      resolved.provider.interactions
+        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
+        : Promise.resolve({ requests: [], revision: 0 }),
+      advertisedCapabilities.queue
+        ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
+        : Promise.resolve(null),
+      advertisedCapabilities.actions?.steer
+        ? (resolved.provider
+            .steerSupported?.(resolved.session.providerSessionId)
+            .catch(() => false) ?? Promise.resolve(false))
+        : Promise.resolve(false),
+    ]);
+    if (snapshot.status === "missing") return null;
+    const liveInteractionKinds = normalizeInteractionKinds(
+      (snapshot as ProviderSessionStateSnapshot).interactionKinds,
+    );
+    let capabilities =
+      liveInteractionKinds === undefined
+        ? advertisedCapabilities
+        : { ...advertisedCapabilities, interactions: { kinds: liveInteractionKinds } };
+    if (capabilities.actions?.steer && !steerSupported) {
+      capabilities = { ...capabilities, actions: { ...capabilities.actions, steer: false } };
+    }
+    const stateSnapshot = snapshot as ProviderSessionStateSnapshot;
+    const composer = await this.projectionComposer(
+      input,
+      resolved.session,
+      stateSnapshot.composer,
+      stateSnapshot.controls,
+      true,
+    );
+    const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
+    const providerGeneration =
+      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      `in-process:${input.agent}`;
+    const sourceGeneration = providerGeneration;
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    if (resolved.session.pendingDispatch) {
+      this.scheduleAmbiguousDispatchSettle(
+        input,
+        sessionKey,
+        resolved.session.pendingDispatch.requestId,
+        resolved.provider,
+      );
+    }
+    if (resolved.session.pendingSteer) {
+      this.scheduleAmbiguousSteerSettle(
+        input,
+        sessionKey,
+        resolved.session.pendingSteer.requestId,
+        resolved.provider,
+      );
+    }
+    const asyncQuestionResponses = new Map<string, NativeAgentAsyncQuestionResponse>();
+    const responsePriority: Record<NativeAgentAsyncQuestionResponse["state"], number> = {
+      queued: 1,
+      failed: 2,
+      dispatching: 3,
+      sent: 4,
+    };
+    const recordResponse = (
+      requestId: unknown,
+      state: NativeAgentAsyncQuestionResponse["state"],
+    ) => {
+      if (typeof requestId !== "string") return;
+      const itemId = nativeAsyncQuestionItemId(requestId);
+      if (!itemId) return;
+      const existing = asyncQuestionResponses.get(itemId);
+      if (existing && responsePriority[existing.state] >= responsePriority[state]) return;
+      asyncQuestionResponses.set(itemId, { itemId, requestId, state });
+    };
+    for (const requestId of resolved.session.dispatchedRequestIds ?? []) {
+      recordResponse(requestId, "sent");
+    }
+    for (const message of queue?.messages ?? []) {
+      recordResponse(
+        message && typeof message === "object" ? (message as { id?: unknown }).id : undefined,
+        "queued",
+      );
+    }
+    recordResponse(queue?.inFlight?.requestId, "dispatching");
+    recordResponse(queue?.dispatchError?.messageId, "failed");
+    return {
+      identity: this.progressiveIdentity(
+        input,
+        resolved.session.providerSessionId,
+        sourceGeneration,
+      ),
+      connection: "connected",
+      turn: {
+        phase:
+          stateSnapshot.phase === "cancelling" ||
+          stateSnapshot.phase === "recovering" ||
+          stateSnapshot.phase === "error"
+            ? stateSnapshot.phase
+            : blocked
+              ? "blocked"
+              : (stateSnapshot.phase ??
+                (stateSnapshot.status === "error"
+                  ? "error"
+                  : stateSnapshot.status === "blocked"
+                    ? "blocked"
+                    : stateSnapshot.status === "running"
+                      ? "running"
+                      : "idle")),
+        ...(stateSnapshot.turnStartedAt === undefined
+          ? {}
+          : { startedAt: stateSnapshot.turnStartedAt }),
+        ...(stateSnapshot.error ? { error: stateSnapshot.error } : {}),
+      },
+      interactions: interactionSnapshot.requests,
+      composerControls: nativeComposerControls(
+        composer,
+        stateSnapshot.status === "running" || blocked,
+        capabilities,
+      ),
+      composer,
+      capabilities,
+      ...(stateSnapshot.readiness ? { readiness: stateSnapshot.readiness } : {}),
+      ...(stateSnapshot.shareUrl === undefined ? {} : { shareUrl: stateSnapshot.shareUrl }),
+      ...(stateSnapshot.title ? { title: stateSnapshot.title } : {}),
+      ...(queue
+        ? {
+            queue: {
+              items: [...(stateSnapshot.providerQueue?.items ?? []), ...queue.messages],
+              ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+              ...(queue.dispatchError
+                ? {
+                    blocked: {
+                      messageId: queue.dispatchError.messageId,
+                      error: queue.dispatchError.message,
+                    },
+                  }
+                : {}),
+            },
+          }
+        : stateSnapshot.providerQueue
+          ? { queue: stateSnapshot.providerQueue }
+          : {}),
+      ...(stateSnapshot.contextUsage ? { contextUsage: stateSnapshot.contextUsage } : {}),
+      ...(asyncQuestionResponses.size > 0
+        ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
+        : {}),
+      ...((stateSnapshot.policy ?? resolved.session.policy)
+        ? { policy: stateSnapshot.policy ?? resolved.session.policy }
+        : {}),
+      ...(stateSnapshot.rateLimits ? { rateLimits: stateSnapshot.rateLimits } : {}),
+      ...(resolved.session.pendingDispatch || resolved.session.pendingSteer
+        ? {
+            recoverableDispatch: {
+              requestId:
+                resolved.session.pendingDispatch?.requestId ??
+                resolved.session.pendingSteer!.requestId,
+              createdAt:
+                resolved.session.pendingDispatch?.createdAt ??
+                resolved.session.pendingSteer!.createdAt,
+              kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
+            },
+          }
+        : {}),
+      ...(stateSnapshot.backgroundTasks ? { backgroundTasks: stateSnapshot.backgroundTasks } : {}),
+      ...(stateSnapshot.suggestedPrompt ? { suggestedPrompt: stateSnapshot.suggestedPrompt } : {}),
+      ...(stateSnapshot.completionBlockedByBackgroundTasks === undefined
+        ? {}
+        : {
+            completionBlockedByBackgroundTasks: stateSnapshot.completionBlockedByBackgroundTasks,
+          }),
+    };
+  }
+
+  async getSessionStateUpdate(
+    input: NativeAgentProgressiveInput,
+  ): Promise<NativeAgentSessionStateUpdate> {
+    this.assertProjectionInput(input);
+    if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
+      throw new Error("Native agent progressive view version is unsupported");
+    }
+    const key = this.progressiveKey(input, "state");
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    const startedAt = this.now();
+    try {
+      const value = await this.progressiveReadCovering(
+        key,
+        sessionKey,
+        epoch,
+        input.forceSnapshot === true,
+        () => this.readProgressiveSessionState(input),
+      );
+      if (!value) {
+        this.recordProgressiveMetric("state", startedAt, "provider", "missing");
+        return { viewVersion: 1, status: "missing" };
+      }
+      const token = createHash("sha256")
+        .update(JSON.stringify(value))
+        .digest("base64url")
+        .slice(0, 43);
+      const previous = this.progressiveStateCache.get(key);
+      this.progressiveStateCache.delete(key);
+      this.progressiveStateCache.set(key, { token, value });
+      while (this.progressiveStateCache.size > 128) {
+        const oldest = this.progressiveStateCache.keys().next().value as string | undefined;
+        if (!oldest || oldest === key) break;
+        this.progressiveStateCache.delete(oldest);
+      }
+      if (!input.forceSnapshot && input.knownToken === token) {
+        this.recordProgressiveMetric("state", startedAt, "provider", "unchanged");
+        return { viewVersion: 1, status: "unchanged", token, identity: value.identity };
+      }
+      this.recordProgressiveMetric("state", startedAt, "provider", "snapshot");
+      return {
+        viewVersion: 1,
+        status: "snapshot",
+        token,
+        value,
+        resetReason:
+          input.forceSnapshot || !previous
+            ? input.forceSnapshot
+              ? "forced"
+              : "initial"
+            : input.knownToken
+              ? "unknown-token"
+              : "initial",
+      };
+    } catch (error) {
+      this.recordProgressiveMetric("state", startedAt, "provider", "unavailable");
+      const cached = this.progressiveStateCache.get(key);
+      return {
+        viewVersion: 1,
+        status: "unavailable",
+        retryable: true,
+        ...(cached ? { identity: cached.value.identity } : {}),
+        error: error instanceof Error ? error.message.slice(0, 4_000) : "Session state unavailable",
+      };
+    }
+  }
+
+  private storeProgressiveDiscovery(
+    key: string,
+    entry: {
+      value: unknown;
+      availability: "ready" | "stale" | "unavailable";
+      expiresAt: number;
+      error?: string;
+    },
+  ): void {
+    const previous = this.progressiveDiscoveryCache.get(key);
+    const semantic = JSON.stringify({
+      value: entry.value,
+      availability: entry.availability,
+      error: entry.error,
+    });
+    const previousSemantic = previous
+      ? JSON.stringify({
+          value: previous.value,
+          availability: previous.availability,
+          error: previous.error,
+        })
+      : undefined;
+    const bytes = Buffer.byteLength(semantic);
+    if (previous) this.progressiveDiscoveryBytes -= previous.bytes;
+    this.progressiveDiscoveryCache.delete(key);
+    this.progressiveDiscoveryCache.set(key, {
+      ...entry,
+      revision:
+        previousSemantic === semantic ? (previous?.revision ?? 0) : (previous?.revision ?? 0) + 1,
+      bytes,
+    });
+    this.progressiveDiscoveryBytes += bytes;
+    while (
+      this.progressiveDiscoveryCache.size > 256 ||
+      this.progressiveDiscoveryBytes > 16 * 1024 * 1024
+    ) {
+      const oldest = this.progressiveDiscoveryCache.keys().next().value as string | undefined;
+      if (!oldest || oldest === key) break;
+      const removed = this.progressiveDiscoveryCache.get(oldest);
+      if (removed) this.progressiveDiscoveryBytes -= removed.bytes;
+      this.progressiveDiscoveryCache.delete(oldest);
+    }
+  }
+
+  private scheduleProgressiveDiscovery(
+    input: NativeAgentDiscoveryUpdateInput,
+    section: NativeAgentDiscoverySection,
+    provider: NativeAgentRuntimeProvider,
+    providerSessionId: string,
+  ): void {
+    const cacheKey = this.progressiveKey(input, `discovery:${section}`);
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
+    if (this.progressiveReads.has(cacheKey)) return;
+    const activeDiscoveryJobs = Array.from(this.progressiveReads.keys()).filter((key) =>
+      key.includes("\0progressive-v1\0discovery:"),
+    ).length;
+    const providerKey = `${input.environmentId}\0${input.agent}\0${String(
+      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ?? "in-process",
+    )}`;
+    if (
+      activeDiscoveryJobs >= 4 ||
+      (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 0) >= 2
+    )
+      return;
+    const read = async (): Promise<unknown> => {
+      switch (section) {
+        case "models":
+          return (await this.refreshProjectionModelCatalog(input.environmentId)).filter(
+            (model) => model.platform === input.agent,
+          );
+        case "commands":
+          return this.projectionSlashCommands(input, provider, providerSessionId);
+        case "mcp":
+          return provider.mcpServers
+            ? (await provider.mcpServers(providerSessionId)).slice(0, 512)
+            : [];
+        case "auth":
+          return provider.authStatus ? await provider.authStatus() : null;
+        case "runtime": {
+          const health = provider.runtimeHealth
+            ? await provider.runtimeHealth(providerSessionId)
+            : { summary: {}, notices: [], authoritative: true };
+          return { summary: health.summary, notices: health.notices };
+        }
+      }
+    };
+    this.progressiveDiscoveryJobsByProvider.set(
+      providerKey,
+      (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 0) + 1,
+    );
+    const operation = this.progressiveRead(cacheKey, read);
+    let settled = false;
+    const deadline = setTimeout(() => {
+      if (settled || this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+      const previous = this.progressiveDiscoveryCache.get(cacheKey);
+      this.storeProgressiveDiscovery(cacheKey, {
+        value: previous?.value,
+        availability: previous?.value === undefined ? "unavailable" : "stale",
+        expiresAt: this.now() + 5_000,
+        error: "Discovery timed out",
+      });
+      this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+        agent: input.agent,
+        logicalSessionKey: input.logicalSessionKey,
+      });
+    }, 2_000);
+    void operation
+      .then((value) => {
+        settled = true;
+        clearTimeout(deadline);
+        if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        this.storeProgressiveDiscovery(cacheKey, {
+          value,
+          availability: "ready",
+          expiresAt: this.now() + 30_000,
+        });
+        this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+          agent: input.agent,
+          logicalSessionKey: input.logicalSessionKey,
+        });
+      })
+      .catch((error) => {
+        settled = true;
+        clearTimeout(deadline);
+        if (this.stopped || (this.projectionEpochs.get(sessionKey) ?? 0) !== epoch) return;
+        const previous = this.progressiveDiscoveryCache.get(cacheKey);
+        this.storeProgressiveDiscovery(cacheKey, {
+          value: previous?.value,
+          availability: previous?.value === undefined ? "unavailable" : "stale",
+          expiresAt: this.now() + 5_000,
+          error: error instanceof Error ? error.message.slice(0, 4_000) : "Discovery unavailable",
+        });
+      })
+      .finally(() => {
+        const remaining = Math.max(
+          0,
+          (this.progressiveDiscoveryJobsByProvider.get(providerKey) ?? 1) - 1,
+        );
+        if (remaining === 0) this.progressiveDiscoveryJobsByProvider.delete(providerKey);
+        else this.progressiveDiscoveryJobsByProvider.set(providerKey, remaining);
+      });
+  }
+
+  async getDiscoveryUpdate(
+    input: NativeAgentDiscoveryUpdateInput,
+  ): Promise<NativeAgentDiscoveryUpdate> {
+    this.assertProjectionInput(input);
+    if (input.viewVersion !== NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION) {
+      throw new Error("Native agent progressive view version is unsupported");
+    }
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) return { viewVersion: 1, status: "missing" };
+    const providerGeneration =
+      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      `in-process:${input.agent}`;
+    const identity = this.progressiveIdentity(
+      input,
+      resolved.session.providerSessionId,
+      providerGeneration,
+    );
+    const sections: NativeAgentDiscoveryView["sections"] = {};
+    for (const section of input.sections) {
+      const key = this.progressiveKey(input, `discovery:${section}`);
+      const cached = this.progressiveDiscoveryCache.get(key);
+      const expired = !cached || cached.expiresAt <= this.now();
+      if (expired) {
+        this.scheduleProgressiveDiscovery(
+          input,
+          section,
+          resolved.provider,
+          resolved.session.providerSessionId,
+        );
+      }
+      const state: NativeAgentDiscoverySectionState<unknown> = cached
+        ? {
+            availability:
+              expired && cached.availability === "ready" ? "stale" : cached.availability,
+            value: cached.value,
+            revision: cached.revision,
+            ...(cached.error ? { error: cached.error } : {}),
+          }
+        : { availability: "loading", revision: 0 };
+      Object.assign(sections, { [section]: state });
+    }
+    const value: NativeAgentDiscoveryView = { identity, sections };
+    const token = createHash("sha256")
+      .update(JSON.stringify(value))
+      .digest("base64url")
+      .slice(0, 43);
+    if (!input.forceSnapshot && input.knownToken === token) {
+      return { viewVersion: 1, status: "unchanged", token, identity };
+    }
+    return {
+      viewVersion: 1,
+      status: "snapshot",
+      token,
+      value,
+      resetReason: input.forceSnapshot ? "forced" : input.knownToken ? "unknown-token" : "initial",
+    };
+  }
+
   async getProjectionUpdate(
     input: NativeAgentProjectionUpdateInput,
   ): Promise<NativeAgentProjectionUpdate> {
@@ -979,6 +2053,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     session: PersistedNativeAgentSession,
     providerComposer?: NativeAgentComposerState,
     providerControls?: NativeAgentControlUpdate,
+    discoveryInBackground = false,
   ): Promise<NativeAgentComposerState> {
     let models = providerComposer?.models ?? [];
     if (models.length === 0) {
@@ -1005,11 +2080,25 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
             });
         }
       } else {
-        try {
-          const bounded = await this.refreshProjectionModelCatalog(input.environmentId);
-          models = bounded.filter((model) => model.platform === input.agent);
-        } catch {
-          // A stale or unavailable catalog must not hide the transcript.
+        const refresh = this.refreshProjectionModelCatalog(input.environmentId);
+        if (discoveryInBackground) {
+          void refresh
+            .then(() => {
+              if (!this.stopped) {
+                this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+                  agent: input.agent,
+                  logicalSessionKey: input.logicalSessionKey,
+                });
+              }
+            })
+            .catch(() => undefined);
+        } else {
+          try {
+            const bounded = await refresh;
+            models = bounded.filter((model) => model.platform === input.agent);
+          } catch {
+            // A stale or unavailable catalog must not hide the transcript.
+          }
         }
       }
     }
@@ -1310,6 +2399,34 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     // had spent says nothing about the new one. A tab that resumes into a
     // different provider session starts its reconnect from a full window.
     this.projectionMissingSince.delete(key);
+    const progressivePrefix = `${key}\0progressive-v1\0`;
+    for (const candidate of Array.from(this.progressiveTranscriptCache.keys())) {
+      if (!candidate.startsWith(progressivePrefix)) continue;
+      const entry = this.progressiveTranscriptCache.get(candidate);
+      if (entry) this.progressiveTranscriptBytes -= entry.bytes;
+      this.progressiveTranscriptCache.delete(candidate);
+      this.progressiveSourceTokens.delete(candidate);
+    }
+    for (const candidate of Array.from(this.progressiveStateCache.keys())) {
+      if (candidate.startsWith(progressivePrefix)) this.progressiveStateCache.delete(candidate);
+    }
+    for (const candidate of Array.from(this.progressiveDiscoveryCache.keys())) {
+      if (!candidate.startsWith(progressivePrefix)) continue;
+      const entry = this.progressiveDiscoveryCache.get(candidate);
+      if (entry) this.progressiveDiscoveryBytes -= entry.bytes;
+      this.progressiveDiscoveryCache.delete(candidate);
+    }
+    for (const candidate of Array.from(this.interactiveSnapshotShares.keys())) {
+      if (candidate.startsWith(`${key}\0`)) this.interactiveSnapshotShares.delete(candidate);
+    }
+    for (const candidate of Array.from(this.progressiveReads.keys())) {
+      if (candidate.startsWith(progressivePrefix)) {
+        this.progressiveDirtyFollowUps.set(
+          candidate,
+          this.projectionEpochs.get(key) ?? 0,
+        );
+      }
+    }
   }
 
   /**
@@ -1324,6 +2441,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   protected pruneProjectionEpoch(key: string): void {
     if (this.projectionCache.has(key)) return;
     if (this.projectionRefreshes.has(key)) return;
+    const progressivePrefix = `${key}\0progressive-v1\0`;
+    if (
+      Array.from(this.progressiveReads.keys()).some((candidate) =>
+        candidate.startsWith(progressivePrefix),
+      ) ||
+      Array.from(this.progressiveTrailing.keys()).some((candidate) =>
+        candidate.startsWith(progressivePrefix),
+      ) ||
+      Array.from(this.progressiveDirtyFollowUps.keys()).some((candidate) =>
+        candidate.startsWith(progressivePrefix),
+      )
+    ) {
+      return;
+    }
     this.projectionEpochs.delete(key);
     this.projectionMissingSince.delete(key);
   }
@@ -1345,15 +2476,32 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     );
     const key = input.representation === "sync-v1" ? `${sessionKey}\0sync-v1` : sessionKey;
     const previousRefresh = this.projectionRefreshes.get(key);
+    const epoch = this.projectionEpochs.get(key) ?? 0;
+    const signature = JSON.stringify({
+      messageLimit: input.messageLimit ?? null,
+      refreshUsage: input.refreshUsage === true,
+      representation: input.representation ?? "legacy",
+      force,
+    });
+    const previousDescriptor = this.projectionRefreshDescriptors.get(key);
+    if (
+      previousRefresh &&
+      previousDescriptor?.epoch === epoch &&
+      previousDescriptor.signature === signature
+    ) {
+      return previousRefresh;
+    }
     const operation = (async () => {
       if (previousRefresh) await previousRefresh.catch(() => undefined);
-      const epoch = this.projectionEpochs.get(key) ?? 0;
-      return this.refreshProjectionOnce(input, force, key, epoch, resolvedSession);
+      const coveredEpoch = this.projectionEpochs.get(key) ?? epoch;
+      return this.refreshProjectionOnce(input, force, key, coveredEpoch, resolvedSession);
     })();
     this.projectionRefreshes.set(key, operation);
+    this.projectionRefreshDescriptors.set(key, { epoch, signature });
     return operation.finally(() => {
       if (this.projectionRefreshes.get(key) === operation) {
         this.projectionRefreshes.delete(key);
+        this.projectionRefreshDescriptors.delete(key);
       }
       this.pruneProjectionEpoch(key);
     });

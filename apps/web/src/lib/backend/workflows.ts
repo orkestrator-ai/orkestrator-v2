@@ -53,10 +53,17 @@ import type {
   NativeAgentMcpServerAction,
   NativeAgentLiveWindow,
   NativeAgentProjectionUpdate,
+  NativeAgentTranscriptUpdate,
+  NativeAgentSessionStateUpdate,
+  NativeAgentDiscoveryUpdate,
+  NativeAgentDiscoverySection,
 } from "@orkestrator/protocol/native-agent";
 import {
   isNativeAgentMessagePage,
   isNativeAgentProjectionUpdate,
+  isNativeAgentTranscriptUpdate,
+  isNativeAgentSessionStateUpdate,
+  isNativeAgentDiscoveryUpdate,
   NATIVE_AGENT_SYNC_MAX_PAGE_BYTES,
   NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES,
 } from "@orkestrator/protocol/native-agent";
@@ -359,6 +366,7 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
 export async function getNativeAgentSyncCapabilities(): Promise<{
   projectionSyncVersions: number[];
   historyPagingVersions: number[];
+  progressiveViewVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -371,14 +379,72 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     !candidate.projectionSyncVersions.every(Number.isSafeInteger) ||
     !Array.isArray(candidate.historyPagingVersions) ||
     candidate.historyPagingVersions.length > 16 ||
-    !candidate.historyPagingVersions.every(Number.isSafeInteger)
+    !candidate.historyPagingVersions.every(Number.isSafeInteger) ||
+    (candidate.progressiveViewVersions !== undefined &&
+      (!Array.isArray(candidate.progressiveViewVersions) ||
+        candidate.progressiveViewVersions.length > 16 ||
+        !candidate.progressiveViewVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
   return response as {
     projectionSyncVersions: number[];
     historyPagingVersions: number[];
+    progressiveViewVersions?: number[];
   };
+}
+
+export async function getNativeAgentTranscriptUpdate<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}): Promise<NativeAgentTranscriptUpdate<TMessage>> {
+  const response = await invoke<unknown>("get_native_agent_transcript_update", input);
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength >
+    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+  ) {
+    throw new Error("Native agent transcript update response exceeded 20 MiB");
+  }
+  if (!isNativeAgentTranscriptUpdate(response)) {
+    throw new Error("Invalid native agent transcript update response");
+  }
+  return response as NativeAgentTranscriptUpdate<TMessage>;
+}
+
+export async function getNativeAgentSessionStateUpdate(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}): Promise<NativeAgentSessionStateUpdate> {
+  const response = await invoke<unknown>("get_native_agent_session_state_update", input);
+  if (!isNativeAgentSessionStateUpdate(response)) {
+    throw new Error("Invalid native agent session-state update response");
+  }
+  return response;
+}
+
+export async function getNativeAgentDiscoveryUpdate(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  sections: NativeAgentDiscoverySection[];
+  knownToken?: string;
+  forceSnapshot?: boolean;
+}): Promise<NativeAgentDiscoveryUpdate> {
+  const response = await invoke<unknown>("get_native_agent_discovery_update", input);
+  if (!isNativeAgentDiscoveryUpdate(response)) {
+    throw new Error("Invalid native agent discovery update response");
+  }
+  return response;
 }
 
 export async function getNativeAgentProjectionUpdate<TMessage = unknown>(input: {

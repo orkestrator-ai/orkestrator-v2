@@ -10,6 +10,8 @@ import type {
   ProviderDispatchStatus,
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
+  ProviderSessionStateSnapshot,
+  ProviderTranscriptSnapshot,
   ProviderSendOptions,
   ProviderSessionObservation,
   ProviderSessionRegistration,
@@ -61,6 +63,12 @@ import {
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+import {
+  readHttpBridgeLegacyTranscript,
+  readHttpBridgeSessionState,
+  readHttpBridgeTranscriptSnapshot,
+  type LegacyTranscriptSnapshot,
+} from "./http-bridge-progressive.js";
 import {
   assertOk,
   assertOkWithErrorDetail,
@@ -540,20 +548,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /**
-   * Read activity from the bridge's dedicated observation route.
-   *
-   * This deliberately does not reuse `status()` plus the pending-input routes.
-   * Those are the routes a *tab* reads, so each one is a liveness touch: the
-   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
-   * the claude bridge additionally hydrates the persisted transcript. This
-   * method is polled every couple of seconds for every session in every
-   * environment, so it must have no side effect at all — `/activity` exists
-   * only to answer it.
-   *
-   * The route reports an unknown session in-band as `missing` and never 404s.
-   * A 404 here therefore means the route itself is absent — an older bridge —
-   * and must surface as a failure rather than as "this session is gone", which
-   * the caller would act on by deleting the user's session mapping.
+   * Observe without touching liveness. A 404 means an old bridge; missing
+   * sessions are reported in-band so callers cannot accidentally delete one.
    */
   async observeActivity(sessionId: string): Promise<ProviderActivityObservation> {
     return readProviderActivityObservation(this.connection, sessionId, this.fetchImpl);
@@ -563,56 +559,47 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return (await this.observeActivity(sessionId)).state;
   }
 
-  private async readTranscript(sessionId: string): Promise<{
-    messages: unknown[];
-    truncated: boolean;
-    revision?: number;
-    status?: "idle" | "running" | "error";
-    error?: string;
-  }> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/messages`,
-      {},
-      this.fetchImpl,
-    );
-    if (response.status === 404) return { messages: [], truncated: false };
-    assertOk(response, `${this.agent} transcript read`);
-    const body = asRecord(
-      await boundedJson(response, `${this.agent} transcript read`, { remaining: 16 * 1024 * 1024 }),
-    );
-    const messageWindow = asRecord(body?.messageWindow);
-    const transcriptStatus = body?.status;
-    const transcriptRevision = body?.revision;
-    return {
-      messages: Array.isArray(body?.messages) ? body.messages : [],
-      truncated: messageWindow?.truncated === true,
-      ...(Number.isSafeInteger(transcriptRevision)
-        ? { revision: transcriptRevision as number }
-        : {}),
-      ...(transcriptStatus === "idle" ||
-      transcriptStatus === "running" ||
-      transcriptStatus === "error"
-        ? { status: transcriptStatus }
-        : {}),
-      ...(typeof body?.error === "string" ? { error: body.error } : {}),
-    };
+  private async readLegacyTranscript(sessionId: string): Promise<LegacyTranscriptSnapshot> {
+    return readHttpBridgeLegacyTranscript({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+    });
   }
 
-  /**
-   * The bridge transcript route has no tail parameter, so a bounded read is
-   * trimmed here rather than at the wire. The contract still holds — a caller
-   * that asked for the newest `limit` entries never sees, or retains, more than
-   * that — but the response itself is still the full bounded transcript.
-   */
+  async transcriptSnapshot(
+    sessionId: string,
+    options: { limit: number; targetBytes: number; knownSourceToken?: string },
+  ): Promise<ProviderTranscriptSnapshot | { unchanged: true; sourceToken: string }> {
+    return readHttpBridgeTranscriptSnapshot({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+      options,
+      readLegacy: () => this.readLegacyTranscript(sessionId),
+    });
+  }
+
+  /** Legacy bounded message surface retained for older callers. */
   async messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
-    const messages = (await this.readTranscript(sessionId)).messages;
+    const messages = (await this.readLegacyTranscript(sessionId)).messages;
     const limit = options?.limit;
     if (limit === undefined) return messages;
     if (!Number.isSafeInteger(limit) || limit <= 0) {
       throw new RangeError(`${this.agent} transcript limit must be a positive integer`);
     }
     return messages.length > limit ? messages.slice(-limit) : messages;
+  }
+
+  async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
+    return readHttpBridgeSessionState({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+    });
   }
 
   /**
@@ -671,7 +658,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           {},
           this.fetchImpl,
         ),
-        this.readTranscript(sessionId),
+        this.readLegacyTranscript(sessionId),
         refreshMetadata && !cachedMetadata
           ? this.runtimeHealth(sessionId)
           : Promise.resolve(undefined),
@@ -793,7 +780,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] =
       await Promise.all([
         bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-        this.readTranscript(sessionId),
+        this.readLegacyTranscript(sessionId),
         this.agent === "codex"
           ? bridgeFetch(
               this.connection,

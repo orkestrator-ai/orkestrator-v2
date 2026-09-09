@@ -620,6 +620,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
       ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
     ]);
+    await this.settleAndClearProgressiveReads();
     await Promise.allSettled(this.scanTasks);
     while (
       this.launchTasks.size > 0 ||
@@ -653,6 +654,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     this.pinnedToolDetailRefs.clear();
     this.toolDetailCacheBytes = 0;
     this.projectionRefreshes.clear();
+    this.projectionRefreshDescriptors.clear();
     this.projectionEpochs.clear();
   }
 

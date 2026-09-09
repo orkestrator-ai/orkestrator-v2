@@ -27,7 +27,9 @@ import {
   isBackgroundTaskLaunchCandidate,
   recoverBackgroundTaskLaunchId,
   applyNativeAgentProjectionDelta,
+  applyNativeAgentTranscriptDelta,
   isNativeAgentProjectionUpdate,
+  isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
   nativeAsyncQuestionRequestId,
   type NativeAgentSessionProjection,
@@ -829,6 +831,79 @@ describe("background task launch id recovery", () => {
   test("tolerates a malformed toolArgs without throwing", () => {
     expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: [1, 2] })).toBe(false);
     expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: null })).toBe(false);
+  });
+});
+
+describe("progressive transcript deltas", () => {
+  const identity = {
+    backendInstanceId: "backend-1",
+    environmentId: "env-1",
+    platform: "codex" as const,
+    logicalSessionKey: "tab-1",
+    providerSessionId: "provider-1",
+    sourceGeneration: "gen-1",
+  };
+  const message = (id: string, content: string) => ({
+    id,
+    role: "assistant" as const,
+    content,
+    parts: [],
+  });
+
+  test("applies an in-place tool update without changing membership", () => {
+    const current = {
+      identity,
+      freshness: "current" as const,
+      messages: [message("m1", "hello"), message("m2", "running")],
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    };
+    const next = applyNativeAgentTranscriptDelta(current, {
+      messageUpserts: [message("m2", "done")],
+      deletedMessageIds: [],
+      freshness: "current",
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    });
+    expect(next?.messages).toEqual([message("m1", "hello"), message("m2", "done")]);
+  });
+
+  test("rejects a delta whose upsert is missing from the live order", () => {
+    const current = {
+      identity,
+      freshness: "current" as const,
+      messages: [message("m1", "hello")],
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    };
+    expect(
+      applyNativeAgentTranscriptDelta(current, {
+        messageUpserts: [message("m2", "new")],
+        deletedMessageIds: [],
+        freshness: "current",
+        historyEpoch: "epoch-1",
+        historyComplete: true,
+      }),
+    ).toBeNull();
+  });
+
+  test("accepts a validated progressive delta envelope", () => {
+    expect(
+      isNativeAgentTranscriptUpdate({
+        viewVersion: 1,
+        status: "delta",
+        baseToken: "base",
+        token: "next",
+        identity,
+        delta: {
+          messageUpserts: [message("m1", "updated")],
+          deletedMessageIds: [],
+          freshness: "current",
+          historyEpoch: "epoch-1",
+          historyComplete: true,
+        },
+      }),
+    ).toBe(true);
   });
 });
 

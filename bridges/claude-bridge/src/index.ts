@@ -146,6 +146,11 @@ app.use("/session/:id/messages", async (c, next) => {
   c.res.headers.append("Vary", "Accept-Encoding");
 });
 app.use("/session/:id/messages", compress({ encoding: "gzip" }));
+app.use("/session/:id/transcript", async (c, next) => {
+  await next();
+  c.res.headers.append("Vary", "Accept-Encoding");
+});
+app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
 
 /**
  * Lightweight authenticated probe used to reject a cached client after token

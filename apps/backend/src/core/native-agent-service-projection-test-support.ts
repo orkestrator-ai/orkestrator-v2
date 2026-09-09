@@ -74,6 +74,8 @@ export function createProviderStub(
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
     interactiveSnapshot?: (sessionId: string) => Promise<ProviderInteractiveSnapshot>;
+    transcriptSnapshot?: NativeAgentRuntimeProvider["transcriptSnapshot"];
+    sessionStateSnapshot?: NativeAgentRuntimeProvider["sessionStateSnapshot"];
     modelCatalog?: NativeAgentRuntimeProvider["modelCatalog"];
     rawModelCatalog?: NativeAgentRuntimeProvider["rawModelCatalog"];
     abort?: (sessionId: string) => Promise<void>;
@@ -109,6 +111,12 @@ export function createProviderStub(
   const interactiveSnapshot = behaviour.interactiveSnapshot
     ? mock(behaviour.interactiveSnapshot)
     : undefined;
+  const transcriptSnapshot = behaviour.transcriptSnapshot
+    ? mock(behaviour.transcriptSnapshot)
+    : undefined;
+  const sessionStateSnapshot = behaviour.sessionStateSnapshot
+    ? mock(behaviour.sessionStateSnapshot)
+    : undefined;
   const modelCatalog = behaviour.modelCatalog ? mock(behaviour.modelCatalog) : undefined;
   const rawModelCatalog = behaviour.rawModelCatalog ? mock(behaviour.rawModelCatalog) : undefined;
   const updateInteractiveControls = behaviour.updateInteractiveControls
@@ -137,6 +145,8 @@ export function createProviderStub(
     interactions: behaviour.interactions,
     messages: behaviour.messages ?? (async () => []),
     interactiveSnapshot,
+    transcriptSnapshot,
+    sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,
     updateInteractiveControls,
@@ -171,6 +181,8 @@ export function createProviderStub(
     stopBackgroundTask,
     dismissSuggestedPrompt,
     interactiveSnapshot,
+    transcriptSnapshot,
+    sessionStateSnapshot,
     modelCatalog,
     rawModelCatalog,
     updateInteractiveControls,
@@ -226,6 +238,10 @@ export function internals(service: NativeAgentService) {
     projectionCache: Map<string, unknown>;
     projectionEpochs: Map<string, number>;
     projectionRefreshes: Map<string, Promise<unknown>>;
+    progressiveTranscriptCache: Map<string, { token: string; value: unknown }>;
+    progressiveMetrics: { list(): readonly unknown[]; clear(): void };
+    invalidateProjection(key: string): void;
+    flushDisplayTailPersist(sessionKey: string): Promise<void>;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };

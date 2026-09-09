@@ -214,6 +214,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       session.title = hydrated.title;
       session.titleSource = hydrated.titleSource;
       this.registry.appendLocalMessages(session, ...hydrated.messages);
+      if (hydrated.messages.length > 0) this.registry.bumpContentEpoch(session);
       session.recoveredContextPending = hydrated.messages.length > 0;
       return { sessionId, title: hydrated.title, threadId, messages: hydrated.messages };
     }
@@ -237,7 +238,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
-      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+      if (hydrated.messages.length > 0) {
+        this.bumpMessageRevision(context);
+        this.registry.bumpContentEpoch(session);
+      }
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
     } else {
@@ -340,7 +344,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       context.messages = hydrated.messages;
       this.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
-      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+      if (hydrated.messages.length > 0) {
+        this.bumpMessageRevision(context);
+        this.registry.bumpContentEpoch(child);
+      }
       await this.persistSession(child);
       return {
         outcome: "created",
@@ -990,6 +997,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     context.messages.splice(index);
     context.error = undefined;
     this.registry.setPhase(context, "idle");
+    this.registry.bumpContentEpoch(session);
     this.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
       this.options.emit({ type: "session.reconcile-required", sessionId: id });
@@ -1091,6 +1099,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     return this.messagesForSession(session, context);
   }
 
+  /**
+   * Read the bridge-owned display tail without touching liveness or attaching a
+   * detached app-server thread. The ordinary getMessages path remains the
+   * exact recovery surface; progressive display uses this preview first.
+   */
+  getCachedMessages(sessionId: string): NormalizedMessage[] | null {
+    const session = this.registry.getSession(sessionId);
+    if (!session) return null;
+    const context = this.registry.getThreadForSession(sessionId);
+    return context ? this.messagesForSession(session, context) : [...session.localMessages];
+  }
+
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
@@ -1127,7 +1147,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     return usage;
   }
 
-  getStatus(sessionId: string): {
+  getStatus(
+    sessionId: string,
+    touch = true,
+  ): {
     status: "idle" | "running" | "error";
     phase: SessionPhase;
     title?: string;
@@ -1142,10 +1165,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     unconfirmedDispatch?: { requestId: string; retryable: boolean };
     engineGeneration: number;
     messageRevision: number;
+    contentEpoch: number;
   } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
-    void this.touchSession(sessionId);
+    if (touch) void this.touchSession(sessionId);
     const context = this.registry.getThreadForSession(sessionId);
     // A restored thread whose journal record has not been settled yet may still
     // be executing its last turn. `idle` here would let the build pipeline
@@ -1178,6 +1202,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       contextUsage: session.threadId ? this.usageByThread.get(session.threadId) : undefined,
       engineGeneration: this.options.engine.info().generation,
       messageRevision: session.messageRevision,
+      contentEpoch: session.contentEpoch,
     };
   }
 

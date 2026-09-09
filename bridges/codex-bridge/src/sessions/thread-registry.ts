@@ -125,6 +125,11 @@ export interface BridgeSession {
    */
   messageRevision: number;
   /**
+   * Advances when history is reconstructed or rewritten (hydrate, rewind, fork).
+   * Ordinary appends only bump `messageRevision`.
+   */
+  contentEpoch: number;
+  /**
    * True when `localMessages` contains history recovered from a rollout that
    * app-server could no longer resume. The first accepted turn on the replacement
    * thread carries a bounded copy so the model does not silently lose context.
@@ -255,6 +260,7 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
     >,
@@ -266,6 +272,7 @@ export class ThreadRegistry {
       localMessages: [],
       asyncQuestionItemIds: [],
       messageRevision: 0,
+      contentEpoch: 0,
       recoveredContextPending: false,
       lastAccessed: this.now(),
       createdAt: this.now(),
@@ -288,6 +295,7 @@ export class ThreadRegistry {
       | "pendingAttachments"
       | "localMessages"
       | "messageRevision"
+      | "contentEpoch"
       | "asyncQuestionItemIds"
       | "recoveredContextPending"
     > & { lastAccessed: number; asyncQuestionItemIds?: string[] },
@@ -299,6 +307,7 @@ export class ThreadRegistry {
       localMessages: [],
       asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
       messageRevision: 0,
+      contentEpoch: 0,
       recoveredContextPending: false,
       createdAt: session.lastAccessed,
     };
@@ -331,6 +340,11 @@ export class ThreadRegistry {
     const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
     if (excess > 0) session.localMessages.splice(0, excess);
     appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
+    session.messageRevision += 1;
+  }
+
+  bumpContentEpoch(session: BridgeSession): void {
+    session.contentEpoch += 1;
     session.messageRevision += 1;
   }
 

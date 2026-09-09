@@ -1867,3 +1867,96 @@ describe("OpenCode provider runtime", () => {
     }
   });
 });
+
+describe("OpenCode progressive discovery", () => {
+  test("runtimeHealth returns stream state without waiting for the metadata fan-out", async () => {
+    const fake = openCodeFake();
+    const gate = deferred();
+    let mcpCalls = 0;
+    Object.assign(fake.client, {
+      mcp: {
+        status: async () => {
+          mcpCalls += 1;
+          await gate.promise;
+          return { data: {} };
+        },
+      },
+    });
+    const provider = openCodeProvider(fake);
+    try {
+      const health = await provider.runtimeHealth!("owned-session");
+      expect(health.summary).toEqual({});
+      expect(health.notices).toEqual([]);
+      await waitUntil(() => mcpCalls === 1);
+      expect(mcpCalls).toBe(1);
+    } finally {
+      gate.resolve();
+      await provider.dispose?.();
+    }
+  });
+
+  test("concurrent runtimeHealth reads share one discovery refresh", async () => {
+    const fake = openCodeFake();
+    const gate = deferred();
+    let mcpCalls = 0;
+    Object.assign(fake.client, {
+      mcp: {
+        status: async () => {
+          mcpCalls += 1;
+          await gate.promise;
+          return { data: {} };
+        },
+      },
+    });
+    const provider = openCodeProvider(fake);
+    try {
+      const first = provider.runtimeHealth!("owned-session");
+      const second = provider.runtimeHealth!("owned-session");
+      await Promise.all([first, second]);
+      await waitUntil(() => mcpCalls === 1);
+      await provider.runtimeHealth!("owned-session");
+      expect(mcpCalls).toBe(1);
+    } finally {
+      gate.resolve();
+      await provider.dispose?.();
+    }
+  });
+
+  test("transcriptSnapshot does not hydrate child task sessions", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesHandler(async (parameters) => {
+      const sessionId = String(parameters?.sessionID ?? "");
+      if (sessionId === "child-session") {
+        throw new Error("child transcript should stay off the parent display path");
+      }
+      return {
+        data: [
+          {
+            info: { id: "parent-1", role: "assistant", time: { created: 1 } },
+            parts: [
+              {
+                type: "tool",
+                tool: "task",
+                state: { metadata: { sessionId: "child-session" } },
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const provider = openCodeProvider(fake);
+    try {
+      const snapshot = await provider.transcriptSnapshot!("owned-session", {
+        limit: 100,
+        targetBytes: 512 * 1024,
+      });
+      expect("messages" in snapshot).toBe(true);
+      if ("messages" in snapshot) {
+        expect(snapshot.messages).toHaveLength(1);
+      }
+      expect(fake.messageCalls.every((call) => call?.sessionID !== "child-session")).toBe(true);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});

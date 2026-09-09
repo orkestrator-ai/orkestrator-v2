@@ -281,6 +281,11 @@ export function SharedNativeAgentController({
     resumeSessionReplacement,
     isRefreshing,
     hasCompletedRead,
+    transcriptAvailability,
+    transcriptRefreshing,
+    transcriptError,
+    sessionStateAvailability,
+    sessionStateError,
     isDispatching,
     connect,
     refresh,
@@ -727,6 +732,12 @@ export function SharedNativeAgentController({
     completedElapsedSeconds,
   );
   const canQueue = isRunning && adapter.capabilities.queue;
+  // Older mocked/legacy hook surfaces have no domain availability field; a
+  // complete projection remains authoritative on that compatibility path.
+  const sessionStateAuthoritative =
+    sessionStateAvailability === undefined
+      ? Boolean(projection)
+      : sessionStateAvailability === "current";
   /*
    * A parked dispatch blocks the session, not just the prompt that created it:
    * the backend refuses any other request id until it is resolved, because the
@@ -737,6 +748,7 @@ export function SharedNativeAgentController({
   const recoverableDispatch = projection?.recoverableDispatch;
   const sendLocked =
     !projection ||
+    !sessionStateAuthoritative ||
     authenticationRequired ||
     !handoff.ready ||
     (isRunning && !canQueue) ||
@@ -1447,7 +1459,13 @@ export function SharedNativeAgentController({
     tabId,
   ]);
 
-  const errorMessage = sendError ?? runtimeError ?? projection?.turn.error ?? null;
+  const errorMessage =
+    sendError ??
+    transcriptError ??
+    sessionStateError ??
+    runtimeError ??
+    projection?.turn.error ??
+    null;
   // An uninitialized inactive tab has neither a projection nor an in-flight
   // refresh. That is still a pending connection, not a failed one: newly added
   // tabs can render for one commit before pane selection marks them active,
@@ -1461,12 +1479,14 @@ export function SharedNativeAgentController({
   // win over the previous completed-read/error, or the only recovery control
   // stays on screen while the reconnect is already running.
   const connectionState =
-    projection?.connection ??
-    (isRefreshing
-      ? ("connecting" as const)
-      : runtimeError || hasCompletedRead
-        ? ("error" as const)
-        : ("connecting" as const));
+    transcriptError || sessionStateError
+      ? ("error" as const)
+      : ((sessionStateAuthoritative ? projection?.connection : undefined) ??
+        (isRefreshing || transcriptRefreshing || sessionStateAvailability === "refreshing"
+          ? ("connecting" as const)
+          : runtimeError || hasCompletedRead
+            ? ("error" as const)
+            : ("connecting" as const)));
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1482,7 +1502,7 @@ export function SharedNativeAgentController({
    * the last transcript row. Command/file/permission approvals stay pinned
    * above the composer because they gate an action that is about to run.
    */
-  const allInteractions = projection?.interactions ?? [];
+  const allInteractions = sessionStateAuthoritative ? (projection?.interactions ?? []) : [];
   const transcriptInteractions = allInteractions.filter(
     (interaction) => interaction.kind === "question" || interaction.kind === "plan-approval",
   );
@@ -1651,6 +1671,13 @@ export function SharedNativeAgentController({
       // bare paths instead of pictures.
       containerId={data.containerId}
       connectionState={connectionState}
+      displayAvailable={
+        Boolean(projection?.messages.length) ||
+        (connectionState !== "error" &&
+          (Boolean(projection) ||
+            (transcriptAvailability !== undefined && transcriptAvailability !== "unavailable"))) ||
+        !hasCompletedRead
+      }
       errorMessage={errorMessage}
       onRetry={() => {
         void connect();
@@ -1852,7 +1879,7 @@ export function SharedNativeAgentController({
             void submit(draft.text);
           }}
           placeholder={`Message ${label}`}
-          disabled={!projection || isSubmitting}
+          disabled={isSubmitting}
           isSending={isDispatching || isSubmitting}
           isLoading={isTurnActive}
           menus={

@@ -1963,7 +1963,7 @@ export class MultiReviewService {
         preparing ? "Multi Review · Prepare review package" : "Multi Review · Consolidation",
         {
           clientSessionKey: sessionKey,
-          mode: "build",
+          ...(preparing ? { mode: "build" as const, readOnly: false } : READ_ONLY_REPORT_TURN),
           model: selection.model === "default" ? undefined : selection.model,
           effort: selection.reasoningEffort,
           policy: await this.executionPolicy(workflow),

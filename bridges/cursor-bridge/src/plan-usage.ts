@@ -145,9 +145,7 @@ export function mergeAccountWindows(
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-let cachedPlan:
-  | { windows: NativeAgentAccountUsageWindow[]; expiresAt: number }
-  | undefined;
+let cachedPlan: { windows: NativeAgentAccountUsageWindow[]; expiresAt: number } | undefined;
 let inFlight: Promise<NativeAgentAccountUsageWindow[] | undefined> | undefined;
 let accessToken: { value: string; expiresAt: number } | undefined;
 let testFetchImpl: FetchLike | undefined;

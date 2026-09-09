@@ -20,6 +20,33 @@ export const cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(s
 
 Cursor.configure({ local: { store: cursorLocalAgentStore } });
 
+/**
+ * Agent.create reserves a queued first run, but only the returned SDK handle
+ * knows to consume it. Agent.resume loses that handle and tries to create a
+ * second run, which the store rejects as "already has active run".
+ *
+ * Only this exact unused reservation is replaceable. A queued follow-up, a
+ * starting run or a conversation checkpoint may represent dispatched work.
+ * Read failures propagate; they are not evidence that a session is unused.
+ */
+export async function hasUnusedInitialRun(agentId: string): Promise<boolean> {
+  const agent = await cursorLocalAgentStore.agents.get({ agentId });
+  if (!agent || agent.status !== "idle" || !agent.activeRunId || agent.latestCheckpoint) {
+    return false;
+  }
+  const run = await cursorLocalAgentStore.runs.get({ agentId, runId: agent.activeRunId });
+  return Boolean(
+    run &&
+    run.turnNumber === 1 &&
+    run.status === "queued" &&
+    run.requestId == null &&
+    run.startedAt == null &&
+    run.endedAt == null &&
+    run.startCheckpointRef == null &&
+    run.latestCheckpointRef == null,
+  );
+}
+
 let platform: Promise<CursorAgentPlatform> | undefined;
 
 async function agentPlatform(): Promise<CursorAgentPlatform> {

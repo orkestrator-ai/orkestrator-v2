@@ -25,7 +25,11 @@ import { schedulePersist } from "./persistence.js";
 import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
 import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
 import { boundTranscript } from "./transcript.js";
-import { mergeAccountWindows, peekPlanAccountWindows, schedulePlanAccountRefresh } from "./plan-usage.js";
+import {
+  mergeAccountWindows,
+  peekPlanAccountWindows,
+  schedulePlanAccountRefresh,
+} from "./plan-usage.js";
 import {
   type JsonObject,
   type PromptJournalEntry,

@@ -24,7 +24,11 @@ import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
 import { cursorMcpServers } from "./mcp.js";
-import { cursorLocalAgentStore, prewarmCursorWorkspace } from "./sdk-runtime.js";
+import {
+  cursorLocalAgentStore,
+  hasUnusedInitialRun,
+  prewarmCursorWorkspace,
+} from "./sdk-runtime.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
 import {
   clientSessionKeys,
@@ -276,7 +280,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     // is not fatal: the id may name an agent the store no longer has, and a new
     // agent with the transcript we already hold is a far better outcome than a
     // tab that can never send again.
-    if (state.agentId) {
+    // A warm-up detached before its first send has no conversation to resume.
+    // Keep its store record intact, but create a usable first-run handle under
+    // the current policy. This also repairs placeholders restored after exit.
+    if (state.agentId && !(await hasUnusedInitialRun(state.agentId))) {
       try {
         const resumed = await Agent.resume(state.agentId, options);
         state.agent = resumed;

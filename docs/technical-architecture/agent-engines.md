@@ -326,11 +326,83 @@ two ways, so they are pinned to one version and `tests/unit/version-drift.test.t
 enforces that the bridge's dependencies, `PINNED_TOOLCHAIN_VERSIONS.pi` and the
 Dockerfile's `PI_CLI_VERSION` all agree.
 
+## Workflow results through tool calls
+
+Backend-owned workflows — feature planning, build pipeline stages, review
+fan-out, multi-review, and looped review — need a structured result from the
+model. Two transports exist, and each attempt records which one it was admitted
+under so old records stay readable.
+
+**Tool mode (`tool-v1`).** The backend prepares a durable result slot, mints an
+attempt-scoped MCP capability, and attaches it to that one turn. The agent tool
+server publishes exactly two tools for that capability: one typed submission
+tool for the attempt's result kind, and `get_workflow_result_status`. No Kanban
+or mail tool is reachable through it, so a subagent cannot inherit anything
+broader. The turn carries no provider final-output schema, and the prompt states
+that the tool instruction supersedes any earlier "final JSON only" guidance.
+
+**Legacy mode.** Review and pipeline attempts fall back to
+`structured-output-v1`, the provider-enforced final-output schema. Feature
+planning falls back to `planner-block-v1`, its tagged state block. Records
+written before this transport existed carry no transport field and continue
+through their original reader.
+
+`WorkflowResultService` owns the slot lifecycle: `open`, `accepted`, `consumed`,
+`cancelled`, `superseded`. It persists to a private file with atomic
+replacement and a cross-process lock, so two backend processes sharing a data
+directory serialize correctly. Submission returns a stable receipt. An identical
+resubmission is deduplicated onto the original receipt, a different payload for
+an accepted key is a conflict, and an invalid payload returns bounded
+diagnostics the model can correct within a fixed budget. Acceptance is not
+completion: the controller still owns turn settlement, worktree and package
+checks, validation execution, pool application, stage changes, and PR
+verification, and consumes an accepted result exactly once.
+
+### Provider qualification
+
+| Provider | Tool mode | Notes |
+| --- | --- | --- |
+| Claude | Qualified | Per-turn `agentMcp`; the restricted review policy admits `mcp__orkestrator-workflow-result__*` and nothing else new |
+| Codex | Qualified | Per-turn `agentMcp` on the pinned bridge |
+| OpenCode | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
+| Cursor | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
+| Grok (ACP) | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
+| Pi | Not qualified | No per-turn MCP attachment; stays on `structured-output-v1` |
+
+An unqualified provider is not a degraded path. It runs the legacy transport it
+has always run, with the same validation and the same domain results.
+
+### Rollout and rollback
+
+Admission is a backend-owned setting, `global.workflowResultTools`, not a
+user-facing transport choice. It carries a master switch plus per-provider and
+per-result-kind lists, and is read through `get_workflow_result_tools_rollout`
+and `set_workflow_result_tools_rollout`. The gate is evaluated once, when an
+attempt is admitted, and the outcome is persisted on the attempt.
+
+To roll back, disable the combination. New attempts take the legacy transport
+immediately. Attempts already admitted keep their tools and their receipts and
+finish normally, so nothing in flight is stranded. Deploying a release that
+cannot read `tool-v1` records is only safe once no such records are active:
+drain them through the current version first.
+
+### Operational metrics
+
+`get_workflow_result_metrics` returns bounded, content-free counters: attempts,
+submission outcomes by a fixed error-code set, distinct corrections, missing
+submissions, acceptance and consumption latency, validation and storage
+duration, and queue and retention gauges. Series names use only provider,
+result kind, transport, schema version, outcome, and error code. Payloads,
+prompts, diagnostics, evidence paths, digests, receipt ids, and result keys are
+never recorded, and the series table is bounded with an explicit dropped-series
+count.
+
 ## Where to look next
 
 | Topic | Document |
 | --- | --- |
 | Bumping any agent SDK, CLI, or pinned binary | [`docs/upgrade-agents.md`](../upgrade-agents.md) |
 | Background-reliability and transport invariants | [`AGENTS.md`](../../AGENTS.md) |
+| Workflow result transport design record | [`docs/todo/json-to-tool-calls.md`](../todo/json-to-tool-calls.md) |
 | Agent-driven real-stack QA | [`docs/development/agent-testing.md`](../development/agent-testing.md) |
 | Known flakes and their root causes | [`docs/flaky-tests.md`](../flaky-tests.md) |

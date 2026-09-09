@@ -34,8 +34,15 @@ import {
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  workflowResultInstruction,
+  type WorkflowResultKind,
+} from "@orkestrator/protocol/workflow-results";
 import type { Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
@@ -82,6 +89,7 @@ import {
   commitProgressObservation,
   consolidationReports,
   deriveConsolidatedProvenance,
+  consolidationResultContext,
   parseStructuredReportResult,
   promptWorktreeSnapshot,
   resolveUnattendedReviewerInteractions,
@@ -241,6 +249,14 @@ export interface MultiReviewServiceOptions {
     selection: MultiReviewModelSelection,
   ) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
+  workflowResults?: WorkflowResultService;
+  workflowResultRollout?: WorkflowResultRollout;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKey: string,
+  ) => AgentToolConnection;
   /**
    * Delivers the durable interactive handoff after {@link address} records it.
    * The supervisor, not a mounted renderer, retries this callback until it
@@ -264,6 +280,7 @@ export interface MultiReviewServiceOptions {
 
 /** Durable backend owner for reviewer fan-out, consolidation, and fixes. */
 export class MultiReviewService {
+  private cachedWorkflowRollout: WorkflowResultRollout | null = null;
   private readonly ownerId = randomUUID();
   private readonly locks = new Map<string, Promise<void>>();
   private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
@@ -1505,6 +1522,14 @@ export class MultiReviewService {
     if (workflow.fixSession?.status === "running") workflow.fixSession.status = "cancelled";
     if (workflow.reviewSession?.status === "running") workflow.reviewSession.status = "cancelled";
     if (workflow.activeRequest) settleStepRuntime(workflow, workflow.activeRequest.kind);
+    const cancelledResultKeys = [
+      ...(workflow.activeRequest?.resultTransport === "tool-v1"
+        ? [workflow.activeRequest.requestId]
+        : []),
+      ...workflow.reviewers.flatMap((reviewer) =>
+        reviewer.resultTransport === "tool-v1" && reviewer.requestId ? [reviewer.requestId] : [],
+      ),
+    ];
     workflow.phase = "cancelled";
     if (timedOut && waiting.length > 0) {
       workflow.error =
@@ -1518,6 +1543,11 @@ export class MultiReviewService {
     delete workflow.cancellingSince;
     delete workflow.activeRequest;
     await this.save(workflow, token);
+    await Promise.allSettled(
+      cancelledResultKeys.map((resultKey) =>
+        this.options.workflowResults?.close(resultKey, "cancelled"),
+      ),
+    );
     await this.release(workflow, token);
   }
 
@@ -1609,6 +1639,33 @@ export class MultiReviewService {
         reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
+      agentMcp: (_selection, resultKey) => this.workflowAgentMcp(workflow, resultKey),
+      ...(this.options.workflowResults
+        ? {
+            supportsToolResult: (selection: MultiReviewModelSelection) =>
+              this.workflowToolEnabled(selection.agent, "review-report"),
+            prepareResult: async (
+              selection: MultiReviewModelSelection,
+              requestId: string,
+              schema: JsonSchema,
+            ) =>
+              this.options.workflowResults!.prepare({
+                resultKey: requestId,
+                kind: "review-report",
+                environmentId: workflow.environmentId,
+                projectId: workflow.projectId,
+                provider: selection.agent,
+                schema,
+              }),
+            projectResult: (requestId: string) =>
+              this.options.workflowResults!.projection(requestId),
+            readResult: <T>(requestId: string) =>
+              this.options.workflowResults!.structured<T>(requestId),
+            consumeResult: (requestId: string) => this.options.workflowResults!.consume(requestId),
+            closeResult: (requestId: string) =>
+              this.options.workflowResults!.close(requestId, "superseded"),
+          }
+        : {}),
       save: async () => {
         await this.save(workflow, token);
       },
@@ -1641,6 +1698,9 @@ export class MultiReviewService {
   }
 
   private async advanceReviewers(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    // Reviewer admission decides a transport, so the rollout snapshot has to be
+    // current before the runner asks whether tool mode is allowed.
+    await this.workflowRollout.refresh();
     const runner = new ReviewFanoutRunner(this.reviewFanoutHost(workflow, token));
     const outcome = await runner.advanceReviewers(workflow.reviewers);
     if (outcome.kind === "working") return;
@@ -1936,10 +1996,17 @@ export class MultiReviewService {
     if (!workflow.activeRequest) {
       const requestId = randomUUID();
       const kind = preparing ? "prepare" : "consolidate";
+      await this.workflowRollout.refresh();
       workflow.activeRequest = {
         kind,
         requestId,
         state: "prepared",
+        resultTransport: this.workflowToolEnabled(selection.agent, this.stepResultKind(kind))
+          ? "tool-v1"
+          : "structured-output-v1",
+        ...(this.workflowToolEnabled(selection.agent, this.stepResultKind(kind))
+          ? { resultSubmission: "preparing" as const }
+          : {}),
         createdAt: nowIso(),
       };
       session.requestIds.push(requestId);
@@ -1981,22 +2048,53 @@ export class MultiReviewService {
       // at-most-once window rather than inside it.
       await attachAgentBeforeDispatch(provider, session.providerSessionId);
       await this.assertFence(workflow.id, token);
+      const schema =
+        request.kind === "prepare"
+          ? REVIEW_VALIDATION_PLAN_SCHEMA
+          : request.kind === "consolidate"
+            ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
+            : REVIEW_FIX_RESULT_JSON_SCHEMA;
+      const resultKind: WorkflowResultKind =
+        request.kind === "prepare"
+          ? "validation-plan"
+          : request.kind === "consolidate"
+            ? "consolidated-review"
+            : "fix-result";
+      const agentMcp =
+        request.resultTransport === "tool-v1"
+          ? await this.workflowAgentMcp(workflow, request.requestId)
+          : undefined;
+      if (request.resultTransport === "tool-v1" && this.options.workflowResults) {
+        await this.options.workflowResults.prepare({
+          resultKey: request.requestId,
+          kind: resultKind,
+          environmentId: workflow.environmentId,
+          projectId: workflow.projectId,
+          provider: selection.agent,
+          schema,
+          ...(request.kind === "consolidate"
+            ? { context: consolidationResultContext(workflow.reviewers) }
+            : {}),
+        });
+      }
       request.state = "dispatching";
       await this.save(workflow, token);
       try {
-        await provider.send(session.providerSessionId, prompt, {
-          requestId: request.requestId,
-          schema:
-            request.kind === "prepare"
-              ? REVIEW_VALIDATION_PLAN_SCHEMA
-              : request.kind === "consolidate"
-                ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
-                : REVIEW_FIX_RESULT_JSON_SCHEMA,
-          mode: request.kind === "consolidate" ? "plan" : "build",
-          readOnly: request.kind === "consolidate",
-          model: selection.model === "default" ? undefined : selection.model,
-          effort: selection.reasoningEffort,
-        });
+        await provider.send(
+          session.providerSessionId,
+          request.resultTransport === "tool-v1"
+            ? `${prompt}\n\n${workflowResultInstruction(resultKind, request.requestId)}`
+            : prompt,
+          {
+            requestId: request.requestId,
+            schema: request.resultTransport === "tool-v1" ? undefined : schema,
+            mode: request.kind === "consolidate" ? "plan" : "build",
+            readOnly: request.kind === "consolidate",
+            model: selection.model === "default" ? undefined : selection.model,
+            effort: selection.reasoningEffort,
+            ...(agentMcp ? { agentMcp } : {}),
+          },
+        );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
         throw error;
@@ -2062,7 +2160,13 @@ export class MultiReviewService {
             : `The ${sessionLabel} session failed`,
       );
     }
-    const result = await provider.structured<unknown>(session.providerSessionId, request.requestId);
+    if (request.resultTransport === "tool-v1") {
+      request.resultSubmission = await this.options.workflowResults?.projection(request.requestId);
+    }
+    const result =
+      request.resultTransport === "tool-v1"
+        ? ((await this.options.workflowResults?.structured<unknown>(request.requestId)) ?? null)
+        : await provider.structured<unknown>(session.providerSessionId, request.requestId);
     await this.assertFence(workflow.id, token);
     if (!result) {
       request.idleResultPolls = (request.idleResultPolls ?? 0) + 1;
@@ -2118,6 +2222,7 @@ export class MultiReviewService {
         session.completedAt = nowIso();
         delete session.stalledSince;
         await this.save(workflow, token);
+        await this.consumeWorkflowResult(request);
         return;
       }
       let preparation: ReturnType<typeof parseReviewPreparationResult>;
@@ -2155,6 +2260,7 @@ export class MultiReviewService {
       delete workflow.activeRequest;
       delete workflow.reviewSnapshotStale;
       await this.save(workflow, token);
+      await this.consumeWorkflowResult(request);
       return;
     }
     if (request.kind === "consolidate") {
@@ -2181,6 +2287,7 @@ export class MultiReviewService {
       settleStepRuntime(workflow, "consolidate");
       delete workflow.activeRequest;
       await this.save(workflow, token);
+      await this.consumeWorkflowResult(request);
       await this.release(workflow, token);
       return;
     }
@@ -2220,6 +2327,7 @@ export class MultiReviewService {
       workflow.phase = "completed";
     }
     await this.save(workflow, token);
+    await this.consumeWorkflowResult(request);
     await this.release(workflow, token);
   }
 
@@ -2240,9 +2348,19 @@ export class MultiReviewService {
         `${error.message} The fix model could not produce a valid ${request.kind === "prepare" ? "review package preparation" : request.kind === "fix" ? "fix result" : "consolidated report"} in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
       );
     }
+    const previousRequestId = request.requestId;
+    const previousTransport = request.resultTransport;
     const requestId = randomUUID();
     request.requestId = requestId;
     request.state = "prepared";
+    await this.workflowRollout.refresh();
+    request.resultTransport = this.workflowToolEnabled(
+      session.agent,
+      this.stepResultKind(request.kind),
+    )
+      ? "tool-v1"
+      : "structured-output-v1";
+    request.resultSubmission = request.resultTransport === "tool-v1" ? "preparing" : undefined;
     request.createdAt = nowIso();
     request.schemaRepairAttempts = attempt;
     request.schemaRepairPrompt = structuredReportRepairPrompt(
@@ -2272,6 +2390,18 @@ export class MultiReviewService {
     delete request.idleResultPolls;
     session.requestIds.push(requestId);
     await this.save(workflow, token);
+    if (previousTransport === "tool-v1") {
+      await this.options.workflowResults?.close(previousRequestId, "superseded");
+    }
+  }
+
+  private async consumeWorkflowResult(
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+  ): Promise<void> {
+    if (request.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.consume(request.requestId);
+      delete request.resultSubmission;
+    }
   }
 
   private resolveUnattendedInteractions(
@@ -2522,6 +2652,7 @@ export class MultiReviewService {
             const connection = await this.bridgeConnection(selection.agent, environment);
             return createBuildPipelineProvider(connection, {
               ...this.options.providerDependencies,
+              workflowResults: this.options.workflowResults,
               autoAnswerRequests: false,
             });
           })();
@@ -2534,6 +2665,45 @@ export class MultiReviewService {
     } finally {
       if (this.providerCreations.get(key) === creation) this.providerCreations.delete(key);
     }
+  }
+
+  private async workflowAgentMcp(
+    workflow: MultiReviewWorkflow,
+    resultKey: string,
+  ): Promise<AgentToolConnection | undefined> {
+    if (!this.options.resolveAgentToolConnection) return undefined;
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment) return undefined;
+    return this.options.resolveAgentToolConnection(
+      workflow.environmentId,
+      workflow.projectId,
+      environment.environmentType === "local" ? "host" : "container",
+      resultKey,
+    );
+  }
+
+  private get workflowRollout(): WorkflowResultRollout {
+    this.cachedWorkflowRollout ??=
+      this.options.workflowResultRollout ?? new WorkflowResultRollout(async () => undefined);
+    return this.cachedWorkflowRollout;
+  }
+
+  private workflowToolEnabled(
+    agent: MultiReviewModelSelection["agent"],
+    kind: WorkflowResultKind,
+  ): boolean {
+    return (
+      this.options.workflowResults !== undefined &&
+      this.options.resolveAgentToolConnection !== undefined &&
+      this.workflowRollout.allows(agent, kind)
+    );
+  }
+
+  /** Result kind produced by one multi-review step. */
+  private stepResultKind(kind: MultiReviewStepKind): WorkflowResultKind {
+    if (kind === "prepare") return "validation-plan";
+    if (kind === "consolidate") return "consolidated-review";
+    return "fix-result";
   }
 
   private async bridgeConnection(

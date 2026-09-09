@@ -12,6 +12,7 @@ import { isReviewValidationPlan, type ReviewValidationPlan } from "./review-vali
 import { getReviewInstructionValidationError } from "./review-prompt.js";
 import { reviewPackageArtifactPath } from "./review-artifacts.js";
 import { isAgentPlatform } from "./agent-platforms.js";
+import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import type {
   AgentInteractionKind,
   AgentInteractionOutcome,
@@ -347,6 +348,9 @@ export interface LoopedReviewDispatch {
   sessionId: string;
   phase: ActiveLoopedReviewPhase;
   kind: "prepare" | "discover" | "reconcile" | "fix" | "pr";
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+  /** Bounded backend-projected delivery state for the tool-mode result slot. */
+  resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
   /** `dispatching` is persisted before provider I/O and is never blindly resent. */
   state: "prepared" | "dispatching" | "sent";
   createdAt: string;
@@ -1022,6 +1026,11 @@ function isDispatch(value: unknown): value is LoopedReviewDispatch {
     !isBoundedNonEmptyString(value.sessionId, LOOPED_REVIEW_MAX_ID_LENGTH) ||
     !ACTIVE_LOOPED_REVIEW_PHASES.has(value.phase) ||
     (value.state !== "prepared" && value.state !== "dispatching" && value.state !== "sent") ||
+    (value.resultTransport !== undefined &&
+      value.resultTransport !== "tool-v1" &&
+      value.resultTransport !== "structured-output-v1") ||
+    (value.resultSubmission !== undefined &&
+      !isWorkflowResultSubmissionState(value.resultSubmission)) ||
     typeof value.createdAt !== "string"
   )
     return false;

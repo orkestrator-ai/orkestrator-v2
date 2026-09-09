@@ -5,6 +5,8 @@ import path from "node:path";
 import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import { StorageService } from "./storage.js";
 import { FeaturePlanningService } from "./feature-planning.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
@@ -45,7 +47,12 @@ interface BridgeMessage {
  */
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "codex" as const;
-  readonly sends: Array<{ sessionId: string; prompt: string; requestId: string }> = [];
+  readonly sends: Array<{
+    sessionId: string;
+    prompt: string;
+    requestId: string;
+    agentMcp?: { url: string; token: string };
+  }> = [];
   readonly created: string[] = [];
   activityState: ProviderActivityState = "working";
   statusState: ProviderStatus = "idle";
@@ -77,11 +84,21 @@ class FakeProvider implements BuildPipelineProvider {
     if (this.sendGate) await this.sendGate;
     if (this.sendBehaviour === "ambiguous") {
       // Recorded first: an ambiguous dispatch may well have reached the agent.
-      this.sends.push({ sessionId, prompt, requestId: options.requestId });
+      this.sends.push({
+        sessionId,
+        prompt,
+        requestId: options.requestId,
+        agentMcp: options.agentMcp,
+      });
       throw new AmbiguousPromptDispatchError("The bridge did not answer");
     }
     if (this.sendBehaviour === "reject") throw new Error("Prompt rejected");
-    this.sends.push({ sessionId, prompt, requestId: options.requestId });
+    this.sends.push({
+      sessionId,
+      prompt,
+      requestId: options.requestId,
+      agentMcp: options.agentMcp,
+    });
   }
 
   async status(): Promise<ProviderStatus> {
@@ -132,9 +149,11 @@ class FakeProvider implements BuildPipelineProvider {
 interface Harness {
   service: FeaturePlanningService;
   storage: StorageService;
+  dataDir: string;
   provider: FakeProvider;
   providers: FakeProvider[];
   featureId: string;
+  workflowResults?: WorkflowResultService;
   /**
    * Start an exchange and let the supervisor run its first pass.
    *
@@ -155,6 +174,7 @@ async function harness(
     providers?: FakeProvider[];
     serviceOptions?: ConstructorParameters<typeof FeaturePlanningService>[2];
     invoke?: (storage: StorageService) => TestInvoker;
+    toolMode?: boolean;
   } = {},
 ): Promise<Harness> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-feature-planning-"));
@@ -200,6 +220,7 @@ async function harness(
   const providers = options.providers ?? [new FakeProvider()];
   const provider = providers[0]!;
   let providerIndex = 0;
+  const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
   const service = new FeaturePlanningService(
     storage,
     options.invoke?.(storage) ?? (async <T>() => undefined as T),
@@ -207,14 +228,25 @@ async function harness(
       ...options.serviceOptions,
       autoAdvance: false,
       provider: async () => providers[Math.min(providerIndex++, providers.length - 1)]!,
+      ...(workflowResults
+        ? {
+            workflowResults,
+            resolveAgentToolConnection: () => ({
+              url: "http://127.0.0.1:1234/mcp",
+              token: "test-token",
+            }),
+          }
+        : {}),
     },
   );
   return {
     service,
     storage,
+    dataDir,
     provider,
     providers,
     featureId: plan.id,
+    workflowResults,
     start: async (input) => {
       await service.start({ featureId: plan.id, ...input });
       await service.advanceNow(plan.id);
@@ -228,6 +260,153 @@ async function harness(
 }
 
 describe("FeaturePlanningService", () => {
+  test("uses the durable tool result while preserving the assistant prose", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      expect(record.resultTransport).toBe("tool-v1");
+      expect(context.provider.sends[0]?.prompt).toContain("submit_feature_plan_state");
+      expect(context.provider.sends[0]?.agentMcp).toEqual({
+        url: "http://127.0.0.1:1234/mcp",
+        token: "test-token",
+      });
+      await context.workflowResults!.submit(
+        { environmentId: "env-1", projectId: "project-1" },
+        record.requestId!,
+        {
+          phase: "confirming",
+          title: "Bulk export",
+          summary: "Export every report as CSV",
+        },
+      );
+      context.provider.reply("The export plan is ready for confirmation.");
+
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+
+      const settled = await context.storage.getFeaturePlan(context.featureId);
+      expect(settled?.planning).toBeUndefined();
+      expect(settled?.status).toBe("confirming");
+      expect(settled?.title).toBe("Bulk export");
+      expect(settled?.messages.at(-1)?.content).toBe("The export plan is ready for confirmation.");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a rejected submission is corrected and settled with no view mounted", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      const scope = { environmentId: "env-1", projectId: "project-1" };
+
+      // Nothing below mounts or activates a renderer. The controller is the
+      // only thing advancing the turn.
+      const rejected = await context.workflowResults!.submit(scope, record.requestId!, {
+        phase: "confirming",
+        title: 42,
+        summary: "",
+      });
+      expect(rejected).toMatchObject({ ok: false, error: { code: "invalid_result" } });
+
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.resultSubmission).toBe("correcting");
+
+      await context.workflowResults!.submit(scope, record.requestId!, {
+        phase: "confirming",
+        title: "Bulk export",
+        summary: "Export every report as CSV",
+      });
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.resultSubmission).toBe("received");
+
+      context.provider.reply("The export plan is ready for confirmation.");
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+
+      const settled = await context.storage.getFeaturePlan(context.featureId);
+      expect(settled?.planning).toBeUndefined();
+      expect(settled?.title).toBe("Bulk export");
+      // Acceptance and workflow completion stay distinct: the slot is consumed
+      // exactly once and its payload no longer exists to be applied again.
+      expect(await context.workflowResults!.structured(record.requestId!)).toBeNull();
+      expect(await context.workflowResults!.status(scope, record.requestId!)).toMatchObject({
+        lifecycle: "consumed",
+        completion: "completed",
+      });
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("an accepted result submitted while the turn is in flight survives a restart", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      await context.workflowResults!.submit(
+        { environmentId: "env-1", projectId: "project-1" },
+        record.requestId!,
+        { phase: "confirming", title: "Bulk export", summary: "Export every report as CSV" },
+      );
+
+      // A fresh service instance over the same durable state stands in for the
+      // backend restarting between acceptance and consumption.
+      const restarted = new WorkflowResultService(context.dataDir);
+      expect(await restarted.structured(record.requestId!)).toMatchObject({ ok: true });
+
+      context.provider.reply("The export plan is ready for confirmation.");
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Bulk export");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a turn accepted without any prose still settles rather than waiting forever", async () => {
+    const context = await harness({ toolMode: true });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      await context.workflowResults!.submit(
+        { environmentId: "env-1", projectId: "project-1" },
+        record.requestId!,
+        { phase: "confirming", title: "Bulk export", summary: "Export every report as CSV" },
+      );
+
+      // The model called its tool and ended the turn without a final message.
+      context.provider.activityState = "idle";
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Bulk export");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("a disabled rollout admits the legacy tagged transport instead", async () => {
+    const context = await harness({
+      toolMode: true,
+      serviceOptions: {
+        workflowResultRollout: new WorkflowResultRollout(async () => ({ enabled: false })),
+      },
+    });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const record = (await context.record())!;
+      expect(record.resultTransport).toBe("planner-block-v1");
+      expect(record.resultSubmission).toBeUndefined();
+      expect(context.provider.sends[0]?.prompt).not.toContain("submit_feature_plan_state");
+      expect(context.provider.sends[0]?.agentMcp).toBeUndefined();
+      expect(await context.workflowResults!.registered(record.requestId!)).toBe(false);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("carries a feature turn from dispatch to an applied state block", async () => {
     const context = await harness();
     try {

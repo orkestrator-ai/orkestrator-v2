@@ -17,6 +17,7 @@
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
+import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 
 export const REVIEW_FANOUT_MIN_REVIEWERS = 1;
 export const REVIEW_FANOUT_MAX_REVIEWERS = 32;
@@ -58,6 +59,9 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   providerSessionId?: string;
   requestId?: string;
   dispatchState?: ReviewDispatchState;
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+  /** Bounded backend-projected delivery state for the tool-mode result slot. */
+  resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
   /** Durable correction turn for a rejected structured report. */
   schemaRepairAttempts?: number;
   schemaRepairPrompt?: string;
@@ -108,6 +112,9 @@ export interface ReviewConsolidationSession {
   agent: AgentPlatform;
   model?: string;
   reasoningEffort?: string;
+  resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
+  /** Bounded backend-projected delivery state for the tool-mode result slot. */
+  resultSubmission?: import("./workflow-results.js").WorkflowResultSubmissionState;
   schemaRepairAttempts?: number;
   schemaRepairPrompt?: string;
   idleResultPolls?: number;
@@ -209,6 +216,8 @@ const REVIEWER_KEYS = [
   "providerSessionId",
   "requestId",
   "dispatchState",
+  "resultTransport",
+  "resultSubmission",
   "idleResultPolls",
   "report",
   "schemaRepairAttempts",
@@ -240,6 +249,11 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.providerSessionId === undefined || nonBlank(value.providerSessionId)) &&
     (value.requestId === undefined || nonBlank(value.requestId)) &&
     (value.dispatchState === undefined || isDispatchState(value.dispatchState)) &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
+    (value.resultSubmission === undefined ||
+      isWorkflowResultSubmissionState(value.resultSubmission)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
     optionalString(value.continuationPrompt, 4_096) &&
@@ -315,6 +329,8 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
       "agent",
       "model",
       "reasoningEffort",
+      "resultTransport",
+      "resultSubmission",
       "schemaRepairAttempts",
       "schemaRepairPrompt",
       "idleResultPolls",
@@ -331,6 +347,11 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     isAgentPlatform(value.agent) &&
     (value.model === undefined || nonBlank(value.model)) &&
     (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
+    (value.resultTransport === undefined ||
+      value.resultTransport === "tool-v1" ||
+      value.resultTransport === "structured-output-v1") &&
+    (value.resultSubmission === undefined ||
+      isWorkflowResultSubmissionState(value.resultSubmission)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
     optionalPollCount(value.idleResultPolls) &&

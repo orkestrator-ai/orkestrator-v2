@@ -13,6 +13,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { workflowResultSubmissionLabel } from "@orkestrator/protocol/workflow-results";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -311,6 +312,16 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   // session, and a second turn would interleave with the first.
   const hasBlockingConversation = runningPlanning !== null || failedPlanning !== null;
   const hasRunningConversation = runningPlanning !== null;
+  // Tool-mode planning turns carry a backend-projected delivery state. It is
+  // strictly a projection: the renderer never polls, retries, or cancels a
+  // submission, and it never sees receipts or diagnostics.
+  const planningSubmissionLabel =
+    runningPlanning?.resultTransport === "tool-v1" && runningPlanning.resultSubmission
+      ? workflowResultSubmissionLabel(
+          runningPlanning.resultSubmission,
+          runningPlanning.kind === "story" ? "story-refinement" : "feature-plan-state",
+        )
+      : undefined;
   const failedFeature = failedPlanning
     ? projectFeatures.find((feature) => feature.id === failedPlanning.featureId)
     : undefined;
@@ -702,6 +713,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                 setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
                 isRunning={hasRunningConversation}
                 isBlocked={hasBlockingConversation}
+                submissionLabel={planningSubmissionLabel}
                 recoveryMessage={recoveryMessage}
                 onRetryRecovery={
                   failedPlanning ? () => retryFailedPlanning(failedPlanning) : undefined
@@ -730,6 +742,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   }
                   isRunning={hasRunningConversation}
                   isBlocked={hasBlockingConversation}
+                  submissionLabel={planningSubmissionLabel}
                   recoveryMessage={recoveryMessage}
                   onRetryRecovery={
                     failedPlanning ? () => retryFailedPlanning(failedPlanning) : undefined
@@ -755,6 +768,7 @@ function FeatureChatPanel({
   setDraft,
   isRunning,
   isBlocked,
+  submissionLabel,
   recoveryMessage,
   onRetryRecovery,
   onStopWaiting,
@@ -766,6 +780,7 @@ function FeatureChatPanel({
   setDraft: (value: string) => void;
   isRunning: boolean;
   isBlocked: boolean;
+  submissionLabel?: string;
   recoveryMessage?: string;
   onRetryRecovery?: () => void;
   onStopWaiting?: () => void;
@@ -781,6 +796,7 @@ function FeatureChatPanel({
       setDraft={setDraft}
       isRunning={isRunning}
       isBlocked={isBlocked}
+      submissionLabel={submissionLabel}
       recoveryMessage={recoveryMessage}
       onRetryRecovery={onRetryRecovery}
       onStopWaiting={onStopWaiting}
@@ -800,6 +816,7 @@ export function NativeStyleChatPanel({
   setDraft,
   isRunning,
   isBlocked = isRunning,
+  submissionLabel,
   recoveryMessage,
   onRetryRecovery,
   onStopWaiting,
@@ -815,6 +832,8 @@ export function NativeStyleChatPanel({
   setDraft: (value: string) => void;
   isRunning: boolean;
   isBlocked?: boolean;
+  /** Backend-projected submission status, shown instead of the generic text. */
+  submissionLabel?: string;
   recoveryMessage?: string;
   onRetryRecovery?: () => void;
   onStopWaiting?: () => void;
@@ -870,7 +889,7 @@ export function NativeStyleChatPanel({
                   <div className="mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      <span className="text-xs">{loadingText}</span>
+                      <span className="text-xs">{submissionLabel ?? loadingText}</span>
                     </div>
                   </div>
                 </div>
@@ -1016,6 +1035,7 @@ function StoryDetailPanel({
   setDraft,
   isRunning,
   isBlocked,
+  submissionLabel,
   recoveryMessage,
   onRetryRecovery,
   onStopWaiting,
@@ -1027,6 +1047,7 @@ function StoryDetailPanel({
   setDraft: (value: string) => void;
   isRunning: boolean;
   isBlocked: boolean;
+  submissionLabel?: string;
   recoveryMessage?: string;
   onRetryRecovery?: () => void;
   onStopWaiting?: () => void;
@@ -1062,6 +1083,7 @@ function StoryDetailPanel({
           setDraft={setDraft}
           isRunning={isRunning}
           isBlocked={isBlocked}
+          submissionLabel={submissionLabel}
           recoveryMessage={recoveryMessage}
           onRetryRecovery={onRetryRecovery}
           onStopWaiting={onStopWaiting}

@@ -5,14 +5,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  WORKFLOW_RESULT_KINDS,
+  workflowResultToolName,
+} from "@orkestrator/protocol/workflow-results";
 import { AgentToolsServer, consumeAgentMailRateLimit } from "./agent-tools.js";
 import { StorageService } from "./storage.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
 
 type RpcResponse = {
   result?: {
     tools?: Array<{
       name: string;
       annotations?: Record<string, boolean>;
+      inputSchema?: Record<string, unknown>;
     }>;
     structuredContent?: Record<string, unknown>;
     isError?: boolean;
@@ -201,6 +207,128 @@ describe("agent Kanban tools", () => {
     expect(
       listed.body.result?.tools?.find((tool) => tool.name === "update_ticket")?.annotations,
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+  });
+
+  test("exposes scoped workflow submission and status tools when configured", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+    const resultKey = crypto.randomUUID();
+    await workflowResults.prepare({
+      resultKey,
+      kind: "feature-plan-state",
+      environmentId: "env-1",
+      projectId: "project-1",
+      provider: "codex",
+    });
+    const connection = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+
+    const ordinaryConnection = server.connection("env-1", "project-1", "host");
+    const ordinaryTools = await rpc(ordinaryConnection.url, ordinaryConnection.token, "tools/list");
+    expect(ordinaryTools.body.result?.tools?.map((tool) => tool.name)).not.toContain(
+      "submit_feature_plan_state",
+    );
+
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "submit_feature_plan_state",
+      "get_workflow_result_status",
+    ]);
+    expect(
+      listed.body.result?.tools?.find((tool) => tool.name === "submit_feature_plan_state")
+        ?.inputSchema,
+    ).toMatchObject({
+      properties: {
+        result: {
+          properties: { phase: { enum: ["collecting", "confirming", "stories"] } },
+        },
+      },
+    });
+
+    const invalid = await rpc(connection.url, connection.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: { resultKey, result: { phase: "stories", title: "Tools", summary: "" } },
+    });
+    expect(invalid.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "invalid_result" } },
+    });
+
+    const accepted = await rpc(connection.url, connection.token, "tools/call", {
+      name: "submit_feature_plan_state",
+      arguments: {
+        resultKey,
+        result: { phase: "collecting", title: "Tools", summary: "" },
+      },
+    });
+    expect(accepted.body.result).toMatchObject({
+      structuredContent: { ok: true, lifecycle: "accepted", duplicate: false },
+    });
+
+    const status = await rpc(connection.url, connection.token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: { resultKey },
+    });
+    expect(status.body.result?.structuredContent).toMatchObject({
+      resultKey,
+      lifecycle: "accepted",
+      receipt: { resultKey },
+    });
+
+    await server.stop();
+    const restartedResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", restartedResults);
+    await server.start();
+    const renewed = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+    expect(renewed).toEqual(connection);
+    const recoveredStatus = await rpc(connection.url, connection.token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: { resultKey },
+    });
+    expect(recoveredStatus.body.result?.structuredContent).toMatchObject({
+      resultKey,
+      lifecycle: "accepted",
+    });
+
+    const denied = await rpc(connection.url, connection.token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: { resultKey: crypto.randomUUID() },
+    });
+    expect(denied.body.result).toMatchObject({
+      isError: true,
+      structuredContent: { ok: false, error: { code: "capability_denied" } },
+    });
+  });
+
+  test("advertises one typed submission tool for every workflow result kind", async () => {
+    await server.stop();
+    const workflowResults = new WorkflowResultService(dataDir);
+    server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
+    await server.start();
+
+    for (const kind of WORKFLOW_RESULT_KINDS) {
+      const resultKey = crypto.randomUUID();
+      await workflowResults.prepare({
+        resultKey,
+        kind,
+        environmentId: "env-1",
+        projectId: "project-1",
+        provider: "codex",
+      });
+      const connection = server.workflowResultConnection("env-1", "project-1", "host", resultKey);
+      const listed = await rpc(connection.url, connection.token, "tools/list");
+      expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+        workflowResultToolName(kind),
+        "get_workflow_result_status",
+      ]);
+      const submission = listed.body.result?.tools?.[0];
+      expect(submission?.inputSchema).toMatchObject({
+        type: "object",
+        required: ["resultKey", "result"],
+        properties: { result: expect.any(Object) },
+      });
+    }
   });
 
   test("keeps mail tools stable and resolves unique or explicitly claimed environment identities", async () => {

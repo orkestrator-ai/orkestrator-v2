@@ -54,6 +54,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     session: PipelineSession,
     error: ReviewContractValidationError,
   ): Promise<void> {
+    const previousRequestId = session.structuredRequestId;
+    const previousTransport = session.resultTransport;
     const attempt = (session.structuredReportRepairAttempts ?? 0) + 1;
     if (attempt > MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS) {
       throw new Error(
@@ -65,6 +67,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     session.structuredReportRepairAttempts = attempt;
     session.structuredRequestId = requestId;
     session.structuredResultStatus = "pending";
+    if (session.resultTransport === "tool-v1") session.resultSubmission = "preparing";
     session.turnStartedAt = startedAt;
     const prompt = withUnattendedPolicy(
       structuredReportRepairPrompt(error.issues, attempt, MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS),
@@ -84,10 +87,14 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       prompt,
       useTaskImages: false,
       structuredReview: true,
+      resultTransport: session.resultTransport,
       startedAt,
     };
     delete pipeline.stallWarning;
     await this.save(pipeline, pipeline.backendRevision);
+    if (previousTransport === "tool-v1" && previousRequestId) {
+      await this.options.workflowResults?.close(previousRequestId, "superseded");
+    }
     await this.dispatchPending(pipeline, provider);
   }
 
@@ -103,8 +110,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const resolvedRequestId =
       session.structuredRequestId ?? this.structuredRequestId(session.messages);
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
-    const result = await provider.structured<VerificationVerdict>(
-      session.sdkSessionId,
+    const result = await this.readWorkflowResult<VerificationVerdict>(
+      provider,
+      session,
       resolvedRequestId,
     );
     if (!result) {
@@ -128,6 +136,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
         comment: "✅ Validation complete",
       });
       await this.startStage(pipeline, "pr", "creating-pr");
+      await this.consumeWorkflowResult(session, resolvedRequestId);
       return;
     }
     if (pipeline.iteration >= pipeline.maxIterations) {
@@ -139,6 +148,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     delete pipeline.validationRun;
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
+    await this.consumeWorkflowResult(session, resolvedRequestId);
   }
 
   /**
@@ -507,6 +517,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       },
       {
         ...this.options.providerDependencies,
+        workflowResults: this.options.workflowResults,
         // Milestone 4 resolves every provider through the same journaled backend
         // path. The OpenCode event-loop compatibility path used to grant an
         // unexpected permission once and fail questions before the common

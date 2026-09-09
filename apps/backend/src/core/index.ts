@@ -15,6 +15,8 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
   type ControlMcpInfo,
@@ -71,6 +73,8 @@ export class OrkestratorBackend {
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
+  private readonly workflowResults: WorkflowResultService;
+  private readonly workflowResultRollout: WorkflowResultRollout;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -84,7 +88,7 @@ export class OrkestratorBackend {
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
   > &
-    Partial<Pick<AgentToolsServer, "revokeTab">>;
+    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection">>;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -112,7 +116,7 @@ export class OrkestratorBackend {
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
     agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop"> &
-      Partial<Pick<AgentToolsServer, "revokeTab">>;
+      Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection">>;
     controlMcp?: Pick<
       ControlMcpServer,
       | "getInfo"
@@ -127,7 +131,20 @@ export class OrkestratorBackend {
     environmentLifecycleDrainTimeoutMs?: number;
   }) {
     const storage = new StorageService(options.dataDir);
-    this.agentTools = options.agentTools ?? new AgentToolsServer(storage);
+    this.workflowResults = new WorkflowResultService(options.dataDir);
+    this.workflowResultRollout = new WorkflowResultRollout(
+      async () => (await storage.loadConfig()).global.workflowResultTools,
+    );
+    this.agentTools =
+      options.agentTools ?? new AgentToolsServer(storage, "0.0.0.0", this.workflowResults);
+    const resolveAgentToolConnection = this.agentTools.workflowResultConnection
+      ? (
+          environmentId: string,
+          projectId: string,
+          target: "host" | "container",
+          resultKey: string,
+        ) => this.agentTools.workflowResultConnection!(environmentId, projectId, target, resultKey)
+      : undefined;
     this.controlMcp =
       options.controlMcp ??
       new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
@@ -341,6 +358,9 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        workflowResults: this.workflowResults,
+        workflowResultRollout: this.workflowResultRollout,
+        resolveAgentToolConnection,
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
@@ -355,6 +375,9 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        workflowResults: this.workflowResults,
+        workflowResultRollout: this.workflowResultRollout,
+        resolveAgentToolConnection,
         onInteractionObservation: (event) => {
           this.nativeAgents.recordProviderInteractionObservation(event);
         },
@@ -369,6 +392,9 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        workflowResults: this.workflowResults,
+        workflowResultRollout: this.workflowResultRollout,
+        resolveAgentToolConnection,
         dispatchAddressPrompt: (workflow, presentation) =>
           dispatchMultiReviewAddressPrompt(
             this.nativeAgents,
@@ -393,6 +419,11 @@ export class OrkestratorBackend {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
         return (await handler(args, context)) as T;
+      },
+      {
+        workflowResults: this.workflowResults,
+        workflowResultRollout: this.workflowResultRollout,
+        resolveAgentToolConnection,
       },
     );
     context.featurePlanning = this.featurePlanning;

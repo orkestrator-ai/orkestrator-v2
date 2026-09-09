@@ -28,6 +28,7 @@ import {
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { Environment } from "./models.js";
@@ -119,6 +120,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         verifyReviewPackage: (pipeline, reviewPackage) =>
           this.assertReviewPackageIntegrity(pipeline.environmentId, reviewPackage),
         progress: this.reviewProgress,
+        workflowResults: this.options.workflowResults,
+        workflowToolEnabled: (agent, kind) =>
+          this.workflowToolEnabled(agent as BuildPipelineAgent, kind),
+        agentMcp: (pipeline, resultKey) => this.workflowAgentMcp(pipeline, resultKey),
       });
     }
     return this.reviewFanoutRunner;
@@ -635,11 +640,19 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   ): Promise<void> {
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
+    await this.refreshWorkflowRollout();
     if (!session.structuredRequestId) {
       const requestId = randomUUID();
       const startedAt = new Date().toISOString();
       const prompt = withUnattendedPolicy(reviewPackagePreparationPrompt(pipeline, targetBranch));
       session.structuredRequestId = requestId;
+      session.resultTransport = this.workflowToolEnabled(
+        sessionAgent(pipeline, session),
+        "review-preparation",
+      )
+        ? "tool-v1"
+        : "structured-output-v1";
+      session.resultSubmission = session.resultTransport === "tool-v1" ? "preparing" : undefined;
       session.structuredResultStatus = "pending";
       session.turnStartedAt = startedAt;
       pipeline.pendingPromptAttempt = {
@@ -650,14 +663,16 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         prompt,
         useTaskImages: false,
         structuredReview: true,
+        resultTransport: session.resultTransport,
         startedAt,
       };
       await this.save(pipeline, pipeline.backendRevision);
       await this.dispatchPending(pipeline, provider);
       return;
     }
-    const result = await provider.structured<unknown>(
-      session.sdkSessionId,
+    const result = await this.readWorkflowResult<unknown>(
+      provider,
+      session,
       session.structuredRequestId,
     );
     if (!result) {
@@ -677,6 +692,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       );
       session.structuredResultStatus = "accepted";
       await this.save(pipeline, pipeline.backendRevision);
+      await this.consumeWorkflowResult(session, session.structuredRequestId);
       return;
     }
     const preparation = parseReviewPreparationResult(result.value);
@@ -699,6 +715,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     });
     session.structuredResultStatus = "accepted";
     await this.startStage(pipeline, "review", "reviewing");
+    await this.consumeWorkflowResult(session, session.structuredRequestId);
   }
 
   private async advanceValidation(pipeline: BuildPipeline): Promise<void> {
@@ -969,6 +986,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       settings?: { agent: BuildPipelineAgent; model?: string; effort?: string };
     },
   ): Promise<void> {
+    await this.refreshWorkflowRollout();
     // A pipeline retains reports only for its newest review attempt. This is
     // both the retry boundary and the iteration boundary, and prevents up to a
     // full reviewer panel of duplicate structured reports accumulating on
@@ -1043,6 +1061,16 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const prompt = withUnattendedPolicy(stagePrompt.prompt);
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
+      const dispatchResultKind = this.workflowResultKind(
+        phase,
+        schema === REVIEW_VALIDATION_PLAN_SCHEMA,
+      );
+      const resultTransport =
+        schema !== undefined
+          ? dispatchResultKind && this.workflowToolEnabled(agent, dispatchResultKind)
+            ? ("tool-v1" as const)
+            : ("structured-output-v1" as const)
+          : undefined;
       const promptStartedAt = new Date().toISOString();
       const session: PipelineSession = {
         phase: sessionPhase,
@@ -1061,6 +1089,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         messages: [],
         messageRevision: 0,
         structuredRequestId: schema !== undefined ? requestId : undefined,
+        resultTransport,
+        resultSubmission: resultTransport === "tool-v1" ? ("preparing" as const) : undefined,
         structuredResultStatus: schema !== undefined ? "pending" : undefined,
         validationHeadAtStart: validationWorktree?.head,
         validationWorktreeStatusAtStart: validationWorktree?.status,
@@ -1084,6 +1114,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         prompt,
         useTaskImages: images.length > 0,
         structuredReview: schema !== undefined,
+        resultTransport,
         validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
         startedAt: promptStartedAt,
       };
@@ -1095,6 +1126,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         useTaskImages: images.length > 0,
         requestId,
         structuredReview: schema !== undefined,
+        resultTransport,
         validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
       };
       if (phase === "reviewing") {
@@ -1102,23 +1134,66 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         delete pipeline.structuredReview;
       }
       await this.save(pipeline, pipeline.backendRevision);
-      return { provider, sessionId, prompt, requestId, images, schema, model, effort, mode };
-    })().catch((error: unknown) => {
-      if (error instanceof ProviderUnavailableError) throw error;
-      throw new PreSessionStageStartError(error, phase);
-    });
-    const { provider, sessionId, prompt, requestId, images, schema, model, effort, mode } =
-      dispatch;
-    await attachBeforeDispatch(provider, sessionId);
-    try {
-      await provider.send(sessionId, prompt, {
+      return {
+        provider,
+        sessionId,
+        prompt,
         requestId,
         images,
         schema,
         model,
         effort,
         mode,
+        resultTransport,
+        agent,
+      };
+    })().catch((error: unknown) => {
+      if (error instanceof ProviderUnavailableError) throw error;
+      throw new PreSessionStageStartError(error, phase);
+    });
+    const {
+      provider,
+      sessionId,
+      prompt,
+      requestId,
+      images,
+      schema,
+      model,
+      effort,
+      mode,
+      resultTransport,
+      agent,
+    } = dispatch;
+    const resultKind = this.workflowResultKind(phase, schema === REVIEW_VALIDATION_PLAN_SCHEMA);
+    if (resultTransport === "tool-v1" && resultKind && this.options.workflowResults) {
+      await this.options.workflowResults.prepare({
+        resultKey: requestId,
+        kind: resultKind,
+        environmentId: pipeline.environmentId,
+        projectId: pipeline.projectId,
+        provider: agent,
+        schema,
       });
+    }
+    await attachBeforeDispatch(provider, sessionId);
+    const agentMcp =
+      resultTransport === "tool-v1" ? this.workflowAgentMcp(pipeline, requestId) : undefined;
+    try {
+      await provider.send(
+        sessionId,
+        resultTransport === "tool-v1" && resultKind
+          ? `${prompt}\n\n${workflowResultInstruction(resultKind, requestId)}`
+          : prompt,
+        {
+          requestId,
+          images,
+          schema: resultTransport === "tool-v1" ? undefined : schema,
+          model,
+          effort,
+          mode,
+          ...(agentMcp ? { agentMcp } : {}),
+        },
+      );
       delete pipeline.pendingPromptAttempt;
       await this.save(pipeline, pipeline.backendRevision);
     } catch (error) {
@@ -1159,6 +1234,22 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const session = pipeline.sessions.find(
       (candidate) => candidate.sdkSessionId === attempt.sessionId,
     );
+    const resultKind = this.workflowResultKind(attempt.phase, attempt.validationPlan === true);
+    if (
+      attempt.resultTransport === "tool-v1" &&
+      resultKind &&
+      this.options.workflowResults &&
+      session
+    ) {
+      await this.options.workflowResults.prepare({
+        resultKey: attempt.requestId,
+        kind: resultKind,
+        environmentId: pipeline.environmentId,
+        projectId: pipeline.projectId,
+        provider: sessionAgent(pipeline, session),
+        schema,
+      });
+    }
     const fallbackStep =
       sessionPhase &&
       (!session || session.model === undefined || session.reasoningEffort === undefined)
@@ -1179,15 +1270,26 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       executionModeOverrideForPhase(attempt.phase) ??
       (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
     await attachBeforeDispatch(provider, attempt.sessionId);
+    const agentMcp =
+      attempt.resultTransport === "tool-v1"
+        ? this.workflowAgentMcp(pipeline, attempt.requestId)
+        : undefined;
     try {
-      await provider.send(attempt.sessionId, attempt.prompt, {
-        requestId: attempt.requestId,
-        images: attempt.useTaskImages ? pipeline.taskSnapshot.images : [],
-        schema,
-        mode,
-        model: step?.model,
-        effort: step?.effort,
-      });
+      await provider.send(
+        attempt.sessionId,
+        attempt.resultTransport === "tool-v1" && resultKind
+          ? `${attempt.prompt}\n\n${workflowResultInstruction(resultKind, attempt.requestId)}`
+          : attempt.prompt,
+        {
+          requestId: attempt.requestId,
+          images: attempt.useTaskImages ? pipeline.taskSnapshot.images : [],
+          schema: attempt.resultTransport === "tool-v1" ? undefined : schema,
+          mode,
+          model: step?.model,
+          effort: step?.effort,
+          ...(agentMcp ? { agentMcp } : {}),
+        },
+      );
       const dispatchedSession = pipeline.sessions.find(
         (candidate) => candidate.sdkSessionId === attempt.sessionId,
       );
@@ -1303,7 +1405,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   ): Promise<void> {
     const requestId = pipeline.structuredReviewRequestId;
     if (!requestId) throw new Error("Review result key is missing");
-    const result = await provider.structured<unknown>(session.sdkSessionId, requestId);
+    const result = await this.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
       await this.awaitStructuredResult(pipeline, session, "review");
       return;
@@ -1323,9 +1425,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");
+      await this.consumeWorkflowResult(session, requestId);
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");
+    await this.consumeWorkflowResult(session, requestId);
   }
 
   /**

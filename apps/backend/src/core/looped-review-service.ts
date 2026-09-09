@@ -41,8 +41,15 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  workflowResultInstruction,
+  type WorkflowResultKind,
+} from "@orkestrator/protocol/workflow-results";
 import type { Environment, PersistedLoopedReviewWorkflow } from "./models.js";
 import type { StorageService } from "./storage.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
@@ -318,6 +325,14 @@ export interface LoopedReviewServiceOptions {
   cancellationDeadlineMs?: number;
   provider?: (workflow: LoopedReviewWorkflow) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
+  workflowResults?: WorkflowResultService;
+  workflowResultRollout?: WorkflowResultRollout;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKey: string,
+  ) => AgentToolConnection;
   onInteractionObservation?: (
     event: ProviderInteractionObservationEvent & {
       environmentId: string;
@@ -328,6 +343,7 @@ export interface LoopedReviewServiceOptions {
 
 /** Backend-owned, fenced controller for every looped-review transition. */
 export class LoopedReviewService {
+  private cachedWorkflowRollout: WorkflowResultRollout | null = null;
   private readonly ownerId = randomUUID();
   private readonly interactionOwnerId = randomUUID();
   private readonly locks = new Map<string, Promise<void>>();
@@ -727,20 +743,58 @@ export class LoopedReviewService {
       if (!(await this.ensureReviewPackageForDispatch(workflow, dispatch, session, lease.token))) {
         return;
       }
+      const material = this.dispatchMaterial(workflow, dispatch);
+      const resultKind = this.workflowResultKind(dispatch.kind);
+      const agentMcp =
+        dispatch.resultTransport === "tool-v1"
+          ? await this.workflowAgentMcp(workflow, dispatch.requestId)
+          : undefined;
+      if (dispatch.resultTransport === "tool-v1" && this.options.workflowResults) {
+        const reconciliationReport =
+          dispatch.kind === "reconcile"
+            ? workflow.rounds
+                .find((entry) => entry.round === workflow.currentRound)
+                ?.passes.find((entry) => entry.pass === workflow.currentPass)?.report
+            : undefined;
+        if (dispatch.kind === "reconcile" && !reconciliationReport) {
+          throw new Error("Reconciliation lost its discovery report");
+        }
+        await this.options.workflowResults.prepare({
+          resultKey: dispatch.requestId,
+          kind: resultKind,
+          environmentId: workflow.environmentId,
+          projectId: workflow.projectId,
+          provider: workflow.agent,
+          schema: material.schema,
+          ...(reconciliationReport
+            ? {
+                context: {
+                  type: "review-reconciliation" as const,
+                  pool: workflow.activePool,
+                  report: reconciliationReport,
+                },
+              }
+            : {}),
+        });
+      }
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
       await this.assertFence(workflow.id, lease.token);
-      const material = this.dispatchMaterial(workflow, dispatch);
       try {
         await provider.send(
           session.providerSessionId,
-          `${material.prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`,
+          `${material.prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}${
+            dispatch.resultTransport === "tool-v1"
+              ? `\n\n${workflowResultInstruction(resultKind, dispatch.requestId)}`
+              : ""
+          }`,
           {
             requestId: dispatch.requestId,
-            schema: material.schema,
+            schema: dispatch.resultTransport === "tool-v1" ? undefined : material.schema,
             mode: executionMode(session.phase),
             model: workflow.model === "default" ? undefined : workflow.model,
             effort: workflow.reasoningEffort,
+            ...(agentMcp ? { agentMcp } : {}),
           },
         );
       } catch (error) {
@@ -754,7 +808,15 @@ export class LoopedReviewService {
     }
     let result: StructuredOutputResult<unknown> | null;
     try {
-      result = await provider.structured<unknown>(session.providerSessionId, dispatch.requestId);
+      if (dispatch.resultTransport === "tool-v1") {
+        dispatch.resultSubmission = await this.options.workflowResults?.projection(
+          dispatch.requestId,
+        );
+      }
+      result =
+        dispatch.resultTransport === "tool-v1"
+          ? ((await this.options.workflowResults?.structured<unknown>(dispatch.requestId)) ?? null)
+          : await provider.structured<unknown>(session.providerSessionId, dispatch.requestId);
     } catch (structuredError) {
       const status = await provider.status(session.providerSessionId).catch(() => null);
       await this.assertFence(workflow.id, lease.token);
@@ -764,6 +826,10 @@ export class LoopedReviewService {
     await this.assertFence(workflow.id, lease.token);
     if (result) {
       await this.applyResult(workflow, session, dispatch, result, lease.token);
+      if (dispatch.resultTransport === "tool-v1") {
+        await this.options.workflowResults?.consume(dispatch.requestId);
+        delete dispatch.resultSubmission;
+      }
       return;
     }
     // Read as data. A turn that ended terminally is definitely not going to
@@ -853,6 +919,7 @@ export class LoopedReviewService {
   }
 
   private async finalizeCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
+    const cancelledDispatch = workflow.dispatch;
     workflow.phase = "cancelled";
     delete workflow.cancellingFromPhase;
     delete workflow.cancellingSince;
@@ -872,6 +939,9 @@ export class LoopedReviewService {
       if (session.status === "running") session.status = "cancelled";
     }
     await this.save(workflow, token);
+    if (cancelledDispatch?.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.close(cancelledDispatch.requestId, "cancelled");
+    }
     await this.releaseWorkflowResources(workflow);
   }
 
@@ -993,6 +1063,7 @@ export class LoopedReviewService {
   ): Promise<void> {
     const phase = workflow.phase;
     if (!isLoopedReviewActivePhase(phase)) return;
+    await this.workflowRollout.refresh();
     const requestId = randomUUID();
     workflow.dispatch = {
       id: randomUUID(),
@@ -1000,6 +1071,15 @@ export class LoopedReviewService {
       sessionId: session.id,
       phase,
       kind: dispatchKind(phase),
+      resultTransport: this.workflowToolEnabled(
+        workflow.agent,
+        this.workflowResultKind(dispatchKind(phase)),
+      )
+        ? "tool-v1"
+        : "structured-output-v1",
+      ...(this.workflowToolEnabled(workflow.agent, this.workflowResultKind(dispatchKind(phase)))
+        ? { resultSubmission: "preparing" as const }
+        : {}),
       state: "prepared",
       createdAt: nowIso(),
     };
@@ -1059,6 +1139,46 @@ export class LoopedReviewService {
       prompt: `${prPrompt(workflow.targetBranch)}\n\nReturn the PR URL using the enforced structured result.`,
       schema: REVIEW_PR_RESULT_JSON_SCHEMA,
     };
+  }
+
+  private workflowResultKind(kind: LoopedReviewDispatch["kind"]): WorkflowResultKind {
+    if (kind === "prepare") return "review-preparation";
+    if (kind === "discover") return "review-report";
+    if (kind === "reconcile") return "review-reconciliation";
+    if (kind === "fix") return "fix-result";
+    return "pr-result";
+  }
+
+  private async workflowAgentMcp(
+    workflow: LoopedReviewWorkflow,
+    resultKey: string,
+  ): Promise<AgentToolConnection | undefined> {
+    if (!this.options.resolveAgentToolConnection) return undefined;
+    const environment = await this.storage.getEnvironment(workflow.environmentId);
+    if (!environment) return undefined;
+    return this.options.resolveAgentToolConnection?.(
+      workflow.environmentId,
+      workflow.projectId,
+      environment.environmentType === "local" ? "host" : "container",
+      resultKey,
+    );
+  }
+
+  private get workflowRollout(): WorkflowResultRollout {
+    this.cachedWorkflowRollout ??=
+      this.options.workflowResultRollout ?? new WorkflowResultRollout(async () => undefined);
+    return this.cachedWorkflowRollout;
+  }
+
+  private workflowToolEnabled(
+    agent: LoopedReviewWorkflow["agent"],
+    kind: WorkflowResultKind,
+  ): boolean {
+    return (
+      this.options.workflowResults !== undefined &&
+      this.options.resolveAgentToolConnection !== undefined &&
+      this.workflowRollout.allows(agent, kind)
+    );
   }
 
   private async ensureReviewPackageForDispatch(
@@ -1242,6 +1362,7 @@ export class LoopedReviewService {
       },
       {
         ...this.options.providerDependencies,
+        workflowResults: this.options.workflowResults,
         autoAnswerRequests: false,
         onInteractionObservation: async (event) => {
           try {

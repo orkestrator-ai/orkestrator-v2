@@ -100,28 +100,78 @@ describe("container runtime environment wiring", () => {
     const dockerfile = read("docker/Dockerfile");
     const zshrc = read("docker/container-zshrc.zsh");
     const config = read("docker/starship.toml");
+    const gitAliases = read("docker/container-git-aliases.zsh");
+    const shellVerifier = read("docker/verify-container-shell.sh");
 
-    expect(dockerfile).toMatch(/^ARG STARSHIP_VERSION=\d+\.\d+\.\d+$/m);
+    expect(dockerfile).toContain("ARG STARSHIP_VERSION=1.26.0");
     expect(dockerfile).toContain(
       "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/${STARSHIP_TARBALL}",
     );
-    expect(dockerfile).toMatch(
-      /amd64\) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=[a-f0-9]{64} ;;/,
+    expect(dockerfile).toContain(
+      "amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3 ;;",
     );
-    expect(dockerfile).toMatch(
-      /arm64\) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=[a-f0-9]{64} ;;/,
+    expect(dockerfile).toContain(
+      "arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b ;;",
     );
     expect(dockerfile).toContain("sha256sum -c -");
     expect(dockerfile).toContain("COPY docker/starship.toml /etc/starship.toml");
+    expect(dockerfile).toContain(
+      "COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh",
+    );
     expect(dockerfile).toContain("COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc");
     expect(dockerfile).toContain("'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc");
     expect(dockerfile).toContain("ENV STARSHIP_CONFIG=/etc/starship.toml");
+    expect(dockerfile).toContain("STARSHIP_CONFIG=/etc/starship.toml starship prompt >/dev/null");
     expect(dockerfile).toContain("ENV SHELL=/bin/zsh");
+    expect(dockerfile).toContain("ENV LANG=en_US.UTF-8");
+    expect(dockerfile).toContain("ENV LANGUAGE=en_US:en");
+    expect(dockerfile).toContain("ENV LC_ALL=en_US.UTF-8");
     expect(dockerfile).toContain('CMD ["/bin/zsh"]');
+    expect(zshrc).toContain("if command -v starship >/dev/null 2>&1; then");
     expect(zshrc).toContain('eval "$(starship init zsh)"');
+    expect(zshrc).toContain("autoload -Uz compinit");
+    expect(zshrc).toContain("compinit -u");
+    expect(zshrc).toContain("source /etc/orkestrator/git-aliases.zsh");
     expect(zshrc).toContain("setopt APPEND_HISTORY SHARE_HISTORY");
+    expect(zshrc).toContain("(( EUID == 0 ))");
+    expect(zshrc).toContain("export HISTFILE=/root/.zsh_history");
+    expect(zshrc).toContain("export HISTFILE=/commandhistory/.bash_history");
+    expect(dockerfile).toContain("install -o root -g root -m 0600 /dev/null /root/.zsh_history");
+    expect(gitAliases).toContain("alias gst='git status'");
+    expect(gitAliases).toContain("alias gco='git checkout'");
+    expect(dockerfile).not.toMatch(/zsh-in-docker|powerlevel10k/i);
+    expect(zshrc).not.toMatch(/zsh-in-docker|powerlevel10k/i);
+    const parsedConfig = Bun.TOML.parse(config);
+    expect(Object.keys(parsedConfig)).toEqual([
+      "$schema",
+      "add_newline",
+      "format",
+      "container",
+      "username",
+      "directory",
+      "git_branch",
+      "git_status",
+      "cmd_duration",
+      "character",
+    ]);
+    expect(parsedConfig).toMatchObject({
+      add_newline: false,
+      container: { symbol: "⬢" },
+      username: { show_always: true },
+    });
     expect(config).toContain("add_newline = false");
     expect(config.indexOf("$line_break")).toBeLessThan(config.indexOf("$character"));
+    expect(dockerfile).toContain(
+      "COPY docker/verify-container-shell.sh /usr/local/share/verify-container-shell.sh",
+    );
+    expect(dockerfile).toContain("/usr/local/share/verify-container-shell.sh");
+    expect(shellVerifier).toContain("assert_shell_contract node");
+    expect(shellVerifier).toContain("assert_shell_contract orkroot");
+    expect(shellVerifier).toContain("assert_history_round_trip node");
+    expect(shellVerifier).toContain("assert_history_round_trip orkroot");
+    expect(shellVerifier).toContain('sudo -H -u node test ! -r "$root_history"');
+    expect(shellVerifier).toContain('[[ "$(locale charmap)" == UTF-8 ]]');
+    expect(shellVerifier).toContain("(( ${+functions[compdef]} == 1 ))");
   });
 
   test("Docker image includes the shared runtime environment helper", () => {

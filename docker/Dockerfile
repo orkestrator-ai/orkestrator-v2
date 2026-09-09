@@ -75,10 +75,12 @@ RUN mkdir -p /usr/local/share/npm-global && \
 
 ARG USERNAME=node
 
-# Persist shell history.
+# Persist node shell history. Root terminals use /root/.zsh_history instead so
+# privileged commands are never exposed to the unprivileged node account.
 RUN mkdir /commandhistory \
   && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory
+  && chown -R $USERNAME /commandhistory \
+  && install -o root -g root -m 0600 /dev/null /root/.zsh_history
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
@@ -104,6 +106,9 @@ ENV PATH=$PATH:/usr/local/share/npm-global/bin
 
 # Container terminals use Zsh, with Starship owning the prompt rendering.
 ENV SHELL=/bin/zsh
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 # Set the default editor and visual
 ENV EDITOR=nano
@@ -324,9 +329,11 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   starship --version
 
 COPY docker/starship.toml /etc/starship.toml
+COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh
 COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc
 ENV STARSHIP_CONFIG=/etc/starship.toml
-RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc
+RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
+  && STARSHIP_CONFIG=/etc/starship.toml starship prompt >/dev/null
 
 # Install mise after the expensive CLI, browser and bridge-build layers so a
 # mise-only version bump does not invalidate them. Host installations cannot be
@@ -384,6 +391,12 @@ RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/update-firewall.sh &
 RUN useradd -o -u 0 -g 0 -M -d /root -s /bin/zsh orkroot && \
   echo "node ALL=(orkroot) NOPASSWD:SETENV: ALL" > /etc/sudoers.d/node-orkroot && \
   chmod 0440 /etc/sudoers.d/node-orkroot
+
+# Exercise the shell contract as both terminal identities while the image is
+# built. The verifier cleans up its sentinel history before the layer commits.
+COPY docker/verify-container-shell.sh /usr/local/share/verify-container-shell.sh
+RUN chmod 755 /usr/local/share/verify-container-shell.sh \
+  && /usr/local/share/verify-container-shell.sh
 
 # Configure SSH for GitHub/GitLab/Bitbucket
 RUN mkdir -p /home/node/.ssh && \

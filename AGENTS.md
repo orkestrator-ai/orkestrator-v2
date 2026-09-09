@@ -817,7 +817,10 @@ Developer tooling:
 
 Users and isolation:
 - Non-root `node` user (uid/gid 1000, matching the workspace bind mount), with
-  zsh + powerlevel10k as its shell.
+  Zsh and a pinned, checksum-verified Starship prompt. The image installs the
+  shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
+  `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
+  Git aliases plus native Zsh completion without Oh My Zsh.
 - `orkroot`, a uid-0 user for root terminal sessions, which `node` may become
   through a scoped sudoers rule.
 - Network firewall (iptables/ipset) for security isolation. `node` has

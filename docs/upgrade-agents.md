@@ -444,10 +444,19 @@ hermetic `codex exec` exception.
 
    The default live contract tests do not call a model or spend credits. They
    verify initialization order, method errors, model pagination/order, thread
-   listing and reads, thread naming, MCP configuration acceptance,
-   project-trust behavior, and clean process shutdown. Run the separately gated
-   approval canary when an upgrade could affect MCP tool approval semantics; it
-   copies the local auth file and spends one short model turn:
+   listing and reads, thread naming, MCP configuration acceptance, MCP
+   protocol-era negotiation, project-trust behavior, and clean process shutdown.
+
+   Treat a failure in the "live MCP protocol era" block as a release blocker
+   rather than a flaky test. Those two contracts stand in for every third-party
+   HTTP MCP server that still speaks the 2025 protocol: the bridge relies on
+   `features.mcp_2026_07_28` defaulting to off, and a version that flips that
+   default silently breaks those servers in native sessions while they keep
+   working in the Codex CLI.
+
+   Run the separately gated approval canary when an upgrade could affect MCP
+   tool approval semantics; it copies the local auth file and spends one short
+   model turn:
 
    ```bash
    CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \

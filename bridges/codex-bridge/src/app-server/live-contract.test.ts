@@ -38,6 +38,35 @@ import { pinnedVersion, resolveCodexBinary } from "./live-binary.js";
 import type { InboundNotification } from "./envelope-validation.js";
 import { BRIDGE_ATTACHMENT_ROOT_ENV, codexAppServerConfigOverrides } from "../codex-config.js";
 
+// The repository-wide test preload registers Happy DOM, which replaces the
+// global `Response`. `Bun.serve` refuses a handler return value that is not its
+// own native Response, and the rejection surfaces as a connection error on the
+// client rather than as a failure inside the handler — the loopback MCP probes
+// below then look like servers that never answer.
+//
+// The key is spelled out rather than imported from `tests/register-dom.ts`:
+// importing that module from a bridge package evaluates it a second time, and
+// `GlobalRegistrator.register()` throws once Happy DOM is already registered.
+const NATIVE_WEB_PLATFORM_KEY = Symbol.for("orkestrator.tests.native-web-platform");
+
+const nativeWebPlatform = (
+  globalThis as typeof globalThis & {
+    [key: symbol]: { Response?: typeof Response } | undefined;
+  }
+)[NATIVE_WEB_PLATFORM_KEY];
+
+// `happyDOM` is the registrator's own marker global, so it answers "was the
+// preload applied?" without depending on which classes it chose to replace.
+if (!nativeWebPlatform?.Response && "happyDOM" in globalThis) {
+  throw new Error(
+    `Happy DOM is registered but ${String(NATIVE_WEB_PLATFORM_KEY)} does not carry a Response. ` +
+      "tests/register-dom.ts must publish Bun's pre-registration Response under that key, " +
+      "or every loopback MCP probe here answers nothing.",
+  );
+}
+
+const NativeResponse = nativeWebPlatform?.Response ?? Response;
+
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
 const describeLiveAttachmentTurn =
@@ -150,13 +179,13 @@ function startMcpMutationProbe(): McpMutationProbe {
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
-      if (request.method !== "POST") return new Response(null, { status: 405 });
+      if (request.method !== "POST") return new NativeResponse(null, { status: 405 });
       const message = (await request.json()) as {
         id?: string | number;
         method?: string;
         params?: Record<string, unknown>;
       };
-      if (message.id === undefined) return new Response(null, { status: 202 });
+      if (message.id === undefined) return new NativeResponse(null, { status: 202 });
 
       let result: Record<string, unknown>;
       switch (message.method) {
@@ -181,7 +210,7 @@ function startMcpMutationProbe(): McpMutationProbe {
           break;
         case "tools/call":
           if (message.params?.name !== "mutating_probe") {
-            return Response.json(
+            return NativeResponse.json(
               {
                 jsonrpc: "2.0",
                 id: message.id,
@@ -194,7 +223,7 @@ function startMcpMutationProbe(): McpMutationProbe {
           result = { content: [{ type: "text", text: "probe called" }] };
           break;
         default:
-          return Response.json(
+          return NativeResponse.json(
             {
               jsonrpc: "2.0",
               id: message.id,
@@ -203,7 +232,7 @@ function startMcpMutationProbe(): McpMutationProbe {
             { status: 200 },
           );
       }
-      return Response.json({ jsonrpc: "2.0", id: message.id, result }, { status: 200 });
+      return NativeResponse.json({ jsonrpc: "2.0", id: message.id, result }, { status: 200 });
     },
   });
 
@@ -214,6 +243,129 @@ function startMcpMutationProbe(): McpMutationProbe {
       await server.stop(true);
     },
   };
+}
+
+const LEGACY_ERA_PROBE_SERVER = "orkestrator-legacy-era-probe";
+const LEGACY_ERA_PROBE_TOOL = "legacy_era_probe";
+
+interface McpEraProbe {
+  url: string;
+  /** Every JSON-RPC method the server received, in arrival order. */
+  methods: string[];
+  stop: () => Promise<void>;
+}
+
+/**
+ * An HTTP MCP server that speaks only the 2025 era, like the third-party
+ * servers Codex has to keep working with.
+ *
+ * `server/discover` is the 2026-07-28 entry point. This probe answers it with
+ * the JSON-RPC -32020 those servers really return, and serves an ordinary
+ * `initialize` handshake with one tool behind it.
+ */
+function startLegacyEraMcpProbe(): McpEraProbe {
+  const methods: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (request.method !== "POST") return new NativeResponse(null, { status: 405 });
+      const message = (await request.json()) as {
+        id?: string | number;
+        method?: string;
+      };
+      if (typeof message.method === "string") methods.push(message.method);
+      if (message.id === undefined) return new NativeResponse(null, { status: 202 });
+
+      if (message.method === "server/discover") {
+        return NativeResponse.json(
+          {
+            jsonrpc: "2.0",
+            id: message.id,
+            error: { code: -32020, message: "server/discover is not supported" },
+          },
+          { status: 200 },
+        );
+      }
+
+      let result: Record<string, unknown>;
+      switch (message.method) {
+        case "initialize":
+          result = {
+            protocolVersion: "2025-06-18",
+            capabilities: { tools: {} },
+            serverInfo: { name: LEGACY_ERA_PROBE_SERVER, version: "1.0.0" },
+          };
+          break;
+        case "tools/list":
+          result = {
+            tools: [
+              {
+                name: LEGACY_ERA_PROBE_TOOL,
+                description: "Reachable only through the 2025 initialize handshake.",
+                inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              },
+            ],
+          };
+          break;
+        case "resources/list":
+          result = { resources: [] };
+          break;
+        case "resources/templates/list":
+          result = { resourceTemplates: [] };
+          break;
+        default:
+          return NativeResponse.json(
+            {
+              jsonrpc: "2.0",
+              id: message.id,
+              error: { code: -32601, message: "unknown method" },
+            },
+            { status: 200 },
+          );
+      }
+      return NativeResponse.json({ jsonrpc: "2.0", id: message.id, result }, { status: 200 });
+    },
+  });
+
+  return {
+    url: `http://${server.hostname}:${server.port}/mcp`,
+    methods,
+    stop: async () => {
+      await server.stop(true);
+    },
+  };
+}
+
+interface McpServerStatusEntry {
+  name: string;
+  serverInfo: { name?: string } | null;
+  tools: Record<string, unknown>;
+}
+
+async function readMcpServerStatus(
+  session: LiveSession,
+  name: string,
+): Promise<McpServerStatusEntry | undefined> {
+  const page = await session.client.request<{ data: McpServerStatusEntry[] }>(
+    "mcpServerStatus/list",
+    {},
+  );
+  return page.data.find((entry) => entry.name === name);
+}
+
+/** Polls until `predicate` holds, so a slow connect is not read as a failure. */
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+  description: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
 }
 
 const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
@@ -435,6 +587,85 @@ describeLive("live thread history", () => {
       expect(read.thread.name).toBe("Orkestrator title");
     } finally {
       await session.stop();
+    }
+  }, 60_000);
+});
+
+/**
+ * Why this exists: `codexAppServerConfigOverrides` deliberately does *not* set
+ * `features.mcp_2026_07_28`, so a native session inherits whatever the pinned
+ * binary defaults to. Every unit test around that decision can only assert that
+ * Orkestrator leaves the key alone, which stays true no matter what the default
+ * becomes. These two contracts are what actually pin the behaviour the omission
+ * is buying, and the Codex upgrade runbook already runs this file.
+ */
+describeLive("live MCP protocol era", () => {
+  test("a 2025-era MCP server is usable under the pinned binary's defaults", async () => {
+    const probe = startLegacyEraMcpProbe();
+    const session = await boot({
+      extraArgs: ["-c", `mcp_servers.probe.url=${JSON.stringify(probe.url)}`],
+    });
+    try {
+      await handshake(session);
+      await waitUntil(
+        async () => {
+          const entry = await readMcpServerStatus(session, "probe");
+          return Object.keys(entry?.tools ?? {}).length > 0;
+        },
+        30_000,
+        "the legacy-era probe's tools to be discovered. Check whether the pinned " +
+          "Codex now defaults features.mcp_2026_07_28 on",
+      );
+
+      const status = await readMcpServerStatus(session, "probe");
+      expect(status?.serverInfo?.name).toBe(LEGACY_ERA_PROBE_SERVER);
+      expect(Object.keys(status?.tools ?? {})).toContain(LEGACY_ERA_PROBE_TOOL);
+      // The handshake that got us there, and the probe that must not have run.
+      expect(probe.methods).toContain("initialize");
+      expect(probe.methods).not.toContain("server/discover");
+    } finally {
+      await session.stop();
+      await probe.stop();
+    }
+  }, 60_000);
+
+  /**
+   * The failure the override removal fixes, pinned so it cannot silently
+   * change. With the feature forced on, Codex asks `server/discover` first and
+   * treats the -32020 as terminal — no `initialize` retry, no tools. If a later
+   * Codex adds that fallback this test fails, which is the signal to revisit
+   * the comment in `codex-config.ts` rather than a regression.
+   */
+  test("forcing features.mcp_2026_07_28 loses those tools with no initialize retry", async () => {
+    const probe = startLegacyEraMcpProbe();
+    const session = await boot({
+      extraArgs: [
+        "-c",
+        `mcp_servers.probe.url=${JSON.stringify(probe.url)}`,
+        "-c",
+        "features.mcp_2026_07_28=true",
+      ],
+    });
+    try {
+      await handshake(session);
+      // Reading the status is what makes Codex connect, so the poll has to do
+      // that on every pass rather than only watch the probe's method log.
+      await waitUntil(
+        async () => {
+          await readMcpServerStatus(session, "probe");
+          return probe.methods.includes("server/discover");
+        },
+        30_000,
+        "Codex to probe the 2026-07-28 discovery method with the feature forced on",
+      );
+
+      const status = await readMcpServerStatus(session, "probe");
+      expect(status).toBeDefined();
+      expect(status?.serverInfo).toBeNull();
+      expect(Object.keys(status?.tools ?? {})).toHaveLength(0);
+    } finally {
+      await session.stop();
+      await probe.stop();
     }
   }, 60_000);
 });

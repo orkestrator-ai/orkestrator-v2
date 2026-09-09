@@ -18,6 +18,7 @@
     "./coordinator": "./src/coordinator.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./diff-stats": "./src/diff-stats.ts",
+    "./bridge-diagnostics": "./src/bridge-diagnostics.ts",
     "./debug-logging": "./src/debug-logging.ts",
     "./docker-availability": "./src/docker-availability.ts",
     "./feature-build": "./src/feature-build.ts",

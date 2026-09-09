@@ -18,9 +18,24 @@ import {
 } from "./commands-containers.js";
 import type { CommandContext } from "./commands-context.js";
 
+type ClaudeCatalogRefreshDependencies = {
+  enqueueContainerBridgeOperation: typeof enqueueContainerBridgeOperation;
+  fetchClaudeBridgeModelCatalog: typeof fetchClaudeBridgeModelCatalog;
+  startContainerClaudeServer: typeof startContainerClaudeServer;
+  startLocalServer: typeof startLocalServer;
+};
+
+const defaultClaudeCatalogRefreshDependencies: ClaudeCatalogRefreshDependencies = {
+  enqueueContainerBridgeOperation,
+  fetchClaudeBridgeModelCatalog,
+  startContainerClaudeServer,
+  startLocalServer,
+};
+
 export async function refreshClaudeModelCatalog(
   environmentId: string,
   context: CommandContext,
+  dependencies: ClaudeCatalogRefreshDependencies = defaultClaudeCatalogRefreshDependencies,
 ): Promise<ClaudeModelCatalogSnapshot> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -28,7 +43,7 @@ export async function refreshClaudeModelCatalog(
   let port: number;
   let authToken: string | undefined;
   if (environment.environmentType === "local") {
-    const started = await startLocalServer(environmentId, context, "claude");
+    const started = await dependencies.startLocalServer(environmentId, context, "claude");
     port = started.port;
     authToken = started.authToken;
   } else {
@@ -36,14 +51,21 @@ export async function refreshClaudeModelCatalog(
     if (!containerId) {
       throw new Error("Container ID is required for Claude model discovery");
     }
-    const started = await enqueueContainerBridgeOperation("claude", containerId, () =>
-      startContainerClaudeServer(containerId),
+    const started = await dependencies.enqueueContainerBridgeOperation(
+      "claude",
+      containerId,
+      async () =>
+        dependencies.startContainerClaudeServer(
+          containerId,
+          undefined,
+          (await context.storage.loadConfig()).global.debugLogging === true,
+        ),
     );
     port = started.hostPort;
     authToken = started.authToken;
   }
 
-  const catalog = await fetchClaudeBridgeModelCatalog(port, authToken);
+  const catalog = await dependencies.fetchClaudeBridgeModelCatalog(port, authToken);
   const snapshot: ClaudeModelCatalogSnapshot = {
     environmentId,
     models: catalog.models,

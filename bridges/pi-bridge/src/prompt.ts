@@ -1,3 +1,4 @@
+import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
 /**
  * Running one turn.
  *
@@ -19,7 +20,7 @@ import { denyAllApprovals } from "./interactions.js";
 import { getLastAssistantUsage } from "./pi-sdk.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
-import { withTimeout } from "./timeout.js";
+import { TimeoutError, withTimeout } from "./timeout.js";
 import {
   setSteerJournal,
   type JsonObject,
@@ -67,51 +68,85 @@ export async function dispatchPrompt(
   state: SessionState,
   session: AgentSession,
   input: DispatchInput,
+  promptTimeoutMs = PROMPT_TIMEOUT_MS,
 ): Promise<DispatchHandle> {
   const text = input.schema
     ? `${input.prompt}\n\n${structuredPromptInstruction(input.schema)}`
     : input.prompt;
   const promptSequence = state.promptSequence;
+  const diagnostics = createBridgeDiagnostics("pi", state, () => ({
+    pendingApprovals: state.approvals.size,
+  }));
+  state.diagnostics = diagnostics;
 
   let announceAccepted: (accepted: boolean) => void = () => undefined;
   const accepted = new Promise<boolean>((resolve) => {
     announceAccepted = resolve;
   });
 
-  const run = session.prompt(text, {
-    ...(input.images.length > 0 ? { images: input.images.map(toImageContent) } : {}),
-    // Prompt templates and skills are the user's own text, expanded by Pi. Left
-    // on so a `/command` typed in the composer behaves exactly as it does in a
-    // Pi terminal tab.
-    expandPromptTemplates: true,
-    // Not "interactive": a person typed this, but there is no terminal behind
-    // it, so an extension that would draw a dialog has to know it cannot.
-    source: "rpc",
-    preflightResult: (success) => announceAccepted(success),
-  });
+  let run: Promise<void>;
+  try {
+    run = session.prompt(text, {
+      ...(input.images.length > 0 ? { images: input.images.map(toImageContent) } : {}),
+      // Prompt templates and skills are the user's own text, expanded by Pi. Left
+      // on so a `/command` typed in the composer behaves exactly as it does in a
+      // Pi terminal tab.
+      expandPromptTemplates: true,
+      // Not "interactive": a person typed this, but there is no terminal behind
+      // it, so an extension that would draw a dialog has to know it cannot.
+      source: "rpc",
+      preflightResult: (success) => announceAccepted(success),
+    });
+  } catch (error) {
+    diagnostics?.terminalSettled("rejected");
+    diagnostics?.streamSettled("rejected");
+    diagnostics?.close("send-failed");
+    if (state.diagnostics === diagnostics) state.diagnostics = undefined;
+    throw error;
+  }
 
   // A rejection before preflight ran — no model, no credential — must not leave
   // the caller awaiting acceptance forever.
   const settled = run.then(
-    () => announceAccepted(true),
-    () => announceAccepted(false),
+    () => {
+      announceAccepted(true);
+    },
+    () => {
+      diagnostics?.terminalSettled("rejected");
+      diagnostics?.streamSettled("rejected");
+      announceAccepted(false);
+    },
   );
 
   if (!(await accepted)) {
     // Pi refused the prompt outright. Surface whatever it refused with, rather
     // than a generic rejection: it is the only thing that says why.
     await settled;
+    diagnostics?.terminalSettled("rejected");
+    diagnostics?.streamSettled("rejected");
+    diagnostics?.close("send-failed");
+    if (state.diagnostics === diagnostics) state.diagnostics = undefined;
     await run;
     throw new Error("Pi rejected the prompt");
   }
 
-  state.cancelTurn = async () => {
-    await session.abort().catch(() => undefined);
+  diagnostics?.sent(state.id);
+  state.cancelTurn = async (reason = "user") => {
+    await (diagnostics
+      ? diagnostics.cancel({ cancel: () => session.abort() }, reason)
+      : session.abort().catch(() => undefined));
   };
 
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
-  return { completion: followRun(state, session, run, promptSequence, input) };
+  return {
+    completion: followRun(state, session, run, promptSequence, input, promptTimeoutMs).finally(
+      () => {
+        diagnostics?.close();
+        if (state.diagnostics === diagnostics) state.diagnostics = undefined;
+      },
+    ),
+  };
 }
 
 async function followRun(
@@ -120,12 +155,18 @@ async function followRun(
   run: Promise<void>,
   promptSequence: number,
   input: DispatchInput,
+  promptTimeoutMs: number,
 ): Promise<void> {
   try {
-    await withTimeout(run, PROMPT_TIMEOUT_MS, "The Pi turn exceeded its time budget");
+    await withTimeout(run, promptTimeoutMs, "The Pi turn exceeded its time budget");
     if (!turnStillOwned(state, promptSequence)) return;
+    state.diagnostics?.terminalSettled("resolved");
+    state.diagnostics?.streamSettled("resolved");
     finishTurn(state, session, input);
   } catch (error) {
+    state.diagnostics?.terminalSettled("rejected");
+    state.diagnostics?.streamSettled("rejected");
+    state.diagnostics?.checkpoint("cancelling");
     // The timeout rejects the wait, not the run: `session.prompt` is still
     // executing, and `settleTurn` is about to drop the only handle that can
     // stop it. Deny parked tool calls before aborting: abort may tear down the
@@ -136,7 +177,7 @@ async function followRun(
     // failed — and from interleaving its deltas into the next turn's message.
     // Awaited so the abort has landed before the session is reported idle.
     try {
-      await state.cancelTurn?.();
+      await state.cancelTurn?.(error instanceof TimeoutError ? "timeout" : "turn-ended");
     } catch {
       // Best-effort. A session that will not abort still has to reach a
       // terminal state here, or the tab stays "running" forever.

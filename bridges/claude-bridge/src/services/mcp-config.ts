@@ -220,7 +220,7 @@ function toSdkServers(configs: McpServersConfig): SdkMcpServersConfig {
     if (sdkConfig) {
       servers[name] = sdkConfig;
     } else {
-      console.warn(`Unknown MCP server config type for "${name}":`, config);
+      console.warn("[mcp-config] Ignoring unsupported MCP server configuration");
     }
   }
 

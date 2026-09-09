@@ -1,3 +1,7 @@
+import {
+  createBridgeDiagnostics,
+  type BridgeRunDiagnostics,
+} from "@orkestrator/protocol/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -773,13 +777,40 @@ async function sweepIdleThreads(
   }
 }
 
+function createCodexProcessDiagnostics(
+  runtime: Pick<AppServerRuntime, "getHealth"> = appServerRuntime,
+): BridgeRunDiagnostics | undefined {
+  const diagnostics = createBridgeDiagnostics("codex", { id: "app-server" }, () => {
+    const health = runtime.getHealth();
+    return {
+      ...health.rpc,
+      state: health.state,
+      generation: health.generation,
+      restartCount: health.restartCount,
+      circuitOpen: health.circuitOpen,
+      notificationQueueDepth: health.notificationQueueDepth,
+      notificationQueueHighWaterMark: health.notificationQueueHighWaterMark,
+      unknownNotifications: health.unknownNotifications,
+      unknownServerRequests: health.unknownServerRequests,
+    };
+  });
+  diagnostics?.checkpoint("attached");
+  return diagnostics;
+}
+
+const debugDiagnostics = createCodexProcessDiagnostics();
+
 const cleanupTimer = setInterval(() => {
   void sweepIdleThreads();
 }, CLEANUP_INTERVAL_MS);
 cleanupTimer.unref?.();
 
-async function stopSelectedEngine(): Promise<void> {
-  await appServerRuntime.stop();
+async function stopSelectedEngine(
+  runtime: Pick<AppServerRuntime, "stop"> = appServerRuntime,
+  diagnostics: BridgeRunDiagnostics | undefined = debugDiagnostics,
+): Promise<void> {
+  diagnostics?.close();
+  await runtime.stop();
 }
 
 /**
@@ -825,6 +856,7 @@ export const __testing = {
   createOpenSseWriterForTesting: createOpenSseWriter,
   createSerializedSseWriterForTesting: createSerializedSseWriter,
   createCodexEngineForTesting: createCodexEngine,
+  createCodexProcessDiagnosticsForTesting: createCodexProcessDiagnostics,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
   emitForTesting: emit,
@@ -883,6 +915,7 @@ export const __testing = {
   },
   startBridgeServerForTesting: startBridgeServer,
   startSelectedEngineForTesting: startSelectedEngine,
+  stopSelectedEngineForTesting: stopSelectedEngine,
   startSseKeepaliveForTesting: startSseKeepalive,
   sweepIdleThreadsForTesting: sweepIdleThreads,
   subscribeForTesting: (subscriber: SseSubscriber) => {

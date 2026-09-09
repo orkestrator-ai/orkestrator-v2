@@ -255,32 +255,120 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("idle");
   });
 
-  test("warns when a provider turn produces no messages or heartbeat", async () => {
-    jest.useFakeTimers();
-    const warn = mock(() => {});
-    const originalWarn = console.warn;
-    console.warn = warn;
+  test.each([false, true])(
+    "quiet-turn diagnostics are gated and cleaned up (debug=%s)",
+    async (enabled) => {
+      jest.useFakeTimers();
+      const lines: string[] = [];
+      const originalInfo = console.info;
+      const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      console.info = (line: unknown) => {
+        lines.push(String(line));
+      };
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = enabled ? "1" : "0";
+      let finish: (() => void) | undefined;
+      let promptPromise: Promise<unknown> | undefined;
+      try {
+        const session = createSession("quiet provider");
+        track(session.id);
+        promptPromise = sendPrompt(session.id, "PRIVATE PROMPT");
+        const call = await nextQueryCall();
+        finish = () => call.finish();
+        jest.advanceTimersByTime(60_001);
+        const snapshots = lines.filter((line) => line.startsWith("[bridge-diagnostics] "));
+        expect(snapshots.some((line) => line.includes('"event":"heartbeat"'))).toBe(enabled);
+        if (enabled) {
+          const heartbeat = snapshots.find((line) => line.includes('"event":"heartbeat"'))!;
+          expect(heartbeat).toContain('"lastDeltaAgoMs":null');
+          expect(heartbeat).toContain('"sdkMessageCount":0');
+          expect(heartbeat).toContain('"terminal":"pending"');
+        } else {
+          expect(snapshots).toHaveLength(0);
+        }
+        expect(lines.join("\n")).not.toContain("PRIVATE PROMPT");
+        call.finish();
+        await promptPromise;
+        const count = lines.length;
+        jest.advanceTimersByTime(120_000);
+        expect(lines).toHaveLength(count);
+      } finally {
+        finish?.();
+        await promptPromise;
+        console.info = originalInfo;
+        if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+        else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  test("records rejected outcomes and a bounded error class when the SDK iterator fails", async () => {
+    class ProviderUnavailableError extends Error {}
+
+    const lines: string[] = [];
+    const errors: unknown[][] = [];
+    const originalInfo = console.info;
+    const originalError = console.error;
+    const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    console.info = (line: unknown) => lines.push(String(line));
+    console.error = (...args: unknown[]) => errors.push(args);
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
     try {
-      const session = createSession("quiet provider");
+      const session = createSession("iterator failure");
       track(session.id);
-      const promptPromise = sendPrompt(session.id, "hello?");
+      const promptPromise = sendPrompt(session.id, "PRIVATE PROMPT");
       const call = await nextQueryCall();
+      call.fail(new ProviderUnavailableError("PRIVATE PROVIDER DETAIL"));
 
-      jest.advanceTimersByTime(30_001);
-      expect(
-        warn.mock.calls.some(([message]) =>
-          String(message).includes("has not responded after 5 seconds"),
-        ),
-      ).toBe(true);
-      expect(
-        warn.mock.calls.some(([message]) => String(message).includes("No SDK messages yet")),
-      ).toBe(true);
+      await expect(promptPromise).rejects.toBeInstanceOf(ProviderUnavailableError);
 
-      call.finish();
-      await promptPromise;
+      const closed = lines
+        .filter((line) => line.startsWith("[bridge-diagnostics] "))
+        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
+        .find((entry) => entry.event === "closed");
+      expect(closed).toMatchObject({ terminal: "rejected", stream: "rejected" });
+      expect(errors).toContainEqual([
+        "[session-manager] Error processing prompt",
+        { errorClass: "ProviderUnavailableError" },
+      ]);
+      expect(JSON.stringify(errors)).not.toContain("PRIVATE");
     } finally {
-      console.warn = originalWarn;
-      jest.useRealTimers();
+      console.info = originalInfo;
+      console.error = originalError;
+      if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
+    }
+  });
+
+  test("records abort outcomes before closing the diagnostic scope", async () => {
+    const lines: string[] = [];
+    const originalInfo = console.info;
+    const originalFlag = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    console.info = (line: unknown) => lines.push(String(line));
+    process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+    try {
+      const session = createSession("diagnostic abort");
+      track(session.id);
+      const promptPromise = sendPrompt(session.id, "wait");
+      await nextQueryCall();
+
+      expect(abortSession(session.id)).toBe(true);
+      await promptPromise;
+
+      const closed = lines
+        .filter((line) => line.startsWith("[bridge-diagnostics] "))
+        .map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)))
+        .find((entry) => entry.event === "closed");
+      expect(closed).toMatchObject({
+        terminal: "rejected",
+        stream: "rejected",
+        cancellation: "pending",
+        cancelReason: "user",
+      });
+    } finally {
+      console.info = originalInfo;
+      if (originalFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = originalFlag;
     }
   });
 

@@ -464,6 +464,7 @@ export async function startContainerOpenCodeServer(
 export async function startContainerClaudeServer(
   containerId: string,
   agentToolConnection?: AgentToolConnection,
+  debugLogging = false,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   const expectedAgentToolsFingerprint = agentToolConnection
     ? agentToolConnectionFingerprint(agentToolConnection)
@@ -523,6 +524,7 @@ export async function startContainerClaudeServer(
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
+      export ORKESTRATOR_BRIDGE_DEBUG=${debugLogging ? "1" : "0"}
       ${
         agentToolConnection
           ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}

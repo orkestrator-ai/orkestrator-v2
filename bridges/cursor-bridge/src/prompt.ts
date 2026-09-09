@@ -22,6 +22,7 @@ import {
 } from "./config.js";
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
+import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
 import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
 import { boundTranscript } from "./transcript.js";
 import {
@@ -77,25 +78,38 @@ export async function dispatchPrompt(
   }));
 
   const promptSequence = state.promptSequence;
-  const run = await agent.send(
-    { text, ...(images.length > 0 ? { images } : {}) },
-    {
-      // Sent every turn rather than only at attach. The composer selection can
-      // change in the same action that sends the prompt, and an agent is
-      // created once but lives across many turns — without this, a model or
-      // mode the user picked would not apply until something re-attached.
-      model: modelSelection(state.composer),
-      mode: state.composer.selectedModeId === "plan" ? "plan" : "agent",
-      // Never awaited by the SDK's producer in a way that can stall the run,
-      // and never awaited by us: every branch of `applyInteractionUpdate` is
-      // synchronous, so a large transcript cannot back-pressure the agent.
-      onDelta: ({ update }) => {
-        if (!turnStillOwned(state, promptSequence)) return;
-        applyInteractionUpdate(state, update);
+  const diagnostics = createRunDiagnostics(state);
+  const run = await agent
+    .send(
+      { text, ...(images.length > 0 ? { images } : {}) },
+      {
+        // Sent every turn rather than only at attach. The composer selection can
+        // change in the same action that sends the prompt, and an agent is
+        // created once but lives across many turns — without this, a model or
+        // mode the user picked would not apply until something re-attached.
+        model: modelSelection(state.composer),
+        mode: state.composer.selectedModeId === "plan" ? "plan" : "agent",
+        // Never awaited by the SDK's producer in a way that can stall the run,
+        // and never awaited by us: every branch of `applyInteractionUpdate` is
+        // synchronous, so a large transcript cannot back-pressure the agent.
+        onDelta: ({ update }) => {
+          if (!turnStillOwned(state, promptSequence)) return;
+          diagnostics?.delta(update);
+          try {
+            applyInteractionUpdate(state, update);
+          } catch (error) {
+            diagnostics?.translationFailed();
+            throw error;
+          }
+        },
+        ...(input.requestId ? { idempotencyKey: input.requestId } : {}),
       },
-      ...(input.requestId ? { idempotencyKey: input.requestId } : {}),
-    },
-  );
+    )
+    .catch((error) => {
+      diagnostics?.close("send-failed");
+      throw error;
+    });
+  diagnostics?.sent(run.id);
 
   if (input.userMessageId) {
     const userMessage = state.messages.find((message) => message.id === input.userMessageId);
@@ -110,7 +124,7 @@ export async function dispatchPrompt(
   });
 
   state.cancelTurn = async () => {
-    await run.cancel().catch(() => undefined);
+    await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
   };
 
   // The user cancelled while `send` was still open, so this turn was stopped
@@ -118,13 +132,22 @@ export async function dispatchPrompt(
   // the user already abandoned run to completion.
   if (state.pendingCancelPromptSequence === promptSequence) {
     state.pendingCancelPromptSequence = undefined;
-    await run.cancel().catch(() => undefined);
+    await state.cancelTurn();
   }
 
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
   return {
-    completion: followRun(state, run, promptSequence, input).finally(() => {
+    completion: followRun(
+      state,
+      run,
+      promptSequence,
+      input,
+      PROMPT_TIMEOUT_MS,
+      CANCEL_ACK_TIMEOUT_MS,
+      diagnostics,
+    ).finally(() => {
+      diagnostics?.close();
       unsubscribeStatus();
       if (state.activeRun === run) state.activeRun = undefined;
     }),
@@ -168,12 +191,23 @@ export async function followRun(
   input: DispatchInput,
   timeoutMs: number = PROMPT_TIMEOUT_MS,
   cancelAckTimeoutMs: number = CANCEL_ACK_TIMEOUT_MS,
+  diagnostics?: CursorRunDiagnostics,
 ): Promise<void> {
-  const terminal = run.wait();
+  const terminal = run.wait().then(
+    (result) => {
+      diagnostics?.terminalSettled("resolved");
+      return result;
+    },
+    (error) => {
+      diagnostics?.terminalSettled("rejected");
+      throw error;
+    },
+  );
   const streamed: StreamedUsage = {};
   const drained = (async () => {
     try {
       for await (const event of run.stream()) {
+        diagnostics?.streamEvent();
         // `onDelta` remains the transcript source. Consuming here primarily
         // keeps a pull-driven stream advancing. Usage is the exception: it also
         // has a first-class SDK message shape, and some local runtimes publish
@@ -195,7 +229,9 @@ export async function followRun(
           applyStreamUsage(state, streamed.total, message);
         }
       }
+      diagnostics?.streamSettled("resolved");
     } catch {
+      diagnostics?.streamSettled("rejected");
       // A stream failure is reported authoritatively by `wait()` below.
     }
   })();
@@ -218,7 +254,7 @@ export async function followRun(
     // terminal result, the turn is failed explicitly rather than held running
     // forever.
     if (error instanceof TurnTimeoutError) {
-      void run.cancel().catch(() => undefined);
+      void (diagnostics ? diagnostics.cancel(run, "timeout") : run.cancel().catch(() => undefined));
       if (!turnStillOwned(state, promptSequence)) return;
       state.error = error.message;
       state.revision += 1;
@@ -251,6 +287,8 @@ export async function followRun(
     }
     if (!turnStillOwned(state, promptSequence)) return;
     failTurn(state, error, input, undefined, streamed);
+  } finally {
+    diagnostics?.close();
   }
 }
 

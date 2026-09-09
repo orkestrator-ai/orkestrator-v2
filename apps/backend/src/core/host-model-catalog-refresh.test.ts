@@ -129,6 +129,52 @@ afterEach(async () => {
 });
 
 describe("host model catalogue refresh", () => {
+  test.each([false, true])(
+    "passes debugLogging=%s to every short-lived bridge process",
+    async (enabled) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({ ...config.global, debugLogging: enabled });
+      stubBridgeSpawn((spawned) =>
+        listenAsBridge(Number(spawned.env.PORT), (url, response) => {
+          if (url !== "/global/models") return false;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ source: "app-server", models: [{ id: "gpt-5" }] }));
+          return true;
+        }),
+      );
+      const refresh = refreshTesting.createHostModelCatalogRefresher({
+        fetchClaudeCatalog: mock(async () => ({
+          source: "sdk",
+          models: [{ id: "claude-opus", name: "Claude Opus" }],
+        })) as never,
+        fetchAcpModels: mock(async () => [
+          { platform: "grok", id: "grok-4", label: "Grok 4" },
+        ]) as never,
+        createOpenCodeClient: mock(() => ({
+          provider: {
+            list: async () => ({
+              data: {
+                all: [{ id: "openai", name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } }],
+                connected: [],
+              },
+            }),
+          },
+        })) as never,
+        runCommand: mock(async () => ({ stdout: "", stderr: "" })) as never,
+      });
+
+      await refresh(context(), "claude");
+      await refresh(context(), "codex");
+      await refresh(context(), "grok");
+      await refresh(context(), "opencode");
+
+      expect(spawns).toHaveLength(4);
+      expect(spawns.map((spawned) => spawned.env.ORKESTRATOR_BRIDGE_DEBUG)).toEqual(
+        Array.from({ length: 4 }, () => (enabled ? "1" : "0")),
+      );
+    },
+  );
+
   test("single-flights a live Codex probe and always releases its child", async () => {
     stubBridgeSpawn((spawned) =>
       listenAsBridge(Number(spawned.env.PORT), (url, response) => {

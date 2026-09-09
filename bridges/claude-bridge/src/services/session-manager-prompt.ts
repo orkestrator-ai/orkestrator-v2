@@ -1,3 +1,5 @@
+import { observeClaudeMessage } from "./diagnostics.js";
+import { createBridgeDiagnostics } from "@orkestrator/protocol/bridge-diagnostics";
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -63,7 +65,7 @@ import {
   type SessionPreferences,
 } from "./session-preferences.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { debugLog, isDebugLoggingEnabled } from "./logger.js";
+import { debugLog, flushDebugLogs, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { AGENT_MCP_SERVER_NAME, getMcpRuntimeConfig } from "./mcp-config.js";
 import {
@@ -178,6 +180,23 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  * keeps iteration proportional to the number of blocks actually received.
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
+
+/**
+ * Keep failure logs useful without copying provider messages, prompts, or tool
+ * output into the process log. Constructor names are code-owned metadata, but
+ * still bounded and validated in case a foreign error object overrides them.
+ */
+function diagnosticErrorClass(error: unknown): string {
+  try {
+    if (!(error instanceof Error)) return "NonError";
+    const name = error.constructor?.name;
+    return typeof name === "string" && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name)
+      ? name
+      : "Error";
+  } catch {
+    return "Error";
+  }
+}
 
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
@@ -525,10 +544,21 @@ export async function sendPrompt(
   });
 
   const startedAt = Date.now();
-  let lastSdkMessageAt = Date.now();
   let sdkMessageCount = 0;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
+  const diagnostics = createBridgeDiagnostics(
+    "claude",
+    {
+      id: sessionId,
+      get status() {
+        return session.status;
+      },
+    },
+    () => ({ sdkMessageCount, cancelled: abortController.signal.aborted }),
+  );
+  const observeAbort = () => {
+    diagnostics?.requestCancellation();
+  };
+  abortController.signal.addEventListener("abort", observeAbort, { once: true });
   let queryIteratorControl: SessionState["queryControl"];
   let structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   let queryStarted = false;
@@ -1394,29 +1424,7 @@ export async function sendPrompt(
     // This intentionally runs off the SDK message-consumer path.
     void structuredUsageRefresh?.trigger();
 
-    // Log an early warning if SDK doesn't respond within 5 seconds
-    earlyWarningTimeout = setTimeout(() => {
-      if (sdkMessageCount === 0) {
-        console.warn("[session-manager] SDK has not responded after 5 seconds", {
-          sessionId,
-          cwd,
-          model: options?.model,
-          status: session.status,
-        });
-      }
-    }, 5000);
-
-    heartbeat = setInterval(() => {
-      const idleMs = Date.now() - lastSdkMessageAt;
-      if (idleMs > 15000) {
-        console.warn("[session-manager] No SDK messages yet", {
-          sessionId,
-          idleMs,
-          sdkMessageCount,
-          status: session.status,
-        });
-      }
-    }, 15000);
+    diagnostics?.sent(sessionId);
 
     // Process the async generator
     for await (const message of queryIterator) {
@@ -1425,7 +1433,7 @@ export async function sendPrompt(
       }
 
       sdkMessageCount += 1;
-      lastSdkMessageAt = Date.now();
+      if (diagnostics) observeClaudeMessage(diagnostics, message);
       // Any frame is evidence the provider is still answering the notification,
       // so the watchdog is pushed out rather than allowed to expire mid-stream.
       // Retention itself is dropped by the reclaim, the result, or the watchdog
@@ -2113,13 +2121,13 @@ export async function sendPrompt(
           createdAt: new Date().toISOString(),
         });
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
-        // Query completed - log full result for debugging
+        diagnostics?.terminalSettled("resolved");
+        // Only allowlisted metadata reaches the shared debug sink.
         const resultMsg = message as SdkResultMessage;
         receivedResult = true;
         debugLog("[session-manager] Query result", {
           sessionId,
           subtype: resultMsg.subtype,
-          result: resultMsg.result,
           costUSD: resultMsg.total_cost_usd,
           durationMs: resultMsg.duration_ms,
         });
@@ -2321,6 +2329,7 @@ export async function sendPrompt(
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
     }
+    diagnostics?.streamSettled("resolved");
 
     // The stream can end on a delta (abort, SDK hang-up) with a snapshot still
     // pending; publish it so the transcript holds everything that streamed.
@@ -2332,6 +2341,8 @@ export async function sendPrompt(
     });
 
     if (abortController.signal.aborted) {
+      diagnostics?.terminalSettled("rejected");
+      diagnostics?.streamSettled("rejected");
       if (options?.outputSchema && structuredRequestId) {
         recordInterruptedStructuredOutputIfCurrent();
       }
@@ -2452,11 +2463,15 @@ export async function sendPrompt(
       state: "failure",
     });
 
+    diagnostics?.terminalSettled("rejected");
+    diagnostics?.streamSettled("rejected");
     if (abortController.signal.aborted) {
       recordInterruptedStructuredOutputIfCurrent();
       return;
     }
-    console.error("[session-manager] Error processing prompt:", error);
+    console.error("[session-manager] Error processing prompt", {
+      errorClass: diagnosticErrorClass(error),
+    });
 
     if (session.abortController === abortController) {
       if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
@@ -2490,6 +2505,9 @@ export async function sendPrompt(
     }
     throw error;
   } finally {
+    diagnostics?.close();
+    flushDebugLogs();
+    abortController.signal.removeEventListener("abort", observeAbort);
     // The turn has stopped producing frames. From here the `revision` counters
     // it stamped only matter for as long as a disconnected client could still
     // be resuming from them; see `evictIdleHydratedTranscripts`.
@@ -2553,12 +2571,6 @@ export async function sendPrompt(
     // until the bridge restarted.
     if (transcriptHydrationFailed && sessions.get(sessionId) === session && !session.deleting) {
       session.persistedMessagesLoaded = false;
-    }
-    if (heartbeat) {
-      clearInterval(heartbeat);
-    }
-    if (earlyWarningTimeout) {
-      clearTimeout(earlyWarningTimeout);
     }
     stream.clearFlushTimer();
   }

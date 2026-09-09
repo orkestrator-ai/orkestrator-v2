@@ -1610,7 +1610,12 @@ export function SharedNativeAgentController({
         </Button>
       </div>
     ) : null,
-    recoverableDispatch ? (
+    // The backend persists the request id before dispatching, so a projection
+    // can briefly expose this record while an ordinary send is still waiting
+    // for its acknowledgement. It is only a recovery choice once that send
+    // has settled without an answer; before then the controls are disabled and
+    // the warning is both premature and unactionable.
+    recoverableDispatch && !isDispatching ? (
       <div
         key="recoverable-dispatch"
         role="alert"

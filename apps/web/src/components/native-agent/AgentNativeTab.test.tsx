@@ -2384,6 +2384,47 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("does not show dispatch recovery while an ordinary send is still in flight", async () => {
+    const tabId = "tab-in-flight-dispatch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "accepted", requestId: input.requestId };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("cursor")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Move the dashboard pages" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    const requestId = dispatchNativeAgentIntentMock.mock.calls[0]![0].requestId;
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        turn: { phase: "running" },
+        recoverableDispatch: {
+          requestId,
+          createdAt: "2026-09-09T19:12:51.000Z",
+        },
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Retry send" })).toBeNull();
+    expect(screen.queryByText(/did not confirm your last message/i)).toBeNull();
+
+    releaseDispatch();
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+  });
+
   test("clears a submitted draft when the transcript confirms a dispatch whose response was lost", async () => {
     const tabId = "tab-transcript-confirmed-send";
     const sessionKey = createSessionKey("env-1", tabId);

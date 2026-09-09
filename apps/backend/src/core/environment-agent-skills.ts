@@ -202,8 +202,22 @@ async function codexPluginRoots(codexHome) {
   return result;
 }
 
+function systemSkillTargets() {
+  // Omarchy exposes its root-managed skills to each agent with symlinks from
+  // the normal user roots. Authorize that system-managed target without
+  // listing it as another source, while arbitrary symlink targets remain refused.
+  const testRoot = isolatedAgentTest
+    ? process.env.ORKESTRATOR_AGENT_TEST_SYSTEM_SKILL_ROOT
+    : undefined;
+  if (testRoot && testRoot.trim()) return [{ path: path.resolve(testRoot) }];
+  return process.platform === "linux" && !isolatedAgentTest
+    ? [{ path: "/usr/share/omarchy/default/agents/skills" }]
+    : [];
+}
+
 async function rootPlan() {
   const projects = await projectDirectories();
+  const systemTargets = systemSkillTargets();
   if (provider === "claude") {
     const managed = process.platform === "darwin"
       ? "/Library/Application Support/ClaudeCode/skills"
@@ -217,7 +231,10 @@ async function rootPlan() {
         ...projects.map((dir) => ({ path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: false })),
         ...(await claudePluginRoots()),
       ].slice(0, maxRoots),
-      targetOnly: isolatedAgentTest ? [] : [{ path: path.join(home, ".agents", "skills") }],
+      targetOnly: [
+        ...(isolatedAgentTest ? [] : [{ path: path.join(home, ".agents", "skills") }]),
+        ...systemTargets,
+      ],
     };
   }
 
@@ -237,7 +254,7 @@ async function rootPlan() {
         { path: path.join(codexHome, "skills", ".system"), scope: "system", recursive: true },
         ...(await codexPluginRoots(codexHome)),
       ].slice(0, maxRoots),
-      targetOnly: [],
+      targetOnly: systemTargets,
     };
   }
 
@@ -262,7 +279,7 @@ async function rootPlan() {
           { path: path.join(cursorCodexHome, "skills"), scope: "shared", skip: [".system"], recursive: true },
         ]),
       ].slice(0, maxRoots),
-      targetOnly: [],
+      targetOnly: systemTargets,
     };
   }
 
@@ -280,7 +297,7 @@ async function rootPlan() {
           { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
         ]),
       ].slice(0, maxRoots),
-      targetOnly: [],
+      targetOnly: systemTargets,
     };
   }
 
@@ -298,7 +315,7 @@ async function rootPlan() {
           { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
         ]),
       ].slice(0, maxRoots),
-      targetOnly: [],
+      targetOnly: systemTargets,
     };
   }
 
@@ -319,7 +336,7 @@ async function rootPlan() {
         { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
       ]),
     ].slice(0, maxRoots),
-    targetOnly: [],
+    targetOnly: systemTargets,
   };
 }
 

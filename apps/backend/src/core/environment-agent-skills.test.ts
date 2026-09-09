@@ -199,6 +199,46 @@ describe("environment agent skills scanner", () => {
     ]);
   });
 
+  test("allows a skill symlink into a trusted system skill root", async () => {
+    const worktree = await createWorktree();
+    const home = await createTemporaryDirectory("ork-environment-home-");
+    const systemRoot = await createTemporaryDirectory("ork-environment-system-skills-");
+    const target = path.join(systemRoot, "omarchy");
+    const skillPath = path.join(home, ".cursor", "skills", "omarchy", "SKILL.md");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "SKILL.md"), "---\nname: omarchy\n---\n# Omarchy\n");
+    await fs.mkdir(path.dirname(path.dirname(skillPath)), { recursive: true });
+    await fs.symlink(target, path.dirname(skillPath), "dir");
+
+    const options = {
+      env: {
+        HOME: home,
+        ORKESTRATOR_AGENT_TEST_ISOLATED: "1",
+        ORKESTRATOR_AGENT_TEST_SYSTEM_SKILL_ROOT: systemRoot,
+      },
+    };
+    const listed = runScanner(worktree, "cursor", "list", "", options);
+    expect(listed.exitCode).toBe(0);
+    const scan = JSON.parse(listed.stdout.toString()) as {
+      skills: Array<{ name: string; filePath: string }>;
+      errors: Array<{ path: string; message: string }>;
+      roots: Array<{ label: string }>;
+    };
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({ name: "omarchy", filePath: skillPath }),
+    );
+    expect(scan.errors).toEqual([]);
+    expect(scan.roots.some((root) => root.label === systemRoot)).toBe(false);
+
+    const read = runScanner(worktree, "cursor", "read", skillPath, options);
+    expect(read.exitCode).toBe(0);
+    expect(JSON.parse(read.stdout.toString())).toMatchObject({
+      path: skillPath,
+      content: expect.stringContaining("# Omarchy"),
+      truncated: false,
+    });
+  });
+
   test("bounds the error list instead of returning one entry per refused path", async () => {
     const worktree = await createWorktree();
     const home = await createTemporaryDirectory("ork-environment-home-");

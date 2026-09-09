@@ -108,6 +108,7 @@ describe("useBuildLaunchOptions", () => {
 
     const opencode = result.current.catalog.opencode ?? [];
     expect(opencode.map((model) => model.id)).toEqual(["provider/model-a"]);
+    expect(opencode[0]?.providerLabel).toBe("Provider A");
     expect(opencode[0]?.description).toBe("Provider A");
   });
 

@@ -79,6 +79,7 @@ describe("buildReviewModelCatalog", () => {
         {
           id: "provider/model-live",
           name: "OpenCode Live",
+          providerLabel: "Provider",
           description: "Provider",
           reasoningEfforts: ["fast", "deep"],
         },
@@ -363,18 +364,21 @@ describe("buildReviewModelCatalog", () => {
       {
         id: "provider/shared",
         name: "Shared",
+        providerLabel: "Provider A",
         description: "Provider A",
         reasoningEfforts: ["fast"],
       },
       {
         id: "provider/only-a",
         name: "Only A",
+        providerLabel: "Provider A",
         description: "Provider A",
         reasoningEfforts: [],
       },
       {
         id: "provider/only-b",
         name: "Only B",
+        providerLabel: "Provider B",
         description: "Provider B",
         reasoningEfforts: ["deep"],
       },
@@ -445,12 +449,14 @@ describe("includeMissingOpenCodeModels", () => {
       {
         id: "opencode-go/deepseek-v4-flash",
         name: "deepseek-v4-flash",
+        providerLabel: "opencode-go",
         description: "opencode-go",
         reasoningEfforts: [],
       },
       {
         id: "opencode/claude-sonnet-5",
         name: "claude-sonnet-5",
+        providerLabel: "opencode",
         description: "opencode",
         reasoningEfforts: [],
       },

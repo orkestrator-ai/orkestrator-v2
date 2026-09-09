@@ -130,6 +130,7 @@ export function AgentLaunchDialog({
           platform,
           id: option.id,
           label: option.name,
+          providerLabel: option.providerLabel,
           description: option.description,
         })),
       ),

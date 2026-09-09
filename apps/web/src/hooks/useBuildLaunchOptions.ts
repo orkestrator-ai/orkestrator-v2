@@ -134,6 +134,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
         : projectOpenCodeModels.map((model) => ({
             id: model.id,
             name: openCodeModelDisplayLabel(model.id, model.name),
+            providerLabel: model.provider,
             description: model.provider,
             reasoningEfforts: [...(model.variants ?? [])],
           }));

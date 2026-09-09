@@ -47,7 +47,14 @@ const catalog: AgentModelCatalog = {
     { id: "claude-fixed", name: "Claude Fixed", reasoningEfforts: [] },
   ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
-  opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast"] }],
+  opencode: [
+    {
+      id: "provider/model-a",
+      name: "OpenCode A",
+      providerLabel: "Provider Cloud",
+      reasoningEfforts: ["fast"],
+    },
+  ],
 };
 
 function renderDialog(overrides: Partial<Parameters<typeof AgentLaunchDialog>[0]> = {}) {
@@ -233,6 +240,15 @@ describe("AgentLaunchDialog", () => {
       model: "provider/model-a",
       reasoningEffort: undefined,
     });
+  });
+
+  test("renders provider captions passed through by the launch dialog", () => {
+    renderDialog({ defaultAgent: "opencode" });
+
+    openPicker();
+    const row = screen.getByRole("menuitemradio", { name: /OpenCode A/ });
+    expect(row.textContent).toContain("Provider Cloud");
+    closePicker();
   });
 
   test("selects a reasoning effort offered by the chosen model", () => {

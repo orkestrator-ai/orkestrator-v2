@@ -5,6 +5,7 @@ import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
 import {
   defaultMultiReviewLaunchSelection,
+  flatCatalog,
   MultiReviewLaunchDialog,
   type MultiReviewLaunchDefaults,
   type MultiReviewLaunchSelection,
@@ -16,7 +17,14 @@ const catalog: AgentModelCatalog = {
     { id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["low", "medium", "high"] },
     { id: "gpt-5.5", name: "GPT-5.5", reasoningEfforts: ["low", "medium", "high"] },
   ],
-  opencode: [{ id: "provider/model", name: "OpenCode", reasoningEfforts: [] }],
+  opencode: [
+    {
+      id: "provider/model",
+      name: "OpenCode",
+      providerLabel: "Provider Cloud",
+      reasoningEfforts: [],
+    },
+  ],
   cursor: [{ id: "grok-4.6", name: "Grok 4.6", reasoningEfforts: [] }],
   pi: [{ id: "anthropic/claude-pi", name: "Claude Pi", reasoningEfforts: ["high"] }],
 };
@@ -41,6 +49,30 @@ function chooseFavorite(row: string, name: RegExp) {
 }
 
 describe("MultiReviewLaunchDialog", () => {
+  test("preserves and renders OpenCode provider captions", () => {
+    expect(
+      flatCatalog(catalog).find(
+        (model) => model.platform === "opencode" && model.id === "provider/model",
+      )?.providerLabel,
+    ).toBe("Provider Cloud");
+
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="opencode"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Reviewer 1 model" }));
+    const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
+      name: /OpenCode/,
+    });
+    expect(row.textContent).toContain("Provider Cloud");
+  });
+
   test("adds and removes reviewer model rows while retaining at least one", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
     render(

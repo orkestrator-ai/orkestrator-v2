@@ -6,11 +6,13 @@ import { Label } from "@/components/ui/label";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   effortLabel,
+  modelSupportsSpeed,
   modelsForAgent,
+  platformOwnsSpeed,
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
-import { resolvedActionDefault } from "@/lib/agent-settings";
+import { resolvedActionDefault, withPlatformField } from "@/lib/agent-settings";
 import {
   AGENT_PLATFORM_LABELS,
   firstEnabledAgentPlatform,
@@ -35,6 +37,7 @@ interface MultiReviewDefaultsEditorProps {
   tier: AgentSettingsTier;
   onChange: (tier: AgentSettingsTier) => void;
   tiers: AgentSettingsTiers;
+  canInherit: boolean;
   enabledPlatforms: AgentPlatform[];
   catalog: AgentModelCatalog;
   disabled?: boolean;
@@ -100,12 +103,15 @@ function ReviewerDefaultPicker({
   fallbackEntry,
   fallbackLabel,
   inheritFallbackFieldsWhenConfigured,
+  canInherit,
   tiers,
   enabledPlatforms,
   catalog,
   pickerModels,
   favorites,
+  tier,
   disabled,
+  onTierChange,
   onChange,
 }: {
   index: number;
@@ -113,12 +119,15 @@ function ReviewerDefaultPicker({
   fallbackEntry: AgentActionDefault & { platform: AgentPlatform };
   fallbackLabel: string;
   inheritFallbackFieldsWhenConfigured?: boolean;
+  canInherit: boolean;
   tiers: AgentSettingsTiers;
   enabledPlatforms: AgentPlatform[];
   catalog: AgentModelCatalog;
   pickerModels: AgentModel[];
   favorites: ReturnType<typeof useAgentModelFavorites>;
+  tier: AgentSettingsTier;
   disabled?: boolean;
+  onTierChange: (tier: AgentSettingsTier) => void;
   onChange: (entry: AgentActionDefault | undefined) => void;
 }) {
   const platform =
@@ -158,6 +167,10 @@ function ReviewerDefaultPicker({
         ];
   const modelLabel = selectedModel?.name ?? effectiveModelId ?? "Provider default";
   const label = `Reviewer ${index + 1}`;
+  const speedCapable = platformOwnsSpeed(platform);
+  const speedAvailable = modelSupportsSpeed(platform, catalog, effectiveModelId);
+  const storedFastMode = tier.platforms?.[platform]?.fastMode;
+  const effectiveFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode ?? null;
 
   return (
     <div
@@ -211,6 +224,27 @@ function ReviewerDefaultPicker({
             ...(reasoningEffort === INHERIT ? {} : { reasoningEffort }),
           })
         }
+        speedCapable={speedCapable}
+        fastModeAvailable={speedCapable && speedAvailable}
+        fastModeEnabled={speedCapable ? effectiveFastMode : false}
+        speedInherit={
+          speedCapable
+            ? {
+                label: canInherit ? "Inherit" : "Provider default",
+                selected: storedFastMode === undefined,
+              }
+            : undefined
+        }
+        onFastModeChange={
+          speedCapable
+            ? (enabled) => onTierChange(withPlatformField(tier, platform, "fastMode", enabled))
+            : undefined
+        }
+        onFastModeInherit={
+          speedCapable
+            ? () => onTierChange(withPlatformField(tier, platform, "fastMode", undefined))
+            : undefined
+        }
         className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
       />
       {entry?.model && !selectedModel && (
@@ -226,6 +260,7 @@ export function MultiReviewDefaultsEditor({
   tier,
   onChange,
   tiers,
+  canInherit,
   enabledPlatforms,
   catalog,
   disabled,
@@ -310,12 +345,15 @@ export function MultiReviewDefaultsEditor({
             fallbackEntry={index === 0 ? { platform: fallbackAgent } : reviewFallbackEntry}
             fallbackLabel={index === 0 ? "App default" : "Follows Review"}
             inheritFallbackFieldsWhenConfigured={index >= DEFAULT_MULTI_REVIEW_REVIEWER_COUNT}
+            canInherit={canInherit}
             tiers={tiers}
             enabledPlatforms={enabledPlatforms}
             catalog={catalog}
             pickerModels={pickerModels}
             favorites={favorites}
+            tier={tier}
             disabled={disabled}
+            onTierChange={onChange}
             onChange={(entry) => onChange(withReviewerEntry(tier, index, entry))}
           />
         ))}

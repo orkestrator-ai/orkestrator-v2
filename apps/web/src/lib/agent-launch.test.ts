@@ -168,6 +168,7 @@ describe("toPickerModel", () => {
       toPickerModel("cursor", {
         id: "grok-4.6",
         name: "Cursor Grok 4.6",
+        providerLabel: "Grok",
         description: "Grok on Cursor",
         reasoningEfforts: ["high"],
         supportsSpeed: true,
@@ -176,6 +177,7 @@ describe("toPickerModel", () => {
       platform: "cursor",
       id: "grok-4.6",
       label: "Cursor Grok 4.6",
+      providerLabel: "Grok",
       description: "Grok on Cursor",
       supportsSpeed: true,
     });

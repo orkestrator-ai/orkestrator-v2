@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { useConfigStore } from "@/stores/configStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 
-afterEach(cleanup);
+const baseConfig = useConfigStore.getState().config;
+
+afterEach(() => {
+  cleanup();
+  useConfigStore.setState({ config: baseConfig });
+  useOpenCodeStore.setState({ models: new Map() });
+});
 
 /**
  * Every class the shared picker theme promises must survive `cn`'s tailwind-merge
@@ -19,6 +27,71 @@ function expectModelPickerTheme(picker: HTMLElement): void {
 }
 
 describe("CreateEnvironmentDialog initial prompt attachments", () => {
+  test("labels an unqualified configured OpenCode model across environment and feature pickers", async () => {
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          enabledAgentPlatforms: ["opencode"],
+          favoriteModels: [],
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            defaultAgent: "opencode",
+            platforms: {
+              ...baseConfig.global.agentSettings?.platforms,
+              opencode: { mode: "native", model: "unqualified-model" },
+            },
+            actionDefaults: {
+              ...baseConfig.global.agentSettings?.actionDefaults,
+              newProject: { platform: "opencode", model: "unqualified-model" },
+            },
+          },
+        },
+      },
+    });
+
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={mock(async () => true)}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    await waitFor(() => expect(picker.textContent).toContain("unqualified-model"));
+    await act(async () => {
+      fireEvent.pointerDown(picker);
+    });
+
+    const row = within(screen.getByRole("group", { name: "Models", hidden: true })).getByRole(
+      "menuitemradio",
+      { name: /unqualified-model/, hidden: true },
+    );
+    expect(row.textContent).toContain("Configured default");
+    act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+    const buildPicker = screen.getByRole("combobox", {
+      name: "Build agent, model and reasoning",
+    });
+    await act(async () => {
+      fireEvent.pointerDown(buildPicker);
+    });
+    const buildRow = within(screen.getByRole("group", { name: "Models", hidden: true })).getByRole(
+      "menuitemradio",
+      { name: /unqualified-model/, hidden: true },
+    );
+    expect(buildRow.textContent).toContain("Configured default");
+    act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+  });
+
   test("uses the compact themed layout with equally sized name and agent controls", () => {
     render(
       <DockerAvailabilityProvider available>

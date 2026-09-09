@@ -34,7 +34,15 @@ const catalog: AgentModelCatalog = {
     },
   ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
-  opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: [] }],
+  opencode: [
+    {
+      id: "provider/model-a",
+      name: "OpenCode A",
+      providerLabel: "Provider Cloud",
+      description: "Fallback provider description",
+      reasoningEfforts: [],
+    },
+  ],
   cursor: [{ id: "cursor-a", name: "Cursor A", reasoningEfforts: [] }],
   grok: [{ id: "grok-a", name: "Grok A", reasoningEfforts: [] }],
   pi: [{ id: "anthropic/pi-a", name: "Pi A", reasoningEfforts: ["high"] }],
@@ -278,6 +286,18 @@ describe("BuildLaunchDialog", () => {
       name: /Claude B/,
     });
     expect(row.textContent).toContain("Fast implementation model");
+  });
+
+  test("prefers an explicit provider label for the model row caption", () => {
+    renderDialog();
+
+    openPicker("Build");
+    fireEvent.click(screen.getByRole("button", { name: "opencode models" }));
+    const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
+      name: /OpenCode A/,
+    });
+    expect(row.textContent).toContain("Provider Cloud");
+    expect(row.textContent).not.toContain("Fallback provider description");
   });
 
   test("hides disabled platforms and their favorites", () => {

@@ -193,7 +193,9 @@ function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]
       platform: agent,
       id: model.id,
       label: model.name,
-      ...(model.description ? { providerLabel: model.description } : {}),
+      ...(model.providerLabel || model.description
+        ? { providerLabel: model.providerLabel ?? model.description }
+        : {}),
       description: model.description,
       reasoning: model.reasoningEfforts.map((effort) => ({
         id: effort,

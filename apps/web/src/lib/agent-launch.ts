@@ -17,6 +17,8 @@ export type LaunchAgent = AgentPlatform;
 export interface AgentModelOption {
   id: string;
   name: string;
+  /** Provider caption shown beneath the model name in the shared picker. */
+  providerLabel?: string;
   description?: string;
   reasoningEfforts: string[];
   /**
@@ -114,6 +116,7 @@ export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): 
     platform,
     id: option.id,
     label: option.name,
+    ...(option.providerLabel ? { providerLabel: option.providerLabel } : {}),
     ...(option.description ? { description: option.description } : {}),
     ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
   };

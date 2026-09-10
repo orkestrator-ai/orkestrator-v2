@@ -42,7 +42,7 @@ specifications, package tests, and intentionally malformed fixtures. Use
 
 ## What the aggregate runner does
 
-`mise run test` starts four independent groups concurrently:
+`mise run test` submits four independent groups to the host capacity queue:
 
 | Group | Contents | Scheduling |
 | --- | --- | --- |
@@ -51,9 +51,13 @@ specifications, package tests, and intentionally malformed fixtures. Use
 | Bridges | ACP, Claude, Codex, Cursor, and Pi bridge tests | Turbo runs two bridge tasks, each with one Bun worker |
 | Protocol | Regeneration check for the committed Codex protocol lockfile | One independent command |
 
-The aggregate Bun worker budget is capped at eight. This avoids the memory and
-subprocess starvation seen when each concurrent group independently used every
-logical core. Smaller machines receive a proportionally smaller plan.
+All cooperating runs share a host budget: at most eight worker slots, leaving
+two logical cores free where possible, plus a memory admission budget of 65% of
+physical memory. The protocol check reserves one slot too. Groups run together
+when they fit; smaller machines queue groups instead of spawning extra workers.
+Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
+memory budget). These are admission estimates, not operating-system CPU or
+memory limits; measure peak use before increasing concurrency.
 
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure
@@ -195,8 +199,10 @@ summary records `timeoutReason` as `no-progress` or `absolute`.
 Because each group runs in its own process group, the terminal's Ctrl+C reaches
 the runner and nothing else. The runner relays it: on `SIGINT`, `SIGTERM`, or
 `SIGHUP` it terminates every live group tree, escalates to `SIGKILL` after two
-seconds, and releases the host lease. A second Ctrl+C bypasses the relay and
-stops the runner immediately, which can leave children behind.
+seconds, and cancels queued groups. Reservations remain occupied until their
+registered process groups have drained. A second Ctrl+C stops the runner
+immediately; the next scheduler participant drains its registered orphan groups
+before reclaiming their slots.
 
 For a known, legitimate long-running diagnostic, override only the necessary
 limit for that invocation, in milliseconds:
@@ -218,28 +224,81 @@ exact command, working directory, PID, or owned port before stopping it. Never
 kill by a broad executable name because other worktrees and agent profiles may
 be using the same runtime.
 
-## Full-suite lease
+## Host capacity queue
 
-Only one aggregate suite may run at a time for all linked worktrees of the same
-Git repository on a host. `mise run test`, `test:changed`, and `test:all` acquire
-a lease keyed by the Git common directory. A duplicate exits with status `75`
-and reports the owning PID, worktree, and start time instead of starting another
-set of workers. A lease whose PID no longer exists is reclaimed automatically.
+`mise run test`, `test:changed`, and `test:all` no longer reject a second suite
+because another worktree is testing. They print `QUEUED`, then `RUNNING` when
+capacity is granted. Group watchdogs start only after admission. The private
+SQLite queue is shared by local worktrees, repositories, agent platforms, and
+terminals for the same OS user. Transactions own admission; no UI or central
+daemon must remain mounted or connected.
 
-The lease prevents two agents or terminals from silently turning two fast runs
-into two slow, resource-starved runs. It does not prevent focused tests or
-development profiles from running, so account for those when investigating
-machine contention.
+Worker and memory reservations are fixed for each running group. Worktrees
+take fair turns, with FIFO ordering within a worktree. When the next eligible
+request is too large for the remaining capacity, it holds its place rather
+than allowing a stream of smaller jobs to starve it. This can deliberately
+leave some slots idle briefly. Repeated instances of the same group in one
+worktree also share an exclusive resource; iOS excludes every host job.
 
-For a deliberate controlled benchmark only, the lease can be bypassed:
+Queueing is cancellable and bounded: the default wait budget is 30 minutes,
+separate from execution watchdogs. A wait expiry or unavailable queue yields
+`INCOMPLETE`, never a passing result or an assertion-failure claim. Queue-only
+failures exit `75`; partial assertion failures remain visible in captured logs.
+The queue contains at most 256 reservations. Dead owners are not redispatched;
+their registered child groups are drained before capacity is returned.
 
-```bash
-ORKESTRATOR_TEST_ALLOW_CONCURRENT=1 mise run test
-```
+Configuration (use the same settings in all participating launchers):
 
-Do not use that override during normal development or CI. Concurrent suites can
-compete for memory, CPUs, ports, child-process capacity, and cache writes, so
-their durations and intermittent failures are not representative.
+| Environment variable | Purpose |
+| --- | --- |
+| `ORKESTRATOR_TEST_HOST_WORKERS` | Lower the host worker ceiling |
+| `ORKESTRATOR_TEST_HOST_MEMORY_MIB` | Lower the estimated host memory budget |
+| `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` | Wait deadline, from 1 second to 2 hours |
+| `ORKESTRATOR_TEST_SCHEDULER_DIR` | Private same-user SQLite directory; normally leave unset |
+| `ORKESTRATOR_COOPERATIVE_STARTUP_MS` | First-publish allowance before a cooperative runner is treated as stalled |
+| `ORKESTRATOR_COOPERATIVE_STALE_MS` | Silence after its last channel read before a cooperative runner is treated as stalled |
+
+An active queue keeps its original budget; changed settings apply when idle.
+The old `ORKESTRATOR_TEST_ALLOW_CONCURRENT` override no longer bypasses admission.
+Older worktrees that still use the fail-fast lease must be updated to participate
+in the new queue. Direct focused tests and unrelated dev servers do not reserve
+capacity automatically. A Docker container is a separate scheduler namespace;
+this is not a distributed scheduler or a physical-host container quota manager.
+
+### Multi Review validation
+
+The environment-owned worker persists queued/running command states and separate
+queue/execution durations alongside its heartbeat. Switching environments,
+closing the validation view, or reconnecting the backend does not start another
+command; the UI rehydrates from that state. Cancellation removes pending tickets
+and terminates owned processes. A stale worker remains uncertain until explicitly
+cancelled, never automatically retried.
+
+Ordinary discovered commands reserve half the host workers (`weight: 1`) or the
+whole budget (`weight: 2`), plus named exclusive resources. These declarations
+must honestly describe internally parallel commands. This repository declares
+its exact aggregate commands in `.orkestrator-test-scheduler.json`: they instead
+reserve their constituent groups and publish bounded scheduling state through a
+private per-command channel, avoiding nested/double reservations. A cooperative
+runner's startup (shell profile, toolchain resolution, transpilation) is allowed
+a generous first-publish window before it is considered stalled; staleness is
+then measured from its last successful read, not from spawn. A missing or stale
+cooperative heartbeat makes validation incomplete.
+Declared exclusive resources also reach those groups: constituents of one
+command may share them internally, but another command cannot use them while
+an owning group is running.
+
+Discovery must use those exact entries as separate commands. An unconfigured
+wrapper that launches an aggregate runner while holding its own reservation
+stops with an explicit infrastructure limitation (exit 75), instead of waiting
+for its own capacity forever. Declare the wrapper's cooperation before using it.
+
+After admission, the worker (and each cooperative group) rechecks clean HEAD.
+Changed snapshots require rediscovery rather than certifying stale code. One
+validation run still feeds the round's shared, hashed, immutable review artifacts;
+reviewers do not each launch full suites. `incomplete` evidence carries a reason
+and any partial logs. Reviewers must report that gap as a limitation, not invent
+a failed test or claim full validation passed.
 
 ## Caching and duration history
 
@@ -278,9 +337,13 @@ fails. A unit test derives the expected flags from `bunfig.toml` so the two
 cannot drift.
 
 The runner also keeps Bun timing profiles in a private temporary directory
-keyed by the Git common directory. Bun updates these files after each aggregate
+keyed by the Git common directory and worktree path. Bun updates these files after each aggregate
 run and uses them to schedule slow files earlier on future runs. The profiles
-are shared by linked worktrees and contain durations, not test output.
+are reused within a worktree and contain durations, not test output. Separate
+worktrees have separate writable profiles so concurrent runs cannot corrupt
+each other's timing files. Do not point concurrent worktrees at the same
+`ORKESTRATOR_TEST_TIMINGS_DIR` override. Turbo's immutable build cache remains
+shared across worktrees.
 
 When comparing performance, record whether the run was cold or warm, the commit,
 the host's logical core count, and whether a development profile or another

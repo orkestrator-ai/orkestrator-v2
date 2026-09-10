@@ -114,7 +114,7 @@ export type LoopedReviewSessionPhase = "preparation" | "discovery" | "fix" | "pr
  */
 export interface ReviewPackageCommandResult {
   command: string;
-  status: "passed" | "failed" | "skipped";
+  status: "passed" | "failed" | "skipped" | "incomplete";
   exitCode: number | null;
   /** Null for a skipped command, which produced no output to point at. */
   stdoutPath: string | null;
@@ -140,7 +140,7 @@ export interface ReviewPackageFile {
 /** The pre-file-backed inline package shape. Only legacy snapshots contain it. */
 export interface LegacyReviewPackageCommandResult {
   command: string;
-  status: "passed" | "failed" | "skipped";
+  status: "passed" | "failed" | "skipped" | "incomplete";
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -726,7 +726,12 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
       if (
         !isRecord(entry) ||
         !isBoundedNonEmptyString(entry.command, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) ||
-        (entry.status !== "passed" && entry.status !== "failed" && entry.status !== "skipped") ||
+        (entry.status !== "passed" &&
+          entry.status !== "failed" &&
+          entry.status !== "skipped" &&
+          entry.status !== "incomplete") ||
+        (entry.status === "incomplete" &&
+          !isBoundedNonEmptyString(entry.limitation, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH)) ||
         (entry.exitCode !== null && !Number.isSafeInteger(entry.exitCode)) ||
         !isNonNegativeInteger(entry.durationMs) ||
         !isNonNegativeInteger(entry.stdoutBytes) ||
@@ -741,7 +746,10 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
       // A command that ran points at both artifacts; a skipped one wrote
       // neither. Allowing one path without the other would leave a reviewer
       // told to read stderr that preparation never created.
-      if (entry.status === "skipped") {
+      if (
+        entry.status === "skipped" ||
+        (entry.status === "incomplete" && entry.stdoutPath === null)
+      ) {
         return entry.stdoutPath === null && entry.stderrPath === null;
       }
       return (
@@ -787,7 +795,10 @@ export function isLegacyReviewPackage(
       (entry) =>
         isRecord(entry) &&
         isBoundedNonEmptyString(entry.command, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH) &&
-        (entry.status === "passed" || entry.status === "failed" || entry.status === "skipped") &&
+        (entry.status === "passed" ||
+          entry.status === "failed" ||
+          entry.status === "skipped" ||
+          entry.status === "incomplete") &&
         (entry.exitCode === null || Number.isSafeInteger(entry.exitCode)) &&
         typeof entry.stdout === "string" &&
         typeof entry.stderr === "string" &&

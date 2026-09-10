@@ -198,6 +198,7 @@ function stateView(extras: Partial<NativeAgentSessionStateView> = {}): NativeAge
     interactions: [],
     composerControls: [],
     capabilities: nativeAgentCapabilities("codex"),
+    notices: [],
     ...extras,
   };
 }

@@ -15,6 +15,45 @@ import {
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
 
 describe("native agent remote projection synchronization", () => {
+  test("unsets a notice after an authoritative clean projection", async () => {
+    let notices = [{ kind: "warning" as const, message: "Provider is using a fallback" }];
+    const stub = createProviderStub("cursor", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [], notices }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-sync-notices-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-notices",
+        };
+        const liveWindow = { messages: 100, targetBytes: 512 * 1024 };
+        await service.ensureSession(identity);
+        const first = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow,
+        });
+        if (first.status !== "snapshot") throw new Error("Expected sync snapshot");
+        expect(first.projection.notices).toEqual(notices);
+
+        notices = [];
+        const recovered = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow,
+          knownToken: first.token,
+        });
+        if (recovered.status !== "delta") throw new Error("Expected sync delta");
+        expect(recovered.delta.unsetFields).toContain("notices");
+        expect(
+          applyNativeAgentProjectionDelta(first.projection, recovered.delta),
+        ).not.toHaveProperty("notices");
+      },
+    );
+  });
+
   test("synchronizes runtime-health authority as an explicit projection field", async () => {
     let authoritative = false;
     const stub = createProviderStub("cursor", {

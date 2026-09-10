@@ -27,7 +27,23 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { applyWorkingDirectory, workingDirectory } from "./config.js";
+import { applyWorkingDirectory, cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
+
+describe("Cursor SDK state", () => {
+  test("nests the SDK store below CURSOR_BRIDGE_STATE_DIR", () => {
+    const previous = process.env.CURSOR_BRIDGE_STATE_DIR;
+    const root = join(tmpdir(), "cursor-bridge-configured-state");
+    try {
+      process.env.CURSOR_BRIDGE_STATE_DIR = root;
+      expect(cursorSdkStateDirectoryPath()).toBe(join(root, "cursor-sdk"));
+      delete process.env.CURSOR_BRIDGE_STATE_DIR;
+      expect(cursorSdkStateDirectoryPath()).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
+      else process.env.CURSOR_BRIDGE_STATE_DIR = previous;
+    }
+  });
+});
 
 describe("applyWorkingDirectory", () => {
   const original = process.cwd();
@@ -95,6 +111,7 @@ function runBridgeScript(options: {
   /** The child's `CWD`: stands in for the environment worktree. */
   workspace: string;
   body: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const result = spawnSync(process.execPath, ["-e", options.body], {
     cwd: options.from,
@@ -105,6 +122,7 @@ function runBridgeScript(options: {
       // routable interface.
       PORT: "0",
       HOSTNAME: "127.0.0.1",
+      ...options.env,
     },
     encoding: "utf8",
     timeout: 60_000,
@@ -118,6 +136,8 @@ function runBridgeScript(options: {
 describe("the bridge process", () => {
   const roots: string[] = [];
   const configModule = pathToFileURL(join(import.meta.dir, "config.ts")).href;
+  const sdkRuntimeModule = pathToFileURL(join(import.meta.dir, "sdk-runtime.ts")).href;
+  const cursorSdkModule = import.meta.resolve("@cursor/sdk");
   const serverModule = pathToFileURL(join(import.meta.dir, "server.ts")).href;
 
   afterEach(() => {
@@ -157,6 +177,35 @@ describe("the bridge process", () => {
 
     expect(cwd).toBe(realpathSync(workspace));
     expect(existsSync(preloadMarker)).toBe(false);
+  });
+
+  test("configures the SDK with the production store rooted below bridge state", () => {
+    const { packageRoot, workspace } = fixture();
+    const stateRoot = join(packageRoot, "state");
+    const output = runBridgeScript({
+      from: packageRoot,
+      workspace,
+      env: { CURSOR_BRIDGE_STATE_DIR: stateRoot },
+      body: `const sdk = await import(${JSON.stringify(cursorSdkModule)});
+        const configured = [];
+        const original = sdk.Cursor.configure;
+        sdk.Cursor.configure = (options) => {
+          configured.push(options.local?.store);
+          return original.call(sdk.Cursor, options);
+        };
+        const runtime = await import(${JSON.stringify(sdkRuntimeModule)});
+        process.stdout.write(JSON.stringify({
+          configuredOnce: configured.length === 1,
+          configuredProductionStore: configured[0] === runtime.cursorLocalAgentStore,
+          storeRoot: runtime.cursorLocalAgentStoreRoot,
+        }));`,
+    });
+
+    expect(JSON.parse(output)).toEqual({
+      configuredOnce: true,
+      configuredProductionStore: true,
+      storeRoot: join(stateRoot, "cursor-sdk"),
+    });
   });
 
   test("re-enters the workspace when start() runs after a later cwd change", () => {

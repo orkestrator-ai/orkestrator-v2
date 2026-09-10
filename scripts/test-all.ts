@@ -42,11 +42,13 @@ import path from "node:path";
 import process from "node:process";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { createTestAdmission } from "./test-admission";
 
 const root = path.resolve(import.meta.dir, "..");
 
 export interface CommandResult {
   status: number | null;
+  infrastructureError?: boolean;
   /** Bounded tail of combined stdout/stderr for the console summary. */
   output?: string;
   /** Complete output up to the explicit safety limit. */
@@ -58,6 +60,9 @@ export interface CommandResult {
 
 export interface TestGroup {
   name: string;
+  workers?: number;
+  exclusive?: boolean;
+  onSpawn?: (pid: number) => void;
   command: string;
   args: string[];
   /** Extra variables layered over the inherited environment for this group. */
@@ -138,9 +143,15 @@ function repositoryStateKey(repositoryRoot: string): string {
 }
 
 export function createTestTimingsDirectory(repositoryRoot: string): string {
+  // Bun updates profiles in place. Linked worktrees can now execute the same
+  // group concurrently, so their mutable timing files must not share a writer.
+  const worktreeKey = createHash("sha256")
+    .update(path.resolve(repositoryRoot))
+    .digest("hex")
+    .slice(0, 20);
   const directory = path.join(
     tmpdir(),
-    `${TEST_TIMINGS_DIRECTORY_PREFIX}${repositoryStateKey(repositoryRoot)}`,
+    `${TEST_TIMINGS_DIRECTORY_PREFIX}${repositoryStateKey(repositoryRoot)}.${worktreeKey}`,
   );
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   return directory;
@@ -156,6 +167,7 @@ function processIsAlive(pid: number): boolean {
 }
 
 /**
+ * @deprecated Legacy compatibility helper, not used by the aggregate runner.
  * Prevents linked worktrees from starting full suites concurrently on one
  * host. The system-temp lock is keyed by Git's common directory, so all of a
  * repository's worktrees contend for the same lease.
@@ -334,7 +346,14 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       // workers or fixtures it spawned, rather than leaving descendants alive.
       detached: process.platform !== "win32",
     });
-    if (child.pid) liveGroupLeaders.add(child.pid);
+    if (child.pid) {
+      liveGroupLeaders.add(child.pid);
+      try {
+        group.onSpawn?.(child.pid);
+      } catch {
+        signalGroupLeader(child.pid, "SIGKILL");
+      }
+    }
 
     let outputBytes = 0;
     let persistedBytes = 0;
@@ -430,12 +449,14 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
         outputBytes,
         outputLimitExceeded,
         timeoutReason,
+        infrastructureError: errors.length > 0 || childStatus === null,
       });
     };
     const finishChild = (status: number | null) => {
       if (childFinished) return;
       childFinished = true;
       childStatus = status;
+      signalProcessTree("SIGKILL");
       if (child.pid) liveGroupLeaders.delete(child.pid);
       if (forceKill) clearTimeout(forceKill);
       if (noProgressTimer) clearTimeout(noProgressTimer);
@@ -513,6 +534,7 @@ export async function finalizeTestLogs(
       outputBytes: entry.result.outputBytes ?? 0,
       outputLimitExceeded: entry.result.outputLimitExceeded ?? false,
       timeoutReason: entry.result.timeoutReason,
+      infrastructureError: entry.result.infrastructureError ?? false,
       artifact: artifact ? path.basename(artifact) : undefined,
       artifactError,
     });
@@ -623,10 +645,16 @@ export function buildConcurrentGroups(
   timingsDirectory?: string,
 ): TestGroup[] {
   const workers = planWorkers(cores);
+  // Groups may queue on tiny hosts, but no individual child may exceed the
+  // capacity it reserves. The legacy plan's four-worker floor is not a grant.
+  const capacity = Math.max(1, Math.floor(cores) || 1);
+  workers.root = Math.min(capacity, workers.root);
+  workers.bridges = Math.min(capacity, workers.bridges);
   const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
   return [
     {
       name: "workspace (web, backend, desktop, web-public, cli, protocol)",
+      workers: workers.workspace * workers.workspaceConcurrency,
       command: "bunx",
       args: [
         "turbo",
@@ -649,6 +677,7 @@ export function buildConcurrentGroups(
     },
     {
       name: "root and agent-support tests",
+      workers: workers.root,
       command: "bun",
       // A bare `tests` is a Bun substring filter and also matches
       // packages/*/tests. An explicit relative path confines discovery to the
@@ -675,6 +704,7 @@ export function buildConcurrentGroups(
       // Turbo runs each script from its own package, so the scripts carry the
       // root `bunfig.toml` preloads explicitly.
       name: "bridges",
+      workers: workers.bridges,
       command: "bunx",
       args: [
         "turbo",
@@ -697,6 +727,7 @@ export function buildConcurrentGroups(
       // lack that managed binary, so the generator has an explicit offline
       // fallback for this pipeline only.
       name: "codex protocol lockfile",
+      workers: 1,
       command: "mise",
       args: ["run", "codex:protocol:check"],
       env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
@@ -711,18 +742,18 @@ function formatDuration(ms: number): string {
 export async function runAllTests(overrides: Partial<TestAllDependencies> = {}): Promise<number> {
   const dependencies = { ...defaultDependencies, ...overrides };
   const usesDefaultRunner = dependencies.runGroup === defaultRunGroup;
-  let lease: FullSuiteLease | undefined;
-  if (usesDefaultRunner) {
-    try {
-      lease = acquireFullSuiteLease(dependencies.root, dependencies.env);
-    } catch (error) {
-      dependencies.log(error instanceof Error ? error.message : String(error));
-      dependencies.log(
-        `No duplicate suite was started. Set ${TEST_ALLOW_CONCURRENT_ENV}=1 to override deliberately.`,
-      );
-      return 75;
-    }
+  let admission: ReturnType<typeof createTestAdmission> | undefined;
+  try {
+    if (usesDefaultRunner)
+      admission = createTestAdmission(dependencies.root, dependencies.env, dependencies.log);
+  } catch (error) {
+    dependencies.log(`INCOMPLETE: ${error instanceof Error ? error.message : String(error)}`);
+    return 75;
   }
+  const runGroup = (group: TestGroup, env: NodeJS.ProcessEnv) =>
+    admission
+      ? admission.run(group, (admitted) => dependencies.runGroup(admitted, env))
+      : dependencies.runGroup(group, env);
 
   // Groups run detached, in their own process groups, so the terminal's Ctrl+C
   // reaches this runner and nothing else. Without a relay the suite's children
@@ -735,8 +766,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     // Anything still alive after the grace period is not going to exit on its
     // own. A second Ctrl+C bypasses all of this: the handlers are one-shot.
     setTimeout(() => terminateActiveGroups("SIGKILL"), 2_000).unref();
-    lease?.release();
-    lease = undefined;
+    admission?.cancel();
     process.exitCode = 130;
   };
   const interruptListeners = new Map<NodeJS.Signals, () => void>();
@@ -754,7 +784,11 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const timingsDirectory =
       dependencies.env[TEST_TIMINGS_DIRECTORY_ENV] ||
       (usesDefaultRunner ? createTestTimingsDirectory(dependencies.root) : undefined);
-    const groups = buildConcurrentGroups(dependencies.cores, affected, timingsDirectory);
+    const groups = buildConcurrentGroups(
+      admission?.capacity.workers ?? dependencies.cores,
+      affected,
+      timingsDirectory,
+    );
     const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
     const logDirectory = usesDefaultRunner
       ? configuredLogDirectory || createTestLogDirectory()
@@ -773,6 +807,9 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       delete sanitizedEnvironment[name];
     }
     const runEnvironment: NodeJS.ProcessEnv = { ...sanitizedEnvironment };
+    delete runEnvironment.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
+    delete runEnvironment.ORKESTRATOR_VALIDATION_HEAD_REF;
+    delete runEnvironment.ORKESTRATOR_VALIDATION_RESOURCES;
     if (logDirectory) runEnvironment[TEST_LOG_DIRECTORY_ENV] = logDirectory;
     // Every workspace and bridge package script reads this to name its own
     // durations file, so it has to reach the group environments, not just the
@@ -788,14 +825,14 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const results: CompletedGroup[] = await Promise.all(
       groups.map(async (group) => {
         const groupStartedAt = Date.now();
-        const result = await dependencies.runGroup(
+        const result = await runGroup(
           group,
           group.env ? { ...runEnvironment, ...group.env } : runEnvironment,
         );
         const completed = { group, result, elapsedMs: Date.now() - groupStartedAt };
         completedCount += 1;
         dependencies.log(
-          `${result.status === 0 ? "PASS" : "FAIL"} ${group.name} finished (${completedCount}/${groups.length}, ${formatDuration(completed.elapsedMs)})`,
+          `${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : result.status === 0 ? "PASS" : "FAIL"} ${group.name} finished (${completedCount}/${groups.length}, ${formatDuration(completed.elapsedMs)})`,
         );
         return completed;
       }),
@@ -808,7 +845,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
       const status = result.status ?? 1;
       const banner = "=".repeat(72);
       dependencies.log(
-        `\n${banner}\n${status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
+        `\n${banner}\n${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
       );
       if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
       if (result.outputLimitExceeded) {
@@ -843,13 +880,14 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     ) {
       const iosGroup: TestGroup = {
         name: "ios",
+        exclusive: true,
         command: "bun",
         args: ["scripts/test-ios.ts"],
         timeoutMs: IOS_GROUP_TIMEOUT_MS,
       };
       dependencies.log(`\nRunning ${iosGroup.name}…`);
       const startedAt = Date.now();
-      const result = await dependencies.runGroup(iosGroup, runEnvironment);
+      const result = await runGroup(iosGroup, runEnvironment);
       const ios = { group: iosGroup, result, elapsedMs: Date.now() - startedAt };
       results.push(ios);
       const status = result.status ?? 1;
@@ -863,7 +901,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     return 0;
   } finally {
     for (const [signal, listener] of interruptListeners) process.off(signal, listener);
-    lease?.release();
+    admission?.close();
   }
 }
 

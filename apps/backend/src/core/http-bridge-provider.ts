@@ -64,8 +64,8 @@ import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
 import {
+  readHttpBridgeAuthoritativeSessionState,
   readHttpBridgeLegacyTranscript,
-  readHttpBridgeSessionState,
   readHttpBridgeTranscriptSnapshot,
   type LegacyTranscriptSnapshot,
 } from "./http-bridge-progressive.js";
@@ -601,11 +601,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
-    return readHttpBridgeSessionState({
+    return readHttpBridgeAuthoritativeSessionState({
       agent: this.agent,
       connection: this.connection,
       fetchImpl: this.fetchImpl,
       sessionId,
+      metadata: this.interactiveMetadata,
+      refreshRuntimeMetadata: () => this.refreshRuntimeMetadata(sessionId),
+      readRuntimeHealth: () => this.runtimeHealth(sessionId),
     });
   }
 

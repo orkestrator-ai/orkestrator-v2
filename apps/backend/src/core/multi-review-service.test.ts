@@ -5114,12 +5114,20 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
     async ({ service, start, snapshot }) => {
       const started = await start([{ agent: "opencode", model: "default" }]);
       await waitUntil(async () => (await snapshot(started.id))?.activeRequest?.state === "sent");
-      provider.statusValue = "idle";
+      const preparing = (await snapshot(started.id))!;
+      const preparationSessionId =
+        preparing.reviewSession?.providerSessionId ?? preparing.fixSession?.providerSessionId;
+      expect(preparationSessionId).toBeDefined();
+      // start() deliberately supervises in the background. If this test joins
+      // that run while it is still settling, runLocked may perform the queued
+      // reviewer pass before advanceNow() resolves. Complete only the
+      // preparation session so any reviewer admitted by that pass still sees
+      // the provider's default running state.
+      provider.statusOverrides.set(preparationSessionId!, "idle");
       await service.advanceNow(started.id);
       const reviewing = (await snapshot(started.id))!;
       expect(reviewing.phase).toBe("reviewing");
 
-      provider.statusValue = "running";
       await service.advanceNow(started.id);
       const firstRun = (await snapshot(started.id))!.reviewers[0]!;
       expect(firstRun.status).toBe("running");

@@ -7,16 +7,20 @@
  * would never reach for. `tests/unit/electron/cursor-sdk-bridge.test.ts` pins
  * the backend half; this pins the bridge half.
  *
- * The SDK is mocked because `credentialStore` is bound at module evaluation
- * and a real `FileCredentialStore` with no configured path writes to the
- * developer's own `~/.cursor/sdk/auth.json`. The mock is installed with the
- * snapshot-and-restore pattern so other suites in this process keep the real
- * module, and `credentials.js` is imported dynamically so it binds the mock.
+ * The credential runtime is injected directly so this owner never mutates
+ * Bun's process-wide module registry or reaches the developer's Cursor store.
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as realCursorSdk from "@cursor/sdk";
-
-const realCursorSdkSnapshot = { ...realCursorSdk };
+import {
+  authStatus,
+  beginLogin,
+  credentialStore,
+  logout,
+  resolveCredential,
+  useCursorCredentialRuntimeForTests,
+} from "./credentials.js";
+import { runLogin } from "./login-cli.js";
 
 interface StoredCredential {
   apiKey: string;
@@ -46,14 +50,12 @@ class FakeCredentialStore {
   }
 }
 
-mock.module("@cursor/sdk", () => ({
-  ...realCursorSdkSnapshot,
-  FileCredentialStore: FakeCredentialStore,
-  Cursor: {
-    ...(realCursorSdkSnapshot as { Cursor?: object }).Cursor,
-    // The bridge configures local agent persistence process-wide. Credential
-    // behavior is unrelated, but this mock still has to preserve that method.
-    configure: () => undefined,
+const previousApiKey = process.env.CURSOR_API_KEY;
+let restoreCredentialRuntime: () => void;
+
+beforeAll(() => {
+  restoreCredentialRuntime = useCursorCredentialRuntimeForTests({
+    store: new FakeCredentialStore(),
     auth: {
       login: (options: Record<string, unknown>) => {
         loginCalls.push(options);
@@ -63,18 +65,13 @@ mock.module("@cursor/sdk", () => ({
         logouts += 1;
         stored = undefined;
       },
-    },
-    me: async () => {
+    } as unknown as typeof realCursorSdk.Cursor.auth,
+    me: (async () => {
       meCalls += 1;
       return undefined;
-    },
-  },
-}));
-
-const { authStatus, beginLogin, logout, resolveCredential } = await import("./credentials.js");
-const { runLogin } = await import("./login-cli.js");
-
-const previousApiKey = process.env.CURSOR_API_KEY;
+    }) as typeof realCursorSdk.Cursor.me,
+  });
+});
 
 beforeEach(() => {
   stored = undefined;
@@ -87,12 +84,48 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  restoreCredentialRuntime();
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousApiKey;
-  mock.module("@cursor/sdk", () => realCursorSdkSnapshot);
 });
 
 describe("resolveCredential", () => {
+  test("restoring an injected runtime reinstates the prior store, auth, and identity clients", async () => {
+    stored = { apiKey: "outer-key", email: "outer@example.com" };
+    const outerStore = credentialStore;
+    let innerCredential: StoredCredential | undefined = {
+      apiKey: "inner-key",
+      email: "inner@example.com",
+    };
+    const innerStore = {
+      load: async () => innerCredential,
+      save: async (value: StoredCredential) => {
+        innerCredential = value;
+      },
+      clear: async () => {
+        innerCredential = undefined;
+      },
+    };
+    const restore = useCursorCredentialRuntimeForTests({
+      store: innerStore,
+      auth: {
+        status: async () => ({ status: "logged-in", email: "inner@example.com" }),
+      } as unknown as typeof realCursorSdk.Cursor.auth,
+      me: (async () => ({ apiKeyName: "Inner account" })) as typeof realCursorSdk.Cursor.me,
+    });
+
+    try {
+      expect(credentialStore).toBe(innerStore);
+      expect(await authStatus()).toMatchObject({ account: { label: "Inner account" } });
+    } finally {
+      restore();
+    }
+
+    expect(credentialStore).toBe(outerStore);
+    expect(await authStatus()).toMatchObject({ account: { label: "outer@example.com" } });
+    expect(meCalls).toBe(1);
+  });
+
   test("reports no credential when nothing is configured", async () => {
     expect(await resolveCredential()).toEqual({ source: "none" });
   });

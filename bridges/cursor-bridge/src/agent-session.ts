@@ -49,6 +49,16 @@ export class CredentialError extends Error {
   }
 }
 
+let cursorAgent = Agent;
+
+export function useCursorAgentForTests(agent: typeof Agent): () => void {
+  const previous = cursorAgent;
+  cursorAgent = agent;
+  return () => {
+    cursorAgent = previous;
+  };
+}
+
 export function newSessionState(
   clientSessionKey?: string,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
@@ -286,7 +296,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
     // the current policy. This also repairs placeholders restored after exit.
     if (state.agentId && !(await hasUnusedInitialRun(state.agentId))) {
       try {
-        const resumed = await Agent.resume(state.agentId, options);
+        const resumed = await cursorAgent.resume(state.agentId, options);
         state.agent = resumed;
         schedulePlanAccountRefresh();
         return resumed;
@@ -295,7 +305,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       }
     }
 
-    const created = await Agent.create({ ...options, name: "Orkestrator" });
+    const created = await cursorAgent.create({ ...options, name: "Orkestrator" });
     // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
     // state somehow lost its id), the replacement starts its cumulative token
     // and cost counters from zero; retaining the previous agent's floor would
@@ -599,12 +609,14 @@ export async function listResumableSessions(): Promise<JsonObject[]> {
   const items: SDKAgentInfo[] = [];
   let cursor: string | undefined;
   do {
-    const page = await Agent.list({
-      runtime: "local",
-      cwd: workingDirectory,
-      limit: MAX_RESUME_ENTRIES,
-      ...(cursor ? { cursor } : {}),
-    }).catch(() => ({ items: [], nextCursor: undefined }));
+    const page = await cursorAgent
+      .list({
+        runtime: "local",
+        cwd: workingDirectory,
+        limit: MAX_RESUME_ENTRIES,
+        ...(cursor ? { cursor } : {}),
+      })
+      .catch(() => ({ items: [], nextCursor: undefined }));
     items.push(...page.items);
     cursor = page.nextCursor;
   } while (cursor && items.length < 2_000);
@@ -671,7 +683,7 @@ async function listAllRuns(agentId: string): Promise<Run[]> {
   let cursor: string | undefined;
   do {
     const page = await withTimeout(
-      Agent.listRuns(agentId, {
+      cursorAgent.listRuns(agentId, {
         runtime: "local",
         cwd: workingDirectory,
         limit: MAX_RESUME_ENTRIES,

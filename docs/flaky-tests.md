@@ -30,10 +30,18 @@ history rather than two partial ones.
 - **Hypothesis:** another aggregate owner races the temporary project path or
   its mocked command environment. The isolated pass establishes a credible
   flake but does not yet identify that owner.
+- **Recurrence:** after merging `origin/main` on 2026-09-10,
+  `mise run test:changed` reproduced the same resolved-path assertion in
+  27.75 ms. The backend group reported 2,986 passed, 1 skipped, and 1 failed
+  across 134 files. The logged isolated rerun
+  `mise run test:logged -- --name project-creation-isolated -- bun test --cwd
+  apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/commands-project-creation.test.ts --parallel=1 --only-failures`
+  passed in 1.0 seconds.
 
-## Cursor SDK mocks in a shared-process run (2026-09-10)
+## Resolved: Cursor SDK mocks in a shared-process run (2026-09-10)
 
-- **Status:** open; isolated workers pass.
+- **Status:** resolved in this change.
 - **Original command:** `mise exec -- bun test bridges/cursor-bridge/src`
   (no worker isolation), 316 passed / 13 failed in 10.76 seconds.
 - **Owners and failures:** `agent-session.test.ts`: `configures one JSONL store
@@ -48,17 +56,33 @@ history rather than two partial ones.
   bridges/cursor-bridge/src/agent-session.test.ts` passed 32 tests in 441 ms;
   `mise exec -- bun test bridges/cursor-bridge/src/credentials.test.ts` passed
   21 tests in 346 ms.
-- **Hypothesis:** process-wide SDK mocks and cached runtime singletons leak
-  between owners without the per-file workers used by the repository runner.
-- **Additional failures:** two diagnostics assertions came from the inherited
-  `ORKESTRATOR_BRIDGE_DEBUG=1`, which overrides each test's provider-specific
-  debug setting. These are environment-dependent, not confirmed flakes. The
-  aggregate runner now removes global and provider-specific bridge diagnostic
-  flags from every child environment, so a live development profile cannot
-  alter the authoritative suite's assertion inputs.
-- **Verification:** `env -u ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
+- **Root cause:** `agent-session.test.ts`, `credentials.test.ts`, and
+  `initial-run.test.ts` each replaced `@cursor/sdk` process-wide. In a
+  non-isolated directory run, whichever owner first evaluated the cached
+  production singleton fixed its store and SDK bindings for later owners;
+  later mock replacements then made the already-loaded owners observe a
+  different suite's implementation.
+- **Fix:** the credential, Agent, model, store, and platform surfaces now use
+  explicit test injection. The three owners restore those dependencies after
+  their suite and no longer call `mock.module("@cursor/sdk")`, so module-cache
+  order cannot select another owner's fake.
+- **Additional deterministic fix:** two diagnostics assertions came from the
+  inherited `ORKESTRATOR_BRIDGE_DEBUG=1`, which intentionally overrides the
+  provider-specific flag those tests changed. The owner now saves, controls,
+  and restores the effective global flag; it passes all eight cases with the
+  inherited flag still set. These failures were environmental, not flakes.
+- **Verification:** the original shared-process shape, `env -u
+  ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test bridges/cursor-bridge/src
+  --only-failures`, now passes 342 tests across all 17 owners in 10.18 seconds.
+  The three affected owners also pass 70 tests with `--parallel=3` in 8.55
+  seconds. No assertion was removed or relaxed.
+- **Aggregate-environment hardening:** the runner also removes global and
+  provider-specific bridge diagnostic flags from every child environment, so a
+  live development profile cannot alter the authoritative suite's assertion
+  inputs. Before the dependency-injection fix, `env -u
+  ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
   ./bridges/cursor-bridge/src --parallel=4` passed 329 tests across all 17
-  owners in 8.96 seconds. No assertions were removed or relaxed.
+  owners in 8.96 seconds.
 
 ## 2026-09-08 review validation preparation
 
@@ -272,14 +296,21 @@ New open observations from the later aggregate runs:
   `mise exec -- bun test --preload ../../tests/setup-node.ts
   ./src/core/commands-project-creation.test.ts` from `apps/backend` passed all
   39 tests and 107 assertions in 1.30 s without a source change.
+- **2026-09-10 recurrence:** `mise run test` failed the same assertion twice in
+  consecutive eight-worker aggregate runs (30.61 ms and 29.46 ms); the exact
+  owner rerun passed in 30.92 ms. A bounded diagnostic on the second aggregate
+  recurrence found the retained project directory contained exactly `.git`,
+  so rollback had not removed any Git metadata. Evidence:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.omW1xF/summary.json`
+  and
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.EAbIpI/summary.json`.
 - **Hypothesis:** `createProjectFromScratch` awaits its best-effort rollback
   before rejecting, but the rollback deliberately swallows failures and first
-  abandons deletion if the directory identity changed. The aggregate output
-  records neither the retained directory contents nor which guard/failure path
-  left it behind, so it does not yet distinguish filesystem contention from an
-  identity-guard mismatch. A recurrence should capture both before changing
-  production rollback behavior; the package-install change does not load this
-  backend path.
+  abandons deletion if the directory identity changed. The new evidence rules
+  out an empty directory that merely missed `rmdir`, but still does not
+  distinguish an identity-guard refusal from an exception before or during
+  `.git` removal. A recurrence should capture that internal outcome before
+  changing the safety guard or production rollback behavior.
 
 ## `Files panel components > ChangedFileItem exposes revert and delete context actions` (`tests/unit/components/FilesPanel.test.tsx`)
 
@@ -3146,25 +3177,40 @@ Focused validation and the passing complete concurrent suite are recorded in
 the rows above. NativeAgent and FeaturesView remain open because stress passes
 alone do not supply the root cause and fix required for resolution.
 
-## `restarting a packaged reviewer re-verifies and reuses the read-only package prompt` (`apps/backend/src/core/multi-review-service.test.ts:4684`)
+## Resolved: `restarting a packaged reviewer re-verifies and reuses the read-only package prompt` (`apps/backend/src/core/multi-review-service.test.ts:5107`)
 
+- **Status:** resolved in this change.
 - **Observed:** 2026-09-07, during coordinator multi-provider work.
 - **Command:** `bun --cwd=apps/backend test --preload ../../tests/setup-node.ts src --parallel`
   (Bun's default worker count on this host).
 - **Suite counts:** 2,627 total, 2,626 passed, 1 failed across 114 files.
-- **Failure message:** not captured — the run was invoked with `--only-failures`
-  on the first observation and the case passed on every subsequent run, so no
-  assertion text was retained.
+- **Failure message:** the 2026-09-10 `mise run test` aggregate expected phase
+  `reviewing` but observed `consolidating` after 35.31 ms. The workspace group
+  reported 2,987 passed, 1 skipped, and 1 failed across 134 backend files.
 - **Isolated rerun:** `bun --cwd=apps/backend test --preload ../../tests/setup-node.ts
   src/core/multi-review-service.test.ts -t "re-verifies and reuses the read-only package prompt"`
   → 1 passed, 0 failed, repeated three times.
-- **Hypothesis:** unattributed. The case restarts a reviewer and re-verifies a
-  packaged prompt, which is subprocess- and filesystem-backed, so it belongs to
-  the same family as the timeout clusters resolved in the 2026-08-27 sweep. No
-  evidence was gathered to confirm that, and the failing assertion is unknown.
-- **Not caused by the change under test:** the coordinator work does not touch
-  multi-review packaging, and the file passes in isolation and in every
-  subsequent aggregate run.
+- **2026-09-10 isolated rerun:**
+  `mise run test:logged -- --name multi-review-service-isolated -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/multi-review-service.test.ts --parallel=1 --only-failures` passed
+  the owner in 6.3 seconds.
+- **Root cause:** the test changed the provider-wide status to `idle` to finish
+  package preparation. `start()` deliberately launches background supervision;
+  when the explicit `advanceNow()` joined that still-running pass, `runLocked`
+  consumed its queued pass before resolving. The newly admitted reviewer then
+  inherited `idle`, completed immediately, and advanced the workflow to
+  `consolidating`. Isolated scheduling usually let the startup pass settle
+  first, hiding the fixture error.
+- **Fix:** mark only the preparation session idle through the provider's
+  per-session status override. A queued reviewer pass now observes the default
+  `running` state, making the test independent of scheduler pass count while
+  preserving every package-integrity, prompt-reuse, and read-only assertion.
+- **Verification:** the exact case passed 100 consecutive reruns in 3.3
+  seconds, and its complete owning file passed in 6.2 seconds. The final
+  `mise run test` passed all four groups: workspace in 137.2 seconds,
+  root/agent-support in 89.9 seconds, bridges in 75.1 seconds, and the protocol
+  lockfile check in 530 ms.
 
 ## tmux generated blocking hooks under the aggregate run (`tests/unit/electron/tmux-commands.test.ts`)
 

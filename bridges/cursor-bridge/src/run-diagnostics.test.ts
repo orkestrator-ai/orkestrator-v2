@@ -35,13 +35,13 @@ describe("Cursor stall diagnostics", () => {
     for (const flag of ["", "0", "false", "off", "true", "secret"])
       expect(cursorDebugEnabled(flag)).toBe(false);
     expect(cursorDebugEnabled("1")).toBe(true);
-    const previous = process.env.CURSOR_BRIDGE_DEBUG;
+    const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     try {
-      delete process.env.CURSOR_BRIDGE_DEBUG;
+      delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       expect(createRunDiagnostics(newSessionState())).toBeUndefined();
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_BRIDGE_DEBUG;
-      else process.env.CURSOR_BRIDGE_DEBUG = previous;
+      if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previous;
     }
   });
 
@@ -242,13 +242,13 @@ describe("Cursor stall diagnostics", () => {
   });
 
   test("dispatch wires the debug gate, interaction updates and send failure cleanup", async () => {
-    const previous = process.env.CURSOR_BRIDGE_DEBUG;
+    const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
     const lines: string[] = [];
     const log = spyOn(console, "info").mockImplementation((line) => {
       lines.push(String(line));
     });
     try {
-      process.env.CURSOR_BRIDGE_DEBUG = "1";
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
       const state = newSessionState();
       state.status = "running";
       const agent = {
@@ -284,14 +284,14 @@ describe("Cursor stall diagnostics", () => {
       expect(lines.at(-1)).toContain('"phase":"send-failed"');
       expect(lines.join("\n")).not.toContain("PRIVATE");
       expect(lines.join("\n")).not.toContain("private-id");
-      process.env.CURSOR_BRIDGE_DEBUG = "0";
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
       const count = lines.length;
       await expect(dispatchPrompt(state, failing, { prompt: "x", images: [] })).rejects.toThrow();
       expect(lines.length).toBe(count);
     } finally {
       log.mockRestore();
-      if (previous === undefined) delete process.env.CURSOR_BRIDGE_DEBUG;
-      else process.env.CURSOR_BRIDGE_DEBUG = previous;
+      if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previous;
     }
   });
 });

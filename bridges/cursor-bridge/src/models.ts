@@ -27,6 +27,19 @@ export const FALLBACK_MODEL_ID = "composer-2";
 
 let catalogCache: AgentModel[] | null = null;
 let catalogProbe: Promise<AgentModel[]> | null = null;
+let cursorModels = Cursor.models;
+
+export function useCursorModelsForTests(models: typeof Cursor.models): () => void {
+  const previous = cursorModels;
+  cursorModels = models;
+  catalogCache = null;
+  catalogProbe = null;
+  return () => {
+    cursorModels = previous;
+    catalogCache = null;
+    catalogProbe = null;
+  };
+}
 
 export function emptyComposer(): NativeAgentComposerState {
   return {
@@ -62,7 +75,7 @@ export async function listModels(): Promise<AgentModel[]> {
     try {
       const { apiKey } = await resolveCredential();
       if (!apiKey) return [];
-      const items = await withTimeout(Cursor.models.list({ apiKey }), CATALOG_TIMEOUT_MS);
+      const items = await withTimeout(cursorModels.list({ apiKey }), CATALOG_TIMEOUT_MS);
       const models = items.map(normalizeModel).filter((model) => model.id.length > 0);
       if (models.length > 0) catalogCache = models;
       return models;

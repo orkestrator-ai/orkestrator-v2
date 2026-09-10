@@ -1,51 +1,41 @@
 /** Real SDK lifecycle/store; only model lookup and executor startup are stubbed. */
-import { afterAll, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import * as sdk from "@cursor/sdk";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const sdkSnapshot = { ...sdk };
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousApiKey = process.env.CURSOR_API_KEY;
 const root = await mkdtemp(join(tmpdir(), "cursor-initial-run-"));
 
 /**
  * The store is built here and installed in `beforeAll`, not selected through
- * `CURSOR_BRIDGE_STATE_DIR`.
- *
- * `sdk-runtime.js` is a process-wide singleton that builds its store during
- * module evaluation, and Bun shares one module registry across every suite in
- * a run. A sibling suite that mocks `@cursor/sdk` and imports the runtime
- * first therefore owns that store for the whole process, and no environment
- * variable set here can reach back and change it. Installing the store
- * explicitly makes this file independent of which suite ran before it.
+ * `CURSOR_BRIDGE_STATE_DIR`. `sdk-runtime.js` is a process-wide singleton, so
+ * direct injection keeps this owner independent of which suite imported it
+ * first without replacing `@cursor/sdk` in Bun's shared module registry.
  */
-const store: sdk.LocalAgentStore = new sdkSnapshot.JsonlLocalAgentStore(join(root, "cursor-sdk"));
+const store: sdk.LocalAgentStore = new sdk.JsonlLocalAgentStore(join(root, "cursor-sdk"));
 
 let platform: sdk.CursorAgentPlatform;
 let listedAgents: sdk.SDKAgentInfo[] = [];
 const createdOptions: sdk.AgentOptions[] = [];
-const cursorSdkMock = () => ({
-  ...sdkSnapshot,
-  Agent: {
-    ...sdkSnapshot.Agent,
-    create: async (options: sdk.AgentOptions) => {
-      createdOptions.push(options);
-      return platform.createAgent(options);
-    },
-    resume: (id: string, options: sdk.AgentOptions) => platform.resumeAgent(id, options),
-    list: async () => ({ items: listedAgents, nextCursor: undefined }),
+const testAgent = {
+  ...sdk.Agent,
+  create: async (options: sdk.AgentOptions) => {
+    createdOptions.push(options);
+    return platform.createAgent(options);
   },
-  createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => undefined }),
-});
-mock.module("@cursor/sdk", cursorSdkMock);
+  resume: (id: string, options: sdk.AgentOptions) => platform.resumeAgent(id, options),
+  list: async () => ({ items: listedAgents, nextCursor: undefined }),
+} as typeof sdk.Agent;
 
-const { hasUnusedInitialRun, useCursorLocalAgentStoreForTests } = await import("./sdk-runtime.js");
-const { newSessionState, ensureAgent, detachAgent, listResumableSessions } =
+const { hasUnusedInitialRun, useCursorLocalAgentStoreForTests, useCursorSdkRuntimeForTests } =
+  await import("./sdk-runtime.js");
+const { newSessionState, ensureAgent, detachAgent, listResumableSessions, useCursorAgentForTests } =
   await import("./agent-session.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
-platform = await sdkSnapshot.createAgentPlatform({
+platform = await sdk.createAgentPlatform({
   localStore: store,
   workspaceRef: root,
   scopedWorkspaceRef: root,
@@ -57,11 +47,17 @@ platform.acquireLocalExecutor = async () => {
 };
 
 let replacedStore: sdk.LocalAgentStore;
+let restoreAgent: () => void;
+let restoreRuntime: () => void;
 
 beforeAll(() => {
-  // Re-asserted here rather than left to import order: the last suite to load
-  // owns both singletons, and this file has to own them while it runs.
-  mock.module("@cursor/sdk", cursorSdkMock);
+  restoreAgent = useCursorAgentForTests(testAgent);
+  restoreRuntime = useCursorSdkRuntimeForTests({
+    configureStore: () => undefined,
+    createPlatform: (async () => ({
+      prewarmLocalWorkspace: async () => undefined,
+    })) as unknown as typeof sdk.createAgentPlatform,
+  });
   replacedStore = useCursorLocalAgentStoreForTests(store);
   process.env.CURSOR_BRIDGE_STATE_DIR = root;
   process.env.CURSOR_API_KEY = "test-key";
@@ -74,8 +70,9 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  restoreRuntime();
   useCursorLocalAgentStoreForTests(replacedStore);
-  mock.module("@cursor/sdk", () => sdkSnapshot);
+  restoreAgent();
   if (previousStateDir === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
   else process.env.CURSOR_BRIDGE_STATE_DIR = previousStateDir;
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;

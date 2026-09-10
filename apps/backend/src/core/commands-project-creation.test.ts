@@ -299,7 +299,12 @@ describe("create_project_from_scratch", () => {
     await withProjectCreation(runCommand, async (invoke, _storage, root) => {
       const projectPath = path.join(root, "missing-gh");
       await expect(invoke(projectPath)).rejects.toThrow("GitHub CLI is not installed");
-      await expect(fs.access(projectPath)).rejects.toThrow();
+      const retainedEntries = await fs
+        .readdir(projectPath)
+        .catch((error: NodeJS.ErrnoException) =>
+          error.code === "ENOENT" ? null : Promise.reject(error),
+        );
+      expect(retainedEntries === null ? null : retainedEntries.slice(0, 32)).toBeNull();
     });
   });
 

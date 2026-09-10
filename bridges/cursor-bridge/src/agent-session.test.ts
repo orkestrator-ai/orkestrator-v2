@@ -8,16 +8,14 @@
  * rule is only worth anything if it is actually exercised, which is what this
  * file does.
  *
- * `@cursor/sdk` is mocked with the snapshot-and-restore pattern so other suites
- * in this process keep the real module, and `agent-session.js` is imported
- * dynamically so it binds the mock.
+ * SDK surfaces are injected through the bridge's test seams so this owner is
+ * independent of Bun's process-wide module registry.
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import * as realCursorSdk from "@cursor/sdk";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { Agent, type CursorAgentPlatform, type LocalAgentStore } from "@cursor/sdk";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const realCursorSdkSnapshot = { ...realCursorSdk };
 const previousApiKey = process.env.CURSOR_API_KEY;
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousCredentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE;
@@ -64,72 +62,64 @@ function fakeSdkAgent(agentId: string) {
   };
 }
 
-mock.module("@cursor/sdk", () => ({
-  ...realCursorSdkSnapshot,
-  Cursor: {
-    ...(realCursorSdkSnapshot as { Cursor?: object }).Cursor,
-    configure: ({ local }: { local?: { store?: unknown } }) => {
-      configuredStores.push(local?.store);
+class FakeJsonlLocalAgentStore {
+  readonly agents = {
+    get: async () => ({ agentId: "agent-1", latestCheckpoint: "latest" }),
+    update: async ({ agent }: { agent: Record<string, unknown> }) => {
+      updatedAgent = agent;
     },
-    models: { list: async () => [] },
-  },
-  JsonlLocalAgentStore: class {
-    readonly agents = {
-      get: async () => ({ agentId: "agent-1", latestCheckpoint: "latest" }),
-      update: async ({ agent }: { agent: Record<string, unknown> }) => {
-        updatedAgent = agent;
-      },
-    };
-    readonly checkpoints = {};
-    readonly runs = {
-      list: async () => ({ items: storedRuns, nextCursor: undefined }),
-      delete: async ({ filter }: { filter: { runIds: string[] } }) => {
-        deletedRunBatches.push(filter.runIds);
-      },
-    };
-    readonly runEvents = { delete: async () => undefined };
+  };
+  readonly checkpoints = {};
+  readonly runs = {
+    list: async () => ({ items: storedRuns, nextCursor: undefined }),
+    delete: async ({ filter }: { filter: { runIds: string[] } }) => {
+      deletedRunBatches.push(filter.runIds);
+    },
+  };
+  readonly runEvents = { delete: async () => undefined };
 
-    constructor(root: string) {
-      jsonlStoreRoots.push(root);
-      jsonlStores.push(this);
-    }
-  },
-  createAgentPlatform: async (options: Record<string, unknown>) => {
-    platformOptions.push(options);
-    return {
-      prewarmLocalWorkspace: async (options: Record<string, unknown>) => {
-        // Sandbox discovery has no model, tools or MCP configuration and
-        // releases its own lease before the session's workspace is warmed.
-        if (!("model" in options)) {
-          sandboxBootstrapOptions.push(options);
-          return async () => {};
-        }
-        prewarmOptions.push(options);
-        if (prewarmFails) throw new Error("workspace scan unavailable");
-        return async () => {
-          warmWorkspaceReleases += 1;
-        };
-      },
-    };
-  },
-  Agent: {
-    create: async (options: Record<string, unknown>) => {
-      created.push(options);
-      return fakeSdkAgent("created-agent");
+  constructor(root: string) {
+    jsonlStoreRoots.push(root);
+    jsonlStores.push(this);
+  }
+}
+
+const createTestPlatform = async (options: Record<string, unknown>) => {
+  platformOptions.push(options);
+  return {
+    prewarmLocalWorkspace: async (options: Record<string, unknown>) => {
+      // Sandbox discovery has no model, tools or MCP configuration and
+      // releases its own lease before the session's workspace is warmed.
+      if (!("model" in options)) {
+        sandboxBootstrapOptions.push(options);
+        return async () => {};
+      }
+      prewarmOptions.push(options);
+      if (prewarmFails) throw new Error("workspace scan unavailable");
+      return async () => {
+        warmWorkspaceReleases += 1;
+      };
     },
-    resume: async (agentId: string, options: Record<string, unknown>) => {
-      resumed.push(agentId);
-      resumedOptions.push(options);
-      if (resumeFails) throw new Error("no such agent");
-      return fakeSdkAgent(agentId);
-    },
-    list: async () => listed,
-    listRuns: async () => {
-      if (listRunsFails) throw new Error("history unavailable");
-      return runs;
-    },
+  };
+};
+
+const testAgent = {
+  create: async (options: Record<string, unknown>) => {
+    created.push(options);
+    return fakeSdkAgent("created-agent");
   },
-}));
+  resume: async (agentId: string, options: Record<string, unknown>) => {
+    resumed.push(agentId);
+    resumedOptions.push(options);
+    if (resumeFails) throw new Error("no such agent");
+    return fakeSdkAgent(agentId);
+  },
+  list: async () => listed,
+  listRuns: async () => {
+    if (listRunsFails) throw new Error("history unavailable");
+    return runs;
+  },
+} as unknown as typeof Agent;
 
 const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
   await import("./config.js");
@@ -144,11 +134,38 @@ const {
   resolveCursorExecutionPolicy,
   resumeSession,
   rewindSessionHistory,
+  useCursorAgentForTests,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
-const { resetCursorSandboxBootstrapForTests } = await import("./sdk-runtime.js");
+const {
+  resetCursorSandboxBootstrapForTests,
+  useCursorLocalAgentStoreForTests,
+  useCursorSdkRuntimeForTests,
+} = await import("./sdk-runtime.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
+const { useCursorModelsForTests } = await import("./models.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
+
+const testStore = new FakeJsonlLocalAgentStore(
+  join(bridgeStateRoot, "cursor-sdk"),
+) as unknown as LocalAgentStore;
+let restoreAgent: () => void;
+let restoreModels: () => void;
+let restoreRuntime: () => void;
+let previousStore: LocalAgentStore;
+
+beforeAll(() => {
+  restoreAgent = useCursorAgentForTests(testAgent);
+  restoreModels = useCursorModelsForTests({
+    list: async () => [],
+  } as typeof import("@cursor/sdk").Cursor.models);
+  restoreRuntime = useCursorSdkRuntimeForTests({
+    configureStore: (store) => configuredStores.push(store),
+    createPlatform:
+      createTestPlatform as unknown as typeof import("@cursor/sdk").createAgentPlatform,
+  });
+  previousStore = useCursorLocalAgentStoreForTests(testStore);
+});
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
@@ -232,6 +249,10 @@ test("a Cursor model change clears parameters from the previous model", () => {
 
 afterAll(() => {
   sessions.clear();
+  restoreRuntime();
+  useCursorLocalAgentStoreForTests(previousStore);
+  restoreModels();
+  restoreAgent();
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousApiKey;
   if (previousStateDir === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
@@ -240,7 +261,6 @@ afterAll(() => {
   else process.env.CURSOR_BRIDGE_AUTH_FILE = previousCredentialFile;
   if (previousExecutionPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
   else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousExecutionPolicy;
-  mock.module("@cursor/sdk", () => realCursorSdkSnapshot);
 });
 
 /** A conversation turn in the shape `run.conversation()` returns. */

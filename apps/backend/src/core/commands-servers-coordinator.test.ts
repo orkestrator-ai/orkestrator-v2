@@ -14,6 +14,7 @@ import { runCommand } from "./shell.js";
 describe("Coordinator Codex server", () => {
   let root: string;
   let checkout: string;
+  let managedBin: string;
   let storage: StorageService;
   let previousCodexHome: string | undefined;
   let previousClaudeConfigDir: string | undefined;
@@ -36,6 +37,13 @@ describe("Coordinator Codex server", () => {
     await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
     await fs.mkdir(path.join(root, "bin"));
     await fs.writeFile(path.join(root, "bin", "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // Production resolves managed tools through a stable activation directory
+    // of symlinks into the version-pinned toolchain directory. Only a test
+    // that puts this in `toolchainBinDir` can tell a launch of the link apart
+    // from a launch of its target.
+    managedBin = path.join(root, "managed-bin");
+    await fs.mkdir(managedBin);
+    await fs.symlink(path.join(root, "bin", "codex"), path.join(managedBin, "codex"));
     storage = new StorageService(path.join(root, "data"));
     await storage.init();
     const config = await storage.loadConfig();
@@ -186,14 +194,6 @@ const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
 `,
     );
-    // Production resolves managed tools through a stable symlink farm. Codex
-    // re-execs argv[0] inside its macOS sandbox helper, so the bridge must be
-    // given the canonical target that its permission profile also allowlists.
-    const managedBin = path.join(root, "managed-bin");
-    if (process.platform !== "win32") {
-      await fs.mkdir(managedBin);
-      await fs.symlink(path.join(root, "bin", "codex"), path.join(managedBin, "codex"));
-    }
     const project = await storage.addProject(createProject("remote", checkout));
     const coordinator = new CoordinatorService(storage, () => ({
       enabled: true,
@@ -210,7 +210,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       coordinators: coordinator,
       appRoot: root,
       resourceRoot: root,
-      ...(process.platform === "win32" ? {} : { toolchainBinDir: managedBin }),
+      toolchainBinDir: managedBin,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
       controlMcp: {
@@ -251,6 +251,9 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await expect(fs.access(path.join(isolatedHome, "config.toml"))).rejects.toThrow();
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
+        // Codex re-execs argv[0] inside its macOS sandbox helper, so the
+        // bridge is handed the activation link's canonical target: the same
+        // directory the deny-by-default permission profile allowlists below.
         codexPath: path.join(root, "bin", "codex"),
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,
@@ -537,6 +540,53 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
       else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
     }
+  });
+
+  test("a worker Codex bridge keeps the managed activation link rather than its target", async () => {
+    // Canonicalizing the executable is a coordinator-only concession to its
+    // deny-by-default permission profile. A worker must keep the activation
+    // link, because Codex resolves the `codex-code-mode-host` companion from
+    // the directory it was launched from and the toolchain symlinks that
+    // companion next to the link, not only next to the pinned binary.
+    const bridge = path.join(root, "bridges", "codex-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH ?? null, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY ?? null, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE ?? null, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT ?? null }));
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    const project = await storage.addProject(createProject("remote", checkout));
+    const environment = createEnvironment(project.id, {
+      name: "local worker",
+      environmentType: "local",
+    });
+    environment.status = "running";
+    environment.worktreePath = checkout;
+    await storage.addEnvironment(environment);
+    const context = {
+      storage,
+      appRoot: root,
+      resourceRoot: root,
+      toolchainBinDir: managedBin,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+    } as CommandContext;
+    cleanupContext = context;
+    cleanupRuntimeId = environment.id;
+
+    await startLocalServerUnlocked(environment.id, context, "codex");
+    expect(JSON.parse(await fs.readFile(path.join(checkout, "captured.json"), "utf8"))).toEqual({
+      codexPath: path.join(managedBin, "codex"),
+      // The coordinator boundary is the only thing that sets these, so a
+      // worker that started reporting one would be running under a policy the
+      // backend never issued for it.
+      policy: null,
+      permissionProfile: null,
+      readableRuntimeRoot: null,
+    });
   });
 
   test("a coordinator runtime refuses a bridge that is not its own platform", async () => {

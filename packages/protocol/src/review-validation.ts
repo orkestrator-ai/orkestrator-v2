@@ -18,7 +18,10 @@ export interface ReviewValidationPlan {
 export interface ReviewValidationResult {
   id: string;
   command: string;
-  status: "pending" | "running" | "passed" | "failed" | "skipped";
+  status: "pending" | "queued" | "running" | "passed" | "failed" | "skipped" | "incomplete";
+  queuedMs?: number;
+  /** Authoritative execution clock, excluding pauses for host capacity. */
+  executionUpdatedAt?: string;
   exitCode: number | null;
   stdoutPath: string | null;
   stderrPath: string | null;
@@ -57,6 +60,7 @@ export interface ReviewValidationRun {
   discoveryDurationMs?: number;
   sealingDurationMs?: number;
   error?: string;
+  queueReason?: string;
   results: ReviewValidationResult[];
 }
 
@@ -129,6 +133,7 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
     (value.discoveryDurationMs !== undefined && !uint(value.discoveryDurationMs)) ||
     (value.sealingDurationMs !== undefined && !uint(value.sealingDurationMs)) ||
     (value.error !== undefined && !text(value.error)) ||
+    (value.queueReason !== undefined && !text(value.queueReason)) ||
     !Array.isArray(value.results) ||
     value.results.length !== value.plan.commands.length
   )
@@ -139,19 +144,25 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
       object(r) &&
       r.id === plan.commands[i]!.id &&
       r.command === plan.commands[i]!.command &&
-      ["pending", "running", "passed", "failed", "skipped"].includes(String(r.status)) &&
+      ["pending", "queued", "running", "passed", "failed", "skipped", "incomplete"].includes(
+        String(r.status),
+      ) &&
       (r.exitCode === null || Number.isSafeInteger(r.exitCode)) &&
       (r.stdoutPath === null || text(r.stdoutPath)) &&
       (r.stderrPath === null || text(r.stderrPath)) &&
       uint(r.stdoutBytes) &&
       uint(r.stderrBytes) &&
       uint(r.durationMs) &&
+      (r.queuedMs === undefined || uint(r.queuedMs)) &&
+      (r.executionUpdatedAt === undefined || date(r.executionUpdatedAt)) &&
       (r.limitation === null || text(r.limitation)) &&
       (r.startedAt === undefined || date(r.startedAt)) &&
       (r.stdoutSha256 === undefined || digest(r.stdoutSha256)) &&
       (r.stderrSha256 === undefined || digest(r.stderrSha256)) &&
       (r.status !== "passed" || r.exitCode === 0) &&
-      (value.status !== "completed" || ["passed", "failed", "skipped"].includes(String(r.status))),
+      (r.status !== "incomplete" || text(r.limitation)) &&
+      (value.status !== "completed" ||
+        ["passed", "failed", "skipped", "incomplete"].includes(String(r.status))),
   );
 }
 

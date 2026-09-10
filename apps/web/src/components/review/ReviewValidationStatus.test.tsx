@@ -69,6 +69,31 @@ function runningValidation(): ReviewValidationRun {
 }
 
 describe("ReviewValidationStatus", () => {
+  test("rehydrates a queued result and later incomplete evidence after an inactive view", () => {
+    const run = runningValidation();
+    Object.assign(run.results[0]!, {
+      status: "queued",
+      durationMs: 300,
+      queuedMs: 12000,
+      executionUpdatedAt: run.startedAt,
+    });
+    const view = render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+    expect(screen.getByText("Queued")).toBeTruthy();
+    expect(screen.getByText("waiting for capacity · 0.3s · queued 12.0s")).toBeTruthy();
+    view.unmount();
+    // The authoritative worker advances while no view is subscribed.
+    run.status = "completed";
+    run.completedAt = "2026-09-08T20:00:20.000Z";
+    Object.assign(run.results[0]!, {
+      status: "incomplete",
+      limitation: "Host capacity wait expired; validation is incomplete",
+    });
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+    expect(screen.getByText("incomplete · 0.3s · queued 12.0s")).toBeTruthy();
+    expect(screen.getByText("Host capacity wait expired; validation is incomplete")).toBeTruthy();
+    expect(screen.queryByText("failed") === null).toBe(true);
+  });
+
   test("uses the live clock for the validation run and every running command", () => {
     const run = runningValidation();
     const view = render(

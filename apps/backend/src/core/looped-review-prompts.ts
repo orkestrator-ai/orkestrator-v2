@@ -23,7 +23,7 @@ const nullableString = {
 export interface ReviewPreparationResult {
   validation: Array<{
     command: string;
-    status: "passed" | "failed" | "skipped";
+    status: "passed" | "failed" | "skipped" | "incomplete";
     exitCode: number | null;
     stdoutPath: string | null;
     stderrPath: string | null;
@@ -74,7 +74,7 @@ export const REVIEW_PREPARATION_RESULT_JSON_SCHEMA: JsonSchema = {
         ],
         properties: {
           command: { type: "string" },
-          status: { type: "string", enum: ["passed", "failed", "skipped"] },
+          status: { type: "string", enum: ["passed", "failed", "skipped", "incomplete"] },
           exitCode: { anyOf: [{ type: "integer" }, { type: "null" }] },
           stdoutPath: nullableString,
           stderrPath: nullableString,
@@ -171,25 +171,33 @@ export function parseReviewPreparationResult(value: unknown): ReviewPreparationR
         record(entry) &&
         typeof entry.command === "string" &&
         entry.command.trim().length > 0 &&
-        ["passed", "failed", "skipped"].includes(String(entry.status)) &&
+        ["passed", "failed", "skipped", "incomplete"].includes(String(entry.status)) &&
         (entry.exitCode === null || Number.isInteger(entry.exitCode)) &&
         (entry.stdoutPath === null || typeof entry.stdoutPath === "string") &&
         (entry.stderrPath === null || typeof entry.stderrPath === "string") &&
         Number.isInteger(entry.durationMs) &&
         (entry.durationMs as number) >= 0 &&
         (entry.limitation === null || typeof entry.limitation === "string") &&
-        (entry.status === "skipped"
-          ? entry.exitCode === null &&
-            entry.stdoutPath === null &&
-            entry.stderrPath === null &&
-            typeof entry.limitation === "string" &&
-            entry.limitation.trim().length > 0
-          : Number.isInteger(entry.exitCode) &&
-            typeof entry.stdoutPath === "string" &&
-            entry.stdoutPath.trim().length > 0 &&
-            typeof entry.stderrPath === "string" &&
-            entry.stderrPath.trim().length > 0 &&
-            (entry.status === "passed" ? entry.exitCode === 0 : entry.exitCode !== 0)),
+        (entry.status === "incomplete"
+          ? typeof entry.limitation === "string" &&
+            entry.limitation.trim().length > 0 &&
+            ((entry.stdoutPath === null && entry.stderrPath === null && entry.exitCode === null) ||
+              (typeof entry.stdoutPath === "string" &&
+                entry.stdoutPath.length > 0 &&
+                typeof entry.stderrPath === "string" &&
+                entry.stderrPath.length > 0))
+          : entry.status === "skipped"
+            ? entry.exitCode === null &&
+              entry.stdoutPath === null &&
+              entry.stderrPath === null &&
+              typeof entry.limitation === "string" &&
+              entry.limitation.trim().length > 0
+            : Number.isInteger(entry.exitCode) &&
+              typeof entry.stdoutPath === "string" &&
+              entry.stdoutPath.trim().length > 0 &&
+              typeof entry.stderrPath === "string" &&
+              entry.stderrPath.trim().length > 0 &&
+              (entry.status === "passed" ? entry.exitCode === 0 : entry.exitCode !== 0)),
     ) ||
     !Array.isArray(value.uncommittedFiles) ||
     !value.uncommittedFiles.every(
@@ -396,6 +404,7 @@ export const PACKAGED_REVIEW_WORKING_RULES = `### How to work
 - The package names the reviewed range and the exact \`diffCommand\` that produces it. Run that command yourself to read the diff.
 - Read any file you need. Use \`git show <headRef>:<path>\` when the worktree may have moved past the reviewed commit.
 - Validation already ran once for this round. Start with each \`validation\` entry's status, exit code, duration, and limitations. Passing commands need no log ingestion. For failures, search the referenced stdout/stderr artifacts and read bounded relevant ranges; never dump entire large logs into context. These are the captured command bytes; honor any incomplete-output limitation. Read evidence instead of rerunning the command. Do not rerun the full test suite, typecheck, or build; a single targeted test is acceptable when a finding genuinely depends on it.
+- An \`incomplete\` result means validation could not finish (for example, capacity wait expired, runner crashed, or output capture failed). It is neither a passing test nor an assertion failure. Report the validation gap as a limitation, inspect any captured partial evidence, and do not invent a code defect or launch another full suite to fill the gap.
 - Do not modify, create, or delete files, and do not commit, stash, reset, fetch, or switch branches. Report what you find instead of fixing it.
 - Do not ask questions or wait for input. Record anything you could not verify as a limitation.`;
 

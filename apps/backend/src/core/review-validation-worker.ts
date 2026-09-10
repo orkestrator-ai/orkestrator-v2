@@ -1,4 +1,5 @@
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { HOST_TEST_SCHEDULER_SOURCE } from "@orkestrator/protocol/host-test-scheduler";
 
 /**
  * Environment-side worker, launched with the application's Bun runtime from a
@@ -17,6 +18,15 @@ const statePath = path.join(directory, "state.json");
 const cancelPath = path.join(directory, "cancel");
 const lockPath = path.join(path.dirname(directory), ".validation-lock");
 const active = new Map();
+const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
+let scheduler;
+const tickets = new Set();
+const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS) || 1800000));
+// A cooperative child does real setup before its first publish (shell profile,
+// mise/toolchain resolution, transpilation). That is not a stalled runner, so it
+// gets a generous window; only its last successful read is treated as stale.
+const COOPERATIVE_STARTUP_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STARTUP_MS) || 60000));
+const COOPERATIVE_STALE_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STALE_MS) || 10000));
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 let totalBytes = 0;
@@ -55,22 +65,86 @@ function snapshotMatches() {
 
 async function execute(cmd, index) {
   const result = run.results[index];
+  let ticket;
+  let streams = [];
+  const queuedAt = Date.now();
+  result.status = "queued";
+  result.queuedMs = 0;
+  let cooperative = false;
+  try {
+    const configPath = path.join(root, ".orkestrator-test-scheduler.json");
+    const stat = fs.lstatSync(configPath);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4096 && cmd.cwd === ".") {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      cooperative = config.version === 1 && Array.isArray(config.cooperativeCommands) && config.cooperativeCommands.includes(cmd.command);
+    }
+  } catch {}
+  // Occupy this command's local slot even while it waits on the host. Otherwise
+  // later commands could leapfrog its dependency/resource reservation. A
+  // cooperative command admits itself inside its child, so it does not consume
+  // this worker's weight budget until that admission reports it running; a
+  // weight-2 cooperative child would otherwise stall unrelated local work for
+  // the whole host wait.
+  active.set(cmd.id, { cmd, stop: () => {}, weight: cooperative ? 0 : cmd.weight });
+  const channel = path.join(directory, "scheduler-" + index + ".json");
+  try {
+    if (!cooperative) {
+      scheduler ??= createScheduler();
+      const capacity = scheduler.capacity(), owner = scheduler.owner(root);
+      const workers = cmd.weight === 2 ? capacity.workers : Math.max(1, Math.floor(capacity.workers / 2));
+      ticket = scheduler.enqueue({ owner, workers, memoryMiB: Math.min(capacity.memoryMiB, workers * 1024),
+        resources: cmd.resources.map(resource => resource === "*" ? "*" : "resource:" + createHash("sha256").update(resource).digest("hex")) });
+      tickets.add(ticket);
+      persist();
+      while (scheduler.poll(ticket).state !== "running") {
+        result.queuedMs = Date.now() - queuedAt;
+        if (stopping) throw new Error("Validation was cancelled while queued");
+        if (result.queuedMs >= QUEUE_TIMEOUT_MS) throw new Error("Host capacity wait expired; command did not run");
+        await delay(100);
+      }
+    }
+    result.queuedMs = Date.now() - queuedAt;
+    if (stopping) throw new Error("Validation was cancelled before execution");
+    if (!snapshotMatches()) {
+      run.error = "Repository changed while validation was queued; rediscover against the current snapshot";
+      stop(run.error);
+      throw new Error(run.error);
+    }
   const cwd = fs.realpathSync(path.resolve(root, cmd.cwd));
   if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error("Validation working directory escapes the workspace");
   const ordinal = String(index + 1).padStart(2, "0");
-  const streams = ["stdout", "stderr"].map(name => {
-    const file = path.join(directory, "validation-" + ordinal + "." + name + ".txt");
-    const fd = fs.openSync(file, "wx", 0o600);
-    result[name + "Path"] = path.relative(root, file).split(path.sep).join("/");
-    return { name, file, fd, hash: createHash("sha256"), bytes: 0 };
-  });
+  // Open both artifacts before recording either path. A one-sided pair is
+  // rejected by the preparation contract, so failing the second open must not
+  // leave a path a reviewer would be told to read.
+  try {
+    for (const name of ["stdout", "stderr"]) {
+      const file = path.join(directory, "validation-" + ordinal + "." + name + ".txt");
+      const fd = fs.openSync(file, "wx", 0o600);
+      streams.push({ name, file, fd, hash: createHash("sha256"), bytes: 0 });
+    }
+  } catch (error) {
+    for (const stream of streams) { try { fs.closeSync(stream.fd); } catch {} try { fs.unlinkSync(stream.file); } catch {} }
+    streams.length = 0;
+    throw error;
+  }
+  for (const stream of streams) result[stream.name + "Path"] = path.relative(root, stream.file).split(path.sep).join("/");
   result.status = "running";
   result.startedAt = new Date().toISOString();
   const started = performance.now();
   persist();
   await new Promise(resolve => {
     const shell = "( while kill -0 \"$2\" 2>/dev/null; do sleep 1; done; kill -KILL -- -$$ ) </dev/null >/dev/null 2>&1 & __orkestrator_validation_watchdog=$!; trap 'kill \"$__orkestrator_validation_watchdog\" 2>/dev/null || true' EXIT; eval \"$1\"";
-    const child = spawn("bash", ["-lc", shell, "review-validation", cmd.command, String(process.pid)], { cwd, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    // Do not leak an outer command's cooperative channel into unrelated nested
+    // runners. A declared cooperative command owns this private channel only.
+    const env = { ...process.env };
+    delete env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
+    delete env.ORKESTRATOR_VALIDATION_HEAD_REF;
+    delete env.ORKESTRATOR_TEST_PARENT_RESERVATION;
+    delete env.ORKESTRATOR_VALIDATION_RESOURCES;
+    if (!cooperative) env.ORKESTRATOR_TEST_PARENT_RESERVATION = run.id;
+    if (cooperative) env.ORKESTRATOR_VALIDATION_RESOURCES = JSON.stringify(cmd.resources.map(resource => resource === "*" ? "*" : "resource:" + createHash("sha256").update(resource).digest("hex")));
+    if (cooperative) { env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE = channel; env.ORKESTRATOR_VALIDATION_HEAD_REF = run.plan.headRef; }
+    const child = spawn("bash", ["-lc", shell, "review-validation", cmd.command, String(process.pid)], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let failure;
     let forceKill;
     const stopJob = reason => {
@@ -79,8 +153,38 @@ async function execute(cmd, index) {
       killTree(child, "SIGTERM");
       forceKill = setTimeout(() => killTree(child, "SIGKILL"), 1000);
     };
-    active.set(cmd.id, { cmd, stop: stopJob });
-    const timeout = setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
+    active.set(cmd.id, { cmd, stop: stopJob, weight: cooperative ? 0 : cmd.weight });
+    try { if (ticket && child.pid) scheduler.registerChild(ticket, child.pid); }
+    catch { stopJob("Validation reservation could not record its child; evidence is incomplete"); }
+    let projection;
+    // Measure staleness from the last successful read, not from spawn. Before
+    // the first publish the channel does not exist, so every read fails; a cold
+    // startup must not be mistaken for a dead runner.
+    let lastProgressAt = started;
+    const updateClock = () => {
+      if (!cooperative) return;
+      try {
+        const stat = fs.lstatSync(channel);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error();
+        const value = JSON.parse(fs.readFileSync(channel, "utf8"));
+        if (value.version !== 1 || !["queued", "running", "completed", "incomplete"].includes(value.state) ||
+            !Number.isSafeInteger(value.executionMs) || value.executionMs < 0 || !Number.isSafeInteger(value.queuedMs) || value.queuedMs < 0 ||
+            !Number.isFinite(value.heartbeat) || Date.now() - value.heartbeat > COOPERATIVE_STALE_MS) throw new Error();
+        projection = value;
+        lastProgressAt = performance.now();
+        result.status = value.state === "queued" ? "queued" : "running";
+        result.durationMs = value.executionMs;
+        result.queuedMs = value.queuedMs;
+        result.executionUpdatedAt = new Date(value.heartbeat).toISOString();
+        const job = active.get(cmd.id);
+        if (job && value.state === "running") job.weight = cmd.weight;
+        if (value.queuedMs >= QUEUE_TIMEOUT_MS) stopJob("Host capacity wait expired; validation is incomplete");
+        if (value.executionMs >= cmd.timeoutMs) stopJob("Validation command timed out");
+      } catch {
+        if (performance.now() - lastProgressAt > (projection ? COOPERATIVE_STALE_MS : COOPERATIVE_STARTUP_MS)) stopJob("Cooperative test runner stopped reporting scheduling progress; validation is incomplete");
+      }
+    };
+    const timeout = cooperative ? setInterval(updateClock, 100) : setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
     child.on("error", () => stopJob("Validation command could not start"));
     [child.stdout, child.stderr].forEach((source, i) => source.on("data", chunk => {
       if (failure) return;
@@ -99,13 +203,15 @@ async function execute(cmd, index) {
     }));
     child.on("close", code => {
       clearTimeout(timeout);
+      updateClock();
       // Clean up descendants even if their parent exited without waiting for them.
       killTree(child, "SIGKILL");
       if (forceKill) clearTimeout(forceKill);
       result.exitCode = typeof code === "number" ? code : null;
-      result.status = code === 0 && !failure ? "passed" : "failed";
-      result.limitation = failure ?? (code === null ? "Validation command ended without an exit code" : null);
-      result.durationMs = Math.round(performance.now() - started);
+      const unavailable = failure ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
+      result.status = unavailable ? "incomplete" : code === 0 ? "passed" : "failed";
+      result.limitation = unavailable;
+      result.durationMs = cooperative && projection ? projection.executionMs : Math.round(performance.now() - started);
       try {
         for (const stream of streams) {
           fs.closeSync(stream.fd);
@@ -123,6 +229,21 @@ async function execute(cmd, index) {
       }
     });
   });
+  } catch (error) {
+    result.status = "incomplete";
+    result.limitation = error.message || "Validation infrastructure was unavailable";
+    result.queuedMs = Date.now() - queuedAt;
+    // Never leave one artifact path without the other: preparation rejects a
+    // one-sided pair, which would turn this failure into an unparseable result.
+    result.stdoutPath = null;
+    result.stderrPath = null;
+    for (const stream of streams) { try { fs.closeSync(stream.fd); } catch {} try { fs.unlinkSync(stream.file); } catch {} }
+    streams.length = 0;
+    persist();
+  } finally {
+    active.delete(cmd.id);
+    if (ticket) { scheduler.release(ticket); tickets.delete(ticket); }
+  }
 }
 
 async function main() {
@@ -145,17 +266,23 @@ async function main() {
       }
       catch (error) { if (error.code !== "EEXIST") throw error; }
       if (!ownsLock) {
-        if (Date.now() - queuedAt > 120000) throw new Error("Another validation owns this workspace; retry after it stops");
+        run.queueReason = "Waiting for another validation in this workspace";
+        if (Date.now() - queuedAt > QUEUE_TIMEOUT_MS) {
+          for (const result of run.results) Object.assign(result, { status: "incomplete", queuedMs: Date.now() - queuedAt, limitation: "Workspace capacity wait expired; command did not run" });
+          run.status = "completed";
+          return;
+        }
         await delay(100);
       }
     }
+    delete run.queueReason;
     if (!stopping && !snapshotMatches()) throw new Error("Repository changed after discovery or is not clean; rediscover validation against the current snapshot");
     const pending = new Set(run.plan.commands.map((_, i) => i));
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = run.plan.commands[index];
         const dependencies = cmd.dependsOn.map(id => run.results.find(result => result.id === id));
-        if (dependencies.some(result => result.status === "pending" || result.status === "running")) continue;
+        if (dependencies.some(result => ["pending", "queued", "running"].includes(result.status))) continue;
         if (dependencies.some(result => result.status !== "passed")) {
           Object.assign(run.results[index], { status: "skipped", limitation: "A prerequisite did not pass" });
           pending.delete(index);
@@ -163,7 +290,7 @@ async function main() {
           continue;
         }
         const jobs = Array.from(active.values());
-        if (jobs.reduce((sum, job) => sum + job.cmd.weight, 0) + cmd.weight > 2) continue;
+        if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > 2) continue;
         if (jobs.some(job => cmd.resources.includes("*") || job.cmd.resources.includes("*") || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
         pending.delete(index);
         const task = execute(cmd, index).catch(() => {
@@ -191,6 +318,9 @@ async function main() {
     run.error = error.message;
   } finally {
     clearInterval(heartbeat);
+    delete run.queueReason;
+    for (const ticket of tickets) scheduler?.release(ticket);
+    scheduler?.close();
     run.completedAt = new Date().toISOString();
     try { persist(); }
     finally { if (ownsLock) { fs.unlinkSync(path.join(lockPath, "owner")); fs.rmdirSync(lockPath); } }

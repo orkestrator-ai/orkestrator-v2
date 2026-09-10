@@ -42,7 +42,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
 async function profileStatus(): Promise<Status> {
-  const command = spawnSync("bun", ["run", "dev:status", "--", "--profile", profile, "--json"], {
+  const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
@@ -54,7 +54,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
   // Exercise the exact host command agents use. Its stdout is parsed in memory
   // and never copied into Playwright output, so the one-shot code stays out of
   // traces and reports.
-  const command = spawnSync("bun", ["run", "dev:login", "--", "--profile", profile, "--json"], {
+  const command = spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
@@ -593,7 +593,7 @@ test("Docker fixture ships a Playwright browser that launches for both container
   }
 });
 
-test("review validation runs through the real backend while its environment is inactive", async ({
+test("review validation queues across worktrees and runs while its environment is inactive", async ({
   page,
 }) => {
   const status = await profileStatus();
@@ -603,6 +603,7 @@ test("review validation runs through the real backend while its environment is i
   )!;
   const environments: Environment[] = [];
   let run: ReviewValidationRun | undefined;
+  let blocker: ReviewValidationRun | undefined;
   try {
     for (const name of ["validation-active", "validation-other"]) {
       const environment = await invoke<Environment>("create_environment", {
@@ -623,6 +624,38 @@ test("review validation runs through the real backend while its environment is i
       { environmentId: target!.id },
     );
     expect(snapshot.paths).toEqual([]);
+    const otherSnapshot = await invoke<{ head: string; paths: string[] }>(
+      "get_environment_uncommitted_paths",
+      { environmentId: other!.id },
+    );
+    blocker = newReviewValidationRun(`review-validation-blocker-${Date.now()}`, {
+      headRef: otherSnapshot.head,
+      limitations: [],
+      commands: [
+        {
+          id: "host-capacity",
+          command: "sleep 6",
+          cwd: ".",
+          dependsOn: [],
+          resources: [],
+          weight: 2,
+          timeoutMs: 10000,
+        },
+      ],
+    });
+    blocker = await invoke<ReviewValidationRun>("start_review_validation", {
+      environmentId: other!.id,
+      run: blocker,
+    });
+    await expect
+      .poll(async () => {
+        blocker = await invoke<ReviewValidationRun>("status_review_validation", {
+          environmentId: other!.id,
+          run: blocker,
+        });
+        return blocker.results[0]!.status;
+      })
+      .toBe("running");
     run = newReviewValidationRun(`review-validation-browser-${Date.now()}`, {
       headRef: snapshot.head,
       limitations: [],
@@ -651,6 +684,15 @@ test("review validation runs through the real backend while its environment is i
       environmentId: target!.id,
       run,
     });
+    await expect
+      .poll(async () => {
+        run = await invoke<ReviewValidationRun>("status_review_validation", {
+          environmentId: target!.id,
+          run,
+        });
+        return run.results[0]!.status;
+      })
+      .toBe("queued");
     await page.mouse.move(1100, 20);
     await page.getByText(other!.name, { exact: true }).first().click();
     await expect
@@ -666,6 +708,7 @@ test("review validation runs through the real backend while its environment is i
       )
       .toBe("completed");
     expect(run.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+    expect(run.results[0]!.queuedMs).toBeGreaterThan(0);
     const completed = run;
     await page.reload();
     await page.getByRole("button", { name: `Expand project ${fixture.name}` }).click();
@@ -677,6 +720,11 @@ test("review validation runs through the real backend while its environment is i
     expect(restored).toEqual(completed);
     expect(restored.results.every((result) => result.stdoutSha256?.length === 64)).toBe(true);
   } finally {
+    if (blocker)
+      await invoke("cancel_review_validation", {
+        environmentId: environments[1]!.id,
+        run: blocker,
+      }).catch(() => undefined);
     if (run)
       await invoke("cancel_review_validation", { environmentId: environments[0]!.id, run }).catch(
         () => undefined,

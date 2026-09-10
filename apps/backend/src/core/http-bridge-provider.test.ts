@@ -2002,4 +2002,25 @@ describe("HTTP bridge progressive transcript", () => {
     expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
     expect(state).not.toHaveProperty("messages");
   });
+
+  test("prefers an explicit resumable identity and drops invalid identities", async () => {
+    for (const [resumableSessionId, expected] of [
+      ["  external-session  ", "external-session"],
+      ["   ", undefined],
+      [42, undefined],
+    ] as const) {
+      const { provider } = httpProvider(
+        () =>
+          Response.json({
+            status: "idle",
+            threadId: "codex-thread",
+            resumableSessionId,
+          }),
+        codexConnection,
+      );
+
+      const state = await provider.sessionStateSnapshot!("session-1");
+      expect(state.resumableSessionId).toBe(expected ?? "codex-thread");
+    }
+  });
 });

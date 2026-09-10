@@ -9,6 +9,7 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;
@@ -796,7 +797,12 @@ export async function resumeSession(
     mode?: CodexConversationMode;
     fastMode?: boolean;
   },
-): Promise<{ session: CodexSession; messages: CodexMessage[] } | null> {
+): Promise<{
+  session: CodexSession;
+  messages: CodexMessage[];
+  messageWindow?: TranscriptWindowMetadata;
+} | null> {
+  let session: CodexSession;
   try {
     const response = await fetchCodex(client, "/session/resume", {
       method: "POST",
@@ -806,16 +812,27 @@ export async function resumeSession(
     if (!response.ok) return null;
     const data = await response.json();
     if (typeof data.sessionId !== "string" || !data.sessionId) return null;
-    return {
-      session: {
-        sessionId: data.sessionId,
-        title: data.title,
-      },
-      messages: await getSessionMessages(client, data.sessionId, { throwOnError: true }),
+    session = {
+      sessionId: data.sessionId,
+      title: data.title,
     };
   } catch (error) {
     console.error("[codex-client] Failed to resume session:", error);
     return null;
+  }
+
+  try {
+    const hydrated = await fetchSessionMessages(client, session.sessionId);
+    return {
+      session,
+      messages: hydrated.messages,
+      ...(hydrated.messageWindow ? { messageWindow: hydrated.messageWindow } : {}),
+    };
+  } catch (error) {
+    // The bridge already adopted the thread. Keep its session id reachable so
+    // the normal transcript reconciliation path can retry this failed read.
+    console.error("[codex-client] Failed to hydrate resumed session:", error);
+    return { session, messages: [] };
   }
 }
 
@@ -893,12 +910,7 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean } = {},
 ): Promise<CodexMessage[]> {
   try {
-    const response = await fetchCodex(client, `/session/${sessionId}/messages`);
-    if (!response.ok) {
-      throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
-    }
-    const data = await response.json();
-    return Array.isArray(data.messages) ? data.messages : [];
+    return (await fetchSessionMessages(client, sessionId)).messages;
   } catch (error) {
     console.error("[codex-client] Failed to get session messages:", error);
     if (options.throwOnError) {
@@ -906,6 +918,31 @@ export async function getSessionMessages(
     }
     return [];
   }
+}
+
+async function fetchSessionMessages(
+  client: CodexClient,
+  sessionId: string,
+): Promise<{ messages: CodexMessage[]; messageWindow?: TranscriptWindowMetadata }> {
+  const response = await fetchCodex(client, `/session/${sessionId}/messages`);
+  if (!response.ok) {
+    throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
+  }
+  const data = (await response.json()) as Record<string, unknown>;
+  if (!data || typeof data !== "object" || !Array.isArray(data.messages)) {
+    throw new Error("Failed to get Codex session messages: malformed response");
+  }
+  const rawWindow = data.messageWindow;
+  const messageWindow =
+    rawWindow &&
+    typeof rawWindow === "object" &&
+    typeof (rawWindow as { truncated?: unknown }).truncated === "boolean"
+      ? (rawWindow as TranscriptWindowMetadata)
+      : undefined;
+  return {
+    messages: data.messages as CodexMessage[],
+    ...(messageWindow ? { messageWindow } : {}),
+  };
 }
 
 const CONTEXT_USAGE_SOURCES: ReadonlySet<string> = new Set([

@@ -106,7 +106,7 @@ describe("ACP bridge", () => {
       await nativeFetch(`${bridge.base}/session/${resumed.sessionId}/status`, {
         headers: bridge.headers,
       }).then((statusResponse) => statusResponse.json()),
-    ).toMatchObject({ policy });
+    ).toMatchObject({ policy, resumableSessionId: listed.sessions[0]!.id });
   });
 
   test("pages the ACP session list and de-duplicates across pages", async () => {

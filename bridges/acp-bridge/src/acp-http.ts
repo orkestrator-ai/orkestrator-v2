@@ -40,6 +40,7 @@ import {
   agentRuntime,
   clientSessionKeys,
   configuredAcpMcpServers,
+  externalSessionToken,
   provider,
   sessions,
   isObject,
@@ -221,6 +222,9 @@ export async function route(
       error: state.error,
       revision: state.revision,
       composer: state.sessionConfig.composer,
+      ...(state.acpSessionId
+        ? { resumableSessionId: externalSessionToken(state.acpSessionId) }
+        : {}),
       ...(state.policy ? { policy: state.policy } : {}),
       ...(contextUsage ? { contextUsage } : {}),
       runtime: publicRuntime(state),

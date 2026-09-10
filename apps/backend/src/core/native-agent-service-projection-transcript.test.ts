@@ -224,6 +224,92 @@ describe("NativeAgentService transcript projection", () => {
     );
   });
 
+  test("filters the stored provider session when no state snapshot is available", async () => {
+    const stub = createProviderStub("codex");
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: "provider-session" },
+      { sessionId: "other-thread" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-fallback-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-resume-fallback",
+        };
+        await service.ensureSession(identity);
+        await expect(service.listProjectionResumableSessions(identity)).resolves.toEqual([
+          { sessionId: "other-thread" },
+        ]);
+      },
+    );
+  });
+
+  test("falls back to the stored provider session when state snapshot fails", async () => {
+    const stub = createProviderStub("codex", {
+      sessionStateSnapshot: async () => {
+        throw new Error("status unavailable");
+      },
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: "provider-session" },
+      { sessionId: "other-thread" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-status-failure-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-resume-status-failure",
+        };
+        await service.ensureSession(identity);
+        const entries = await service.listProjectionResumableSessions(identity);
+        expect(entries.map((entry) => entry.sessionId)).toEqual(["other-thread"]);
+        expect(stub.sessionStateSnapshot).toHaveBeenCalledWith("provider-session");
+      },
+    );
+  });
+
+  test("filters an ACP-backed agent's external resumable identity", async () => {
+    const externalSessionId = "acp-session:c2Vzc2lvbi0x.signature";
+    const stub = createProviderStub("grok", {
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        resumableSessionId: externalSessionId,
+      }),
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: externalSessionId, title: "Current Grok conversation" },
+      { sessionId: "acp-session:b3RoZXI.signature", title: "Other Grok conversation" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-grok-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "grok" as const,
+          logicalSessionKey: "env-env-1:tab-grok-resume",
+        };
+        await service.ensureSession(identity);
+        const entries = await service.listProjectionResumableSessions(identity);
+        expect(entries).toEqual([
+          { sessionId: "acp-session:b3RoZXI.signature", title: "Other Grok conversation" },
+        ]);
+      },
+    );
+  });
+
   test("windows a long transcript and reports that it was truncated", async () => {
     const messages = Array.from({ length: 600 }, (_, index) => ({
       id: `message-${index}`,

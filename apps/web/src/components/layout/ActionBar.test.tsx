@@ -1032,6 +1032,24 @@ describe("ActionBar grid presentation", () => {
     // about a second alone.
   }, 20_000);
 
+  test("shows the shortcut hints that match the native, terminal, and review controls", async () => {
+    render(<ActionBar />);
+
+    const cases = [
+      ["New native agent tab", "⌘T · Right-click for options"],
+      ["New terminal tab", "⌘R · Right-click for agent CLIs"],
+      ["Code review", "⌘⇧R or right-click/long-press to configure"],
+    ] as const;
+
+    for (const [accessibleName, hint] of cases) {
+      const button = screen.getByRole("button", { name: accessibleName });
+      fireEvent.focus(button);
+      expect(screen.getByText(hint)).toBeTruthy();
+      fireEvent.blur(button);
+      await waitFor(() => expect(screen.queryByText(hint) === null).toBe(true));
+    }
+  });
+
   test("renders mobile tools as two columns with labels after their icons", () => {
     const { container } = render(<ActionBar presentation="grid" />);
 
@@ -2241,17 +2259,38 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
     fireEvent.keyDown(window, { key: "4", code: "", ctrlKey: true });
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
-    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
 
     expect(selectTabMock.mock.calls.map(([index]) => index)).toEqual([2, 3]);
-    expect(createTabMock).toHaveBeenCalledWith("plain");
     expect(createTabMock).toHaveBeenCalledWith("agent-native");
     expect(createTabMock).not.toHaveBeenCalledWith("claude");
     expect(createTabMock).not.toHaveBeenCalledWith("opencode");
     expect(closeActiveTabMock).not.toHaveBeenCalled();
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves Command+N unhandled for the desktop or browser new-window accelerator", () => {
+    render(<ActionBar />);
+
+    const event = createEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
+    fireEvent(window, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("maps Command+R exclusively to a plain terminal tab", () => {
+    render(<ActionBar />);
+
+    const event = createEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent(window, event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(createTabMock.mock.calls).toEqual([["plain"]]);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+    expect(startLoopedReviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Configure code review" }) === null).toBe(true);
   });
 
   test("ignores out-of-range tab selection and disabled panel shortcuts", () => {
@@ -2272,7 +2311,7 @@ describe("ActionBar toolbar interactions", () => {
     currentEnabledAgentPlatforms = ["codex"];
     render(<ActionBar />);
 
-    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
+    fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
 
     expect(createTabMock).toHaveBeenCalledWith("agent-native");
     expect(createTabMock).not.toHaveBeenCalledWith("claude");
@@ -2492,7 +2531,7 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
@@ -2516,7 +2555,7 @@ describe("ActionBar workflow tabs", () => {
     currentCodexFastMode = false;
 
     render(<ActionBar />);
-    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
     expect(tabOptions).toMatchObject({
@@ -6221,23 +6260,16 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
-    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
     fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
-    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
     fireEvent.keyDown(window, { key: "g", code: "KeyG", metaKey: true });
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
     fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
     fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
 
     expect(selectTabMock).toHaveBeenCalledWith(2);
-    expect(createTabMock).toHaveBeenCalledWith("plain");
     expect(createTabMock).toHaveBeenCalledWith("agent-native");
     expect(createTabMock).not.toHaveBeenCalledWith("claude");
     expect(createTabMock).not.toHaveBeenCalledWith("opencode");
-    expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Review" }),
-    );
     await waitFor(() =>
       expect(launchTerminalJobMock).toHaveBeenCalledWith(
         expect.objectContaining({ tabType: "plain", data: "bun test\n" }),
@@ -6420,7 +6452,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     document.body.append(input, editor);
 
     for (const target of [input, editor]) {
-      for (const key of ["m", "g", "p"]) {
+      for (const key of ["t", "r", "m", "g", "p"]) {
         fireEvent.keyDown(target, { key, metaKey: true });
       }
       for (const key of ["r", "m", "g", "u"]) {
@@ -6444,6 +6476,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     input.remove();
     editor.remove();
+    expect(createTabMock).not.toHaveBeenCalled();
     expect(startMultiReviewMock).not.toHaveBeenCalled();
     expect(launchTerminalJobMock).not.toHaveBeenCalled();
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
@@ -6561,7 +6594,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
       ).toBe("true"),
     );
 
-    for (const key of ["t", "n", "r", "m", "g", "p"]) {
+    for (const key of ["t", "r", "m", "g", "p"]) {
       toastErrorMock.mockClear();
       const event = createEvent.keyDown(window, {
         key,
@@ -6595,7 +6628,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentReviewPrompt = 123 as never;
     render(<ActionBar />);
 
-    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
     await waitFor(() =>
       expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(

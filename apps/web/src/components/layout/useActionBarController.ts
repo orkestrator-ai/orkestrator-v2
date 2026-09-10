@@ -1272,15 +1272,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return true;
       };
 
+      // Command+N is deliberately absent: the desktop File menu owns it as the
+      // "New Window" accelerator, and a browser-served client hands it to the
+      // browser. The renderer acting on it too would open two windows for one
+      // keypress on the platforms where both the menu and the DOM see it.
       switch (e.key.toLowerCase()) {
         case "t":
-          if (reportTabLimit()) break;
-          if (canCreateTab) {
-            e.preventDefault();
-            createTab?.("plain");
-          }
-          break;
-        case "n":
           if (reportTabLimit()) break;
           if (canCreateTab) {
             e.preventDefault();
@@ -1288,10 +1285,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           }
           break;
         case "r":
-          if (selectedProjectId && reportTabLimit()) break;
-          if (canCreateTab && selectedProjectId) {
+          if (reportTabLimit()) break;
+          if (canCreateTab) {
             e.preventDefault();
-            handleReview();
+            createTab?.("plain");
           }
           break;
         case "g":
@@ -1331,8 +1328,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     canCopyEnvironmentUrl,
     handleCopyEnvironmentUrl,
     selectedEnvironment,
-    selectedProjectId,
-    handleReview,
     hasRunCommands,
     canRunCommands,
     handleRun,

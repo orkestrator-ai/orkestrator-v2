@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import {
+  acquireFullSuiteLease,
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
   buildConcurrentGroups,
   createTestLogDirectory,
@@ -18,7 +19,11 @@ import {
   runAllTests,
   TEST_LOG_DIRECTORY_ENV,
   TEST_LOG_RETENTION_MS,
+  TEST_GROUP_TIMEOUT_MS_ENV,
+  TEST_LEASE_DIRECTORY_ENV,
   TEST_MAX_OUTPUT_BYTES_ENV,
+  TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
+  TEST_TIMINGS_DIRECTORY_ENV,
   WORKSPACE_WORKERS_ENV,
   type CommandResult,
   type TestAllDependencies,
@@ -121,7 +126,10 @@ describe("scripts/test-all.ts", () => {
       expect(invocation.env).toMatchObject(dependencies.env);
     }
     expect(invocations.find((entry) => entry.name === ROOT)?.env).toEqual(dependencies.env);
-    expect(invocations.find((entry) => entry.name === BRIDGES)?.env).toEqual(dependencies.env);
+    expect(invocations.find((entry) => entry.name === BRIDGES)?.env).toEqual({
+      ...dependencies.env,
+      [WORKSPACE_WORKERS_ENV]: "1",
+    });
     expect(invocations.find((entry) => entry.name === PROTOCOL)?.env).toMatchObject({
       ...dependencies.env,
       [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1",
@@ -168,8 +176,10 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain("./e2e/agent-testing/artifact-sanitizer.test.ts");
     expect(rootGroup.args).toContain("./test-fixtures/agent-project/server.test.ts");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/desktop");
-    expect(bridgeGroup.args).toContain("--parallel=2");
-    expect(bridgeGroup.args.slice(0, 2)).toEqual(["test", "bridges"]);
+    expect(bridgeGroup.command).toBe("bunx");
+    expect(bridgeGroup.args.slice(0, 3)).toEqual(["turbo", "run", "test:bridge"]);
+    expect(bridgeGroup.args).toContain("--concurrency=2");
+    expect(bridgeGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "1" });
   });
 
   test("the workspace worker count travels by environment, never through Turbo's `--`", () => {
@@ -195,6 +205,24 @@ describe("scripts/test-all.ts", () => {
     expect(workspace.env[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
     // The caller's environment object must not be mutated.
     expect(dependencies.env[WORKSPACE_WORKERS_ENV]).toBeUndefined();
+  });
+
+  test("removes ambient bridge diagnostics flags from every aggregate group", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: {
+        TEST_ALL_MARKER: "preserved",
+        ORKESTRATOR_BRIDGE_DEBUG: "1",
+        CURSOR_BRIDGE_DEBUG: "1",
+      },
+    });
+
+    await runAllTests(dependencies);
+    for (const invocation of invocations) {
+      expect(invocation.env.TEST_ALL_MARKER).toBe("preserved");
+      expect(invocation.env.ORKESTRATOR_BRIDGE_DEBUG).toBeUndefined();
+      expect(invocation.env.CURSOR_BRIDGE_DEBUG).toBeUndefined();
+    }
+    expect(dependencies.env.ORKESTRATOR_BRIDGE_DEBUG).toBe("1");
   });
 
   test("worker plan bounds aggregate Bun workers across every active package task", () => {
@@ -272,13 +300,14 @@ describe("scripts/test-all.ts", () => {
     expect(planWorkers(64)).toEqual(planWorkers(MAX_AGGREGATE_TEST_WORKERS));
   });
 
-  test("still runs the bridge suites, which turbo does not cover", () => {
+  test("runs bridge suites as cacheable Turbo package tasks", () => {
     const groups = buildConcurrentGroups(8);
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
-    expect(bridgeGroup.command).toBe("bun");
-    expect(bridgeGroup.args).toContain("test");
-    expect(bridgeGroup.args).toContain("bridges");
+    expect(bridgeGroup.command).toBe("bunx");
+    expect(bridgeGroup.args).toContain("test:bridge");
+    expect(bridgeGroup.args).toContain("--filter=./bridges/*");
+    expect(bridgeGroup.args).not.toContain("--cache-dir");
   });
 
   test("runs the Codex protocol check with an explicit offline fallback", () => {
@@ -304,6 +333,32 @@ describe("scripts/test-all.ts", () => {
     // both backends depend on); without a filter it would never run.
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/protocol");
     expect(workspaceGroup.env?.[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
+    expect(workspaceGroup.args).not.toContain("--cache-dir");
+    expect(workspaceGroup.args).toContain("--summarize");
+  });
+
+  test("offers an affected fast path while keeping the default suite complete", () => {
+    const complete = buildConcurrentGroups(8);
+    const affected = buildConcurrentGroups(8, true);
+
+    expect(complete.flatMap((group) => group.args)).not.toContain("--affected");
+    expect(complete.flatMap((group) => group.args)).not.toContain("--changed=main");
+    expect(affected.find((group) => group.name === WORKSPACE)?.args).toContain("--affected");
+    expect(affected.find((group) => group.name === BRIDGES)?.args).toContain("--affected");
+    expect(affected.find((group) => group.name === ROOT)?.args).toContain("--changed=main");
+    expect(affected.find((group) => group.name === ROOT)?.args).toContain("--pass-with-no-tests");
+  });
+
+  test("uses persistent duration data to start slow root files first", () => {
+    const timingsDirectory = "/tmp/orkestrator-timings-fixture";
+    const rootGroup = buildConcurrentGroups(8, false, timingsDirectory).find(
+      (group) => group.name === ROOT,
+    )!;
+
+    expect(rootGroup.args).toContain("--timings");
+    expect(rootGroup.args).toContain(path.join(timingsDirectory, "root.json"));
+    expect(rootGroup.args).toContain("--update-timings");
+    expect(TEST_TIMINGS_DIRECTORY_ENV).toBe("ORKESTRATOR_TEST_TIMINGS_DIR");
   });
 
   test("reports every failing group rather than stopping at the first", async () => {
@@ -354,9 +409,30 @@ describe("scripts/test-all.ts", () => {
     await run;
 
     const report = logs.join("\n");
-    expect(report.indexOf(WORKSPACE)).toBeLessThan(report.indexOf(ROOT));
-    expect(report.indexOf(ROOT)).toBeLessThan(report.indexOf(BRIDGES));
-    expect(report.indexOf(BRIDGES)).toBeLessThan(report.indexOf(PROTOCOL));
+    expect(report.indexOf(`PASS  ${WORKSPACE}`)).toBeLessThan(report.indexOf(`PASS  ${ROOT}`));
+    expect(report.indexOf(`PASS  ${ROOT}`)).toBeLessThan(report.indexOf(`PASS  ${BRIDGES}`));
+    expect(report.indexOf(`PASS  ${BRIDGES}`)).toBeLessThan(report.indexOf(`PASS  ${PROTOCOL}`));
+  });
+
+  test("reports group completion before slower groups finish", async () => {
+    let release = () => {};
+    const gate = {
+      name: ROOT,
+      release: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    const { dependencies, logs } = createDependencies({ gate });
+    const run = runAllTests(dependencies);
+    const deadline = Date.now() + 5_000;
+    while (!logs.some((line) => line.includes("finished (")) && Date.now() < deadline) {
+      await Bun.sleep(5);
+    }
+
+    expect(logs.some((line) => line.includes("finished ("))).toBe(true);
+    expect(logs.join("\n")).not.toContain(`PASS  ${ROOT}`);
+    release();
+    expect(await run).toBe(0);
   });
 
   test("runs iOS last and only after the other groups pass", async () => {
@@ -531,6 +607,72 @@ describe("scripts/test-all.ts", () => {
     expect(result.outputLimitExceeded).toBe(true);
     expect(result.output).toContain("Output exceeded 4096 bytes");
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("terminates a process group that stops making observable progress", async () => {
+    const result = await defaultRunGroup(
+      {
+        name: "wedged fixture",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+      },
+      isolatedRunnerEnvironment({
+        [TEST_NO_PROGRESS_TIMEOUT_MS_ENV]: "50",
+        [TEST_GROUP_TIMEOUT_MS_ENV]: "1000",
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.timeoutReason).toBe("no-progress");
+    expect(result.output).toContain("No output for 50ms");
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("enforces an absolute deadline even while a group keeps printing", async () => {
+    const result = await defaultRunGroup(
+      {
+        name: "busy fixture",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => process.stdout.write('.'), 10)"],
+      },
+      isolatedRunnerEnvironment({
+        [TEST_NO_PROGRESS_TIMEOUT_MS_ENV]: "1000",
+        [TEST_GROUP_TIMEOUT_MS_ENV]: "75",
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.timeoutReason).toBe("absolute");
+    expect(result.output).toContain("Exceeded the 75ms group deadline");
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("serializes full suites across linked worktrees and cleans stale leases", async () => {
+    const leaseDirectory = await mkdtemp(path.join(os.tmpdir(), "ork-suite-lease-parent-"));
+    const lock = path.join(leaseDirectory, "suite.lock");
+    try {
+      const repositoryRoot = path.resolve(import.meta.dir, "../..");
+      const first = acquireFullSuiteLease(repositoryRoot, { [TEST_LEASE_DIRECTORY_ENV]: lock });
+      expect(first?.directory).toBe(lock);
+      expect(() =>
+        acquireFullSuiteLease(repositoryRoot, { [TEST_LEASE_DIRECTORY_ENV]: lock }),
+      ).toThrow(/already running/);
+      first?.release();
+
+      await mkdir(lock);
+      await writeFile(
+        path.join(lock, "owner.json"),
+        JSON.stringify({ version: 1, pid: 2_147_483_647, root: "/stale" }),
+      );
+      const replacement = acquireFullSuiteLease(repositoryRoot, {
+        [TEST_LEASE_DIRECTORY_ENV]: lock,
+      });
+      expect(replacement?.directory).toBe(lock);
+      replacement?.release();
+      expect(await stat(lock).catch(() => null)).toBeNull();
+    } finally {
+      await rm(leaseDirectory, { recursive: true, force: true });
+    }
   });
 
   test("fails a group when its authoritative log cannot be opened", async () => {

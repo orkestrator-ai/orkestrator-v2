@@ -15,8 +15,25 @@
     },
     "test:workspace": {
       "dependsOn": ["build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/bunfig.toml",
+        "$TURBO_ROOT$/tests/register-dom.ts",
+        "$TURBO_ROOT$/tests/setup.ts",
+        "$TURBO_ROOT$/tests/setup-node.ts"
+      ],
       "outputs": [],
-      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS"]
+      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
+    },
+    "test:bridge": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/bunfig.toml",
+        "$TURBO_ROOT$/tests/register-dom.ts",
+        "$TURBO_ROOT$/tests/setup.ts"
+      ],
+      "outputs": [],
+      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
     },
     "dev": {
       "cache": false,

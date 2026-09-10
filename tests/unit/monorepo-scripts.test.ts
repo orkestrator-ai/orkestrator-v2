@@ -180,21 +180,45 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain("Failing groups:");
   });
 
-  test("full tests cover the bridge packages, which have no workspace test script", () => {
-    // bridges/* are not in the turbo `test:workspace` filters and declare no
-    // `test` script, so they only run if test-all.ts invokes them directly.
+  test("full tests cover bridge packages through a cacheable Turbo task", () => {
     const source = read("scripts/test-all.ts");
     expect(source).toContain('name: "bridges"');
-    expect(source).toContain('"test", "bridges"');
+    expect(source).toContain('"test:bridge"');
 
     for (const bridge of [
+      "bridges/acp-bridge/package.json",
       "bridges/claude-bridge/package.json",
       "bridges/codex-bridge/package.json",
+      "bridges/cursor-bridge/package.json",
+      "bridges/pi-bridge/package.json",
     ]) {
       const scripts =
         (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toBeUndefined();
+      expect(scripts["test:bridge"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-1}");
     }
+
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { inputs?: string[]; passThroughEnv?: string[] }>;
+    };
+    expect(turbo.tasks?.["test:bridge"]?.inputs).toContain("$TURBO_ROOT$/bunfig.toml");
+    expect(turbo.tasks?.["test:bridge"]?.passThroughEnv).toContain("ORKESTRATOR_TEST_WORKERS");
+    expect(turbo.tasks?.["test:workspace"]?.inputs).toContain("$TURBO_ROOT$/tests/setup-node.ts");
+    expect(turbo.tasks?.["test:workspace"]?.passThroughEnv).toContain(
+      "ORKESTRATOR_TEST_TIMINGS_DIR",
+    );
+  });
+
+  test("Turbo uses its automatic worktree-shared cache", () => {
+    expect(read("mise.toml")).not.toContain("--cache-dir");
+    expect(read("scripts/test-all.ts")).not.toContain('"--cache-dir"');
+  });
+
+  test("provides a changed-tests fast path without weakening the full suite", () => {
+    const tasks = miseTasks();
+    expect(tasks.test.run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"].run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"].env).toEqual({ ORKESTRATOR_TEST_AFFECTED: "1" });
   });
 
   test("the component e2e project never claims the agent-testing suite", () => {

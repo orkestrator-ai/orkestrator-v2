@@ -3,7 +3,7 @@ bun = "1.4.2"
 
 [tasks.dev]
 description = "Start the Electron development application"
-run = "bunx turbo --cwd . run dev --filter=@orkestrator/desktop --cache-dir .turbo"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/desktop"
 
 [tasks."dev:test"]
 description = "Start an isolated development test profile"
@@ -32,15 +32,15 @@ run = "bun apps/desktop/scripts/dev-reset.ts"
 
 [tasks."dev:web"]
 description = "Start the Vite frontend and standalone backend"
-run = "bunx turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend --cache-dir .turbo"
+run = "bunx turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend"
 
 [tasks."dev:web-public"]
 description = "Start the public web client"
-run = "bunx turbo --cwd . run dev --filter=@orkestrator/web-public --cache-dir .turbo"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/web-public"
 
 [tasks."dev:renderer"]
 description = "Start only the Electron renderer"
-run = "bunx turbo --cwd . run dev --filter=@orkestrator/web --cache-dir .turbo"
+run = "bunx turbo --cwd . run dev --filter=@orkestrator/web"
 
 [tasks."dev:ios"]
 description = "Build and launch the iOS simulator application"
@@ -49,63 +49,63 @@ run = "bun scripts/run-ios-simulator.ts"
 
 [tasks."start:web"]
 description = "Build and start the standalone backend"
-run = "bunx turbo run start:web --cwd . --filter=@orkestrator/backend --cache-dir .turbo"
+run = "bunx turbo run start:web --cwd . --filter=@orkestrator/backend"
 
 [tasks."start:web-public"]
 description = "Build and start the public-web backend"
-run = "bunx turbo run start:web-public --cwd . --filter=@orkestrator/backend --cache-dir .turbo"
+run = "bunx turbo run start:web-public --cwd . --filter=@orkestrator/backend"
 
 [tasks.build]
 description = "Build the desktop application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:desktop"]
 description = "Build the desktop application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:backend"]
 description = "Build the standalone backend"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/backend --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/backend"
 
 [tasks."build:cli"]
 description = "Build the published CLI"
-run = "bunx turbo --cwd . run build --filter=orkestrator --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=orkestrator"
 
 [tasks."build:renderer"]
 description = "Build the Electron renderer"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/web --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/web"
 
 [tasks."build:web-public"]
 description = "Build the public web client"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/web-public --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/web-public"
 
 [tasks."build:electron"]
 description = "Build the Electron application"
-run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=@orkestrator/desktop"
 
 [tasks."build:claude-bridge"]
 description = "Build the Claude bridge"
-run = "bunx turbo --cwd . run build --filter=claude-bridge --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=claude-bridge"
 
 [tasks."build:codex-bridge"]
 description = "Build the Codex bridge"
-run = "bunx turbo --cwd . run build --filter=codex-bridge --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=codex-bridge"
 
 [tasks."build:acp-bridge"]
 description = "Build the ACP bridge"
-run = "bunx turbo --cwd . run build --filter=acp-bridge --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=acp-bridge"
 
 [tasks."build:pi-bridge"]
 description = "Build the Pi bridge"
-run = "bunx turbo --cwd . run build --filter=pi-bridge --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=pi-bridge"
 
 [tasks."build:cursor-bridge"]
 description = "Build the Cursor bridge"
-run = "bunx turbo --cwd . run build --filter=cursor-bridge --cache-dir .turbo"
+run = "bunx turbo --cwd . run build --filter=cursor-bridge"
 
 [tasks."build:all"]
 description = "Build every workspace package"
-run = "bunx turbo --cwd . run build --cache-dir .turbo"
+run = "bunx turbo --cwd . run build"
 
 [tasks."download:bun"]
 description = "Download the pinned Bun runtime for desktop packaging"
@@ -184,6 +184,11 @@ run = "bun run --cwd apps/web preview"
 description = "Run the complete non-iOS test suite"
 run = "bun scripts/test-all.ts"
 
+[tasks."test:changed"]
+description = "Run tests affected by changes from main"
+env = { ORKESTRATOR_TEST_AFFECTED = "1" }
+run = "bun scripts/test-all.ts"
+
 [tasks."test:all"]
 description = "Run the complete test suite, including iOS"
 env = { ORKESTRATOR_INCLUDE_IOS = "1" }
@@ -221,7 +226,7 @@ run = "bun test tests/unit"
 
 [tasks.typecheck]
 description = "Typecheck every workspace package"
-run = "bunx turbo --cwd . run typecheck --cache-dir .turbo"
+run = "bunx turbo --cwd . run typecheck"
 
 [tasks.format]
 description = "Format the repository"

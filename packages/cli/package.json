@@ -30,7 +30,7 @@
     "prepack": "bun run build",
     "smoke:pack": "bun scripts/smoke-packed.ts",
     "test": "bun run build && bun test --preload ../../tests/setup-node.ts tests --parallel",
-    "test:workspace": "bun test --preload ../../tests/setup-node.ts tests --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts tests --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/cli.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

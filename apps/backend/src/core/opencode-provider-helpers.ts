@@ -263,14 +263,19 @@ export function openCodeModelSelection(model: string | undefined) {
     : undefined;
 }
 
+/**
+ * OpenCode reasoning travels as the composer's reasoning selection, never as a
+ * model parameter. An earlier catalog briefly advertised a `reasoning`
+ * parameter alongside the built-in picker, so sessions from that window can
+ * still carry a `parameterValues.reasoning` entry that no control writes or
+ * clears any more. Reading it here would let that dead value outrank the
+ * picker, so the selection is the only input.
+ */
 export function openCodeReasoningVariant(
   options: ProviderSendOptions,
   fallback: string | undefined,
 ): string | undefined {
-  const variant =
-    typeof options.parameterValues?.reasoning === "string"
-      ? options.parameterValues.reasoning
-      : (options.effort ?? fallback);
+  const variant = options.effort ?? fallback;
   return variant === "default" ? undefined : variant;
 }
 

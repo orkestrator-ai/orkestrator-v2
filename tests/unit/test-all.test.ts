@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -7,9 +7,12 @@ import {
   ALLOW_MISSING_PROTOCOL_BINARY_ENV,
   buildConcurrentGroups,
   createTestLogDirectory,
+  DEFAULT_TEST_GROUP_TIMEOUT_MS,
+  DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS,
   defaultRunGroup,
   finalizeTestLogs,
   INCLUDE_IOS_TESTS_ENV,
+  IOS_GROUP_TIMEOUT_MS,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
   MIN_AGGREGATE_TEST_WORKERS,
@@ -24,6 +27,7 @@ import {
   TEST_MAX_OUTPUT_BYTES_ENV,
   TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
   TEST_TIMINGS_DIRECTORY_ENV,
+  terminateActiveGroups,
   WORKSPACE_WORKERS_ENV,
   type CommandResult,
   type TestAllDependencies,
@@ -35,6 +39,7 @@ interface Invocation {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
 }
 
 function createDependencies(
@@ -79,6 +84,7 @@ function createDependencies(
           command: group.command,
           args: group.args,
           env,
+          timeoutMs: group.timeoutMs,
         });
         if (options.gate && options.gate.name === group.name) {
           await options.gate.release;
@@ -359,6 +365,25 @@ describe("scripts/test-all.ts", () => {
     expect(rootGroup.args).toContain(path.join(timingsDirectory, "root.json"));
     expect(rootGroup.args).toContain("--update-timings");
     expect(TEST_TIMINGS_DIRECTORY_ENV).toBe("ORKESTRATOR_TEST_TIMINGS_DIR");
+  });
+
+  test("hands the durations directory to every group, not only the root arguments", async () => {
+    // Workspace and bridge packages name their own durations file from this
+    // variable inside their `test:workspace` / `test:bridge` script, so it has
+    // to survive into each group's environment.
+    const timingsDirectory = "/tmp/orkestrator-timings-fixture";
+    const { dependencies, invocations } = createDependencies({
+      environment: { TEST_ALL_MARKER: "preserved", [TEST_TIMINGS_DIRECTORY_ENV]: timingsDirectory },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(invocations.length).toBeGreaterThan(0);
+    for (const invocation of invocations) {
+      expect(invocation.env[TEST_TIMINGS_DIRECTORY_ENV]).toBe(timingsDirectory);
+    }
+    expect(invocations.find((entry) => entry.name === ROOT)?.args).toContain(
+      path.join(timingsDirectory, "root.json"),
+    );
   });
 
   test("reports every failing group rather than stopping at the first", async () => {
@@ -645,6 +670,146 @@ describe("scripts/test-all.ts", () => {
     expect(result.timeoutReason).toBe("absolute");
     expect(result.output).toContain("Exceeded the 75ms group deadline");
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("gives a slow group far more headroom than the slowest run ever recorded", () => {
+    // The workspace group has been measured at roughly four minutes on a cold
+    // cache. A deadline anywhere near that turns a slow run into a reported
+    // failure, so the budget has to be a multiple of it, not a margin on it.
+    const slowestRecordedGroupMs = 4 * 60 * 1_000;
+    expect(DEFAULT_TEST_GROUP_TIMEOUT_MS).toBeGreaterThanOrEqual(slowestRecordedGroupMs * 4);
+    expect(DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS).toBeGreaterThanOrEqual(5 * 60 * 1_000);
+    // A group only ever goes quiet for a whole no-progress window if it is
+    // wedged, so that window must stay well inside the absolute deadline.
+    expect(DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS).toBeLessThan(DEFAULT_TEST_GROUP_TIMEOUT_MS);
+    expect(IOS_GROUP_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TEST_GROUP_TIMEOUT_MS);
+  });
+
+  test("gives the simulator group its own deadline rather than the Bun default", async () => {
+    const { dependencies, invocations } = createDependencies({
+      exists: true,
+      platform: "darwin",
+      environment: { [INCLUDE_IOS_TESTS_ENV]: "1" },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    const ios = invocations.find((entry) => entry.name === "ios");
+    expect(ios?.timeoutMs).toBe(IOS_GROUP_TIMEOUT_MS);
+    // Every Bun group keeps the shared default, which stays implicit.
+    for (const entry of invocations.filter((candidate) => candidate.name !== "ios")) {
+      expect(entry.timeoutMs).toBeUndefined();
+    }
+  });
+
+  test("honours a per-group deadline and lets the environment override it", async () => {
+    const busyFixture = {
+      name: "per-group deadline fixture",
+      command: process.execPath,
+      args: ["-e", "setInterval(() => process.stdout.write('.'), 10)"],
+      timeoutMs: 75,
+    };
+    const viaGroup = await defaultRunGroup(busyFixture, isolatedRunnerEnvironment());
+    expect(viaGroup.timeoutReason).toBe("absolute");
+    expect(viaGroup.output).toContain("Exceeded the 75ms group deadline");
+    if (viaGroup.logPath)
+      await rm(path.dirname(viaGroup.logPath), { recursive: true, force: true });
+
+    const viaEnvironment = await defaultRunGroup(
+      busyFixture,
+      isolatedRunnerEnvironment({ [TEST_GROUP_TIMEOUT_MS_ENV]: "40" }),
+    );
+    expect(viaEnvironment.output).toContain("Exceeded the 40ms group deadline");
+    if (viaEnvironment.logPath) {
+      await rm(path.dirname(viaEnvironment.logPath), { recursive: true, force: true });
+    }
+  });
+
+  test("an interrupt can reach descendants the group spawned, not just the group", async () => {
+    // Groups are spawned detached, so Ctrl+C no longer reaches them and the
+    // runner has to relay it across the whole process tree. A grandchild is the
+    // case that matters: Bun workers and fixture servers all live at that depth.
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-tree-terminate-"));
+    const pidFile = path.join(directory, "grandchild.pid");
+    const grandchild = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+      process.stdout.write("spawned\\n");
+      setInterval(() => {}, 1000);
+    `;
+    try {
+      const run = defaultRunGroup(
+        { name: "tree fixture", command: process.execPath, args: ["-e", grandchild] },
+        isolatedRunnerEnvironment(),
+      );
+
+      const deadline = Date.now() + 5_000;
+      let grandchildPid = 0;
+      while (!grandchildPid && Date.now() < deadline) {
+        grandchildPid = Number(await readFile(pidFile, "utf8").catch(() => 0));
+        if (!grandchildPid) await Bun.sleep(10);
+      }
+      expect(grandchildPid).toBeGreaterThan(0);
+
+      expect(terminateActiveGroups("SIGKILL")).toBeGreaterThan(0);
+      const result = await run;
+      expect(result.status).not.toBe(0);
+
+      let alive = true;
+      const grandchildDeadline = Date.now() + 5_000;
+      while (alive && Date.now() < grandchildDeadline) {
+        try {
+          process.kill(grandchildPid, 0);
+          await Bun.sleep(10);
+        } catch {
+          alive = false;
+        }
+      }
+      expect(alive).toBe(false);
+      // A finished group must stop being a signal target.
+      expect(terminateActiveGroups("SIGKILL")).toBe(0);
+      if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("treats an unreadable but fresh lease as contention, not as a leftover", async () => {
+    // A live acquirer is briefly between its `mkdir` and its metadata write.
+    // Claiming the lease in that window would defeat the whole mechanism.
+    const parent = await mkdtemp(path.join(os.tmpdir(), "ork-lease-fresh-"));
+    const lock = path.join(parent, "suite.lock");
+    try {
+      await mkdir(lock);
+      expect(() =>
+        acquireFullSuiteLease(path.resolve(import.meta.dir, "../.."), {
+          [TEST_LEASE_DIRECTORY_ENV]: lock,
+        }),
+      ).toThrow(/acquiring the host lease/);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims a lease that no longer resolves instead of throwing its ENOENT", async () => {
+    // A dangling lease is what a released-underneath-us lease looks like from
+    // inside the EEXIST branch: `mkdir` still fails, and both the metadata read
+    // and the age check come back ENOENT.
+    const parent = await mkdtemp(path.join(os.tmpdir(), "ork-lease-dangling-"));
+    const lock = path.join(parent, "suite.lock");
+    try {
+      await symlink(path.join(parent, "gone"), lock);
+      const lease = acquireFullSuiteLease(path.resolve(import.meta.dir, "../.."), {
+        [TEST_LEASE_DIRECTORY_ENV]: lock,
+      });
+      expect(lease?.directory).toBe(lock);
+      lease?.release();
+      expect(await stat(lock).catch(() => null)).toBeNull();
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
   });
 
   test("serializes full suites across linked worktrees and cleans stale leases", async () => {

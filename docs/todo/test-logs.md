@@ -1,5 +1,11 @@
 # Test diagnostics, logs, and retention
 
+For current test selection, concurrency, cache, lease, watchdog, and artifact
+instructions, use
+[`../development/testing-guide.md`](../development/testing-guide.md). This
+document retains the diagnostic-bounds rationale and lower-level implementation
+notes.
+
 The test infrastructure bounds diagnostics at their source and owns the log
 lifecycle. Use the repository runners instead of adding an unbounded `tee` file
 for every command.
@@ -36,13 +42,13 @@ Use the logged wrapper for a focused test, typecheck, build, smoke test, or
 Playwright suite:
 
 ```bash
-mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
 
-mise run test:logged --name terminal-container -- \
+mise run test:logged -- --name terminal-container -- \
   bun --cwd=apps/web test 'src/components/terminal/TerminalContainer*.test.tsx' \
   --parallel=2 --only-failures
 
-mise run test:logged --name agent-browser -- \
+mise run test:logged -- --name agent-browser -- \
   mise run test:agent:browser
 ```
 
@@ -92,6 +98,8 @@ Each command group has these defaults:
 | --- | --- |
 | Persisted output per group | 64 MiB; the child is terminated if exceeded |
 | In-memory/console failure tail | 256 KiB |
+| No-output watchdog | 5 minutes; terminate the command process group |
+| Absolute group deadline | 30 minutes (iOS 60); terminate the command process group |
 | File permissions | log `0600`, directory `0700` |
 | Passing run | raw group logs deleted; small `summary.json` retained |
 | Failing run | raw group logs streamed through gzip level 1, then deleted |
@@ -123,11 +131,15 @@ point multiple concurrent runs at it.
 ## Parallel scheduling
 
 `scripts/test-all.ts` runs independent workspace, root, bridge, and protocol
-groups concurrently. It caps aggregate Bun workers at 12, reserves two bridge
+groups concurrently. It caps aggregate Bun workers at 8, reserves two bridge
 workers, limits Turbo to two active package tests, and gives remaining capacity
-to the root long pole. On the 18-core reference host, six root workers completed
-in 81.7 seconds versus 137.9 seconds at four workers. Package scripts use
+to the root long pole. On a large host this means four root workers, two bridge
+workers, and two active single-worker package tests. Package scripts use
 `--only-failures` so successful assertion lines are not serialized.
+
+Only one aggregate suite may run across linked worktrees of the same repository
+on a host. The Git-common-directory lease prevents concurrent suites from
+competing for those bounded workers; stale leases are reclaimed automatically.
 
 iOS uses a shared simulator and runs alone. It is opt-in through `mise run
 test:all`, keeping ordinary cross-platform validation independent of Xcode.

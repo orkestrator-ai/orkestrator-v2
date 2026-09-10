@@ -15,6 +15,7 @@
     },
     "test:workspace": {
       "dependsOn": ["build"],
+      "cache": false,
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/bunfig.toml",
@@ -26,6 +27,7 @@
       "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS", "ORKESTRATOR_TEST_TIMINGS_DIR"]
     },
     "test:bridge": {
+      "cache": false,
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/bunfig.toml",

@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "bun build src/index.ts --target=node --format=esm --outfile=dist/index.js",
-    "test:bridge": "bun test src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/acp-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
+    "test:bridge": "bun test src --preload ../../tests/register-dom.ts --preload ../../tests/setup.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/acp-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "start": "bun dist/index.js"
   },

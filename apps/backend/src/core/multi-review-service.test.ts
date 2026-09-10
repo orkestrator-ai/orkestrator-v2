@@ -4844,7 +4844,7 @@ test("Multi Review prepares and consolidates with its review model before openin
         projectId: "project-1",
         targetBranch: "main",
         reviewers: [
-          { agent: "claude", model: "review-a" },
+          { agent: "opencode", model: "review-a" },
           { agent: "codex", model: "review-b" },
         ],
         reviewModel: {
@@ -4887,6 +4887,14 @@ test("Multi Review prepares and consolidates with its review model before openin
       expect(reviews).toHaveLength(2);
       for (const sent of reviews) {
         expect(sent.options).toMatchObject({ mode: "plan", readOnly: true });
+        if (sent.options.model === "review-a") {
+          expect(sent.options.reviewShellPolicy).toMatchObject({
+            id: "pipeline",
+            approvals: "auto-approve",
+          });
+        } else {
+          expect(sent.options.reviewShellPolicy).toBeUndefined();
+        }
         expect(sent.prompt).toContain(reviewing.reviewPackage!.filePath);
         expect(sent.prompt).toContain("Do not modify, create, or delete files");
         // Validation ran once during preparation; every reviewer reads those
@@ -4901,6 +4909,7 @@ test("Multi Review prepares and consolidates with its review model before openin
             (entry) =>
               entry.options?.mode === "plan" &&
               entry.options?.readOnly === true &&
+              entry.options?.reviewerSession === true &&
               entry.options.policy?.id === "pipeline",
           ),
       ).toBe(true);
@@ -4923,6 +4932,7 @@ test("Multi Review prepares and consolidates with its review model before openin
         mode: "build",
         readOnly: true,
       });
+      expect(consolidation?.options.reviewShellPolicy).toBeUndefined();
       expect(consolidation?.prompt).toContain("same backend-verified immutable review package");
       expect(consolidation?.prompt).toContain(reviewing.reviewPackage!.filePath);
       expect(ready.reviewSession).toMatchObject({
@@ -5019,7 +5029,7 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
     "env-package-restart-reviewer",
     provider,
     async ({ service, start, snapshot }) => {
-      const started = await start();
+      const started = await start([{ agent: "opencode", model: "default" }]);
       await waitUntil(async () => (await snapshot(started.id))?.activeRequest?.state === "sent");
       provider.statusValue = "idle";
       await service.advanceNow(started.id);
@@ -5044,6 +5054,9 @@ test("restarting a packaged reviewer re-verifies and reuses the read-only packag
       );
       expect(reviewSends).toHaveLength(2);
       expect(reviewSends.at(-1)?.options).toMatchObject({ mode: "plan", readOnly: true });
+      expect(reviewSends.every((sent) => sent.options.reviewShellPolicy?.id === "pipeline")).toBe(
+        true,
+      );
       expect(reviewSends.at(-1)?.prompt).toContain(reviewing.reviewPackage!.filePath);
       expect(commands.filter((command) => command === "verify_looped_review_package")).toHaveLength(
         2,

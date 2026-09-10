@@ -246,7 +246,10 @@ run = ["mise run format:check", "mise run lint", "mise run typecheck"]
 [tasks."verify:opencode:live"]
 description = "Run live OpenCode compatibility checks"
 env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
-run = "bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts"
+run = [
+  "bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
+  "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
+]
 
 [tasks."verify:toolchains:live"]
 description = "Verify live toolchain artifacts"

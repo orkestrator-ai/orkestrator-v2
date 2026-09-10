@@ -14,6 +14,8 @@ import {
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
+import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
+import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 
 describe("OpenCode provider runtime", () => {
   test.each([["permission"], ["question"]] as const)(
@@ -436,19 +438,6 @@ describe("OpenCode provider runtime", () => {
             { id: "high", label: "High" },
           ],
           defaultReasoningId: "default",
-          parameters: [
-            {
-              id: "reasoning",
-              label: "Reasoning",
-              kind: "select",
-              scope: "turn",
-              defaultValue: "default",
-              options: [
-                { id: "default", label: "Default" },
-                { id: "high", label: "High" },
-              ],
-            },
-          ],
           supportsSpeed: false,
           // OpenCode has primary agents, not a Build/Plan permission mode.
           supportsMode: false,
@@ -477,6 +466,45 @@ describe("OpenCode provider runtime", () => {
     } finally {
       await provider.dispose?.();
     }
+  });
+
+  // The composer renders the model's `reasoning` list as its own control and
+  // renders every model parameter as another. A catalog that advertised both a
+  // `reasoning` list and a `reasoning` parameter therefore produced two
+  // identical Reasoning dropdowns, so the control list is asserted end to end
+  // rather than only the catalog shape.
+  test("normalized catalog models yield exactly one Reasoning control", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      {
+        providers: [
+          {
+            id: "opencode",
+            models: { "claude-sonnet": { name: "Claude Sonnet", variants: { high: {} } } },
+          },
+        ],
+        default: { providerID: "opencode", modelID: "claude-sonnet", variant: "high" },
+      },
+      [],
+    );
+    const composer = {
+      ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+      models: catalog.models,
+      selectedModelId: catalog.selectedModelId,
+      selectedReasoningId: catalog.selectedReasoningId,
+    };
+    const controls = nativeComposerControls(composer, false, nativeCapabilities("opencode"));
+
+    expect(controls.map((control) => control.id)).toEqual(["model", "reasoning"]);
+    expect(controls.filter((control) => control.label === "Reasoning")).toHaveLength(1);
+    expect(catalog.models.every((model) => model.parameters === undefined)).toBe(true);
+    expect(controls.find((control) => control.id === "reasoning")).toMatchObject({
+      kind: "select",
+      value: "high",
+      options: [
+        { id: "default", label: "Default" },
+        { id: "high", label: "High" },
+      ],
+    });
   });
 
   test("only exposes providers OpenCode reports as connected", async () => {

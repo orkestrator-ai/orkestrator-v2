@@ -6,12 +6,32 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 
 export interface NativeAgentSyncCacheEntry {
-  token: string;
+  /**
+   * The joined projection token this entry was built from.
+   *
+   * Absent when the live tail came from the progressive transcript instead:
+   * that surface mints its own token in a different namespace, and replaying
+   * it as `knownToken` on the joined endpoint would describe a base revision
+   * the backend never held.
+   */
+  token?: string;
   liveProjection: NativeAgentSessionProjection;
-  historyEpoch: string;
+  /**
+   * The backend's history-paging epoch, not the transcript's content epoch.
+   *
+   * Only the joined projection and message-page surfaces mint it, so it is
+   * absent until this tab has read one of them.
+   */
+  historyEpoch?: string;
   historyCursor?: string;
   /** Server-reported boundary between retained history and the live tail. */
   historyBoundaryCursor?: string;
+  /**
+   * True when the transcript reports earlier messages but no cursor exists yet,
+   * so a click still has to mint one through the joined snapshot. Cached so a
+   * remount can act on the control it paints from this entry.
+   */
+  historyBootstrap?: boolean;
   historyComplete: boolean;
   historyMessages: unknown[];
   historyBytes: number;

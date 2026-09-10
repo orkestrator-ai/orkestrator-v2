@@ -179,6 +179,30 @@ describe("resolvedActionDefault", () => {
       ),
     ).toEqual({ agent: "grok", reasoningEffort: "high" });
   });
+
+  test("resolves Fast independently per action", () => {
+    const tiers = {
+      global: {
+        platforms: { cursor: { fastMode: true } },
+        actionDefaults: {
+          pr: { platform: "cursor" as const, model: "grok-4.6", fastMode: true },
+          reviewPreparation: { platform: "cursor" as const, model: "grok-4.6", fastMode: false },
+        },
+      },
+    };
+
+    expect(resolvedActionDefault(tiers, "pr", enabled)).toEqual({
+      agent: "cursor",
+      model: "grok-4.6",
+      fastMode: true,
+    });
+    expect(resolvedActionDefault(tiers, "reviewPreparation", enabled)).toEqual({
+      agent: "cursor",
+      model: "grok-4.6",
+      fastMode: false,
+    });
+    expect(resolvedActionDefault(tiers, "push", enabled)).toEqual({ agent: "claude" });
+  });
 });
 
 /**

@@ -484,6 +484,37 @@ describe("session detail route outcomes", () => {
     );
   });
 
+  test("marks the recovery read truncated once the local tail dropped a message", async () => {
+    const messages = [
+      {
+        id: "message-kept",
+        role: "assistant",
+        content: "retained",
+        parts: [],
+        createdAt: "2026-07-25T12:00:00.000Z",
+      },
+    ];
+    await withRuntimeMethod(
+      "getMessages",
+      async () => messages,
+      async () =>
+        withRuntimeMethod(
+          "transcriptComplete",
+          () => false,
+          async () => {
+            const response = await app.request("/session/session-1/messages");
+            expect(response.status).toBe(200);
+            // The exact recovery surface cannot invent the evicted messages, but
+            // it must not present what survived as the whole conversation.
+            expect(await response.json()).toEqual({
+              messages,
+              messageWindow: { truncated: true },
+            });
+          },
+        ),
+    );
+  });
+
   test("reports missing message and status snapshots as missing sessions", async () => {
     await withRuntimeMethod(
       "getMessages",
@@ -1538,7 +1569,7 @@ describe("progressive transcript route", () => {
       async () =>
         withRuntimeMethod(
           "getCachedMessages",
-          () => ({ messages: [message("m1")], freshness: "current" }),
+          () => ({ messages: [message("m1")], freshness: "current", complete: true }),
           async () => {
             const response = await app.request(
               "/session/session-1/transcript?version=1&limit=100&targetBytes=524288",
@@ -1574,10 +1605,36 @@ describe("progressive transcript route", () => {
       async () =>
         withRuntimeMethod(
           "getCachedMessages",
-          () => ({ messages: [message("m1")], freshness: "cached" }),
+          () => ({ messages: [message("m1")], freshness: "cached", complete: true }),
           async () => {
             const response = await app.request("/session/session-1/transcript?version=1");
             expect((await response.json()).value.freshness).toBe("cached");
+          },
+        ),
+    );
+  });
+
+  test("reports a trimmed local tail as incomplete without naming a window cut", async () => {
+    // The retained tail is the whole transcript for a session whose rollout
+    // could not be resumed. Reporting it as complete is what hid the dropped
+    // messages: the tail fits the window, so nothing else marks the gap.
+    await withRuntimeMethod(
+      "getStatus",
+      () => status,
+      async () =>
+        withRuntimeMethod(
+          "getCachedMessages",
+          () => ({ messages: [message("m1")], freshness: "cached", complete: false }),
+          async () => {
+            const response = await app.request(
+              "/session/session-1/transcript?version=1&limit=100&targetBytes=524288",
+            );
+            expect(response.status).toBe(200);
+            const body = await response.json();
+            expect(body.value.complete).toBe(false);
+            expect(body.value.messageWindow.truncated).toBe(true);
+            // Nothing local cut this window, so there is no reason to name.
+            expect(body.value.messageWindow.truncationReason).toBeUndefined();
           },
         ),
     );
@@ -1594,7 +1651,7 @@ describe("progressive transcript route", () => {
       async () =>
         withRuntimeMethod(
           "getCachedMessages",
-          () => ({ messages: [message("m1")], freshness: "current" }),
+          () => ({ messages: [message("m1")], freshness: "current", complete: true }),
           async () => {
             const first = await app.request("/session/session-1/transcript?version=1");
             const token = (await first.json()).token as string;
@@ -1618,6 +1675,7 @@ describe("progressive transcript route", () => {
           () => ({
             messages: Array.from({ length: 40 }, (_, index) => message(`m${index}`)),
             freshness: "current",
+            complete: true,
           }),
           async () => {
             const request = new Request("http://localhost/session/session-1/transcript?version=1");

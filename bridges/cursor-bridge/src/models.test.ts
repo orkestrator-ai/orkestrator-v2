@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelListItem } from "@cursor/sdk";
 import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
-import { __testing, emptyComposer, modelSelection } from "./models.js";
+import { __testing, contextWindowForModelId, emptyComposer, modelSelection } from "./models.js";
 
 /** Shaped like a real Cursor model: an effort axis plus a speed toggle. */
 const opus: AgentModel = {
@@ -252,5 +252,44 @@ describe("emptyComposer", () => {
   test("reports no speed control until a model says it has one", () => {
     expect(emptyComposer().fastModeAvailable).toBe(false);
     expect(emptyComposer().fastModeEnabled).toBeNull();
+  });
+});
+
+describe("context windows", () => {
+  test("normalizes confirmed windows onto the catalogue entry", () => {
+    const grok: ModelListItem = { id: "grok-4-6", displayName: "Cursor Grok 4.6" };
+    const opus: ModelListItem = { id: "claude-opus-5", displayName: "Claude Opus 5" };
+    expect(__testing.normalizeModel(grok).contextWindow).toBe(500_000);
+    expect(__testing.normalizeModel(opus).contextWindow).toBe(1_000_000);
+  });
+
+  test("leaves unconfirmed models without a window rather than guessing", () => {
+    const unknown: ModelListItem = { id: "composer-2", displayName: "Composer" };
+    expect(__testing.normalizeModel(unknown).contextWindow).toBeUndefined();
+    expect(contextWindowForModelId("composer-2")).toBeUndefined();
+    expect(contextWindowForModelId(undefined)).toBeUndefined();
+  });
+
+  test("normalizes separators and ignores the fast suffix", () => {
+    expect(contextWindowForModelId("grok-4.6")).toBe(500_000);
+    expect(contextWindowForModelId("grok-4-6-fast")).toBe(500_000);
+    expect(contextWindowForModelId("Claude-Opus-5")).toBe(1_000_000);
+  });
+
+  test("answers an inherited object key with no window", () => {
+    // The composer stores whatever model id the client names, so these reach
+    // the table verbatim. A plain object would answer `constructor` with the
+    // `Object` function and hand the gauge a non-number as its denominator.
+    for (const key of ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"]) {
+      expect(contextWindowForModelId(key)).toBeUndefined();
+    }
+  });
+
+  test("ignores whitespace and blank ids", () => {
+    expect(contextWindowForModelId("  grok-4-6  ")).toBe(500_000);
+    expect(contextWindowForModelId("   ")).toBeUndefined();
+    expect(contextWindowForModelId("")).toBeUndefined();
+    // `-fast` is a suffix on a known model, never a model of its own.
+    expect(contextWindowForModelId("-fast")).toBeUndefined();
   });
 });

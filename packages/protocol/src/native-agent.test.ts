@@ -868,6 +868,56 @@ describe("progressive transcript deltas", () => {
     expect(next?.messages).toEqual([message("m1", "hello"), message("m2", "done")]);
   });
 
+  test("clears a history cursor the delta no longer carries", () => {
+    const current = {
+      identity,
+      freshness: "current" as const,
+      messages: [message("m1", "hello")],
+      historyCursor: "cursor-before-m1",
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    };
+    const next = applyNativeAgentTranscriptDelta(current, {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      freshness: "current",
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    });
+
+    expect(next?.historyCursor).toBeUndefined();
+  });
+
+  test("clears the cursor without claiming the history is fully loaded", () => {
+    /*
+     * A cursor also goes away when the backend's paging cache was never
+     * populated or has been evicted, which is not the same as the live tail
+     * reaching the start. The view says so by keeping `historyComplete` false
+     * and its window pageable, and consumers have to read those rather than
+     * infer completeness from the missing cursor.
+     */
+    const current = {
+      identity,
+      freshness: "current" as const,
+      messages: [message("m1", "hello")],
+      historyCursor: "cursor-before-m1",
+      historyEpoch: "epoch-1",
+      historyComplete: false,
+    };
+    const next = applyNativeAgentTranscriptDelta(current, {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      freshness: "current",
+      historyEpoch: "epoch-1",
+      historyComplete: false,
+      messageWindow: { limit: 1, truncated: true, canLoadEarlier: true },
+    });
+
+    expect(next?.historyCursor).toBeUndefined();
+    expect(next?.historyComplete).toBe(false);
+    expect(next?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
   test("rejects a delta whose upsert is missing from the live order", () => {
     const current = {
       identity,

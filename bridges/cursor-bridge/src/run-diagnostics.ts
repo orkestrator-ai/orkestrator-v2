@@ -51,3 +51,25 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
 export function createRunDiagnostics(state: SessionState): CursorRunDiagnostics | undefined {
   return bridgeDebugEnabled("cursor") ? new CursorRunDiagnostics(state) : undefined;
 }
+
+/** Bounded so one SDK error cannot write an unbounded diagnostic line. */
+const MAX_SETUP_DETAIL_BYTES = 300;
+
+/**
+ * One gated line for a setup failure that attach deliberately recovers from.
+ * Both call sites swallow their error, so without this the only symptom of an
+ * unprimed sandbox verdict is a later generic dispatch failure — exactly the
+ * ambiguity that made the original incident hard to place.
+ *
+ * The message is the only field taken from the error: the options in scope at
+ * these sites carry an API key and the workspace path.
+ */
+export function cursorSetupDebug(stage: string, error: unknown): void {
+  if (!bridgeDebugEnabled("cursor")) return;
+  const detail = (error instanceof Error ? error.message : String(error)).slice(
+    0,
+    MAX_SETUP_DETAIL_BYTES,
+  );
+  const entry = JSON.stringify({ bridge: "cursor", event: "setup-failed", stage, detail });
+  console.info(`[bridge-diagnostics] ${entry}`);
+}

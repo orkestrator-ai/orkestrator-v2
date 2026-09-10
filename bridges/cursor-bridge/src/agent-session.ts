@@ -272,7 +272,7 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       : {}),
     ...(state.mcpServerNames.length > 0 ? { mcpServers } : {}),
   };
-  const releaseWarmWorkspace = await prewarmCursorWorkspace(options);
+  const releaseWarmWorkspace = await prewarmCursorWorkspace(options, policy.sandbox);
   state.workspaceWarmRelease = releaseWarmWorkspace;
 
   try {

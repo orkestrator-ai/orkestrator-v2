@@ -1253,9 +1253,17 @@ app.get("/session/:id/config", async (c) => {
 });
 
 app.get("/session/:id/messages", async (c) => {
-  const messages = await appServerRuntime.getMessages(c.req.param("id"));
+  const sessionId = c.req.param("id");
+  const messages = await appServerRuntime.getMessages(sessionId);
   if (!messages) return c.json({ error: "Session not found" }, 404);
-  return c.json(boundCodexTranscriptResponse(messages));
+  const bounded = boundCodexTranscriptResponse(messages);
+  // This is the exact recovery surface, so it must not present a transcript the
+  // local ring buffer already evicted from as the whole conversation.
+  if (appServerRuntime.transcriptComplete(sessionId)) return c.json(bounded);
+  return c.json({
+    ...bounded,
+    messageWindow: { ...bounded.messageWindow, truncated: true },
+  });
 });
 
 app.get("/session/:id/transcript", (c) => {
@@ -1274,7 +1282,7 @@ app.get("/session/:id/transcript", (c) => {
       limit,
       targetBytes,
       knownToken: c.req.query("knownToken"),
-      complete: true,
+      complete: cached.complete,
       freshness: cached.freshness,
       title: status.title,
     }),

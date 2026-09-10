@@ -435,6 +435,41 @@ describe("MultiReviewLaunchDialog", () => {
     });
   });
 
+  test("pins Fast independently on consolidation and each reviewer", () => {
+    const selection = defaultMultiReviewLaunchSelection({
+      defaultAgent: "claude",
+      catalog: speedCatalog,
+      preferredFastModes: { claude: true },
+      reviewerDefaults: [
+        {
+          defaultAgent: "claude",
+          preferredModels: { claude: "opus" },
+          preferredFastModes: { claude: true },
+        },
+        {
+          defaultAgent: "claude",
+          preferredModels: { claude: "opus" },
+          preferredFastModes: { claude: false },
+        },
+      ],
+      reviewModelDefaults: {
+        defaultAgent: "claude",
+        preferredModels: { claude: "opus" },
+        preferredFastModes: { claude: false },
+      },
+      fixModelDefaults: {
+        defaultAgent: "claude",
+        preferredModels: { claude: "opus" },
+        preferredFastModes: { claude: true },
+      },
+    });
+
+    expect(selection.reviewers[0]).toMatchObject({ agent: "claude", fastMode: true });
+    expect(selection.reviewers[1]).toMatchObject({ agent: "claude", fastMode: false });
+    expect(selection.reviewModel).toMatchObject({ agent: "claude", fastMode: false });
+    expect(selection.fixModel).toMatchObject({ agent: "claude", fastMode: true });
+  });
+
   test("submits the same initial selection as the direct-launch helper", () => {
     const defaults: MultiReviewLaunchDefaults = {
       defaultAgent: "claude",

@@ -641,6 +641,38 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
+  // OpenCode briefly advertised a `reasoning` model parameter next to the
+  // composer's own reasoning picker. Removing that parameter left no control
+  // that writes or clears `parameterValues.reasoning`, so sessions created in
+  // that window still carry the value. It must not outrank the picker, and it
+  // must not act as a variant of its own.
+  test("ignores a reasoning parameter value left behind by the removed control", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Continue", {
+        requestId: "request-stale-parameter",
+        effort: "low",
+        parameterValues: { reasoning: "high" },
+      });
+      await provider.send("owned-session", "Continue", {
+        requestId: "request-stale-parameter-only",
+        parameterValues: { reasoning: "high" },
+      });
+      await provider.send("owned-session", "Continue", {
+        requestId: "request-stale-parameter-default",
+        effort: "default",
+        parameterValues: { reasoning: "high" },
+      });
+
+      expect(fake.promptCalls[0]!.variant).toBe("low");
+      expect(fake.promptCalls[1]!.variant).toBeUndefined();
+      expect(fake.promptCalls[2]!.variant).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("sends images as data-url file parts alongside the prompt", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

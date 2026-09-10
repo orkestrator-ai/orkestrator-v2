@@ -544,9 +544,10 @@ export interface GlobalConfig {
    * Application-wide agent defaults — the widest tier. Supersedes
    * `defaultAgent`, the three `*Mode` fields, `claudeNativeBackend`,
    * `actionDefaults`, and the four model/effort fields that had no UI at all.
-   * Speed is `platforms[agent].fastMode`, the same Fast/Normal axis the model
-   * picker exposes. A legacy `*NativeFastModeDefault` key migrates when it is
-   * still present; an earlier release may already have stripped it.
+   * Platform speed is `platforms[agent].fastMode`. Each action default can
+   * override that with its own `fastMode` so PR and Consolidation need not
+   * share one Fast choice. A legacy `*NativeFastModeDefault` key migrates
+   * when it is still present; an earlier release may already have stripped it.
    */
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */

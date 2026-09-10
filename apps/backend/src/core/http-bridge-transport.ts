@@ -113,26 +113,35 @@ export async function readProviderActivityObservation(
   const body = (await response.json()) as {
     activity?: unknown;
     asyncQuestionItemIds?: unknown;
+    readyForInput?: unknown;
   };
   if (!isProviderActivityState(body.activity)) {
     throw new ProviderUnavailableError(
       `${connection.agent} returned a malformed activity snapshot`,
     );
   }
-  if (body.asyncQuestionItemIds === undefined) return { state: body.activity };
-  if (
-    !Array.isArray(body.asyncQuestionItemIds) ||
-    body.asyncQuestionItemIds.length > 64 ||
-    !body.asyncQuestionItemIds.every(
-      (itemId) => typeof itemId === "string" && itemId.length > 0 && itemId.length <= 2_048,
-    )
-  ) {
-    throw new ProviderUnavailableError(`${connection.agent} returned malformed attention metadata`);
+  if (body.readyForInput !== undefined && typeof body.readyForInput !== "boolean") {
+    throw new ProviderUnavailableError(`${connection.agent} returned malformed readiness metadata`);
   }
-  const asyncQuestionItemIds = Array.from(new Set(body.asyncQuestionItemIds));
+  let asyncQuestionItemIds: string[] = [];
+  if (body.asyncQuestionItemIds !== undefined) {
+    if (
+      !Array.isArray(body.asyncQuestionItemIds) ||
+      body.asyncQuestionItemIds.length > 64 ||
+      !body.asyncQuestionItemIds.every(
+        (itemId) => typeof itemId === "string" && itemId.length > 0 && itemId.length <= 2_048,
+      )
+    ) {
+      throw new ProviderUnavailableError(
+        `${connection.agent} returned malformed attention metadata`,
+      );
+    }
+    asyncQuestionItemIds = Array.from(new Set(body.asyncQuestionItemIds));
+  }
   return {
     state: body.activity,
     ...(asyncQuestionItemIds.length ? { asyncQuestionItemIds } : {}),
+    ...(typeof body.readyForInput === "boolean" ? { readyForInput: body.readyForInput } : {}),
   };
 }
 

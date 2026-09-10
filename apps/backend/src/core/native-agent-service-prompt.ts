@@ -136,6 +136,35 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     return observed?.state ?? "unknown";
   }
 
+  /**
+   * Activity as the *turn* consumers read it, with background work removed.
+   *
+   * {@link sessionActivitySnapshot} answers what the environment indicator
+   * shows, and a bridge reports `working` there for as long as tasks the
+   * session launched are alive — a backgrounded dev server or file watcher can
+   * hold that for the rest of the session. The parent turn has still ended and
+   * the composer is still free, which the bridge reports separately as
+   * `readyForInput`.
+   *
+   * Everything that gates on "can this session take a prompt right now" must
+   * read that release rather than the raw state. Mail injection only claims a
+   * message for an `idle` mailbox, so without this collapse one long-lived
+   * background process would silence a worker for as long as it runs.
+   */
+  sessionTurnActivitySnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): AgentActivityState | "unknown" {
+    const observed = this.observedSessionActivity.get(
+      nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    if (!observed) return "unknown";
+    return observed.state === "working" && observed.readyForInput === true
+      ? "idle"
+      : observed.state;
+  }
+
   sessionPresentationSnapshot(
     environmentId: string,
     agent: BuildPipelineAgent,
@@ -179,7 +208,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     ) {
       return "working";
     }
-    const activity = this.sessionActivitySnapshot(
+    const activity = this.sessionTurnActivitySnapshot(
       input.environmentId,
       input.agent,
       input.logicalSessionKey,

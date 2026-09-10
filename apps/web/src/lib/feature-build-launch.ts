@@ -18,6 +18,7 @@ import {
   defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
+  modelSupportsSpeed,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -100,6 +101,28 @@ export function resolveFeatureBuildStep(
     ...(reasoningEffort === "default" ? {} : { reasoningEffort }),
     ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
+}
+
+/**
+ * The Fast a step keeps when its model changes.
+ *
+ * Speed is a per-platform capability, so it survives a model change inside one
+ * provider and is dropped when the provider changes or when the new model
+ * cannot honour it. The panel has no speed control of its own, so a step that
+ * silently lost its configured Fast could not be put back without reopening
+ * Settings.
+ */
+export function retainedStepFastMode(
+  selection: FeatureBuildStepSelection,
+  nextAgent: LaunchAgent,
+  nextModelId: string,
+  catalog: AgentModelCatalog,
+): { fastMode?: boolean } {
+  return nextAgent === selection.agent &&
+    typeof selection.fastMode === "boolean" &&
+    modelSupportsSpeed(nextAgent, catalog, nextModelId)
+    ? { fastMode: selection.fastMode }
+    : {};
 }
 
 export function featureBuildReviewerRow(

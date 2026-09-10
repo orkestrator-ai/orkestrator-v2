@@ -245,6 +245,25 @@ describe("local slash-command transcript", () => {
     expect(session.localMessages[0]!.id).toBe("m10");
     expect(session.localMessages.at(-1)!.id).toBe(`m${MAX_LOCAL_MESSAGES + 9}`);
     expect(session.messageRevision).toBe(MAX_LOCAL_MESSAGES + 10);
+    // The drop is the only transcript loss the bridge performs silently, so it
+    // has to be recorded for the transcript reads to report.
+    expect(session.localMessagesTrimmed).toBe(true);
+  });
+
+  test("records no trim while the buffer is still under its cap", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1");
+
+    expect(session.localMessagesTrimmed).toBe(false);
+    for (let index = 0; index < MAX_LOCAL_MESSAGES; index += 1) {
+      registry.appendLocalMessages(session, localMessage(`m${index}`));
+    }
+
+    expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
+    expect(session.localMessagesTrimmed).toBe(false);
+
+    registry.appendLocalMessages(session, localMessage("overflow"));
+    expect(session.localMessagesTrimmed).toBe(true);
   });
 
   test("each non-empty append operation advances the revision exactly once", () => {

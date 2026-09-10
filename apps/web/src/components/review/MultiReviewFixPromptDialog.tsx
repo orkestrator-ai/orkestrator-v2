@@ -114,6 +114,8 @@ export function MultiReviewFixPromptDialog({
 
   const selectModel = (agent: LaunchAgent, model: string) => {
     const effort = defaultEffortFor(agent, model, catalog);
+    // Speed survives a model change within one provider when the new model can
+    // honour it, and is dropped when the provider changes.
     const fastMode = defaultFastModeFor(
       agent,
       model,

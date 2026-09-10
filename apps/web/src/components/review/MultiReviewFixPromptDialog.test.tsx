@@ -11,8 +11,18 @@ import {
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high", "xhigh"] }],
   codex: [
-    { id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["low", "medium", "high"] },
-    { id: "gpt-5.4", name: "GPT-5.4", reasoningEfforts: ["low", "medium", "high"] },
+    {
+      id: "gpt-5.6",
+      name: "GPT-5.6",
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsSpeed: true,
+    },
+    {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsSpeed: true,
+    },
   ],
   opencode: [
     {
@@ -74,6 +84,60 @@ describe("MultiReviewFixPromptDialog", () => {
       name: /OpenCode/,
     });
     expect(row.textContent).toContain("Provider Cloud");
+  });
+
+  test("carries the workflow's Fast through an unchanged submission", () => {
+    const { onSubmit } = renderDialog({
+      defaultSelection: {
+        agent: "codex",
+        model: "gpt-5.6",
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+
+    // A custom fix has no speed control of its own, so it has to run at the
+    // speed the workflow's Fix step was configured with.
+    expect(onSubmit).toHaveBeenCalledWith(
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high", fastMode: true },
+      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+    );
+  });
+
+  test("keeps Fast across a model change but drops it when the provider changes", () => {
+    const { onSubmit } = renderDialog({
+      defaultSelection: {
+        agent: "codex",
+        model: "gpt-5.6",
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+
+    fireEvent.pointerDown(picker);
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
+        name: /GPT-5.4/,
+      }),
+    );
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    expect(onSubmit.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.4",
+      fastMode: true,
+    });
+
+    // Claude's only catalogue model cannot honour Fast, so moving there has to
+    // clear it rather than send a speed the provider will not accept.
+    fireEvent.pointerDown(picker);
+    fireEvent.click(screen.getByRole("button", { name: "claude models" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    expect(onSubmit.mock.calls.at(-1)?.[0].fastMode).toBeUndefined();
   });
 
   test("submits a cross-provider model and manually selected effort", () => {

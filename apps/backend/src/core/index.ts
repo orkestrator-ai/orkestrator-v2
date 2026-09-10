@@ -326,7 +326,10 @@ export class OrkestratorBackend {
       for (const conversation of workspace.conversations) {
         if (conversation.closedAt || !conversation.agent) continue;
         const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-        const observed = this.nativeAgents.sessionActivitySnapshot(
+        // The turn view, not the indicator view: a coordinator conversation
+        // whose composer is free is not holding this project's git, even when
+        // a background task it launched keeps the environment pulsing.
+        const observed = this.nativeAgents.sessionTurnActivitySnapshot(
           runtimeId,
           conversation.agent,
           conversation.logicalSessionKey,

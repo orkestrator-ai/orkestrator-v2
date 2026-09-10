@@ -1831,7 +1831,19 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
     messages: order.map((id) => currentMessages.get(id)!),
     historyEpoch: delta.historyEpoch,
     historyComplete: delta.historyComplete,
-    ...(delta.historyCursor === undefined ? {} : { historyCursor: delta.historyCursor }),
+    /*
+     * A delta mirrors whatever cursor its view carries, including none, so the
+     * omission is authoritative for this view rather than a field the sender
+     * chose to save bytes on. Retaining the previous cursor made a view whose
+     * boundary had gone away look perpetually pageable.
+     *
+     * The reasons a cursor goes away are not all "history was fully read": the
+     * backend also stops minting one when its paging cache has not been
+     * populated for this session. Consumers therefore must not treat a cleared
+     * cursor here as proof that nothing earlier exists — that question belongs
+     * to `historyComplete` and to whatever paging state the consumer owns.
+     */
+    historyCursor: delta.historyCursor,
     ...(delta.title === undefined ? {} : { title: delta.title }),
     ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),

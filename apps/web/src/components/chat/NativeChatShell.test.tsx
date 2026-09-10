@@ -519,6 +519,145 @@ describe("NativeChatShell", () => {
       expect(screen.getByText("Previously visible answer")).toBeTruthy();
       expect(screen.getByRole("textbox", { name: "Prompt" })).toBeTruthy();
       expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+      // The reconnect reads as a skeleton, not as a banner with a spinner.
+      expect(
+        screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+      ).toBe("true");
+      expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
+    });
+
+    test("leaves the composer centered while an empty established session refreshes", () => {
+      // A refresh is transient. Sending the dock to the bottom and animating it
+      // back is visible churn, and it swaps which "Resume Session" control the
+      // centered layout puts in front of the user mid-reconnect.
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          centerCompose
+          connectionState="connecting"
+          displayAvailable
+          onResumeClick={() => {}}
+        />,
+      );
+
+      const dock = screen.getByTestId("compose-dock");
+      expect(dock.className).toContain("top-1/2");
+      // Exactly one reachable entry point, the centered one, throughout.
+      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          centerCompose
+          connectionState="connected"
+          displayAvailable
+          onResumeClick={() => {}}
+        />,
+      );
+
+      expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
+      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+    });
+
+    test("pins the shimmer to the dock when the centered layout hides the transcript", () => {
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          centerCompose
+          connectionState="connecting"
+          displayAvailable
+        />,
+      );
+
+      // The centered layout fades the transcript to `opacity-0`, so the
+      // transcript-end skeleton has nowhere to be seen.
+      expect(
+        screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+      ).toBe("false");
+      expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+      expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+    });
+
+    test("pins the shimmer to the dock when the reader has scrolled away from the bottom", () => {
+      const { rerender } = render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connecting"
+          displayAvailable
+          isAtBottom={false}
+        />,
+      );
+
+      // The transcript footer is off screen, so the only visible indicator has
+      // to be the one that travels with the dock.
+      expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+      expect(
+        screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+      ).toBe("true");
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connecting"
+          displayAvailable
+          isAtBottom
+        />,
+      );
+
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+    });
+
+    test("prefers the refresh shimmer over the desync banner it is already resolving", () => {
+      const { rerender } = render(
+        <NativeChatShell {...shellProps()} agentLabel="Codex" centerCompose desynced />,
+      );
+
+      expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          centerCompose
+          connectionState="connecting"
+          displayAvailable
+          desynced
+        />,
+      );
+
+      expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+      expect(screen.queryByText(/Live updates disconnected/) === null).toBe(true);
+    });
+
+    test("keeps the refresh live region mounted before the refresh begins", () => {
+      const { container, rerender } = render(
+        <NativeChatShell {...shellProps()} agentLabel="Codex" displayAvailable />,
+      );
+
+      // An `aria-live` node created in the same commit as its text is usually
+      // too late to be announced, so the region has to outlive the refresh.
+      const regions = container.querySelectorAll("span.sr-only[aria-live='polite']");
+      expect(regions.length).toBeGreaterThan(1);
+      expect(screen.queryByRole("status") === null).toBe(true);
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connecting"
+          displayAvailable
+        />,
+      );
+
+      expect(container.querySelectorAll("span.sr-only[aria-live='polite']")).toHaveLength(
+        regions.length,
+      );
+      expect(screen.getByRole("status").textContent).toBe("Refreshing Codex session…");
     });
 
     test("waits on the connecting logo while a first session is created", () => {
@@ -573,7 +712,7 @@ describe("NativeChatShell", () => {
 
     test("keeps cached transcript readable and exposes compact retry after an error", () => {
       const onRetry = mock(() => {});
-      render(
+      const { container } = render(
         <NativeChatShell
           {...shellProps()}
           connectionState="error"
@@ -587,6 +726,11 @@ describe("NativeChatShell", () => {
       expect(screen.getByText("bridge unavailable")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(onRetry).toHaveBeenCalledTimes(1);
+      // The notice carries the failure alone now. A spinner here would claim a
+      // reconnect is running when the only way forward is the Retry button.
+      expect(container.querySelector(".animate-spin") === null).toBe(true);
+      expect(screen.getByRole("alert")).toBeTruthy();
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     });
 
     test("shows a connecting screen instead of the transcript", () => {

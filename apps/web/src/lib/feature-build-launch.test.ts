@@ -6,6 +6,7 @@ import {
   featureBuildRequest,
   featureBuildStepConfigs,
   resolveFeatureBuildStep,
+  retainedStepFastMode,
   type FeatureBuildModelState,
 } from "@/lib/feature-build-launch";
 
@@ -17,9 +18,17 @@ const catalog: AgentModelCatalog = {
       reasoningEfforts: ["low", "high"],
       resolvedModel: "claude-sonnet-5",
     },
-    { id: "opus", name: "Opus", reasoningEfforts: ["high", "max"] },
+    { id: "opus", name: "Opus", reasoningEfforts: ["high", "max"], supportsSpeed: true },
+    { id: "opus-mini", name: "Opus Mini", reasoningEfforts: [], supportsSpeed: true },
   ],
-  codex: [{ id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["medium", "high"] }],
+  codex: [
+    {
+      id: "gpt-5.6",
+      name: "GPT-5.6",
+      reasoningEfforts: ["medium", "high"],
+      supportsSpeed: true,
+    },
+  ],
   opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
 };
 
@@ -130,6 +139,36 @@ describe("defaultFeatureBuildModels", () => {
       agent: "codex",
       model: "gpt-5.6",
       reasoningEffort: "high",
+    });
+  });
+
+  test("carries Fast independently on PR and consolidation defaults", () => {
+    const state = defaultFeatureBuildModels({
+      catalog,
+      build: { agent: "claude", model: "opus" },
+      review: { agent: "claude", model: "sonnet" },
+      review2: { agent: "codex", model: "gpt-5.6" },
+      reviewPreparation: { agent: "claude", model: "opus", fastMode: false },
+      address: { agent: "codex", model: "gpt-5.6" },
+      pr: { agent: "claude", model: "opus", fastMode: true },
+      resolve: { agent: "claude", model: "opus" },
+    });
+
+    expect(state.pr).toMatchObject({ agent: "claude", model: "opus", fastMode: true });
+    expect(state.reviewPreparation).toMatchObject({
+      agent: "claude",
+      model: "opus",
+      fastMode: false,
+    });
+    expect(featureBuildStepConfigs(state).steps.pr).toEqual({
+      agent: "claude",
+      model: "opus",
+      fastMode: true,
+    });
+    expect(featureBuildStepConfigs(state).reviewPreparation).toEqual({
+      agent: "claude",
+      model: "opus",
+      fastMode: false,
     });
   });
 });
@@ -362,5 +401,35 @@ describe("featureBuildIdentity", () => {
     const request = featureBuildRequest(base);
     const reordered = Object.fromEntries(Object.entries(request).reverse()) as typeof request;
     expect(featureBuildIdentity(reordered)).toBe(featureBuildIdentity(request));
+  });
+});
+
+describe("retainedStepFastMode", () => {
+  const fastStep = { agent: "claude" as const, model: "opus", fastMode: true };
+
+  test("keeps Fast across a model change inside one provider", () => {
+    expect(retainedStepFastMode(fastStep, "claude", "opus-mini", catalog)).toEqual({
+      fastMode: true,
+    });
+  });
+
+  test("keeps an explicit Normal, which is a choice rather than an absence", () => {
+    expect(
+      retainedStepFastMode({ ...fastStep, fastMode: false }, "claude", "opus-mini", catalog),
+    ).toEqual({ fastMode: false });
+  });
+
+  test("drops Fast when the provider changes", () => {
+    expect(retainedStepFastMode(fastStep, "codex", "gpt-5.6", catalog)).toEqual({});
+  });
+
+  test("drops Fast when the new model cannot honour it", () => {
+    expect(retainedStepFastMode(fastStep, "claude", "sonnet", catalog)).toEqual({});
+  });
+
+  test("has nothing to keep when the step never named a speed", () => {
+    expect(
+      retainedStepFastMode({ agent: "claude", model: "opus" }, "claude", "opus-mini", catalog),
+    ).toEqual({});
   });
 });

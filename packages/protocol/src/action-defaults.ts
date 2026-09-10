@@ -2,9 +2,10 @@
  * Application-level agent/model defaults for configurable toolbar workflows.
  *
  * Each workflow's launch dialog opens on the same entry used by its direct
- * action, when it has one. An entry is a whole decision — platform, model and
- * reasoning level together — because a model id is only meaningful inside its
- * own platform's catalogue.
+ * action, when it has one. An entry is a whole decision — platform, model,
+ * reasoning level and Fast together — because a model id is only meaningful
+ * inside its own platform's catalogue, and Fast is a choice about this action
+ * rather than every other default that happens to name the same agent.
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
@@ -29,6 +30,34 @@ export interface AgentActionDefault {
   model?: string;
   /** Missing means the model's default reasoning level. */
   reasoningEffort?: string;
+  /**
+   * Fast vs normal for this action only.
+   *
+   * Missing means inherit the platform Fast default. `false` is an explicit
+   * Normal choice, not "unset" — the same three-state the model picker uses.
+   */
+  fastMode?: boolean;
+}
+
+/** The agent, model, reasoning and Fast this action should use. */
+export interface ResolvedActionDefault {
+  agent: AgentPlatform;
+  model?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
+}
+
+/** Persist only the fields that actually have a value. */
+export function actionDefaultEntry(
+  platform: AgentPlatform,
+  fields: Omit<AgentActionDefault, "platform"> = {},
+): AgentActionDefault {
+  return {
+    platform,
+    ...(fields.model ? { model: fields.model } : {}),
+    ...(fields.reasoningEffort ? { reasoningEffort: fields.reasoningEffort } : {}),
+    ...(fields.fastMode !== undefined ? { fastMode: fields.fastMode } : {}),
+  };
 }
 
 export type ActionDefaults = Partial<Record<ActionDefaultKey, AgentActionDefault>>;
@@ -60,10 +89,12 @@ function normalizeEntry(value: unknown): AgentActionDefault | undefined {
     platform === "opencode" && trimmedModel === OPENCODE_PLACEHOLDER_MODEL ? "" : trimmedModel;
   const reasoningEffort =
     typeof record.reasoningEffort === "string" ? record.reasoningEffort.trim() : "";
+  const fastMode = typeof record.fastMode === "boolean" ? record.fastMode : undefined;
   return {
     platform,
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
   };
 }
 
@@ -83,7 +114,7 @@ export function normalizeActionDefaults(value: unknown): ActionDefaults {
 }
 
 /**
- * The agent, model and reasoning level this action should use.
+ * The agent, model, reasoning level and Fast this action should use.
  *
  * There is deliberately no way to hand this resolver an agent that outranks the
  * entry. It used to take one — the agent an environment was created with — so
@@ -105,7 +136,7 @@ export function resolveActionDefault(
     fallbackAgent: AgentPlatform;
     enabledAgents: readonly AgentPlatform[];
   },
-): { agent: AgentPlatform; model?: string; reasoningEffort?: string } {
+): ResolvedActionDefault {
   const entry = actionDefaults?.[key];
   const platform = entry?.platform;
   if (!platform || !options.enabledAgents.includes(platform)) {
@@ -115,5 +146,6 @@ export function resolveActionDefault(
     agent: platform,
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+    ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
   };
 }

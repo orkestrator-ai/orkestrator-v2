@@ -12,6 +12,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
+import { contextWindowForModelId } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
 import { sessionIsWorking, turnTokenTotal, type JsonObject, type SessionState } from "./state.js";
 
@@ -152,10 +153,14 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ? (state.currentRunModelId ?? state.composer.selectedModelId)
     : usage?.modelId;
   const model = state.composer.models.find((entry) => entry.id === modelId);
+  // Sessions hydrated before the catalogue carried windows keep models without
+  // one. Fall back to the curated table so those tabs gain a bar without
+  // waiting for a re-hydrate; unknown models stay metrics-only.
+  const maximumTokens = model?.contextWindow ?? contextWindowForModelId(modelId);
   const account = mergeAccountWindows(usage?.account, peekPlanAccountWindows());
   return {
     usedTokens: used,
-    ...(model?.contextWindow ? { maximumTokens: model.contextWindow } : {}),
+    ...(maximumTokens ? { maximumTokens } : {}),
     ...(modelId ? { modelId } : {}),
     ...(turn.inputTokens !== undefined ? { inputTokens: turn.inputTokens } : {}),
     ...(turn.outputTokens !== undefined ? { outputTokens: turn.outputTokens } : {}),

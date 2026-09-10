@@ -8,6 +8,7 @@ import type {
 import type {
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
+  NativeAgentMessageWindow,
   NativeAgentSessionProjection,
   NativeAgentSessionAction,
   NativeAgentToolDetails,
@@ -86,6 +87,77 @@ let syncCapabilityRequest: { generation: number; promise: Promise<boolean> } | n
 
 function encodedBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+/**
+ * A revision the projection on screen cannot mistake for an older read.
+ *
+ * `revision` is one ordering within a generation, but the surfaces that mint it
+ * do not share a counter: the progressive transport increments locally on every
+ * applied view, while the joined and legacy projections carry the backend's own
+ * counter, which only moves when content changes. A tab that has polled for a
+ * minute has therefore outrun the server's number, and `applyProjection` would
+ * drop the next authoritative projection as stale.
+ *
+ * Only callers that have already fenced their read on sequence and operation
+ * epoch may use this — ordering is established there, not here.
+ */
+function orderedRevision<TMessage>(
+  current: NativeAgentSessionProjection<TMessage> | null,
+  next: NativeAgentSessionProjection<TMessage>,
+): number {
+  return current && current.generation === next.generation && current.revision >= next.revision
+    ? current.revision + 1
+    : next.revision;
+}
+
+/**
+ * The load-earlier control, derived from what this client can actually fetch.
+ *
+ * Three distinct states, and the server can only answer the last of them:
+ *
+ *  - a `cursor` this client holds — one click fetches a real page;
+ *  - no cursor, a server that reports earlier messages, and no `boundaryCursor`
+ *    this client has already walked past — the click has to mint a cursor
+ *    first, which the joined snapshot does;
+ *  - anything else — the range is either fully loaded or unreachable, so the
+ *    control must not be offered.
+ *
+ * Driving the button from the server's live-tail boundary alone put an inert
+ * action back on screen after every poll: the server keeps reporting that
+ * messages exist before the live tail long after this client has paged back to
+ * the start of the conversation. `boundaryCursor` without `cursor` is exactly
+ * that walked-past state, which is why it suppresses the bootstrap rather than
+ * enabling it.
+ */
+function historyMessageWindow(params: {
+  messageCount: number;
+  /** The cursor this client holds, if paging has one left to spend. */
+  cursor?: string;
+  /** The newest server-minted boundary this client has already resolved. */
+  boundaryCursor?: string;
+  /** Whether the server reports messages before the live tail. */
+  serverCanLoadEarlier?: boolean;
+  /** Server-reported completeness of the backend's own history. */
+  complete: boolean;
+  /** The server's own window, kept when nothing can be fetched. */
+  serverWindow?: NativeAgentMessageWindow;
+}): NativeAgentMessageWindow | undefined {
+  if (params.cursor || (params.serverCanLoadEarlier === true && !params.boundaryCursor)) {
+    return {
+      limit: params.messageCount,
+      truncated: true,
+      truncationReason: "count",
+      canLoadEarlier: true,
+    };
+  }
+  if (params.complete) return undefined;
+  return {
+    ...(params.serverWindow ?? { limit: params.messageCount }),
+    limit: params.messageCount,
+    truncated: true,
+    canLoadEarlier: false,
+  };
 }
 
 async function nativeAgentSyncSupported(): Promise<boolean> {
@@ -171,8 +243,10 @@ function invalidateNativeAgentSyncCapability(): void {
 interface SyncMaterializationPlan<TMessage> {
   materialized: NativeAgentSessionProjection<TMessage>;
   live: NativeAgentSessionProjection<TMessage>;
-  token: string;
-  historyEpoch: string;
+  /** Absent when the live tail came from the progressive transcript. */
+  token?: string;
+  /** The backend paging epoch; absent until a sync-v1 surface minted one. */
+  historyEpoch?: string;
   historyCursor?: string;
   /** Server-reported first message before the live tail, for recovery. */
   boundaryCursor?: string;
@@ -442,6 +516,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     sharedSyncCache?.historyBoundaryCursor,
   );
   const historyCompleteRef = useRef(sharedSyncCache?.historyComplete ?? false);
+  /**
+   * Whether one click could still mint a paging cursor this tab does not hold.
+   *
+   * Only the progressive transport reaches that state: its transcript reports
+   * that earlier messages exist while the backend's paging cache — populated
+   * by a different surface entirely — has never been read for this session.
+   * Recorded here because a mutation answers on the legacy projection surface,
+   * which knows none of this and would otherwise drop the control until the
+   * next poll rebuilt it.
+   */
+  const historyBootstrapRef = useRef(false);
   const historyMessagesRef = useRef<TMessage[]>(
     (sharedSyncCache?.historyMessages as TMessage[] | undefined) ?? [],
   );
@@ -599,8 +684,8 @@ export function useNativeAgentSession<TMessage = unknown>({
   const planSyncMaterialization = useCallback(
     (params: {
       live: NativeAgentSessionProjection<TMessage>;
-      token: string;
-      historyEpoch: string;
+      token?: string;
+      historyEpoch?: string;
       /** Server-reported completeness of the backend's own history. */
       historyComplete: boolean;
       /**
@@ -708,27 +793,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         return true;
       });
       /*
-       * The control is driven by the cursor this client actually holds, not by
-       * the server's live-tail boundary. They diverge as soon as paging reaches
-       * the start of the conversation: the boundary cursor keeps being reported
-       * because messages do exist before the live tail, while the client has
-       * nothing left to ask for, and rendering the button from the server value
-       * put an inert action back on screen after every poll.
+       * No bootstrap term here on purpose. A sync-v1 read always mints its own
+       * boundary cursor when earlier messages exist, so "the server says there
+       * is history but this client holds no cursor" is not a state this path
+       * can recover from — offering the control would put an inert action back
+       * on screen after every poll.
        */
-      const messageWindow = settledCursor
-        ? {
-            limit: messages.length,
-            truncated: true,
-            truncationReason: "count" as const,
-            canLoadEarlier: true,
-          }
-        : retainedComplete
-          ? undefined
-          : {
-              ...(live.messageWindow ?? { limit: messages.length }),
-              truncated: true,
-              canLoadEarlier: false,
-            };
+      const messageWindow = historyMessageWindow({
+        messageCount: messages.length,
+        ...(settledCursor ? { cursor: settledCursor } : {}),
+        complete: retainedComplete,
+        ...(live.messageWindow ? { serverWindow: live.messageWindow } : {}),
+      });
       return {
         materialized: {
           ...live,
@@ -736,8 +812,8 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
         },
         live,
-        token,
-        historyEpoch,
+        ...(token ? { token } : {}),
+        ...(historyEpoch ? { historyEpoch } : {}),
         ...(settledCursor ? { historyCursor: settledCursor } : {}),
         ...(boundaryCursor ? { boundaryCursor } : {}),
         historyComplete: retainedComplete,
@@ -752,6 +828,10 @@ export function useNativeAgentSession<TMessage = unknown>({
   /** Installs a plan. Callers must have fenced the read that produced it. */
   const commitSyncMaterialization = useCallback(
     (plan: SyncMaterializationPlan<TMessage>) => {
+      const materialized: NativeAgentSessionProjection<TMessage> = {
+        ...plan.materialized,
+        revision: orderedRevision(projectionRef.current, plan.materialized),
+      };
       historyEpochRef.current = plan.historyEpoch;
       historyCursorRef.current = plan.historyCursor;
       historyBoundaryCursorRef.current = plan.boundaryCursor;
@@ -760,17 +840,20 @@ export function useNativeAgentSession<TMessage = unknown>({
       historyEvictionRef.current = plan.evictionGeneration;
       syncTokenRef.current = plan.token;
       syncLiveProjectionRef.current = plan.live;
-      applyProjection(plan.materialized, {
-        token: plan.token,
+      // A sync-v1 read answers the bootstrap question outright: it either
+      // minted a cursor or proved there is nothing left to mint one for.
+      historyBootstrapRef.current = false;
+      applyProjection(materialized, {
+        ...(plan.token ? { token: plan.token } : {}),
         liveProjection: plan.live as NativeAgentSessionProjection,
-        historyEpoch: plan.historyEpoch,
+        ...(plan.historyEpoch ? { historyEpoch: plan.historyEpoch } : {}),
         ...(plan.historyCursor ? { historyCursor: plan.historyCursor } : {}),
         ...(plan.boundaryCursor ? { historyBoundaryCursor: plan.boundaryCursor } : {}),
         historyComplete: plan.historyComplete,
         historyMessages: plan.historyMessages,
         historyBytes: plan.historyBytes,
       });
-      return plan.materialized;
+      return materialized;
     },
     [applyProjection],
   );
@@ -784,6 +867,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     historyBoundaryCursorRef.current = undefined;
     historyEpochRef.current = undefined;
     historyCompleteRef.current = false;
+    historyBootstrapRef.current = false;
   }, []);
 
   const updateProgressiveCache = useCallback(
@@ -890,22 +974,82 @@ export function useNativeAgentSession<TMessage = unknown>({
        * the shared store cannot evict — its trim loop refuses to drop the
        * session it is currently writing, so nothing else would reclaim this.
        */
-      if (
+      let retainedBytes = retained.length > 0 ? encodedBytes(retained) : 0;
+      const retentionCollapsed =
         retained.length > 0 &&
         (retained.length + value.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
-          encodedBytes(retained) > CLIENT_HISTORY_MAX_BYTES)
-      ) {
+          retainedBytes > CLIENT_HISTORY_MAX_BYTES);
+      if (retentionCollapsed) {
         retained = [];
+        retainedBytes = 0;
       }
       const messages = [...retained, ...value.messages];
-      const next: NativeAgentSessionProjection<TMessage> = {
+      const serverCanLoadEarlier = value.messageWindow?.canLoadEarlier === true;
+      /*
+       * Whether the paging state this hook holds still describes this
+       * transcript. Paging lives in the sync-v1 namespace — its cursors, its
+       * epoch and its retained pages are all minted by the joined projection
+       * and message-page endpoints — so the transcript view can only ever
+       * invalidate that state, never re-derive it.
+       *
+       * In particular `value.historyEpoch` is the bridge's content epoch and
+       * `historyEpochRef` is the backend's paging epoch. They are different
+       * identifiers for different things and never compare equal, so comparing
+       * them here would discard the cursor on every poll. The transcript's own
+       * rotation is already covered by `historyEpochChanged`.
+       */
+      const pagingCarriesOver =
+        !identityChanged &&
+        !historyEpochChanged &&
+        !evicted &&
+        syncLiveProjectionRef.current !== null;
+      const historyBoundaryCursor = pagingCarriesOver
+        ? historyBoundaryCursorRef.current
+        : undefined;
+      /*
+       * A collapse discards retained pages, so the range they covered has to
+       * become fetchable again. The boundary is the only cursor that still
+       * describes it; the page cursor pointed further back than anything now
+       * on screen.
+       */
+      const settledHistoryCursor = !pagingCarriesOver
+        ? undefined
+        : retentionCollapsed
+          ? historyBoundaryCursorRef.current
+          : historyCursorRef.current;
+      const historyPagingEpoch = pagingCarriesOver ? historyEpochRef.current : undefined;
+      const canBootstrapHistory =
+        serverCanLoadEarlier && !historyBoundaryCursor && !settledHistoryCursor;
+      /*
+       * Completeness is about what this client can show, not about the window
+       * the transcript happened to carry. A live tail reports itself truncated
+       * for as long as messages have aged out of it, but a client that has
+       * already paged those messages back in is showing the whole conversation
+       * and must not keep a "not shown" banner on screen for it.
+       *
+       * Paging having reached the start is exactly "a boundary was resolved and
+       * no cursor survived it", and only then does its completeness win.
+       */
+      const historyComplete =
+        pagingCarriesOver && historyBoundaryCursor && !settledHistoryCursor
+          ? historyCompleteRef.current
+          : value.historyComplete;
+      const messageWindow = historyMessageWindow({
+        messageCount: messages.length,
+        ...(settledHistoryCursor ? { cursor: settledHistoryCursor } : {}),
+        ...(historyBoundaryCursor ? { boundaryCursor: historyBoundaryCursor } : {}),
+        serverCanLoadEarlier,
+        complete: historyComplete,
+        ...(value.messageWindow ? { serverWindow: value.messageWindow } : {}),
+      });
+      const live: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
         sessionId: value.identity.providerSessionId,
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         connection: hasAuthoritativeState ? current.connection : "connecting",
         turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
-        messages,
+        messages: value.messages,
         ...(value.messageWindow ? { messageWindow: value.messageWindow } : {}),
         interactions: hasAuthoritativeState ? current.interactions : [],
         composerControls: hasAuthoritativeState ? current.composerControls : [],
@@ -946,6 +1090,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
+      const next: NativeAgentSessionProjection<TMessage> = {
+        ...live,
+        messages,
+        ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
+      };
+      historyEpochRef.current = historyPagingEpoch;
+      historyCursorRef.current = settledHistoryCursor;
+      historyBoundaryCursorRef.current = historyBoundaryCursor;
+      historyCompleteRef.current = historyComplete;
+      historyBootstrapRef.current = canBootstrapHistory;
+      historyMessagesRef.current = retained;
+      historyEvictionRef.current = evictionGeneration;
+      if (!pagingCarriesOver) syncTokenRef.current = undefined;
+      syncLiveProjectionRef.current = live;
       progressiveTranscriptTokenRef.current = token;
       lastTranscriptViewRef.current = value;
       progressiveHistoryEpochRef.current = value.historyEpoch;
@@ -955,7 +1113,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       setTranscriptAvailability(availability);
       setTranscriptRefreshing(false);
       setTranscriptError(null);
-      applyProjection(next);
+      applyProjection(next, {
+        ...(syncTokenRef.current ? { token: syncTokenRef.current } : {}),
+        liveProjection: live as NativeAgentSessionProjection,
+        ...(historyPagingEpoch ? { historyEpoch: historyPagingEpoch } : {}),
+        ...(settledHistoryCursor ? { historyCursor: settledHistoryCursor } : {}),
+        ...(historyBoundaryCursor ? { historyBoundaryCursor } : {}),
+        ...(canBootstrapHistory ? { historyBootstrap: true } : {}),
+        historyComplete,
+        historyMessages: retained,
+        historyBytes: retainedBytes,
+      });
       updateProgressiveCache({
         identity: value.identity,
         transcriptToken: token,
@@ -1132,15 +1300,17 @@ export function useNativeAgentSession<TMessage = unknown>({
       setSessionStateError(null);
       const live = syncLiveProjectionRef.current;
       const retained = historyMessagesRef.current;
-      if (
-        !next ||
-        !live ||
-        retained.length === 0 ||
-        next.platform !== platform ||
-        next.environmentId !== environmentId
-      ) {
-        applyProjection(next);
-        return next;
+      /*
+       * A tab with no retained pages still owns a load-earlier decision the
+       * legacy window cannot express, so only an identity mismatch short
+       * circuits here. The merge below is a no-op when `retained` is empty.
+       */
+      if (!next || !live || next.platform !== platform || next.environmentId !== environmentId) {
+        const ordered = next
+          ? { ...next, revision: orderedRevision(projectionRef.current, next) }
+          : null;
+        applyProjection(ordered);
+        return ordered;
       }
       const nextIds = new Set(
         next.messages
@@ -1151,24 +1321,18 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...retained.filter((message) => !nextIds.has((message as { id?: unknown })?.id as string)),
         ...next.messages,
       ];
-      const messageWindow = historyCursorRef.current
-        ? {
-            limit: messages.length,
-            truncated: true,
-            truncationReason: "count" as const,
-            canLoadEarlier: true,
-          }
-        : historyCompleteRef.current
-          ? undefined
-          : {
-              ...(next.messageWindow ?? { limit: messages.length }),
-              truncated: true,
-              canLoadEarlier: false,
-            };
+      const messageWindow = historyMessageWindow({
+        messageCount: messages.length,
+        ...(historyCursorRef.current ? { cursor: historyCursorRef.current } : {}),
+        serverCanLoadEarlier: historyBootstrapRef.current,
+        complete: historyCompleteRef.current,
+        ...(next.messageWindow ? { serverWindow: next.messageWindow } : {}),
+      });
       const merged = {
         ...next,
         messages,
         ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
+        revision: orderedRevision(projectionRef.current, next),
       } as NativeAgentSessionProjection<TMessage>;
       applyProjection(merged);
       return merged;
@@ -1727,6 +1891,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       historyCursorRef.current = cached.historyCursor;
       historyBoundaryCursorRef.current = cached.historyBoundaryCursor;
       historyCompleteRef.current = cached.historyComplete;
+      historyBootstrapRef.current = cached.historyBootstrap === true;
       historyMessagesRef.current = cached.historyMessages as TMessage[];
     }
     const progressive = store.progressiveCaches.get(sessionKey);
@@ -2077,13 +2242,33 @@ export function useNativeAgentSession<TMessage = unknown>({
    * the session never had.
    */
   const loadEarlierMessages = useCallback(async () => {
-    if ((await nativeAgentProgressiveSupported()) && !syncLiveProjectionRef.current) {
+    const requestedOperationEpoch = projectionOperationEpochRef.current;
+    const progressive = await nativeAgentProgressiveSupported();
+    if (
+      progressive &&
+      !historyCursorRef.current &&
+      (!syncLiveProjectionRef.current || historyBootstrapRef.current)
+    ) {
+      /*
+       * The progressive transcript knows that history exists long before the
+       * backend has populated the paging cache that mints its cursor: only a
+       * sync-v1 read fills that cache, and this tab may never have issued one.
+       * The joined snapshot is what turns "there is history" into a cursor.
+       */
       const update = await getNativeAgentProjectionUpdate<TMessage>({
         ...identity,
         syncVersion: 1,
         liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
         forceSnapshot: true,
       });
+      /*
+       * Fence before committing, not after. A mutation that landed while the
+       * snapshot was in flight owns the transcript now, and installing this
+       * plan would rewrite the paging refs from a pre-mutation live tail.
+       */
+      if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
+        return projectionRef.current;
+      }
       if (update.status === "snapshot") {
         const live = update.projection;
         if (
@@ -2103,6 +2288,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
       }
     }
+    if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
+      return projectionRef.current;
+    }
     if (await nativeAgentSyncSupported()) {
       const before = historyCursorRef.current;
       if (!before) return projectionRef.current;
@@ -2120,7 +2308,6 @@ export function useNativeAgentSession<TMessage = unknown>({
       const budget = historyRequestBudget();
       if (budget.messages <= 0 || budget.bytes <= 0) return projectionRef.current;
       const sequence = ++refreshSequenceRef.current;
-      const operationEpoch = projectionOperationEpochRef.current;
       const page = await getNativeAgentMessagePage<TMessage>({
         ...identity,
         syncVersion: 1,
@@ -2133,17 +2320,38 @@ export function useNativeAgentSession<TMessage = unknown>({
       // longer describes.
       if (
         sequence !== refreshSequenceRef.current ||
-        operationEpoch !== projectionOperationEpochRef.current
+        requestedOperationEpoch !== projectionOperationEpochRef.current
       ) {
         return projectionRef.current;
       }
-      const live = syncLiveProjectionRef.current;
+      const syncLive = syncLiveProjectionRef.current;
       const token = syncTokenRef.current;
-      if (page.historyEpoch !== historyEpochRef.current || !live || !token) {
+      /*
+       * `historyEpochRef` and `page.historyEpoch` are both the backend's paging
+       * epoch, so a mismatch means the history this cursor described has been
+       * rewritten. The token is deliberately not required: a progressive tail
+       * pages without ever holding a joined-projection token.
+       */
+      if (page.historyEpoch !== historyEpochRef.current || !syncLive) {
         resetSyncState();
         await refresh({ manual: true });
         return projectionRef.current;
       }
+      const current = projectionRef.current;
+      const live =
+        current &&
+        current.platform === syncLive.platform &&
+        current.environmentId === syncLive.environmentId &&
+        current.sessionId === syncLive.sessionId &&
+        current.generation === syncLive.generation
+          ? {
+              ...current,
+              messages: syncLive.messages,
+              ...(syncLive.messageWindow
+                ? { messageWindow: syncLive.messageWindow }
+                : { messageWindow: undefined }),
+            }
+          : syncLive;
       const existing = new Set(
         [...historyMessagesRef.current, ...live.messages].map(
           (message) => (message as { id?: unknown }).id,
@@ -2180,7 +2388,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        */
       const plan = planSyncMaterialization({
         live,
-        token,
+        ...(token ? { token } : {}),
         historyEpoch: page.historyEpoch,
         historyComplete: page.complete,
         retained: {
@@ -2201,14 +2409,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (next <= current) return projectionRef.current;
     setMessageLimit(next);
     const sequence = ++refreshSequenceRef.current;
-    const operationEpoch = projectionOperationEpochRef.current;
     const projection = await getNativeAgentProjection<TMessage>({
       ...identity,
       messageLimit: next,
     });
     if (
       sequence === refreshSequenceRef.current &&
-      operationEpoch === projectionOperationEpochRef.current
+      requestedOperationEpoch === projectionOperationEpochRef.current
     )
       applyProjection(projection);
     return projection;

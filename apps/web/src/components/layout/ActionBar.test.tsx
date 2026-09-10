@@ -2751,6 +2751,37 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("uses the PR action Fast default even when the platform default is Normal", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { fastMode: false } },
+      },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      pr: { platform: "codex", model: "gpt-5.4", fastMode: true },
+      reviewPreparation: { platform: "codex", model: "gpt-5.4", fastMode: false },
+    };
+    currentCodexFastMode = false;
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "codex",
+          title: "PR",
+          fastMode: true,
+        }),
+      ),
+    );
+  });
+
   test("retains the launch prompt when durable PR enqueue fails", async () => {
     currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
     currentEnvironment = {
@@ -4381,6 +4412,34 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("drops the Review action's Fast when the dialog switches to another agent", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentEnabledAgentPlatforms = ["claude", "codex"];
+    // Review pins Fast on Claude. Codex carries its own Normal platform default.
+    currentActionDefaults = { review: { platform: "claude", fastMode: true } };
+    currentClaudeFastMode = undefined;
+    currentCodexFastMode = false;
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    chooseReviewProvider("codex");
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalled());
+    // Speed belongs to the Review action only while that action's agent is the
+    // one being launched; Codex has to fall back to its own platform default.
+    expect(startLoopedReviewMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "codex",
+      fastMode: false,
+    });
+  });
+
   test("disables the toolbar entry point while a launch is in flight", async () => {
     currentWorkspaceReady = true;
     let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
@@ -5314,6 +5373,42 @@ describe("ActionBar configured action defaults", () => {
       model: "claude-fable-5[1m]",
       reasoningEffort: "xhigh",
     });
+  });
+
+  test("does not hand Review's Fast to a later reviewer on the same platform", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    // Claude has no platform Fast of its own, so the only Fast in play belongs
+    // to the Review action.
+    currentClaudeFastMode = undefined;
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", fastMode: true },
+      review2: { platform: "codex", model: "gpt-5.4" },
+    };
+    currentMultiReviewSettings = {
+      reviewerCount: 3,
+      additionalReviewers: [{ platform: "claude", model: "opus" }],
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
+    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
+      reviewers: Array<{ agent: string; model: string; fastMode?: boolean }>;
+    };
+    expect(launch.reviewers).toHaveLength(3);
+    expect(launch.reviewers[0]).toMatchObject({ agent: "claude", fastMode: true });
+    // Reviewer 3 stores no speed of its own, so it follows the Claude platform
+    // default rather than Reviewer 1's action-scoped choice.
+    expect(launch.reviewers[2]?.agent).toBe("claude");
+    expect(launch.reviewers[2]?.fastMode).toBeUndefined();
   });
 
   test("preserves configured OpenCode defaults while the repository catalog is loading", async () => {

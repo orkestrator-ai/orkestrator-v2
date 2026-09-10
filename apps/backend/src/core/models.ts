@@ -742,10 +742,12 @@ export interface AppConfig {
      *
      * Supersedes `defaultAgent`, the three `*Mode` fields,
      * `claudeNativeBackend`, `actionDefaults`, and the four model/effort fields
-     * that had no UI at all. Speed now lives on each platform block as
-     * `fastMode`, the same Fast/Normal axis the model picker exposes. A legacy
-     * `*NativeFastModeDefault` key is migrated when it is still present; an
-     * earlier release may already have stripped it before this field existed.
+     * that had no UI at all. Platform speed is `platforms[agent].fastMode`, the
+     * same Fast/Normal axis the model picker exposes. Each action default can
+     * override that with its own `fastMode` so PR and Consolidation need not
+     * share one Fast choice. A legacy `*NativeFastModeDefault` key is migrated
+     * when it is still present; an earlier release may already have stripped it
+     * before this field existed.
      */
     agentSettings?: AgentSettingsTier;
     /**

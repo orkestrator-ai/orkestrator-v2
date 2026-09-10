@@ -41,6 +41,8 @@ export interface ProviderActivityObservation {
   state: ProviderActivityState;
   /** Content-free provider item ids that require attention in this session. */
   asyncQuestionItemIds?: string[];
+  /** The composer can accept input even if background work keeps `state` working. */
+  readyForInput?: boolean;
 }
 export type ProviderExecutionMode = "plan" | "build";
 export type ProviderAgent = AgentInteractionProvider;

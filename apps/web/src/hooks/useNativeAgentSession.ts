@@ -1194,7 +1194,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           ? {}
           : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }),
         ...(current?.auth ? { auth: current.auth } : {}),
-        ...(current?.notices ? { notices: current.notices } : {}),
+        notices: value.notices,
         ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),
         ...(value.backgroundTasks ? { backgroundTasks: value.backgroundTasks } : {}),
         ...(value.suggestedPrompt ? { suggestedPrompt: value.suggestedPrompt } : {}),

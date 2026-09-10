@@ -276,6 +276,36 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("carries authoritative notices in progressive session state", async () => {
+    const stub = createProviderStub("cursor", {
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        phase: "idle",
+        notices: [
+          { kind: "warning", message: "Provider is using a fallback" },
+          { kind: "stopped", message: "Stopped by user" },
+        ],
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-state-notices-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-state-notices",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+
+        expect(update.status).toBe("snapshot");
+        expect(update.status === "snapshot" ? update.value.notices : undefined).toEqual([
+          { kind: "warning", message: "Provider is using a fallback" },
+        ]);
+      },
+    );
+  });
+
   test("projects sign-in metadata without blocking a new unauthenticated session", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => ({

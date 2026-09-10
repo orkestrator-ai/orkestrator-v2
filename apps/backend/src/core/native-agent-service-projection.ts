@@ -1562,6 +1562,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ? { policy: stateSnapshot.policy ?? resolved.session.policy }
         : {}),
       ...(stateSnapshot.rateLimits ? { rateLimits: stateSnapshot.rateLimits } : {}),
+      notices: (stateSnapshot.notices ?? []).filter(
+        (notice) => notice.kind !== "error" && notice.kind !== "stopped",
+      ),
       ...(resolved.session.pendingDispatch || resolved.session.pendingSteer
         ? {
             recoverableDispatch: {

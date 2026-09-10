@@ -140,6 +140,28 @@ function nativeNoticeDismissalId(notice: NativeAgentNotice): string {
   return `${notice.kind}\u0000${severity}\u0000${notice.occurrenceId ?? notice.message}`;
 }
 
+function nativeNoticeToastId(sessionIdentity: string, noticeId: string): string {
+  return `native-agent-notice:${sessionIdentity}:${noticeId}`;
+}
+
+function nativeNoticeToastType(
+  notice: NativeAgentNotice,
+): "error" | "info" | "loading" | "warning" {
+  if (notice.kind === "recovery") return "loading";
+  if (notice.kind === "error" || (notice.kind === "advisory" && notice.severity === "error")) {
+    return "error";
+  }
+  if (
+    notice.kind === "warning" ||
+    notice.kind === "auth" ||
+    notice.kind === "incomplete-turn" ||
+    (notice.kind === "advisory" && notice.severity === "warning")
+  ) {
+    return "warning";
+  }
+  return "info";
+}
+
 export async function enqueueNativeAsyncQuestionResponse(input: {
   platform: string;
   itemId: string;
@@ -358,6 +380,9 @@ export function SharedNativeAgentController({
     () => (projection?.notices ?? []).map(nativeNoticeDismissalId),
     [projection?.notices],
   );
+  const noticeToastRecordsRef = useRef(new Map<string, string>());
+  const programmaticNoticeDismissalsRef = useRef(new Set<string>());
+  const noticeToastsMountedRef = useRef(false);
   useEffect(() => {
     // An absent projection means rehydration is still in flight, not that every
     // condition recovered. Only an authoritative snapshot may retire a
@@ -1511,6 +1536,75 @@ export function SharedNativeAgentController({
             ? ("error" as const)
             : ("connecting" as const)));
   useEffect(() => {
+    const notices = (projection?.notices ?? []).filter(
+      (notice) =>
+        !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
+        // A recovered state is authoritative even if an older renderer cache
+        // briefly carries the recovery notice into the same projection.
+        !(notice.kind === "recovery" && connectionState === "connected"),
+    );
+    const toastRecords = noticeToastRecordsRef.current;
+    const programmaticDismissals = programmaticNoticeDismissalsRef.current;
+    const nextRecords = new Map<string, string>();
+
+    for (const notice of notices) {
+      const noticeId = nativeNoticeDismissalId(notice);
+      const toastId = nativeNoticeToastId(noticeSessionIdentity, noticeId);
+      const type = nativeNoticeToastType(notice);
+      const signature = `${type}\u0000${notice.message}`;
+      nextRecords.set(toastId, signature);
+      if (toastRecords.get(toastId) === signature) continue;
+
+      programmaticDismissals.delete(toastId);
+      const options = {
+        id: toastId,
+        duration: Infinity,
+        onDismiss: () => {
+          if (programmaticDismissals.delete(toastId)) return;
+          dismissNotice(noticeSessionIdentity, noticeId);
+        },
+      };
+      if (type === "loading") toast.loading(notice.message, options);
+      else if (type === "error") toast.error(notice.message, options);
+      else if (type === "warning") toast.warning(notice.message, options);
+      else toast.info(notice.message, options);
+    }
+
+    for (const toastId of toastRecords.keys()) {
+      if (nextRecords.has(toastId)) continue;
+      programmaticDismissals.add(toastId);
+      toast.dismiss(toastId);
+    }
+    toastRecords.clear();
+    for (const [toastId, signature] of nextRecords) toastRecords.set(toastId, signature);
+  }, [
+    connectionState,
+    dismissNotice,
+    dismissedNoticeIds,
+    noticeSessionIdentity,
+    projection?.notices,
+  ]);
+  useEffect(() => {
+    const mounted = noticeToastsMountedRef;
+    const toastRecords = noticeToastRecordsRef.current;
+    const programmaticDismissals = programmaticNoticeDismissalsRef.current;
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      queueMicrotask(() => {
+        // React Strict Mode probes effects with a setup-cleanup-setup cycle.
+        // Only dismiss after a real unmount, once that immediate setup had a
+        // chance to reclaim these keyed notifications.
+        if (mounted.current) return;
+        for (const toastId of toastRecords.keys()) {
+          programmaticDismissals.add(toastId);
+          toast.dismiss(toastId);
+        }
+        toastRecords.clear();
+      });
+    };
+  }, []);
+  useEffect(() => {
     if (connectionState === "connected") hasConnectedSessionRef.current = true;
   }, [connectionState]);
   /*
@@ -1582,35 +1676,6 @@ export function SharedNativeAgentController({
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
-    ...(projection?.notices ?? []).flatMap((notice) => {
-      const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
-      const noticeId = nativeNoticeDismissalId(notice);
-      if (dismissedNoticeIds.includes(noticeId)) return [];
-
-      const isError = severity === "error";
-      return [
-        <div
-          key={`notice:${noticeId}`}
-          role="status"
-          className={
-            isError
-              ? "flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              : "flex items-center justify-between gap-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
-          }
-        >
-          <span>{notice.message}</span>
-          <button
-            type="button"
-            aria-label={`Dismiss notice: ${notice.message}`}
-            title="Dismiss notice"
-            className="shrink-0 cursor-pointer rounded-sm opacity-40 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
-            onClick={() => dismissNotice(noticeSessionIdentity, noticeId)}
-          >
-            <X aria-hidden="true" className="size-3.5" />
-          </button>
-        </div>,
-      ];
-    }),
     authenticationRequired ? (
       <div
         key="authentication-required"

@@ -275,16 +275,20 @@ function stateView(extras: Partial<NativeAgentSessionStateView> = {}): NativeAge
     interactions: [],
     composerControls: [],
     capabilities: nativeAgentCapabilities("codex"),
+    notices: [],
     ...extras,
   };
 }
 
-function stateSnapshot(token: string): NativeAgentSessionStateUpdate {
+function stateSnapshot(
+  token: string,
+  extras: Partial<NativeAgentSessionStateView> = {},
+): NativeAgentSessionStateUpdate {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
-    value: stateView(),
+    value: stateView(extras),
   };
 }
 
@@ -498,6 +502,34 @@ describe("useNativeAgentSession progressive view", () => {
     });
     await waitFor(() => expect(result.current.sessionStateRefreshing).toBe(false));
     expect(result.current.sessionStateAvailability).toBe("current");
+  });
+
+  test("clears a recovery notice when authoritative session state recovers", async () => {
+    useNativeAgentProjectionStore.getState().setProjection(
+      "env-env-1:tab-1",
+      projection([message("m1")], {
+        connection: "connecting",
+        turn: { phase: "recovering" },
+        notices: [{ kind: "recovery", message: "Reconnecting to the native agent runtime…" }],
+      }),
+    );
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    let releaseState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+      releaseState = () => resolve(stateSnapshot("state-connected", { notices: [] }));
+    });
+    stateUpdates = [() => heldState];
+
+    const { result } = renderSession();
+    expect(result.current.projection?.notices).toHaveLength(1);
+
+    await act(async () => {
+      releaseState();
+      await heldState;
+    });
+
+    await waitFor(() => expect(result.current.projection?.connection).toBe("connected"));
+    expect(result.current.projection?.notices).toEqual([]);
   });
 
   test("drops authority when the session state read fails", async () => {

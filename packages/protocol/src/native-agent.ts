@@ -1381,6 +1381,13 @@ export interface NativeAgentSessionStateView {
   contextUsage?: NativeAgentContextUsage;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
+  /**
+   * Authoritative session notices, including an empty array when every prior
+   * condition has cleared. Keeping these in the state domain lets a recovered
+   * connection retire a notice without waiting for an unrelated transcript or
+   * discovery refresh.
+   */
+  notices: NativeAgentNotice[];
   recoverableDispatch?: NativeAgentRecoverableDispatch;
   backgroundTasks?: NativeAgentBackgroundTaskSummary[];
   suggestedPrompt?: string;

@@ -36,7 +36,12 @@ import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { CLAUDE_AUTH_LOGIN_COMMAND, CLAUDE_CONTAINER_AUTH_LOGIN_COMMAND } from "@/lib/claude-auth";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realNativeComposeBarPaste from "@/hooks/useNativeComposeBarPaste";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastDismiss,
+  mockToastError,
+  mockToastLoading,
+  mockToastWarning,
+} from "../../../../../tests/mocks/sonner";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
@@ -4601,7 +4606,13 @@ describe("AgentNativeTab", () => {
         refreshRequestId={0}
       />,
     );
-    expect(await screen.findByText("Recovered provider notice")).toBeTruthy();
+    await waitFor(() =>
+      expect(mockToastWarning).toHaveBeenCalledWith(
+        "Recovered provider notice",
+        expect.objectContaining({ duration: Infinity }),
+      ),
+    );
+    expect(screen.queryByText("Recovered provider notice") === null).toBe(true);
     fireEvent.click(await screen.findByRole("button", { name: "Address all" }));
     await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
     expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -4840,6 +4851,7 @@ describe("AgentNativeTab", () => {
     /** A running turn on a provider that reports the given capabilities. */
     function seedProjection(
       overrides: {
+        connection?: NativeAgentSessionProjection["connection"];
         phase?: NativeAgentSessionProjection["turn"]["phase"];
         actions?: NativeAgentSessionProjection["capabilities"]["actions"];
         messageWindow?: NativeAgentSessionProjection["messageWindow"];
@@ -4861,7 +4873,7 @@ describe("AgentNativeTab", () => {
         platform: input.agent,
         environmentId: input.environmentId,
         sessionId: overrides.sessionId ?? `${input.agent}-session`,
-        connection: "connected" as const,
+        connection: overrides.connection ?? ("connected" as const),
         turn: { phase: overrides.phase ?? "idle" },
         messages: overrides.messages ?? [
           {
@@ -5662,9 +5674,7 @@ describe("AgentNativeTab", () => {
       expect(liveRegionText()?.textContent).toBe("Sub-agent finished.");
     });
 
-    test("keeps pinned cards rendered and reserves their clearance", async () => {
-      // The guard that stops an empty pinned wrapper reserving dock height must
-      // not also hide real cards; it is derived from the same list that renders.
+    test("routes native notices through the global toast system", async () => {
       seedProjection({
         notices: [{ kind: "warning", message: "Recovered provider notice" }],
       });
@@ -5678,12 +5688,53 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const notice = await screen.findByText("Recovered provider notice");
-      expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
-      expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
+      await waitFor(() =>
+        expect(mockToastWarning).toHaveBeenCalledWith(
+          "Recovered provider notice",
+          expect.objectContaining({ duration: Infinity }),
+        ),
+      );
+      expect(screen.queryByText("Recovered provider notice") === null).toBe(true);
+      expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
-    test("dismisses only the native notice banner that is clicked", async () => {
+    test("dismisses the reconnect toast as soon as the session recovers", async () => {
+      seedProjection({
+        connection: "connecting",
+        phase: "recovering",
+        notices: [{ kind: "recovery", message: "Reconnecting to the native agent runtime…" }],
+      });
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-recovery-toast"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(mockToastLoading).toHaveBeenCalledWith(
+          "Reconnecting to the native agent runtime…",
+          expect.objectContaining({ duration: Infinity }),
+        ),
+      );
+      const toastId = (mockToastLoading.mock.calls.at(-1)?.[1] as { id?: unknown } | undefined)?.id;
+
+      seedProjection({ connection: "connected", phase: "idle", notices: [] });
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-recovery-toast"
+          data={identity("codex")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledWith(toastId));
+    });
+
+    test("uses the matching toast severity and persists a user dismissal", async () => {
       seedProjection({
         notices: [
           { kind: "warning", message: "First provider notice" },
@@ -5700,18 +5751,20 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const first = await screen.findByRole("button", {
-        name: "Dismiss notice: First provider notice",
-      });
-      const second = await screen.findByRole("button", {
-        name: "Dismiss notice: Second provider notice",
-      });
-      expect(second.closest('[role="status"]')?.className).toContain("border-destructive");
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Second provider notice",
+        expect.objectContaining({ duration: Infinity }),
+      );
+      const warningOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
+        | { onDismiss?: () => void }
+        | undefined;
+      act(() => warningOptions?.onDismiss?.());
 
-      fireEvent.click(first);
-
-      expect(screen.queryByText("First provider notice") === null).toBe(true);
-      expect(screen.getByText("Second provider notice")).toBeTruthy();
+      await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledTimes(1));
+      expect(useNativeNoticeDismissalStore.getState().sessions[0]?.occurrenceIds).toContain(
+        "warning\u0000warning\u0000First provider notice",
+      );
     });
 
     test("persists a dismissed occurrence but shows a newer occurrence and another session", async () => {
@@ -5729,35 +5782,37 @@ describe("AgentNativeTab", () => {
       let view = render(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
-      );
-      expect(screen.queryByText("Codex reported warning") === null).toBe(true);
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      const firstOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
+        | { onDismiss?: () => void }
+        | undefined;
+      act(() => firstOptions?.onDismiss?.());
 
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
+      mockToastWarning.mockClear();
       view = render(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-      expect(screen.queryByText("Codex reported warning") === null).toBe(true);
+      expect(mockToastWarning).not.toHaveBeenCalled();
 
       seedProjection({ sessionId: "session-a", notices: notice("occurrence-2") });
       view.rerender(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
       );
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
-      );
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      const secondOptions = mockToastWarning.mock.calls.at(-1)?.[1] as
+        | { onDismiss?: () => void }
+        | undefined;
+      act(() => secondOptions?.onDismiss?.());
 
       seedProjection({ sessionId: "session-b", notices: notice("occurrence-2") });
       view.rerender(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
       );
-      expect(
-        await screen.findByRole("button", { name: "Dismiss notice: Codex reported warning" }),
-      ).toBeTruthy();
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(2));
     });
 
     test("keeps a repeated active condition dismissed until a clean snapshot retires it", async () => {
@@ -5773,15 +5828,18 @@ describe("AgentNativeTab", () => {
       const view = render(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
-      );
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
+      const firstOptions = mockToastError.mock.calls.at(-1)?.[1] as
+        | { onDismiss?: () => void }
+        | undefined;
+      act(() => firstOptions?.onDismiss?.());
+      mockToastError.mockClear();
 
       seedProjection({ sessionId: "session-a", notices: [notice] });
       view.rerender(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={1} />,
       );
-      expect(screen.queryByText("github MCP failed to start") === null).toBe(true);
+      expect(mockToastError).not.toHaveBeenCalled();
 
       seedProjection({ sessionId: "session-a", notices: [] });
       view.rerender(
@@ -5799,9 +5857,7 @@ describe("AgentNativeTab", () => {
       view.rerender(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={3} />,
       );
-      expect(
-        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
-      ).toBeTruthy();
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
     });
 
     test("does not retire a dismissal from an unavailable runtime-health snapshot", async () => {
@@ -5820,9 +5876,12 @@ describe("AgentNativeTab", () => {
       const view = render(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={0} />,
       );
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Dismiss notice: github MCP failed to start" }),
-      );
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
+      const options = mockToastError.mock.calls.at(-1)?.[1] as
+        | { onDismiss?: () => void }
+        | undefined;
+      act(() => options?.onDismiss?.());
+      mockToastError.mockClear();
 
       seedProjection({
         sessionId: "session-a",
@@ -5848,7 +5907,7 @@ describe("AgentNativeTab", () => {
       view.rerender(
         <AgentNativeTab tabId={tabId} data={identity("codex")} isActive refreshRequestId={2} />,
       );
-      expect(screen.queryByText("github MCP failed to start") === null).toBe(true);
+      expect(mockToastError).not.toHaveBeenCalled();
     });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {

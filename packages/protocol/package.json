@@ -64,7 +64,7 @@
   "scripts": {
     "build": "bunx tsc --noEmit -p tsconfig.json",
     "test": "bun test --preload ../../tests/setup-node.ts src --parallel",
-    "test:workspace": "bun test --preload ../../tests/setup-node.ts src --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    "test:workspace": "bun test --preload ../../tests/setup-node.ts src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/protocol.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   }
 }

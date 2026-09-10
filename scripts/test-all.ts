@@ -21,13 +21,18 @@
  * failing group: with concurrency the others have already run anyway, so
  * reporting every failure saves a second full run.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -48,6 +53,7 @@ export interface CommandResult {
   logPath?: string;
   outputBytes?: number;
   outputLimitExceeded?: boolean;
+  timeoutReason?: "no-progress" | "absolute";
 }
 
 export interface TestGroup {
@@ -56,6 +62,8 @@ export interface TestGroup {
   args: string[];
   /** Extra variables layered over the inherited environment for this group. */
   env?: Record<string, string>;
+  /** Absolute watchdog budget when this group is slower than a Bun suite. */
+  timeoutMs?: number;
 }
 
 export interface TestAllDependencies {
@@ -72,12 +80,156 @@ export interface TestAllDependencies {
 
 export const TEST_LOG_DIRECTORY_ENV = "ORKESTRATOR_TEST_LOG_DIR";
 export const TEST_MAX_OUTPUT_BYTES_ENV = "ORKESTRATOR_TEST_MAX_OUTPUT_BYTES";
+export const TEST_NO_PROGRESS_TIMEOUT_MS_ENV = "ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS";
+export const TEST_GROUP_TIMEOUT_MS_ENV = "ORKESTRATOR_TEST_GROUP_TIMEOUT_MS";
+export const TEST_ALLOW_CONCURRENT_ENV = "ORKESTRATOR_TEST_ALLOW_CONCURRENT";
+export const TEST_LEASE_DIRECTORY_ENV = "ORKESTRATOR_TEST_LEASE_DIRECTORY";
+export const TEST_AFFECTED_ENV = "ORKESTRATOR_TEST_AFFECTED";
+export const TEST_TIMINGS_DIRECTORY_ENV = "ORKESTRATOR_TEST_TIMINGS_DIR";
 export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
 export const MAX_GROUP_OUTPUT_BYTES = 64 * 1024 * 1024;
 export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
+/**
+ * Watchdog budgets. Groups stream their child output live (`--output-logs` is
+ * never `errors-only`, which would buffer a whole Turbo run into one silent
+ * window), so a five-minute gap really does mean the group stopped working.
+ * The absolute deadline is deliberately several times the slowest group ever
+ * recorded — around four minutes for the workspace group on a cold cache — so
+ * it only catches a wedged run, never a slow one.
+ */
+export const DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS = 5 * 60 * 1_000;
+export const DEFAULT_TEST_GROUP_TIMEOUT_MS = 30 * 60 * 1_000;
+/** iOS builds and boots a simulator, which is far slower than any Bun group. */
+export const IOS_GROUP_TIMEOUT_MS = 60 * 60 * 1_000;
+/** Longest a group may hold an unreadable lease before we call it contended. */
+export const LEASE_HANDOVER_GRACE_MS = 30_000;
 export const TEST_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const TEST_LOG_DIRECTORY_PREFIX = "orkestrator-test-run.";
 const TEST_LOG_SENTINEL = ".orkestrator-test-log";
+const TEST_LEASE_DIRECTORY_PREFIX = "orkestrator-test-suite.";
+const TEST_TIMINGS_DIRECTORY_PREFIX = "orkestrator-test-timings.";
+const TEST_LEASE_METADATA = "owner.json";
+
+export interface FullSuiteLease {
+  directory: string;
+  release: () => void;
+}
+
+function configuredPositiveInteger(
+  environment: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+): number {
+  const configured = Number(environment[name]);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : fallback;
+}
+
+function gitCommonDirectory(repositoryRoot: string): string {
+  const result = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : repositoryRoot;
+}
+
+function repositoryStateKey(repositoryRoot: string): string {
+  return createHash("sha256").update(gitCommonDirectory(repositoryRoot)).digest("hex").slice(0, 20);
+}
+
+export function createTestTimingsDirectory(repositoryRoot: string): string {
+  const directory = path.join(
+    tmpdir(),
+    `${TEST_TIMINGS_DIRECTORY_PREFIX}${repositoryStateKey(repositoryRoot)}`,
+  );
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Prevents linked worktrees from starting full suites concurrently on one
+ * host. The system-temp lock is keyed by Git's common directory, so all of a
+ * repository's worktrees contend for the same lease.
+ */
+export function acquireFullSuiteLease(
+  repositoryRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): FullSuiteLease | undefined {
+  if (environment[TEST_ALLOW_CONCURRENT_ENV] === "1") return undefined;
+  const key = repositoryStateKey(repositoryRoot);
+  const directory =
+    environment[TEST_LEASE_DIRECTORY_ENV] ||
+    path.join(tmpdir(), `${TEST_LEASE_DIRECTORY_PREFIX}${key}.lock`);
+  const metadataPath = path.join(directory, TEST_LEASE_METADATA);
+  const token = randomUUID();
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      mkdirSync(directory, { mode: 0o700 });
+      writeFileSync(
+        metadataPath,
+        `${JSON.stringify({ version: 1, pid: process.pid, token, root: repositoryRoot, startedAt: new Date().toISOString() })}\n`,
+        { mode: 0o600 },
+      );
+      return {
+        directory,
+        release: () => {
+          try {
+            const current = JSON.parse(readFileSync(metadataPath, "utf8")) as { token?: unknown };
+            if (current.token === token) rmSync(directory, { recursive: true, force: true });
+          } catch {
+            // A replaced or already-cleaned lease no longer belongs to us.
+          }
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let owner: { pid?: unknown; root?: unknown; startedAt?: unknown } = {};
+      try {
+        owner = JSON.parse(readFileSync(metadataPath, "utf8")) as typeof owner;
+      } catch {
+        // No readable owner. Either a live acquirer is between its `mkdir` and
+        // its metadata write, or the lease is a leftover we may clear. A lease
+        // that disappears underneath us is neither: fall through to the
+        // cleanup-and-retry path with no owner rather than throwing its ENOENT.
+        let ageMs: number | undefined;
+        try {
+          ageMs = Date.now() - statSync(directory).mtimeMs;
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+        }
+        if (ageMs !== undefined && ageMs < LEASE_HANDOVER_GRACE_MS) {
+          throw new Error(`Another test suite is acquiring the host lease at ${directory}.`);
+        }
+      }
+      const ownerPid = typeof owner.pid === "number" ? owner.pid : 0;
+      if (ownerPid > 0 && processIsAlive(ownerPid)) {
+        const location = typeof owner.root === "string" ? ` in ${owner.root}` : "";
+        const since = typeof owner.startedAt === "string" ? ` since ${owner.startedAt}` : "";
+        throw new Error(
+          `Another full test suite is already running (PID ${ownerPid}${location}${since}).`,
+        );
+      }
+      const staleDirectory = `${directory}.stale.${process.pid}.${Date.now()}`;
+      try {
+        renameSync(directory, staleDirectory);
+        rmSync(staleDirectory, { recursive: true, force: true });
+      } catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
+      }
+    }
+  }
+  throw new Error(`Could not acquire the full-suite lease at ${directory}.`);
+}
 
 function safeLogName(name: string): string {
   return (
@@ -125,6 +277,33 @@ export async function pruneExpiredTestLogDirectories(now = Date.now()): Promise<
   }
 }
 
+/**
+ * Process-group leaders for every group still running. Groups are spawned
+ * detached, so they no longer share the runner's process group and no longer
+ * receive the terminal's Ctrl+C. The runner has to relay it, and it can only do
+ * that if it knows which trees are live.
+ */
+const liveGroupLeaders = new Set<number>();
+
+function signalGroupLeader(pid: number, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform !== "win32") process.kill(-pid, signal);
+    else process.kill(pid, signal);
+  } catch {
+    // The tree may have exited between the caller's check and this signal.
+  }
+}
+
+/**
+ * Signals every live group's whole process tree. Exported so the interrupt
+ * path and its test can reach the same trees the watchdogs do.
+ */
+export function terminateActiveGroups(signal: NodeJS.Signals = "SIGTERM"): number {
+  const leaders = [...liveGroupLeaders];
+  for (const pid of leaders) signalGroupLeader(pid, signal);
+  return leaders.length;
+}
+
 export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promise<CommandResult> {
   return new Promise((resolve) => {
     const logDirectory = env[TEST_LOG_DIRECTORY_ENV] || createTestLogDirectory();
@@ -136,12 +315,26 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       Number.isSafeInteger(configuredLimit) && configuredLimit > 0
         ? configuredLimit
         : MAX_GROUP_OUTPUT_BYTES;
+    const noProgressTimeoutMs = configuredPositiveInteger(
+      env,
+      TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
+      DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS,
+    );
+    const groupTimeoutMs = configuredPositiveInteger(
+      env,
+      TEST_GROUP_TIMEOUT_MS_ENV,
+      group.timeoutMs ?? DEFAULT_TEST_GROUP_TIMEOUT_MS,
+    );
     const child = spawn(group.command, group.args, {
       cwd: root,
       env,
       // Captured rather than inherited so concurrent groups do not interleave.
       stdio: ["ignore", "pipe", "pipe"],
+      // A dedicated process group lets a watchdog terminate Bun/Turbo and all
+      // workers or fixtures it spawned, rather than leaving descendants alive.
+      detached: process.platform !== "win32",
     });
+    if (child.pid) liveGroupLeaders.add(child.pid);
 
     let outputBytes = 0;
     let persistedBytes = 0;
@@ -154,6 +347,9 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let logFinished = false;
     let resolved = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let noProgressTimer: ReturnType<typeof setTimeout> | undefined;
+    let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutReason: CommandResult["timeoutReason"];
 
     const appendTail = (chunk: Buffer) => {
       outputTail =
@@ -161,10 +357,37 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
           ? chunk.subarray(chunk.byteLength - MAX_GROUP_OUTPUT_TAIL_BYTES)
           : Buffer.concat([outputTail, chunk]).subarray(-MAX_GROUP_OUTPUT_TAIL_BYTES);
     };
+    const signalProcessTree = (signal: NodeJS.Signals) => {
+      if (child.pid) signalGroupLeader(child.pid, signal);
+      else child.kill(signal);
+    };
+    const terminate = (marker: string, reason?: CommandResult["timeoutReason"]) => {
+      if (forceKill) return;
+      timeoutReason = reason;
+      const chunk = Buffer.from(`\n[orkestrator-test-runner] ${marker}\n`);
+      if (!logError) log.write(chunk);
+      appendTail(chunk);
+      signalProcessTree("SIGTERM");
+      forceKill = setTimeout(() => signalProcessTree("SIGKILL"), 1_000);
+      forceKill.unref();
+    };
+    const armNoProgressTimer = () => {
+      if (noProgressTimer) clearTimeout(noProgressTimer);
+      noProgressTimer = setTimeout(
+        () =>
+          terminate(
+            `No output for ${noProgressTimeoutMs}ms; terminating the group process tree.`,
+            "no-progress",
+          ),
+        noProgressTimeoutMs,
+      );
+      noProgressTimer.unref();
+    };
     const consume = (value: Buffer | string) => {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       outputBytes += chunk.byteLength;
       appendTail(chunk);
+      armNoProgressTimer();
       if (outputLimitExceeded || logError) return;
       const remaining = maxOutputBytes - persistedBytes;
       if (remaining > 0) {
@@ -174,40 +397,49 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       }
       if (chunk.byteLength > remaining || outputBytes > maxOutputBytes) {
         outputLimitExceeded = true;
-        const marker = Buffer.from(
-          `\n[orkestrator-test-runner] Output exceeded ${maxOutputBytes} bytes; terminating the group.\n`,
-        );
-        log.write(marker);
-        appendTail(marker);
-        child.kill("SIGTERM");
-        forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-        forceKill.unref();
+        terminate(`Output exceeded ${maxOutputBytes} bytes; terminating the group process tree.`);
       }
     };
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
+    armNoProgressTimer();
+    absoluteTimer = setTimeout(
+      () =>
+        terminate(
+          `Exceeded the ${groupTimeoutMs}ms group deadline; terminating the process tree.`,
+          "absolute",
+        ),
+      groupTimeoutMs,
+    );
+    absoluteTimer.unref();
 
     const maybeResolve = () => {
       if (resolved || !childFinished || !logFinished) return;
       resolved = true;
       if (forceKill) clearTimeout(forceKill);
+      if (noProgressTimer) clearTimeout(noProgressTimer);
+      if (absoluteTimer) clearTimeout(absoluteTimer);
       const errors = [spawnError, logError]
         .filter((error): error is Error => Boolean(error))
         .map((error) => error.message);
       resolve({
-        status: outputLimitExceeded || errors.length > 0 ? 1 : childStatus,
+        status: outputLimitExceeded || timeoutReason || errors.length > 0 ? 1 : childStatus,
         output:
           `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
         logPath,
         outputBytes,
         outputLimitExceeded,
+        timeoutReason,
       });
     };
     const finishChild = (status: number | null) => {
       if (childFinished) return;
       childFinished = true;
       childStatus = status;
+      if (child.pid) liveGroupLeaders.delete(child.pid);
       if (forceKill) clearTimeout(forceKill);
+      if (noProgressTimer) clearTimeout(noProgressTimer);
+      if (absoluteTimer) clearTimeout(absoluteTimer);
       if (!logError) log.end();
       maybeResolve();
     };
@@ -219,9 +451,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     log.once("error", (error) => {
       logError = error;
       logFinished = true;
-      child.kill("SIGTERM");
-      forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
-      forceKill.unref();
+      terminate("The group log failed; terminating the group process tree.");
       maybeResolve();
     });
 
@@ -282,6 +512,7 @@ export async function finalizeTestLogs(
       elapsedMs: entry.elapsedMs,
       outputBytes: entry.result.outputBytes ?? 0,
       outputLimitExceeded: entry.result.outputLimitExceeded ?? false,
+      timeoutReason: entry.result.timeoutReason,
       artifact: artifact ? path.basename(artifact) : undefined,
       artifactError,
     });
@@ -386,8 +617,13 @@ export function planWorkers(cores: number): WorkerPlan {
   return { workspace, workspaceConcurrency, root, bridges };
 }
 
-export function buildConcurrentGroups(cores: number): TestGroup[] {
+export function buildConcurrentGroups(
+  cores: number,
+  affected = false,
+  timingsDirectory?: string,
+): TestGroup[] {
   const workers = planWorkers(cores);
+  const changedArguments = affected ? ["--changed=main", "--pass-with-no-tests"] : [];
   return [
     {
       name: "workspace (web, backend, desktop, web-public, cli, protocol)",
@@ -405,8 +641,9 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
         "--filter=orkestrator",
         "--filter=@orkestrator/protocol",
         `--concurrency=${workers.workspaceConcurrency}`,
-        "--cache-dir",
-        ".turbo",
+        "--output-logs=new-only",
+        "--summarize",
+        ...(affected ? ["--affected"] : []),
       ],
       env: { [WORKSPACE_WORKERS_ENV]: String(workers.workspace) },
     },
@@ -422,15 +659,36 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
         "./e2e/agent-testing/artifact-sanitizer.test.ts",
         "./test-fixtures/agent-project/server.test.ts",
         "--only-failures",
+        ...changedArguments,
+        ...(timingsDirectory
+          ? ["--timings", path.join(timingsDirectory, "root.json"), "--update-timings"]
+          : []),
         `--parallel=${workers.root}`,
       ],
     },
     {
-      // The bridge packages have no `test` script of their own, so they are not
-      // part of the turbo run above. Without this their suites never execute.
+      // Bridges use a separate Turbo task without a build dependency, which
+      // preserves the previous cold-run shape. The task is declared
+      // `"cache": false`: replaying a stored pass would let this group report
+      // success having executed nothing, and a suite with a live flake register
+      // cannot afford a green that proves only that the inputs are unchanged.
+      // Turbo runs each script from its own package, so the scripts carry the
+      // root `bunfig.toml` preloads explicitly.
       name: "bridges",
-      command: "bun",
-      args: ["test", "bridges", "--only-failures", `--parallel=${workers.bridges}`],
+      command: "bunx",
+      args: [
+        "turbo",
+        "run",
+        "test:bridge",
+        "--cwd",
+        ".",
+        "--filter=./bridges/*",
+        `--concurrency=${workers.bridges}`,
+        "--output-logs=new-only",
+        "--summarize",
+        ...(affected ? ["--affected"] : []),
+      ],
+      env: { [WORKSPACE_WORKERS_ENV]: "1" },
     },
     {
       // Always validates the committed TypeScript lockfile. On developer
@@ -452,87 +710,161 @@ function formatDuration(ms: number): string {
 
 export async function runAllTests(overrides: Partial<TestAllDependencies> = {}): Promise<number> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  await pruneExpiredTestLogDirectories().catch(() => undefined);
-  const groups = buildConcurrentGroups(dependencies.cores);
   const usesDefaultRunner = dependencies.runGroup === defaultRunGroup;
-  const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
-  const logDirectory = usesDefaultRunner
-    ? configuredLogDirectory || createTestLogDirectory()
-    : undefined;
-  const runEnvironment = logDirectory
-    ? { ...dependencies.env, [TEST_LOG_DIRECTORY_ENV]: logDirectory }
-    : dependencies.env;
-
-  dependencies.log(`Running ${groups.length} test groups concurrently…`);
-  const startedAt = Date.now();
-
-  const results: CompletedGroup[] = await Promise.all(
-    groups.map(async (group) => {
-      const groupStartedAt = Date.now();
-      const result = await dependencies.runGroup(
-        group,
-        group.env ? { ...runEnvironment, ...group.env } : runEnvironment,
+  let lease: FullSuiteLease | undefined;
+  if (usesDefaultRunner) {
+    try {
+      lease = acquireFullSuiteLease(dependencies.root, dependencies.env);
+    } catch (error) {
+      dependencies.log(error instanceof Error ? error.message : String(error));
+      dependencies.log(
+        `No duplicate suite was started. Set ${TEST_ALLOW_CONCURRENT_ENV}=1 to override deliberately.`,
       );
-      return { group, result, elapsedMs: Date.now() - groupStartedAt };
-    }),
-  );
-
-  // Printed in declaration order, not completion order, so the log reads the
-  // same between runs even though groups finish in whatever order they finish.
-  let firstFailure = 0;
-  for (const { group, result, elapsedMs } of results) {
-    const status = result.status ?? 1;
-    const banner = "=".repeat(72);
-    dependencies.log(
-      `\n${banner}\n${status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
-    );
-    if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
-    if (result.outputLimitExceeded) {
-      dependencies.log(`Diagnostic output limit exceeded in ${group.name}.`);
+      return 75;
     }
-    if (status !== 0 && firstFailure === 0) firstFailure = status;
   }
 
-  dependencies.log(`\nTest groups finished in ${formatDuration(Date.now() - startedAt)}`);
-
-  if (firstFailure !== 0) {
-    const failed = results
-      .filter(({ result }) => (result.status ?? 1) !== 0)
-      .map(({ group }) => group.name);
-    dependencies.log(`Failing groups: ${failed.join(", ")}`);
-    const artifacts = await finalizeTestLogs(logDirectory, results, false);
-    if (artifacts) dependencies.log(`Failure artifacts: ${artifacts}`);
-    return firstFailure;
+  // Groups run detached, in their own process groups, so the terminal's Ctrl+C
+  // reaches this runner and nothing else. Without a relay the suite's children
+  // would outlive it, keep holding ports, and race the next run that the now
+  // ownerless lease no longer blocks.
+  const interruptSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const handleInterrupt = (signal: NodeJS.Signals) => {
+    const trees = terminateActiveGroups("SIGTERM");
+    dependencies.log(`\nReceived ${signal}; terminating ${trees} group process tree(s)…`);
+    // Anything still alive after the grace period is not going to exit on its
+    // own. A second Ctrl+C bypasses all of this: the handlers are one-shot.
+    setTimeout(() => terminateActiveGroups("SIGKILL"), 2_000).unref();
+    lease?.release();
+    lease = undefined;
+    process.exitCode = 130;
+  };
+  const interruptListeners = new Map<NodeJS.Signals, () => void>();
+  if (usesDefaultRunner) {
+    for (const signal of interruptSignals) {
+      const listener = () => handleInterrupt(signal);
+      interruptListeners.set(signal, listener);
+      process.once(signal, listener);
+    }
   }
 
-  // iOS runs last and alone: it drives a simulator, a single shared machine
-  // resource that cannot be used alongside anything else.
-  const xcodeDeveloperDirectory =
-    dependencies.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
-  if (
-    dependencies.env[INCLUDE_IOS_TESTS_ENV] === "1" &&
-    dependencies.platform === "darwin" &&
-    dependencies.exists(xcodeDeveloperDirectory)
-  ) {
-    const iosGroup: TestGroup = {
-      name: "ios",
-      command: "bun",
-      args: ["scripts/test-ios.ts"],
-    };
-    dependencies.log(`\nRunning ${iosGroup.name}…`);
+  try {
+    await pruneExpiredTestLogDirectories().catch(() => undefined);
+    const affected = dependencies.env[TEST_AFFECTED_ENV] === "1";
+    const timingsDirectory =
+      dependencies.env[TEST_TIMINGS_DIRECTORY_ENV] ||
+      (usesDefaultRunner ? createTestTimingsDirectory(dependencies.root) : undefined);
+    const groups = buildConcurrentGroups(dependencies.cores, affected, timingsDirectory);
+    const configuredLogDirectory = dependencies.env[TEST_LOG_DIRECTORY_ENV];
+    const logDirectory = usesDefaultRunner
+      ? configuredLogDirectory || createTestLogDirectory()
+      : undefined;
+    const sanitizedEnvironment = { ...dependencies.env };
+    // Runtime diagnostic flags change assertion inputs and must not leak from a
+    // development profile into an authoritative aggregate test run.
+    for (const name of [
+      "ORKESTRATOR_BRIDGE_DEBUG",
+      "CLAUDE_BRIDGE_DEBUG",
+      "CODEX_BRIDGE_DEBUG",
+      "ACP_BRIDGE_DEBUG",
+      "PI_BRIDGE_DEBUG",
+      "CURSOR_BRIDGE_DEBUG",
+    ]) {
+      delete sanitizedEnvironment[name];
+    }
+    const runEnvironment: NodeJS.ProcessEnv = { ...sanitizedEnvironment };
+    if (logDirectory) runEnvironment[TEST_LOG_DIRECTORY_ENV] = logDirectory;
+    // Every workspace and bridge package script reads this to name its own
+    // durations file, so it has to reach the group environments, not just the
+    // root group's argument list.
+    if (timingsDirectory) runEnvironment[TEST_TIMINGS_DIRECTORY_ENV] = timingsDirectory;
+
+    dependencies.log(
+      `Running ${groups.length} ${affected ? "affected " : ""}test groups concurrently…`,
+    );
     const startedAt = Date.now();
-    const result = await dependencies.runGroup(iosGroup, runEnvironment);
-    const ios = { group: iosGroup, result, elapsedMs: Date.now() - startedAt };
-    results.push(ios);
-    const status = result.status ?? 1;
-    if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
-    const artifacts = await finalizeTestLogs(logDirectory, results, status === 0);
-    if (artifacts && status !== 0) dependencies.log(`Failure artifacts: ${artifacts}`);
-    return status;
-  }
+    let completedCount = 0;
 
-  await finalizeTestLogs(logDirectory, results, true);
-  return 0;
+    const results: CompletedGroup[] = await Promise.all(
+      groups.map(async (group) => {
+        const groupStartedAt = Date.now();
+        const result = await dependencies.runGroup(
+          group,
+          group.env ? { ...runEnvironment, ...group.env } : runEnvironment,
+        );
+        const completed = { group, result, elapsedMs: Date.now() - groupStartedAt };
+        completedCount += 1;
+        dependencies.log(
+          `${result.status === 0 ? "PASS" : "FAIL"} ${group.name} finished (${completedCount}/${groups.length}, ${formatDuration(completed.elapsedMs)})`,
+        );
+        return completed;
+      }),
+    );
+
+    // Detailed output stays in declaration order even though completion is
+    // reported live above.
+    let firstFailure = 0;
+    for (const { group, result, elapsedMs } of results) {
+      const status = result.status ?? 1;
+      const banner = "=".repeat(72);
+      dependencies.log(
+        `\n${banner}\n${status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
+      );
+      if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
+      if (result.outputLimitExceeded) {
+        dependencies.log(`Diagnostic output limit exceeded in ${group.name}.`);
+      }
+      if (result.timeoutReason) {
+        dependencies.log(`Group watchdog fired (${result.timeoutReason}) in ${group.name}.`);
+      }
+      if (status !== 0 && firstFailure === 0) firstFailure = status;
+    }
+
+    dependencies.log(`\nTest groups finished in ${formatDuration(Date.now() - startedAt)}`);
+
+    if (firstFailure !== 0) {
+      const failed = results
+        .filter(({ result }) => (result.status ?? 1) !== 0)
+        .map(({ group }) => group.name);
+      dependencies.log(`Failing groups: ${failed.join(", ")}`);
+      const artifacts = await finalizeTestLogs(logDirectory, results, false);
+      if (artifacts) dependencies.log(`Failure artifacts: ${artifacts}`);
+      return firstFailure;
+    }
+
+    // iOS runs last and alone: it drives a simulator, a single shared machine
+    // resource that cannot be used alongside anything else.
+    const xcodeDeveloperDirectory =
+      dependencies.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
+    if (
+      dependencies.env[INCLUDE_IOS_TESTS_ENV] === "1" &&
+      dependencies.platform === "darwin" &&
+      dependencies.exists(xcodeDeveloperDirectory)
+    ) {
+      const iosGroup: TestGroup = {
+        name: "ios",
+        command: "bun",
+        args: ["scripts/test-ios.ts"],
+        timeoutMs: IOS_GROUP_TIMEOUT_MS,
+      };
+      dependencies.log(`\nRunning ${iosGroup.name}…`);
+      const startedAt = Date.now();
+      const result = await dependencies.runGroup(iosGroup, runEnvironment);
+      const ios = { group: iosGroup, result, elapsedMs: Date.now() - startedAt };
+      results.push(ios);
+      const status = result.status ?? 1;
+      if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
+      const artifacts = await finalizeTestLogs(logDirectory, results, status === 0);
+      if (artifacts && status !== 0) dependencies.log(`Failure artifacts: ${artifacts}`);
+      return status;
+    }
+
+    await finalizeTestLogs(logDirectory, results, true);
+    return 0;
+  } finally {
+    for (const [signal, listener] of interruptListeners) process.off(signal, listener);
+    lease?.release();
+  }
 }
 
 export async function main(

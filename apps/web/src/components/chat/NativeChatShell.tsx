@@ -11,6 +11,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { AlertCircle, ArrowDown, History, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { SessionRefreshShimmer } from "@/components/chat/SessionRefreshShimmer";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -321,38 +322,27 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    * invisible card, so its presence ends the centered state.
    */
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
-  const composerCentered = centerCompose && !hasTranscriptCards;
+  const refreshingSession =
+    displayAvailable && connectionState === "connecting" && sessionEstablished;
+  // An established but empty session still needs a visible loading indicator.
+  const composerCentered = centerCompose && !hasTranscriptCards && !refreshingSession;
   const connectionNotice =
-    displayAvailable &&
-    (connectionState === "error" || (connectionState === "connecting" && sessionEstablished)) ? (
+    displayAvailable && connectionState === "error" ? (
       <div
-        role={connectionState === "error" ? "alert" : "status"}
-        className={cn(
-          "rounded-md border px-3 py-2 text-xs",
-          connectionState === "error"
-            ? "border-destructive/40 bg-destructive/10 text-destructive"
-            : "border-border bg-muted/70 text-muted-foreground",
-        )}
+        role="alert"
+        className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
       >
         <div className="flex items-center gap-2">
-          {connectionState === "error" ? (
-            <AlertCircle className="h-4 w-4 shrink-0" />
-          ) : (
-            <RefreshCw className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" />
-          )}
+          <AlertCircle className="h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1 break-words">
-            {connectionState === "error"
-              ? errorMessage ||
-                `Unable to reconnect to ${agentLabel}. The saved conversation remains readable.`
-              : `Refreshing ${agentLabel} session…`}
+            {errorMessage ||
+              `Unable to reconnect to ${agentLabel}. The saved conversation remains readable.`}
           </span>
-          {connectionState === "error" ? (
-            <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
-              <RefreshCw className="h-3.5 w-3.5" />
-              Retry
-            </Button>
-          ) : null}
-          {connectionState === "error" && serverLog ? (
+          <Button variant="outline" size="sm" onClick={onRetry} className="h-7 gap-1.5">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+          {serverLog ? (
             <Button
               variant="ghost"
               size="sm"
@@ -466,6 +456,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   </div>
                 </div>
               )}
+              <SessionRefreshShimmer active={refreshingSession} agentLabel={agentLabel} />
               {/*
                 The dock floats over the transcript, so its full live height must
                 be reserved here. That keeps a growing composer — plus any pinned

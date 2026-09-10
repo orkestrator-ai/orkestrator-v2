@@ -13,43 +13,81 @@ const hostOptions: AgentOptions = {
   mcpServers: { example: { command: "must-not-start" } },
 };
 
-test("primes sandbox discovery before an unsandboxed preparation can cache an unsupported verdict", async () => {
-  // SDK 1.0.31's checkBinaryAvailable/isSandboxHelperSupported memoize their
-  // first result. Only sandbox-enabled executor creation registers the helper.
+const probeOptions = {
+  apiKey: "test-key",
+  local: {
+    cwd: "/test-workspace",
+    settingSources: [],
+    sandboxOptions: { enabled: true },
+    autoReview: false,
+  },
+};
+
+/** The SDK's wording; the classifier keys on it, so the fake must use it too. */
+const unsupported = () =>
+  new Error(
+    "Local SDK sandboxing was requested, but sandboxing is not supported in this environment.",
+  );
+
+/**
+ * Models SDK 1.0.31: `checkBinaryAvailable`/`isSandboxHelperSupported` memoize
+ * their first answer, only sandbox-enabled executor creation registers the
+ * helper beforehand, and an unsandboxed executor still answers
+ * environment-metadata queries — which is what cached `false`.
+ */
+function poisonablePlatform() {
   let helperRegistered = false;
-  let supported: boolean | undefined;
-  const environmentMetadata = () => (supported ??= helperRegistered);
+  let verdict: boolean | undefined;
+  const askSupported = () => (verdict ??= helperRegistered);
   const calls: AgentOptions[] = [];
   let released = 0;
   const platform = {
     async prewarmLocalWorkspace(options: AgentOptions) {
       calls.push(options);
-      if (options.apiKey && options.local?.sandboxOptions?.enabled) {
+      if (options.local?.sandboxOptions?.enabled) {
         helperRegistered = true;
-        if (!environmentMetadata()) throw new Error("Sandbox unsupported");
+        if (!askSupported()) throw unsupported();
+      } else {
+        askSupported();
       }
       return async () => {
         released += 1;
       };
     },
   };
-  const bootstrap = createCursorSandboxBootstrap();
-  await bootstrap(platform, hostOptions, "none");
-  expect(released).toBe(1);
-  expect(calls).toEqual([
-    {
-      apiKey: "test-key",
-      local: {
-        cwd: "/test-workspace",
-        settingSources: [],
-        sandboxOptions: { enabled: true },
-        autoReview: false,
-      },
-    },
-  ]);
+  return { platform, calls, askSupported, releases: () => released };
+}
+
+/**
+ * Guards the fake above. Without this the first test could pass against a
+ * model that never reproduced the bug, and the ordering it asserts would carry
+ * no weight.
+ */
+test("the fake reproduces the cached unsupported verdict when nothing primes discovery", async () => {
+  const { platform, askSupported } = poisonablePlatform();
 
   const preparation = await platform.prewarmLocalWorkspace(hostOptions);
-  expect(environmentMetadata()).toBe(true);
+  await preparation();
+  expect(askSupported()).toBe(false);
+
+  await expect(
+    platform.prewarmLocalWorkspace({
+      ...hostOptions,
+      local: { ...hostOptions.local, sandboxOptions: { enabled: true } },
+    }),
+  ).rejects.toThrow("sandboxing is not supported in this environment");
+});
+
+test("primes sandbox discovery before an unsandboxed preparation can cache an unsupported verdict", async () => {
+  const { platform, calls, askSupported, releases } = poisonablePlatform();
+  const bootstrap = createCursorSandboxBootstrap();
+
+  await bootstrap(platform, hostOptions, "none");
+  expect(releases()).toBe(1);
+  expect(calls).toEqual([probeOptions]);
+  expect(askSupported()).toBe(true);
+
+  const preparation = await platform.prewarmLocalWorkspace(hostOptions);
   await preparation();
   await bootstrap(platform, hostOptions, "none");
   const review = await platform.prewarmLocalWorkspace({
@@ -94,32 +132,89 @@ test("concurrent host attaches share the barrier until the probe lease is releas
   expect(settled).toBe(true);
 });
 
-test.each(["initialize", "release"])(
-  "an unsupported sandbox or failed %s does not block ordinary sessions or change their policy",
-  async (failure) => {
-    let calls = 0;
-    const platform = {
-      async prewarmLocalWorkspace() {
-        calls += 1;
-        if (failure === "initialize") throw new Error("Sandbox unsupported");
-        return async () => {
-          throw new Error("Release failed");
-        };
-      },
-    };
-    const bootstrap = createCursorSandboxBootstrap();
-    const readOnly: AgentOptions = {
-      ...hostOptions,
-      local: { ...hostOptions.local, sandboxOptions: { enabled: true } },
-      tools: ["read"],
-    };
-    await bootstrap(platform, hostOptions, "none");
-    await bootstrap(platform, readOnly, "provider");
-    expect(calls).toBe(1);
-    expect(readOnly.local?.sandboxOptions?.enabled).toBe(true);
-    expect(readOnly.tools).toEqual(["read"]);
-  },
-);
+test("an unsupported host is settled by one probe and keeps its sessions unchanged", async () => {
+  let calls = 0;
+  const reported: unknown[] = [];
+  const platform = {
+    async prewarmLocalWorkspace() {
+      calls += 1;
+      throw unsupported();
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap((error) => reported.push(error));
+  const readOnly: AgentOptions = {
+    ...hostOptions,
+    local: { ...hostOptions.local, sandboxOptions: { enabled: true } },
+    tools: ["read"],
+  };
+
+  await bootstrap(platform, hostOptions, "none");
+  await bootstrap(platform, readOnly, "provider");
+
+  expect(calls).toBe(1);
+  expect(reported).toHaveLength(1);
+  expect(readOnly.local?.sandboxOptions?.enabled).toBe(true);
+  expect(readOnly.tools).toEqual(["read"]);
+});
+
+test("a probe whose release fails is settled, because the helper is already registered", async () => {
+  let calls = 0;
+  const reported: unknown[] = [];
+  const platform = {
+    async prewarmLocalWorkspace() {
+      calls += 1;
+      return async () => {
+        throw new Error("Release failed");
+      };
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap((error) => reported.push(error));
+
+  await bootstrap(platform, hostOptions, "none");
+  await bootstrap(platform, hostOptions, "none");
+
+  expect(calls).toBe(1);
+  expect(reported).toHaveLength(1);
+  expect(hostOptions.local?.sandboxOptions?.enabled).toBe(false);
+});
+
+/**
+ * A transient failure leaves the helper unregistered. Settling on it would
+ * silently reinstate the dispatch failure for the rest of the process, so the
+ * next attach has to try again.
+ */
+test("a transient probe failure is retried by the next host attach, then settles", async () => {
+  let calls = 0;
+  const reported: string[] = [];
+  const platform = {
+    async prewarmLocalWorkspace() {
+      calls += 1;
+      if (calls === 1) throw new Error("workspace scan unavailable");
+      return async () => {};
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap((error) =>
+    reported.push(error instanceof Error ? error.message : String(error)),
+  );
+
+  await bootstrap(platform, hostOptions, "none");
+  expect(calls).toBe(1);
+  await bootstrap(platform, hostOptions, "none");
+  expect(calls).toBe(2);
+  await bootstrap(platform, hostOptions, "none");
+  expect(calls).toBe(2);
+  expect(reported).toEqual(["workspace scan unavailable"]);
+});
+
+test("a transient failure does not fail the attach that observed it", async () => {
+  const platform = {
+    async prewarmLocalWorkspace() {
+      throw new Error("workspace scan unavailable");
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap(() => {});
+  await expect(bootstrap(platform, hostOptions, "none")).resolves.toBeUndefined();
+});
 
 test("an unauthenticated warm-up does not consume initialization", async () => {
   let calls = 0;

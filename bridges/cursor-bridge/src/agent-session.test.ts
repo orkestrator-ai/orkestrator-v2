@@ -146,11 +146,15 @@ const {
   rewindSessionHistory,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
+const { resetCursorSandboxBootstrapForTests } = await import("./sdk-runtime.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
+  // The barrier is primed once per process by design, so without this only
+  // the first attaching test could observe whether an attach primes it.
+  resetCursorSandboxBootstrapForTests();
   sessions.clear();
   clientSessionKeys.clear();
   process.env.CURSOR_API_KEY = "test-key";
@@ -302,6 +306,19 @@ describe("ensureAgent", () => {
     const { name: _name, ...createdOptions } = created[0]!;
     expect(prewarmOptions[0]).toEqual(createdOptions);
     expect(state.workspaceWarmRelease).toBeFunction();
+    // One probe for two racing attaches, ahead of either session's own
+    // warm-up, carrying none of the session's model, tools or MCP servers.
+    expect(sandboxBootstrapOptions).toEqual([
+      {
+        apiKey: "test-key",
+        local: {
+          cwd: workingDirectory,
+          settingSources: [],
+          sandboxOptions: { enabled: true },
+          autoReview: false,
+        },
+      },
+    ]);
 
     await detachAgent(state);
     expect(warmWorkspaceReleases).toBe(1);

@@ -38,6 +38,14 @@ their outer sandbox remains the boundary. Unsupported hosts still admit normal
 unsandboxed sessions, while read-only sessions retain their sandbox requirement
 and closed tool allowlist.
 
+The barrier is settled by a probe that reached a lease, or by the SDK's
+"sandboxing is not supported in this environment" verdict, which is final. Any
+other failure leaves `cursorsandbox` unregistered, so the next host attach
+probes again rather than letting one transient error reinstate the failure for
+the rest of the process. Neither swallowed failure changes the attach it was
+observed on; both write a single `setup-failed` diagnostic line, carrying the
+error message only, under the cursor bridge debug flag.
+
 The diagnosis was reproduced against the installed SDK by constructing an
 unsandboxed executor, invoking its sandbox-support metadata callback, then
 constructing a sandboxed executor. The latter threw the same error. Performing

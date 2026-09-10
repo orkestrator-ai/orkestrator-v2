@@ -9,6 +9,7 @@ import {
   type LocalAgentStore,
 } from "@cursor/sdk";
 import { cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
+import { cursorSetupDebug } from "./run-diagnostics.js";
 import { createCursorSandboxBootstrap } from "./sandbox-bootstrap.js";
 
 const storeRoot = cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
@@ -42,8 +43,19 @@ export function useCursorLocalAgentStoreForTests(store: LocalAgentStore): LocalA
   cursorLocalAgentStore = store;
   Cursor.configure({ local: { store } });
   platform = undefined;
-  initializeSandbox = createCursorSandboxBootstrap();
+  resetCursorSandboxBootstrapForTests();
   return previous;
+}
+
+/**
+ * Drop the process-wide sandbox barrier.
+ *
+ * Production primes it exactly once per process, which is the whole point of
+ * it. That also means a suite would see an already-primed runtime from its
+ * second test onwards and could not assert that an attach primes it at all.
+ */
+export function resetCursorSandboxBootstrapForTests(): void {
+  initializeSandbox = createCursorSandboxBootstrap();
 }
 
 /**
@@ -105,9 +117,10 @@ export async function prewarmCursorWorkspace(
     // All host sessions share this barrier, including concurrent warm-ups.
     await initializeSandbox(runtime, options, sandboxBoundary);
     return await runtime.prewarmLocalWorkspace(options);
-  } catch {
+  } catch (error) {
     // Prewarming is only an optimization. Agent.send() can rebuild the same
     // executor and remains the authoritative place to report a real failure.
+    cursorSetupDebug("workspace-prewarm", error);
     return undefined;
   }
 }

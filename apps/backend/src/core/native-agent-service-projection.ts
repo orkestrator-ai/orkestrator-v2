@@ -17,6 +17,7 @@ import {
   type NativeAgentViewIdentity,
   type NativeAgentAsyncQuestionResponse,
   type NativeAgentContextUsage,
+  type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
 import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-evidence-frames";
 import {
@@ -129,6 +130,26 @@ type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
 type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
+
+function visibleProjectionNotices(
+  notices: readonly NativeAgentNotice[] | undefined,
+  incompleteTurn: OpenCodeIncompleteTurnNotice | undefined,
+): NativeAgentNotice[] {
+  const visible = (notices ?? [])
+    .filter((notice) => notice.kind !== "error" && notice.kind !== "stopped")
+    .slice(0, incompleteTurn ? 511 : 512);
+  if (!incompleteTurn) return visible;
+  return [
+    ...visible,
+    {
+      kind: "incomplete-turn",
+      message:
+        incompleteTurn.kind === "failed"
+          ? "The previous OpenCode turn ended before completion."
+          : "OpenCode could not complete the previous turn after recovery.",
+    },
+  ];
+}
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -1492,6 +1513,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     recordResponse(queue?.inFlight?.requestId, "dispatching");
     recordResponse(queue?.dispatchError?.messageId, "failed");
+    const notices = visibleProjectionNotices(
+      stateSnapshot.notices,
+      resolved.session.openCodeIncompleteTurnNotice,
+    );
     return {
       identity: this.progressiveIdentity(
         input,
@@ -1562,6 +1587,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ? { policy: stateSnapshot.policy ?? resolved.session.policy }
         : {}),
       ...(stateSnapshot.rateLimits ? { rateLimits: stateSnapshot.rateLimits } : {}),
+      ...(stateSnapshot.runtimeHealthAuthoritative === undefined
+        ? {}
+        : { runtimeHealthAuthoritative: stateSnapshot.runtimeHealthAuthoritative }),
+      notices,
       ...(resolved.session.pendingDispatch || resolved.session.pendingSteer
         ? {
             recoverableDispatch: {
@@ -2961,6 +2990,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       }
       recordAsyncQuestionResponse(queue?.inFlight?.requestId, "dispatching");
       recordAsyncQuestionResponse(queue?.dispatchError?.messageId, "failed");
+      const notices = visibleProjectionNotices(
+        snapshot.notices,
+        resolved.session.openCodeIncompleteTurnNotice,
+      );
 
       const projection: NativeAgentSessionProjection = {
         platform: input.agent,
@@ -3040,15 +3073,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               },
             }
           : {}),
-        ...((snapshot.notices ?? []).some(
-          (notice) => notice.kind !== "error" && notice.kind !== "stopped",
-        )
-          ? {
-              notices: snapshot.notices!.filter(
-                (notice) => notice.kind !== "error" && notice.kind !== "stopped",
-              ),
-            }
-          : {}),
+        ...(notices.length > 0 ? { notices } : {}),
         ...(resolved.session.pendingDispatch || resolved.session.pendingSteer
           ? {
               recoverableDispatch: {
@@ -3084,20 +3109,6 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                     ]
                   : [];
               }),
-            }
-          : {}),
-        ...(resolved.session.openCodeIncompleteTurnNotice
-          ? {
-              notices: [
-                ...(snapshot.notices ?? []),
-                {
-                  kind: "incomplete-turn" as const,
-                  message:
-                    resolved.session.openCodeIncompleteTurnNotice.kind === "failed"
-                      ? "The previous OpenCode turn ended before completion."
-                      : "OpenCode could not complete the previous turn after recovery.",
-                },
-              ],
             }
           : {}),
         revision: 0,

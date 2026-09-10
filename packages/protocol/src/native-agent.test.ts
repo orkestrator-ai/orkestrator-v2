@@ -29,6 +29,7 @@ import {
   applyNativeAgentProjectionDelta,
   applyNativeAgentTranscriptDelta,
   isNativeAgentProjectionUpdate,
+  isNativeAgentSessionStateUpdate,
   isNativeAgentTranscriptUpdate,
   nativeAsyncQuestionItemId,
   nativeAsyncQuestionRequestId,
@@ -954,6 +955,40 @@ describe("progressive transcript deltas", () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe("progressive session state guard", () => {
+  const identity = {
+    backendInstanceId: "backend-1",
+    environmentId: "env-1",
+    platform: "codex" as const,
+    logicalSessionKey: "tab-1",
+    providerSessionId: "provider-1",
+    sourceGeneration: "gen-1",
+  };
+  const snapshot = (notices: unknown) => ({
+    viewVersion: 1,
+    status: "snapshot",
+    token: "state-1",
+    value: {
+      identity,
+      connection: "connected",
+      turn: { phase: "idle" },
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities("codex"),
+      ...(notices === undefined ? {} : { notices }),
+    },
+  });
+
+  test("requires a bounded notices array on every state snapshot", () => {
+    expect(isNativeAgentSessionStateUpdate(snapshot([]))).toBe(true);
+    expect(isNativeAgentSessionStateUpdate(snapshot(undefined))).toBe(false);
+    expect(isNativeAgentSessionStateUpdate(snapshot("not-an-array"))).toBe(false);
+    expect(isNativeAgentSessionStateUpdate(snapshot(Array.from({ length: 513 }, () => ({}))))).toBe(
+      false,
+    );
   });
 });
 

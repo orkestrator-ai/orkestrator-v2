@@ -1,6 +1,7 @@
 import type { BridgeConnection } from "./agent-provider-contract.js";
 import {
   ProviderUnavailableError,
+  type ProviderRuntimeHealth,
   type ProviderSessionStateSnapshot,
   type ProviderStatus,
   type ProviderTranscriptSnapshot,
@@ -11,9 +12,19 @@ import type {
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { asRecord, normalizeProviderContextUsage } from "./agent-provider-runtime.js";
+import {
+  asRecord,
+  INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
+  INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+  MAX_TRACKED_INTERACTION_SESSIONS,
+  normalizeProviderContextUsage,
+  normalizeProviderRuntimeSummary,
+  setBoundedMapEntry,
+} from "./agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
+import type { HttpBridgeRuntimeMetadata } from "./http-bridge-runtime-metadata.js";
+import { snapshotNotices } from "./http-bridge-runtime-health.js";
 import {
   assertOk,
   boundedJson,
@@ -208,6 +219,7 @@ export async function readHttpBridgeSessionState(input: {
     : undefined;
   const readiness = normalizeProviderReadiness(payload.readiness);
   const contextUsage = normalizeProviderContextUsage(payload.contextUsage);
+  const runtime = normalizeProviderRuntimeSummary(payload.runtime);
   const policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;
   const backgroundTasks = normalizeClaudeBackgroundTasks(payload.backgroundTasks);
@@ -237,6 +249,10 @@ export async function readHttpBridgeSessionState(input: {
       ? { providerGeneration: payload.engineGeneration as number }
       : {}),
     ...(contextUsage ? { contextUsage } : {}),
+    ...(runtime ? { runtime } : {}),
+    ...(typeof payload.runtimeHealthAuthoritative === "boolean"
+      ? { runtimeHealthAuthoritative: payload.runtimeHealthAuthoritative }
+      : {}),
     ...(policy ? { policy } : {}),
     ...(Array.isArray(bridgeQueue?.items)
       ? { providerQueue: { items: bridgeQueue.items.slice(0, 512) } }
@@ -256,5 +272,64 @@ export async function readHttpBridgeSessionState(input: {
       ? { completionBlockedByBackgroundTasks: payload.completionBlockedByBackgroundTasks }
       : {}),
     ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+  };
+}
+
+export async function readHttpBridgeAuthoritativeSessionState(input: {
+  agent: HttpBridgeAgent;
+  connection: BridgeConnection;
+  fetchImpl: typeof fetch;
+  sessionId: string;
+  metadata: Map<string, HttpBridgeRuntimeMetadata>;
+  refreshRuntimeMetadata: () => Promise<void>;
+  readRuntimeHealth: () => Promise<ProviderRuntimeHealth>;
+}): Promise<ProviderSessionStateSnapshot> {
+  const cachedMetadata = input.metadata.get(input.sessionId);
+  const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
+  if (cachedMetadata && refreshMetadata) {
+    // Keep serving the last authoritative runtime conditions while the
+    // no-touch health route refreshes them in the background.
+    void input.refreshRuntimeMetadata().catch(() => undefined);
+  }
+  const [snapshot, health] = await Promise.all([
+    readHttpBridgeSessionState(input),
+    refreshMetadata && !cachedMetadata ? input.readRuntimeHealth() : Promise.resolve(undefined),
+  ]);
+  if (snapshot.status === "missing") return snapshot;
+
+  const healthRuntime =
+    health && Object.keys(health.summary).length > 0 ? health.summary : undefined;
+  const runtime =
+    healthRuntime || snapshot.runtime || cachedMetadata?.runtime
+      ? { ...cachedMetadata?.runtime, ...snapshot.runtime, ...healthRuntime }
+      : undefined;
+  if (refreshMetadata && !cachedMetadata && health) {
+    setBoundedMapEntry(
+      input.metadata,
+      input.sessionId,
+      {
+        expiresAt:
+          Date.now() +
+          (health.authoritative === false
+            ? INTERACTIVE_RUNTIME_METADATA_RETRY_MS
+            : INTERACTIVE_RUNTIME_METADATA_TTL_MS),
+        ...(runtime ? { runtime } : {}),
+        runtimeHealthAuthoritative: health.authoritative !== false,
+      },
+      MAX_TRACKED_INTERACTION_SESSIONS,
+    );
+  }
+  return {
+    ...snapshot,
+    ...(runtime ? { runtime } : {}),
+    ...(health
+      ? { runtimeHealthAuthoritative: health.authoritative !== false }
+      : cachedMetadata?.runtimeHealthAuthoritative !== undefined
+        ? { runtimeHealthAuthoritative: cachedMetadata.runtimeHealthAuthoritative }
+        : {}),
+    notices: snapshotNotices({
+      transcriptTruncated: false,
+      ...(runtime ? { runtime } : {}),
+    }),
   };
 }

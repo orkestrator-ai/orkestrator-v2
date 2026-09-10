@@ -30,6 +30,14 @@ history rather than two partial ones.
 - **Hypothesis:** another aggregate owner races the temporary project path or
   its mocked command environment. The isolated pass establishes a credible
   flake but does not yet identify that owner.
+- **Recurrence:** after merging `origin/main` on 2026-09-10,
+  `mise run test:changed` reproduced the same resolved-path assertion in
+  27.75 ms. The backend group reported 2,986 passed, 1 skipped, and 1 failed
+  across 134 files. The logged isolated rerun
+  `mise run test:logged -- --name project-creation-isolated -- bun test --cwd
+  apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/commands-project-creation.test.ts --parallel=1 --only-failures`
+  passed in 1.0 seconds.
 
 ## Resolved: Cursor SDK mocks in a shared-process run (2026-09-10)
 

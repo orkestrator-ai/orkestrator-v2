@@ -10,6 +10,74 @@ import {
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
 describe("native agent progressive remainder", () => {
+  test("keeps provider-trimmed history reachable when the preview fits the backend window", async () => {
+    const prompt = {
+      id: "prompt",
+      role: "user",
+      content: "Original request",
+      parts: [],
+      createdAt: "2026-09-09T00:00:00.000Z",
+    };
+    const response = {
+      id: "response",
+      role: "assistant",
+      content: "Latest update",
+      parts: [{ type: "text", text: "Earlier response activity" }],
+      createdAt: "2026-09-09T00:01:00.000Z",
+    };
+    // The provider has already trimmed the prompt and older response parts to
+    // fit the preview it serves before hydration finishes, and says so with
+    // `complete: false`. The surviving message needs no further backend
+    // trimming, so nothing local reports the gap.
+    const stub = createProviderStub("claude", {
+      transcriptSnapshot: async () => ({
+        messages: [{ ...response, parts: [] }],
+        complete: false,
+        freshness: "current",
+      }),
+      messages: async () => [prompt, response],
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-trimmed-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:progressive-trimmed",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(1);
+        expect(preview.value.historyComplete).toBe(false);
+        // The tab gates its recovery header on truncated, not canLoadEarlier.
+        expect(preview.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: true,
+        });
+        // No local byte/count cut occurred; don't invent a truncation reason.
+        expect(preview.value.messageWindow?.truncationReason).toBeUndefined();
+
+        // This is the authoritative read used by "Load earlier messages".
+        const recovered = await service.getProjectionUpdate({
+          ...identity,
+          syncVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(recovered.status).toBe("snapshot");
+        if (recovered.status !== "snapshot") throw new Error("expected snapshot");
+        expect(recovered.projection.messages).toMatchObject([prompt, response]);
+        expect(recovered.historyComplete).toBe(true);
+      },
+    );
+  });
+
   test("shares one legacy interactive snapshot between transcript and state", async () => {
     const interactiveSnapshot = mock(async () => ({
       status: "idle" as const,

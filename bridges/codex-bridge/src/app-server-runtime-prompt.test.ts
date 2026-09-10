@@ -1644,6 +1644,25 @@ describe("slash commands", () => {
     expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
     expect(session.localMessages.at(-1)!.content).toContain("Available Codex slash commands");
     expect(session.messageRevision).toBe(rounds);
+    // Every read of this session now has to say history is missing. The cap is
+    // the whole transcript when the rollout could not be resumed, so reporting
+    // the retained tail as complete is what hid the dropped messages.
+    expect(h.runtime.transcriptComplete(sessionId)).toBe(false);
+    expect(h.runtime.getCachedMessages(sessionId)?.complete).toBe(false);
+  });
+
+  test("an uncapped local transcript reads as complete", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    await h.runtime.prompt(sessionId, {
+      prompt: "/help",
+      requestId: "req-help-once",
+      attachments: [],
+    });
+
+    expect(h.runtime.transcriptComplete(sessionId)).toBe(true);
+    expect(h.runtime.getCachedMessages(sessionId)?.complete).toBe(true);
   });
 });
 

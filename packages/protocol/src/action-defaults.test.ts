@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   ACTION_DEFAULT_KEYS,
+  actionDefaultEntry,
   normalizeActionDefaults,
   resolveActionDefault,
 } from "./action-defaults.js";
@@ -63,6 +64,20 @@ describe("normalizeActionDefaults", () => {
     ).toEqual({ pr: { platform: "claude" } });
   });
 
+  it("keeps an explicit Fast or Normal choice on each action independently", () => {
+    expect(
+      normalizeActionDefaults({
+        pr: { platform: "cursor", model: "grok-4.6", fastMode: true },
+        reviewPreparation: { platform: "cursor", model: "grok-4.6", fastMode: false },
+        push: { platform: "cursor", model: "grok-4.6", fastMode: "yes" },
+      }),
+    ).toEqual({
+      pr: { platform: "cursor", model: "grok-4.6", fastMode: true },
+      reviewPreparation: { platform: "cursor", model: "grok-4.6", fastMode: false },
+      push: { platform: "cursor", model: "grok-4.6" },
+    });
+  });
+
   it("drops OpenCode's placeholder model but keeps the rest of the entry", () => {
     // `default` is the id the catalog builder synthesises when no OpenCode
     // models are cached. No OpenCode server knows it, so persisting it would
@@ -109,14 +124,46 @@ describe("resolveActionDefault", () => {
     ).toEqual({ agent: "codex" });
   });
 
-  it("returns the configured platform, model and reasoning level", () => {
+  it("returns the configured platform, model, reasoning level and Fast", () => {
     expect(
       resolveActionDefault(
-        { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
+        {
+          review: {
+            platform: "codex",
+            model: "gpt-5.4",
+            reasoningEffort: "xhigh",
+            fastMode: false,
+          },
+        },
         "review",
         { fallbackAgent: "claude", enabledAgents },
       ),
-    ).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
+    ).toEqual({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "xhigh",
+      fastMode: false,
+    });
+  });
+
+  it("reads Fast only from the requested action", () => {
+    const defaults = {
+      pr: { platform: "codex" as const, model: "gpt-5.4", fastMode: true },
+      reviewPreparation: { platform: "codex" as const, model: "gpt-5.4", fastMode: false },
+    };
+    expect(
+      resolveActionDefault(defaults, "pr", { fallbackAgent: "claude", enabledAgents }),
+    ).toEqual({
+      agent: "codex",
+      model: "gpt-5.4",
+      fastMode: true,
+    });
+    expect(
+      resolveActionDefault(defaults, "reviewPreparation", {
+        fallbackAgent: "claude",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "codex", model: "gpt-5.4", fastMode: false });
   });
 
   it("ignores a default whose platform has since been disabled", () => {
@@ -170,5 +217,16 @@ describe("resolveActionDefault", () => {
         enabledAgents,
       }),
     ).toEqual({ agent: "codex" });
+  });
+});
+
+describe("actionDefaultEntry", () => {
+  it("omits unset optional fields, including an inherited Fast", () => {
+    expect(actionDefaultEntry("cursor")).toEqual({ platform: "cursor" });
+    expect(actionDefaultEntry("cursor", { model: "grok-4.6", fastMode: false })).toEqual({
+      platform: "cursor",
+      model: "grok-4.6",
+      fastMode: false,
+    });
   });
 });

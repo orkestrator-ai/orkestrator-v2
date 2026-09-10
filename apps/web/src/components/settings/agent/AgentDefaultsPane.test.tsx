@@ -381,7 +381,7 @@ describe("AgentDefaultsPane speed defaults", () => {
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
   });
 
-  test("offers the same per-platform Fast setting from an action picker", () => {
+  test("writes Fast onto that action default only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness scope="global" onChange={onChange} />);
 
@@ -395,16 +395,110 @@ describe("AgentDefaultsPane speed defaults", () => {
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         actionDefaults: {
-          createScript: { platform: "codex", model: "codex-a" },
+          createScript: { platform: "codex", model: "codex-a", fastMode: true },
         },
-        platforms: { codex: { fastMode: true } },
       }),
     );
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
 
     fireEvent.click(
       screen.getByRole("button", { name: "action-default-createScript inherit speed" }),
     );
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.createScript).toEqual({
+      platform: "codex",
+      model: "codex-a",
+    });
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
+  });
+
+  test("keeps Fast independent across action defaults that share a model", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Codex A" }));
+    fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Fast" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "action-default-reviewPreparation choose Codex A" }),
+    );
+
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults).toEqual({
+      pr: { platform: "codex", model: "codex-a", fastMode: true },
+      reviewPreparation: { platform: "codex", model: "codex-a" },
+    });
+    expect(screen.getByTestId("action-default-pr speed-value").textContent).toBe("true");
+    expect(screen.getByTestId("action-default-pr speed-inherit").textContent).toBe("false");
+    expect(screen.getByTestId("action-default-reviewPreparation speed-value").textContent).toBe(
+      "null",
+    );
+    expect(screen.getByTestId("action-default-reviewPreparation speed-inherit").textContent).toBe(
+      "true",
+    );
+  });
+
+  test("keeps an inherited model and reasoning level when a child tier pins Fast", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    const global: AgentSettingsTier = {
+      defaultAgent: "claude",
+      actionDefaults: {
+        pr: { platform: "codex", model: "codex-a", reasoningEffort: "high" },
+      },
+    };
+
+    function Harness() {
+      const [repository, setRepository] = useState<AgentSettingsTier>({});
+      return (
+        <AgentDefaultsPane
+          tier={repository}
+          onChange={(next) => {
+            setRepository(next);
+            onChange(next);
+          }}
+          tiers={{ global, repository }}
+          canInherit
+          enabledPlatforms={["claude", "codex", "opencode"]}
+          catalog={catalog}
+          scopeLabel="this repository"
+        />
+      );
+    }
+
+    render(<Harness />);
+    // A narrower tier's entry replaces the parent's whole, so a speed-only
+    // toggle has to carry the inherited model and reasoning level with it.
+    fireEvent.click(screen.getByRole("button", { name: "action-default-pr choose Fast" }));
+
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.pr).toEqual({
+      platform: "codex",
+      model: "codex-a",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
+
+  test("ignores an inherited Fast whose platform is no longer enabled", () => {
+    const global: AgentSettingsTier = {
+      defaultAgent: "claude",
+      actionDefaults: {
+        pr: { platform: "cursor", model: "cursor-a", fastMode: true },
+      },
+    };
+    const repository: AgentSettingsTier = {};
+    render(
+      <AgentDefaultsPane
+        tier={repository}
+        onChange={() => {}}
+        tiers={{ global, repository }}
+        canInherit
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="this repository"
+      />,
+    );
+
+    // The runtime resolver drops that entry whole, so the row must fall back to
+    // the effective agent's own speed rather than showing Cursor's Fast.
+    expect(screen.getByTestId("action-default-pr speed-value").textContent).toBe("null");
+    expect(screen.getByTestId("action-default-pr speed-inherit").textContent).toBe("true");
   });
 
   test("uses the platform default model to determine Fast availability for inherited actions", () => {

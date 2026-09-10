@@ -12,13 +12,13 @@ import {
   toPickerModel,
   type AgentModelCatalog,
 } from "@/lib/agent-launch";
-import { resolvedActionDefault, withPlatformField } from "@/lib/agent-settings";
+import { resolvedActionDefault } from "@/lib/agent-settings";
 import {
   AGENT_PLATFORM_LABELS,
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import type { AgentActionDefault } from "@orkestrator/protocol/action-defaults";
+import { actionDefaultEntry, type AgentActionDefault } from "@orkestrator/protocol/action-defaults";
 import {
   DEFAULT_MULTI_REVIEW_REVIEWER_COUNT,
   resolveAgentPlatformSettings,
@@ -109,9 +109,7 @@ function ReviewerDefaultPicker({
   catalog,
   pickerModels,
   favorites,
-  tier,
   disabled,
-  onTierChange,
   onChange,
 }: {
   index: number;
@@ -125,9 +123,7 @@ function ReviewerDefaultPicker({
   catalog: AgentModelCatalog;
   pickerModels: AgentModel[];
   favorites: ReturnType<typeof useAgentModelFavorites>;
-  tier: AgentSettingsTier;
   disabled?: boolean;
-  onTierChange: (tier: AgentSettingsTier) => void;
   onChange: (entry: AgentActionDefault | undefined) => void;
 }) {
   const platform =
@@ -169,8 +165,27 @@ function ReviewerDefaultPicker({
   const label = `Reviewer ${index + 1}`;
   const speedCapable = platformOwnsSpeed(platform);
   const speedAvailable = modelSupportsSpeed(platform, catalog, effectiveModelId);
-  const storedFastMode = tier.platforms?.[platform]?.fastMode;
-  const effectiveFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode ?? null;
+  const platformFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode;
+  const storedFastMode = entry?.fastMode;
+  const inheritedFastMode = inheritsFallbackFields ? fallbackEntry.fastMode : undefined;
+  const effectiveFastMode = storedFastMode ?? inheritedFastMode ?? platformFastMode ?? null;
+  // Writing this row's entry replaces whatever it was following, whole. Carry
+  // the inherited model and reasoning level across so choosing a speed cannot
+  // quietly move the reviewer onto a different model.
+  const persistSpeed = (fastMode: boolean | undefined) => {
+    if (fastMode === undefined && entry == null) return;
+    const model = entry?.model ?? (inheritsFallbackFields ? fallbackEntry.model : undefined);
+    const reasoningEffort =
+      entry?.reasoningEffort ??
+      (inheritsFallbackFields ? fallbackEntry.reasoningEffort : undefined);
+    onChange(
+      actionDefaultEntry(platform, {
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastMode !== undefined ? { fastMode } : {}),
+      }),
+    );
+  };
 
   return (
     <div
@@ -218,11 +233,13 @@ function ReviewerDefaultPicker({
             ?.label
         }
         onReasoningChange={(reasoningEffort) =>
-          onChange({
-            platform,
-            ...(entry?.model ? { model: entry.model } : {}),
-            ...(reasoningEffort === INHERIT ? {} : { reasoningEffort }),
-          })
+          onChange(
+            actionDefaultEntry(platform, {
+              ...(entry?.model ? { model: entry.model } : {}),
+              ...(reasoningEffort === INHERIT ? {} : { reasoningEffort }),
+              ...(entry?.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+            }),
+          )
         }
         speedCapable={speedCapable}
         fastModeAvailable={speedCapable && speedAvailable}
@@ -235,16 +252,8 @@ function ReviewerDefaultPicker({
               }
             : undefined
         }
-        onFastModeChange={
-          speedCapable
-            ? (enabled) => onTierChange(withPlatformField(tier, platform, "fastMode", enabled))
-            : undefined
-        }
-        onFastModeInherit={
-          speedCapable
-            ? () => onTierChange(withPlatformField(tier, platform, "fastMode", undefined))
-            : undefined
-        }
+        onFastModeChange={speedCapable ? persistSpeed : undefined}
+        onFastModeInherit={speedCapable ? () => persistSpeed(undefined) : undefined}
         className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
       />
       {entry?.model && !selectedModel && (
@@ -273,6 +282,7 @@ export function MultiReviewDefaultsEditor({
     platform: reviewFallback.agent,
     ...(reviewFallback.model ? { model: reviewFallback.model } : {}),
     ...(reviewFallback.reasoningEffort ? { reasoningEffort: reviewFallback.reasoningEffort } : {}),
+    ...(reviewFallback.fastMode !== undefined ? { fastMode: reviewFallback.fastMode } : {}),
   };
   const pickerModels = useMemo<AgentModel[]>(
     () =>
@@ -351,9 +361,7 @@ export function MultiReviewDefaultsEditor({
             catalog={catalog}
             pickerModels={pickerModels}
             favorites={favorites}
-            tier={tier}
             disabled={disabled}
-            onTierChange={onChange}
             onChange={(entry) => onChange(withReviewerEntry(tier, index, entry))}
           />
         ))}

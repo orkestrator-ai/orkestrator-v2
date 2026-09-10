@@ -114,15 +114,20 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 choose Normal" }));
-    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBe(false);
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({
+      platform: "claude",
+      fastMode: false,
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("false");
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 inherit speed" }));
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({ platform: "claude" });
     expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
     expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
   });
 
-  test("writes Fast to the platform selected by a reviewer", () => {
+  test("writes Fast onto the selected reviewer only", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness canInherit onChange={onChange} />);
 
@@ -132,8 +137,59 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "multi-review-default-0 choose Fast" }));
     expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
-      actionDefaults: { review: { platform: "codex" } },
-      platforms: { codex: { fastMode: true } },
+      actionDefaults: { review: { platform: "codex", fastMode: true } },
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.codex?.fastMode).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "multi-review-default-1 choose Normal" }));
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults).toEqual({
+      review: { platform: "codex", fastMode: true },
+      review2: { platform: "codex", fastMode: false },
+    });
+    expect(screen.getByTestId("multi-review-default-0 speed-value").textContent).toBe("true");
+    expect(screen.getByTestId("multi-review-default-1 speed-value").textContent).toBe("false");
+  });
+
+  test("keeps the model a reviewer was following when it pins Fast", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+
+    function Harness() {
+      const [tier, setTier] = useState<AgentSettingsTier>({
+        defaultAgent: "claude",
+        actionDefaults: {
+          review: { platform: "claude", model: "claude-fast", reasoningEffort: "high" },
+        },
+      });
+      return (
+        <MultiReviewDefaultsEditor
+          tier={tier}
+          onChange={(next) => {
+            setTier(next);
+            onChange(next);
+          }}
+          tiers={{ global: tier }}
+          canInherit={false}
+          enabledPlatforms={["claude", "codex"]}
+          catalog={catalog}
+        />
+      );
+    }
+
+    render(<Harness />);
+    // Reviewer 2 follows Review until it stores something of its own. Writing a
+    // speed there must not drop the model and reasoning level it was showing.
+    fireEvent.click(screen.getByRole("button", { name: "multi-review-default-1 choose Fast" }));
+
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review2).toEqual({
+      platform: "claude",
+      model: "claude-fast",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({
+      platform: "claude",
+      model: "claude-fast",
+      reasoningEffort: "high",
     });
   });
 

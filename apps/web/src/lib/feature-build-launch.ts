@@ -17,6 +17,7 @@ import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-buil
 import {
   defaultEffortFor,
   firstModelFor,
+  modelSupportsSpeed,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -30,6 +31,7 @@ export interface FeatureBuildStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /** A reviewer row. The key is presentational: reviewers have no identity yet. */
@@ -60,6 +62,7 @@ export interface ConfiguredStepDefault {
   agent: AgentPlatform;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /**
@@ -89,7 +92,30 @@ export function resolveFeatureBuildStep(
     agent,
     model,
     ...(reasoningEffort === "default" ? {} : { reasoningEffort }),
+    ...(typeof configured.fastMode === "boolean" ? { fastMode: configured.fastMode } : {}),
   };
+}
+
+/**
+ * The Fast a step keeps when its model changes.
+ *
+ * Speed is a per-platform capability, so it survives a model change inside one
+ * provider and is dropped when the provider changes or when the new model
+ * cannot honour it. The panel has no speed control of its own, so a step that
+ * silently lost its configured Fast could not be put back without reopening
+ * Settings.
+ */
+export function retainedStepFastMode(
+  selection: FeatureBuildStepSelection,
+  nextAgent: LaunchAgent,
+  nextModelId: string,
+  catalog: AgentModelCatalog,
+): { fastMode?: boolean } {
+  return nextAgent === selection.agent &&
+    typeof selection.fastMode === "boolean" &&
+    modelSupportsSpeed(nextAgent, catalog, nextModelId)
+    ? { fastMode: selection.fastMode }
+    : {};
 }
 
 export function featureBuildReviewerRow(
@@ -139,6 +165,7 @@ function stepConfig(selection: FeatureBuildStepSelection): BuildStepConfig {
     agent: selection.agent,
     model: selection.model,
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
   };
 }
 

@@ -3128,6 +3128,143 @@ describe("NativeMessage task list rendering", () => {
     }
   });
 
+  test("clocks a background task from its launch row when the snapshot has no start", () => {
+    // An older snapshot reports the task without a launch clock. The row that
+    // launched it is the honest fallback, and is what keeps the timer on a card
+    // recovered from a transcript rather than from a live lifecycle event.
+    const launchStartedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(launchStartedAt) + 125_000;
+    try {
+      const { rerender } = render(
+        <BackgroundTaskCard
+          task={{ id: "task-1", description: "Run validation", status: "running" }}
+          launchStartedAt={launchStartedAt}
+          open={false}
+          onOpenChange={() => {}}
+          onStop={async () => true}
+        />,
+      );
+
+      expect(screen.getByText("2m 5s")).toBeTruthy();
+
+      // The backend's own clock outranks the fallback wherever it exists.
+      rerender(
+        <BackgroundTaskCard
+          task={{
+            id: "task-1",
+            description: "Run validation",
+            status: "running",
+            startedAt: "2026-03-21T10:01:00.000Z",
+          }}
+          launchStartedAt={launchStartedAt}
+          open={false}
+          onOpenChange={() => {}}
+          onStop={async () => true}
+        />,
+      );
+
+      expect(screen.queryByText("2m 5s") === null).toBe(true);
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("hands a background task card the launch row's clock", () => {
+    const launchStartedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(launchStartedAt) + 125_000;
+    try {
+      render(
+        <NativeMessage
+          stopBackgroundTask={async () => true}
+          message={makeMessage([
+            makeAgentTaskGroupPart({
+              task: {
+                createdAt: launchStartedAt,
+                toolName: "Bash",
+                toolTitle: "Bash",
+                agentState: "active",
+                backgroundTask: {
+                  id: "task-1",
+                  description: "Run validation",
+                  status: "running",
+                },
+              },
+            }),
+          ])}
+        />,
+      );
+
+      expect(screen.getByText("2m 5s")).toBeTruthy();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("shows no background task timer when the settle clock precedes the start", () => {
+    // Clock skew between the two backend stamps would otherwise render as a
+    // negative runtime. Nothing is the honest answer; a guess is not.
+    const { container } = render(
+      <BackgroundTaskCard
+        task={{
+          id: "task-1",
+          description: "Run validation",
+          status: "completed",
+          startedAt: "2026-03-21T10:02:05.000Z",
+          settledAt: "2026-03-21T10:00:00.000Z",
+        }}
+        command="mise run test"
+        open={false}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    // The runtime label is the only thing on this card that sets `tabular-nums`.
+    expect(container.querySelector(".tabular-nums") === null).toBe(true);
+    expect(screen.getByText("Completed")).toBeTruthy();
+  });
+
+  test("shows a settled agent runtime on every platform, not only Cursor", () => {
+    // The duration used to reach the usage block on the Cursor branch alone, so
+    // a finished subagent elsewhere reported tools and updates but never how
+    // long it took.
+    render(
+      <NativeMessage
+        platform="claude"
+        message={makeMessage([
+          makeStandaloneSubagentPart({
+            toolState: "success",
+            toolArgs: { durationMs: 125_000 },
+          }),
+        ])}
+      />,
+    );
+
+    const timer = screen.getByText("2m 5s");
+    expect(getClassTokens(timer)).toContain("tabular-nums");
+  });
+
+  test("shows a settled agent runtime beside a token-only usage count", () => {
+    render(
+      <NativeMessage
+        platform="claude"
+        message={makeMessage([
+          makeStandaloneSubagentPart({
+            toolState: "success",
+            agentUsageDisplay: "token-only",
+            tokenCountText: "12.3k tokens",
+            toolArgs: { durationMs: 125_000 },
+          }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("12.3k tokens")).toBeTruthy();
+    expect(screen.getByText("2m 5s")).toBeTruthy();
+  });
+
   test("collapses a Codex agent label whose role only restates its name", () => {
     // Codex multi-agent v2 derives both the name and the role from the same
     // task path, so rendering both would read "metadata_review (metadata_review)".

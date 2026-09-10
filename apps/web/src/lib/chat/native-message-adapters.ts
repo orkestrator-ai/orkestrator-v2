@@ -909,7 +909,16 @@ function backgroundTaskStartedAt(
 ): string | undefined {
   if (!task || task.startedAt === undefined) return undefined;
   const epoch = typeof task.startedAt === "number" ? task.startedAt : Date.parse(task.startedAt);
-  return Number.isFinite(epoch) ? new Date(epoch).toISOString() : undefined;
+  if (!Number.isFinite(epoch)) return undefined;
+  /*
+   * A finite epoch can still sit outside the range `Date` represents — a bridge
+   * reporting nanoseconds is enough — and `toISOString` throws there rather than
+   * returning anything. This runs inside the decoration memo on the render path,
+   * so an unguarded throw would take the whole transcript down to lose one
+   * timer. Same guard `backgroundTaskSettledAt` uses below.
+   */
+  const date = new Date(epoch);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
 /**

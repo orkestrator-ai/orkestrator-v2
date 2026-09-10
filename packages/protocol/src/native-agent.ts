@@ -1003,10 +1003,14 @@ export interface NativeAgentBackgroundTaskSummary {
   /**
    * When the provider started this task, as an ISO timestamp.
    *
-   * Only the card for a task the transcript cannot show needs this, and only
-   * when there is no transcript row to take a clock from either — a tab that
-   * resumed into a task already running. Unlike `settledAt` it says nothing
-   * about where the card belongs; it is what the card's own header reads.
+   * Every background task card reads this as the start of its elapsed timer:
+   * live cards tick from it, and settled ones freeze at the distance between it
+   * and `settledAt`. The transcript row that launched the task supplies a
+   * fallback clock, so omitting this degrades the timer rather than removing it
+   * — except for a card the transcript cannot show at all, which has no row to
+   * fall back to and reads this as its own header too.
+   *
+   * Unlike `settledAt` it says nothing about where the card belongs.
    */
   startedAt?: string;
   /**

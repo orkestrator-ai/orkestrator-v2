@@ -890,22 +890,51 @@ export function useNativeAgentSession<TMessage = unknown>({
        * the shared store cannot evict — its trim loop refuses to drop the
        * session it is currently writing, so nothing else would reclaim this.
        */
-      if (
+      const retentionCollapsed =
         retained.length > 0 &&
         (retained.length + value.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
-          encodedBytes(retained) > CLIENT_HISTORY_MAX_BYTES)
-      ) {
+          encodedBytes(retained) > CLIENT_HISTORY_MAX_BYTES);
+      if (retentionCollapsed) {
         retained = [];
       }
       const messages = [...retained, ...value.messages];
-      const next: NativeAgentSessionProjection<TMessage> = {
+      const serverCanLoadEarlier = value.messageWindow?.canLoadEarlier === true;
+      const pagingStateMatches =
+        !identityChanged &&
+        !historyEpochChanged &&
+        !evicted &&
+        syncLiveProjectionRef.current !== null &&
+        historyEpochRef.current === value.historyEpoch;
+      const historyBoundaryCursor =
+        value.historyCursor ??
+        (pagingStateMatches && serverCanLoadEarlier ? historyBoundaryCursorRef.current : undefined);
+      const settledHistoryCursor =
+        pagingStateMatches && !retentionCollapsed ? historyCursorRef.current : value.historyCursor;
+      const canBootstrapHistory = serverCanLoadEarlier && !historyBoundaryCursor;
+      const messageWindow =
+        settledHistoryCursor || canBootstrapHistory
+          ? {
+              ...(value.messageWindow ?? { limit: messages.length }),
+              limit: messages.length,
+              truncated: true,
+              canLoadEarlier: true,
+            }
+          : value.historyComplete
+            ? undefined
+            : {
+                ...(value.messageWindow ?? { limit: messages.length }),
+                limit: messages.length,
+                truncated: true,
+                canLoadEarlier: false,
+              };
+      const live: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
         sessionId: value.identity.providerSessionId,
         ...(value.title || current?.title ? { title: value.title ?? current?.title } : {}),
         connection: hasAuthoritativeState ? current.connection : "connecting",
         turn: hasAuthoritativeState ? current.turn : { phase: "recovering" },
-        messages,
+        messages: value.messages,
         ...(value.messageWindow ? { messageWindow: value.messageWindow } : {}),
         interactions: hasAuthoritativeState ? current.interactions : [],
         composerControls: hasAuthoritativeState ? current.composerControls : [],
@@ -946,6 +975,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         revision: (current?.revision ?? 0) + 1,
         generation: value.identity.sourceGeneration,
       };
+      const next: NativeAgentSessionProjection<TMessage> = {
+        ...live,
+        messages,
+        ...(messageWindow ? { messageWindow } : { messageWindow: undefined }),
+      };
+      const historyBytes = encodedBytes(retained);
+      historyEpochRef.current = value.historyEpoch;
+      historyCursorRef.current = settledHistoryCursor;
+      historyBoundaryCursorRef.current = historyBoundaryCursor;
+      historyCompleteRef.current = value.historyComplete;
+      historyMessagesRef.current = retained;
+      historyEvictionRef.current = evictionGeneration;
+      syncTokenRef.current = token;
+      syncLiveProjectionRef.current = live;
       progressiveTranscriptTokenRef.current = token;
       lastTranscriptViewRef.current = value;
       progressiveHistoryEpochRef.current = value.historyEpoch;
@@ -955,7 +998,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       setTranscriptAvailability(availability);
       setTranscriptRefreshing(false);
       setTranscriptError(null);
-      applyProjection(next);
+      applyProjection(next, {
+        token,
+        liveProjection: live as NativeAgentSessionProjection,
+        historyEpoch: value.historyEpoch,
+        ...(settledHistoryCursor ? { historyCursor: settledHistoryCursor } : {}),
+        ...(historyBoundaryCursor ? { historyBoundaryCursor } : {}),
+        historyComplete: value.historyComplete,
+        historyMessages: retained,
+        historyBytes,
+      });
       updateProgressiveCache({
         identity: value.identity,
         transcriptToken: token,
@@ -2077,7 +2129,21 @@ export function useNativeAgentSession<TMessage = unknown>({
    * the session never had.
    */
   const loadEarlierMessages = useCallback(async () => {
-    if ((await nativeAgentProgressiveSupported()) && !syncLiveProjectionRef.current) {
+    const requestedOperationEpoch = projectionOperationEpochRef.current;
+    const progressive = await nativeAgentProgressiveSupported();
+    if (
+      progressive &&
+      (!syncLiveProjectionRef.current ||
+        (!historyCursorRef.current &&
+          !historyBoundaryCursorRef.current &&
+          projectionRef.current?.messageWindow?.canLoadEarlier === true))
+    ) {
+      /*
+       * A persisted progressive tail can know that history exists before the
+       * backend has populated the paging cache that mints its cursor. Bootstrap
+       * that exceptional state through the joined snapshot. Ordinary
+       * progressive snapshots already carry a cursor and skip this extra read.
+       */
       const update = await getNativeAgentProjectionUpdate<TMessage>({
         ...identity,
         syncVersion: 1,
@@ -2103,6 +2169,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         }
       }
     }
+    if (requestedOperationEpoch !== projectionOperationEpochRef.current) {
+      return projectionRef.current;
+    }
     if (await nativeAgentSyncSupported()) {
       const before = historyCursorRef.current;
       if (!before) return projectionRef.current;
@@ -2120,7 +2189,6 @@ export function useNativeAgentSession<TMessage = unknown>({
       const budget = historyRequestBudget();
       if (budget.messages <= 0 || budget.bytes <= 0) return projectionRef.current;
       const sequence = ++refreshSequenceRef.current;
-      const operationEpoch = projectionOperationEpochRef.current;
       const page = await getNativeAgentMessagePage<TMessage>({
         ...identity,
         syncVersion: 1,
@@ -2133,17 +2201,32 @@ export function useNativeAgentSession<TMessage = unknown>({
       // longer describes.
       if (
         sequence !== refreshSequenceRef.current ||
-        operationEpoch !== projectionOperationEpochRef.current
+        requestedOperationEpoch !== projectionOperationEpochRef.current
       ) {
         return projectionRef.current;
       }
-      const live = syncLiveProjectionRef.current;
+      const syncLive = syncLiveProjectionRef.current;
       const token = syncTokenRef.current;
-      if (page.historyEpoch !== historyEpochRef.current || !live || !token) {
+      if (page.historyEpoch !== historyEpochRef.current || !syncLive || !token) {
         resetSyncState();
         await refresh({ manual: true });
         return projectionRef.current;
       }
+      const current = projectionRef.current;
+      const live =
+        current &&
+        current.platform === syncLive.platform &&
+        current.environmentId === syncLive.environmentId &&
+        current.sessionId === syncLive.sessionId &&
+        current.generation === syncLive.generation
+          ? {
+              ...current,
+              messages: syncLive.messages,
+              ...(syncLive.messageWindow
+                ? { messageWindow: syncLive.messageWindow }
+                : { messageWindow: undefined }),
+            }
+          : syncLive;
       const existing = new Set(
         [...historyMessagesRef.current, ...live.messages].map(
           (message) => (message as { id?: unknown }).id,
@@ -2201,14 +2284,13 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (next <= current) return projectionRef.current;
     setMessageLimit(next);
     const sequence = ++refreshSequenceRef.current;
-    const operationEpoch = projectionOperationEpochRef.current;
     const projection = await getNativeAgentProjection<TMessage>({
       ...identity,
       messageLimit: next,
     });
     if (
       sequence === refreshSequenceRef.current &&
-      operationEpoch === projectionOperationEpochRef.current
+      requestedOperationEpoch === projectionOperationEpochRef.current
     )
       applyProjection(projection);
     return projection;

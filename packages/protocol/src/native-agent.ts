@@ -1831,7 +1831,10 @@ export function applyNativeAgentTranscriptDelta<TMessage>(
     messages: order.map((id) => currentMessages.get(id)!),
     historyEpoch: delta.historyEpoch,
     historyComplete: delta.historyComplete,
-    ...(delta.historyCursor === undefined ? {} : { historyCursor: delta.historyCursor }),
+    // Omission means the new live tail starts at the beginning of history.
+    // Retaining the previous cursor makes a completed history page look
+    // perpetually pageable after an authoritative delta clears the boundary.
+    historyCursor: delta.historyCursor,
     ...(delta.title === undefined ? {} : { title: delta.title }),
     ...(delta.messageWindow === undefined ? {} : { messageWindow: delta.messageWindow }),
     ...(delta.providerRevision === undefined ? {} : { providerRevision: delta.providerRevision }),

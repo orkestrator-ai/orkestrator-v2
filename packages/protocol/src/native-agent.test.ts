@@ -868,6 +868,26 @@ describe("progressive transcript deltas", () => {
     expect(next?.messages).toEqual([message("m1", "hello"), message("m2", "done")]);
   });
 
+  test("clears a history cursor once the live tail reaches the start", () => {
+    const current = {
+      identity,
+      freshness: "current" as const,
+      messages: [message("m1", "hello")],
+      historyCursor: "cursor-before-m1",
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    };
+    const next = applyNativeAgentTranscriptDelta(current, {
+      messageUpserts: [],
+      deletedMessageIds: [],
+      freshness: "current",
+      historyEpoch: "epoch-1",
+      historyComplete: true,
+    });
+
+    expect(next?.historyCursor).toBeUndefined();
+  });
+
   test("rejects a delta whose upsert is missing from the live order", () => {
     const current = {
       identity,

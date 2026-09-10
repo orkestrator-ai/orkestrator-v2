@@ -35,9 +35,51 @@ let authCache: { credential: string; expiresAt: number; value: BridgeAuthStatus 
  * unrelated Cursor state and a container can be handed exactly one credential
  * file. Falls back to the SDK default otherwise.
  */
-export const credentialStore: SdkCredentialStore = credentialFile
-  ? new FileCredentialStore(credentialFile)
-  : new FileCredentialStore();
+class LazyFileCredentialStore implements SdkCredentialStore {
+  private store: FileCredentialStore | undefined;
+
+  private delegate(): FileCredentialStore {
+    return (this.store ??= credentialFile
+      ? new FileCredentialStore(credentialFile)
+      : new FileCredentialStore());
+  }
+
+  load(): ReturnType<SdkCredentialStore["load"]> {
+    return this.delegate().load();
+  }
+
+  save(credentials: Parameters<SdkCredentialStore["save"]>[0]): Promise<void> {
+    return this.delegate().save(credentials);
+  }
+
+  clear(): Promise<void> {
+    return this.delegate().clear();
+  }
+}
+
+// Construction is lazy so a test can install its in-memory runtime before the
+// SDK ever resolves (or creates the parent of) its default ~/.cursor path.
+export let credentialStore: SdkCredentialStore = new LazyFileCredentialStore();
+let cursorAuth = Cursor.auth;
+let cursorMe: typeof Cursor.me | undefined = Cursor.me;
+
+export function useCursorCredentialRuntimeForTests(runtime: {
+  store: SdkCredentialStore;
+  auth: typeof Cursor.auth;
+  me?: typeof Cursor.me;
+}): () => void {
+  const previous = { store: credentialStore, auth: cursorAuth, me: cursorMe };
+  credentialStore = runtime.store;
+  cursorAuth = runtime.auth;
+  cursorMe = runtime.me;
+  authCache = undefined;
+  return () => {
+    credentialStore = previous.store;
+    cursorAuth = previous.auth;
+    cursorMe = previous.me;
+    authCache = undefined;
+  };
+}
 
 export async function resolveCredential(): Promise<CredentialResolution> {
   const fromEnvironment = process.env.CURSOR_API_KEY?.trim();
@@ -60,8 +102,8 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
   const fromEnvironment = process.env.CURSOR_API_KEY?.trim();
   const stored = fromEnvironment ? undefined : await credentialStore.load().catch(() => undefined);
   const statusFn = (
-    Cursor.auth as typeof Cursor.auth & {
-      status?: typeof Cursor.auth.status;
+    cursorAuth as typeof cursorAuth & {
+      status?: typeof cursorAuth.status;
     }
   ).status;
   const sdkStatus = fromEnvironment
@@ -87,7 +129,7 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
   if (credential && authCache?.credential === credential && authCache.expiresAt > Date.now()) {
     return authCache.value;
   }
-  const meFn = (Cursor as typeof Cursor & { me?: typeof Cursor.me }).me;
+  const meFn = cursorMe;
   const me =
     credential && meFn ? await meFn({ apiKey: credential }).catch(() => undefined) : undefined;
   const label =
@@ -146,7 +188,7 @@ export function beginLogin(options: { openBrowser?: boolean } = {}): LoginHandle
   const timeout = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS);
   timeout.unref();
 
-  const completion = Cursor.auth
+  const completion = cursorAuth
     .login({
       openBrowser: options.openBrowser ?? false,
       onLoginUrl: (url) => publishUrl(url),
@@ -176,7 +218,7 @@ export function beginLogin(options: { openBrowser?: boolean } = {}): LoginHandle
 
 export async function logout(): Promise<void> {
   authCache = undefined;
-  await Cursor.auth.logout({ store: credentialStore });
+  await cursorAuth.logout({ store: credentialStore });
 }
 
 function isExpired(expiresAtMs: number | undefined): boolean {

@@ -31,9 +31,9 @@ history rather than two partial ones.
   its mocked command environment. The isolated pass establishes a credible
   flake but does not yet identify that owner.
 
-## Cursor SDK mocks in a shared-process run (2026-09-10)
+## Resolved: Cursor SDK mocks in a shared-process run (2026-09-10)
 
-- **Status:** open; isolated workers pass.
+- **Status:** resolved in this change.
 - **Original command:** `mise exec -- bun test bridges/cursor-bridge/src`
   (no worker isolation), 316 passed / 13 failed in 10.76 seconds.
 - **Owners and failures:** `agent-session.test.ts`: `configures one JSONL store
@@ -48,17 +48,33 @@ history rather than two partial ones.
   bridges/cursor-bridge/src/agent-session.test.ts` passed 32 tests in 441 ms;
   `mise exec -- bun test bridges/cursor-bridge/src/credentials.test.ts` passed
   21 tests in 346 ms.
-- **Hypothesis:** process-wide SDK mocks and cached runtime singletons leak
-  between owners without the per-file workers used by the repository runner.
-- **Additional failures:** two diagnostics assertions came from the inherited
-  `ORKESTRATOR_BRIDGE_DEBUG=1`, which overrides each test's provider-specific
-  debug setting. These are environment-dependent, not confirmed flakes. The
-  aggregate runner now removes global and provider-specific bridge diagnostic
-  flags from every child environment, so a live development profile cannot
-  alter the authoritative suite's assertion inputs.
-- **Verification:** `env -u ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
+- **Root cause:** `agent-session.test.ts`, `credentials.test.ts`, and
+  `initial-run.test.ts` each replaced `@cursor/sdk` process-wide. In a
+  non-isolated directory run, whichever owner first evaluated the cached
+  production singleton fixed its store and SDK bindings for later owners;
+  later mock replacements then made the already-loaded owners observe a
+  different suite's implementation.
+- **Fix:** the credential, Agent, model, store, and platform surfaces now use
+  explicit test injection. The three owners restore those dependencies after
+  their suite and no longer call `mock.module("@cursor/sdk")`, so module-cache
+  order cannot select another owner's fake.
+- **Additional deterministic fix:** two diagnostics assertions came from the
+  inherited `ORKESTRATOR_BRIDGE_DEBUG=1`, which intentionally overrides the
+  provider-specific flag those tests changed. The owner now saves, controls,
+  and restores the effective global flag; it passes all eight cases with the
+  inherited flag still set. These failures were environmental, not flakes.
+- **Verification:** the original shared-process shape, `env -u
+  ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test bridges/cursor-bridge/src
+  --only-failures`, now passes 342 tests across all 17 owners in 10.18 seconds.
+  The three affected owners also pass 70 tests with `--parallel=3` in 8.55
+  seconds. No assertion was removed or relaxed.
+- **Aggregate-environment hardening:** the runner also removes global and
+  provider-specific bridge diagnostic flags from every child environment, so a
+  live development profile cannot alter the authoritative suite's assertion
+  inputs. Before the dependency-injection fix, `env -u
+  ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
   ./bridges/cursor-bridge/src --parallel=4` passed 329 tests across all 17
-  owners in 8.96 seconds. No assertions were removed or relaxed.
+  owners in 8.96 seconds.
 
 ## 2026-09-08 review validation preparation
 
@@ -272,14 +288,21 @@ New open observations from the later aggregate runs:
   `mise exec -- bun test --preload ../../tests/setup-node.ts
   ./src/core/commands-project-creation.test.ts` from `apps/backend` passed all
   39 tests and 107 assertions in 1.30 s without a source change.
+- **2026-09-10 recurrence:** `mise run test` failed the same assertion twice in
+  consecutive eight-worker aggregate runs (30.61 ms and 29.46 ms); the exact
+  owner rerun passed in 30.92 ms. A bounded diagnostic on the second aggregate
+  recurrence found the retained project directory contained exactly `.git`,
+  so rollback had not removed any Git metadata. Evidence:
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.omW1xF/summary.json`
+  and
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.EAbIpI/summary.json`.
 - **Hypothesis:** `createProjectFromScratch` awaits its best-effort rollback
   before rejecting, but the rollback deliberately swallows failures and first
-  abandons deletion if the directory identity changed. The aggregate output
-  records neither the retained directory contents nor which guard/failure path
-  left it behind, so it does not yet distinguish filesystem contention from an
-  identity-guard mismatch. A recurrence should capture both before changing
-  production rollback behavior; the package-install change does not load this
-  backend path.
+  abandons deletion if the directory identity changed. The new evidence rules
+  out an empty directory that merely missed `rmdir`, but still does not
+  distinguish an identity-guard refusal from an exception before or during
+  `.git` removal. A recurrence should capture that internal outcome before
+  changing the safety guard or production rollback behavior.
 
 ## `Files panel components > ChangedFileItem exposes revert and delete context actions` (`tests/unit/components/FilesPanel.test.tsx`)
 

@@ -27,6 +27,22 @@ export const FALLBACK_MODEL_ID = "composer-2";
 
 let catalogCache: AgentModel[] | null = null;
 let catalogProbe: Promise<AgentModel[]> | null = null;
+let catalogGeneration = 0;
+let cursorModels = Cursor.models;
+
+export function useCursorModelsForTests(models: typeof Cursor.models): () => void {
+  const previous = cursorModels;
+  cursorModels = models;
+  catalogCache = null;
+  catalogProbe = null;
+  catalogGeneration += 1;
+  return () => {
+    cursorModels = previous;
+    catalogCache = null;
+    catalogProbe = null;
+    catalogGeneration += 1;
+  };
+}
 
 export function emptyComposer(): NativeAgentComposerState {
   return {
@@ -58,24 +74,35 @@ export function emptyComposer(): NativeAgentComposerState {
  */
 export async function listModels(): Promise<AgentModel[]> {
   if (catalogCache) return catalogCache;
-  catalogProbe ??= (async () => {
-    try {
+  if (!catalogProbe) {
+    const generation = catalogGeneration;
+    const modelsClient = cursorModels;
+    const probe = (async () => {
       const { apiKey } = await resolveCredential();
       if (!apiKey) return [];
-      const items = await withTimeout(Cursor.models.list({ apiKey }), CATALOG_TIMEOUT_MS);
+      const items = await withTimeout(modelsClient.list({ apiKey }), CATALOG_TIMEOUT_MS);
       const models = items.map(normalizeModel).filter((model) => model.id.length > 0);
-      if (models.length > 0) catalogCache = models;
+      if (generation === catalogGeneration && models.length > 0) catalogCache = models;
       return models;
-    } finally {
-      catalogProbe = null;
-    }
-  })();
+    })();
+    catalogProbe = probe;
+    void probe.then(
+      () => {
+        if (catalogProbe === probe) catalogProbe = null;
+      },
+      () => {
+        if (catalogProbe === probe) catalogProbe = null;
+      },
+    );
+  }
   return catalogProbe.catch(() => []);
 }
 
 /** Drop the memo so the next read re-discovers. */
 export function refreshModels(): void {
   catalogCache = null;
+  catalogProbe = null;
+  catalogGeneration += 1;
 }
 
 /** Cursor's name for the axis the shared composer calls "reasoning". */

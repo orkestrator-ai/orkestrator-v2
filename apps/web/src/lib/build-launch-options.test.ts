@@ -191,6 +191,58 @@ describe("buildLaunchDefaults", () => {
     expect(defaults.preferredModels.codex).toBe("gpt-5.4");
   });
 
+  test("carries each platform's configured Fast/Normal choice", () => {
+    const defaults = buildLaunchDefaults(
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { model: "claude-sonnet-5", fastMode: true },
+            // An explicit Normal is a choice, not an absence.
+            codex: { model: "gpt-5.4", fastMode: false },
+            opencode: { model: "opencode/claude-sonnet-5" },
+          },
+        },
+      }),
+      "project-1",
+      false,
+    );
+
+    expect(defaults.preferredFastModes).toEqual({ claude: true, codex: false });
+  });
+
+  test("lets a repository speed override its own platform only", () => {
+    const defaults = buildLaunchDefaults(
+      makeConfig(
+        {
+          agentSettings: {
+            defaultAgent: "codex",
+            platforms: { codex: { fastMode: true } },
+          },
+        },
+        {
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              claude: { model: "claude-sonnet-5", fastMode: false },
+              codex: { model: "gpt-5.4", fastMode: false },
+              opencode: { model: "opencode/claude-sonnet-5" },
+            },
+          },
+        },
+      ),
+      "project-1",
+      false,
+    );
+
+    expect(defaults.preferredFastModes).toEqual({ claude: false, codex: true });
+  });
+
+  test("leaves speed unseeded when no tier expresses one", () => {
+    // Absent means the provider decides, which is not the same as Normal.
+    expect(buildLaunchDefaults(makeConfig(), "project-1", false).preferredFastModes).toEqual({});
+  });
+
   test("prefers the repository's last environment type, then the project's path", () => {
     expect(
       buildLaunchDefaults(makeConfig({ lastEnvironmentType: "containerized" }), "project-1", true)

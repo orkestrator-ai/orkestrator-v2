@@ -716,6 +716,11 @@ function App() {
           ...(existingOptions?.reasoningEffort
             ? { reasoningEffort: existingOptions.reasoningEffort }
             : {}),
+          // Boolean check rather than truthiness: an explicit Normal is a
+          // choice the create dialog made, and `false` must survive it.
+          ...(typeof existingOptions?.fastMode === "boolean"
+            ? { fastMode: existingOptions.fastMode }
+            : {}),
         };
         setClaudeOptions(environmentId, launchOptions);
         try {
@@ -724,6 +729,7 @@ function App() {
             initialPrompt: launchPrompt,
             model: launchOptions.model,
             reasoningEffort: launchOptions.reasoningEffort,
+            fastMode: launchOptions.fastMode,
             attachments: launchOptions.initialPromptAttachments,
           });
           useEnvironmentStore.getState().updateEnvironment(environmentId, prepared);

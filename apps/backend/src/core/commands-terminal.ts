@@ -79,6 +79,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     delete client.initialAgentPlatform;
     delete client.initialAgentModel;
     delete client.initialReasoningEffort;
+    delete client.initialFastMode;
   }
   // The bodies stay backend-only, but their existence does not: the renderer
   // uses this to decide whether the targeted detail read is worth making at all.

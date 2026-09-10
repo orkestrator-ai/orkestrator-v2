@@ -383,6 +383,77 @@ describe("create-environment agent preference command", () => {
   });
 });
 
+describe("one-shot startup launch speed", () => {
+  test("persists an explicit Fast or Normal choice for the pending launch", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialAgentModel: "sonnet",
+        initialReasoningEffort: "high",
+        initialFastMode: true,
+      });
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(true);
+
+      // `false` is a choice, not an absence: a falsy-only guard anywhere on
+      // this path would drop it and hand the run back to the platform tier.
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialFastMode: false,
+      });
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(false);
+    });
+  });
+
+  test("leaves speed untouched when the request carries none", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialFastMode: true,
+      });
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        initialAgentModel: "opus",
+      });
+
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(true);
+    });
+  });
+
+  test("clears speed with the rest of the launch intent", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialAgentModel: "sonnet",
+        initialFastMode: true,
+      });
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: false,
+      });
+
+      const environment = await storage.getEnvironment("e1");
+      expect(environment?.initialFastMode).toBeUndefined();
+      expect(environment?.initialAgentModel).toBeUndefined();
+    });
+  });
+
+  test("rejects a non-boolean speed rather than storing it", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("update_environment_agent_settings", {
+          environmentId: "e1",
+          pendingAgentLaunch: true,
+          initialFastMode: "yes",
+        }),
+      ).rejects.toThrow("initialFastMode must be a boolean");
+    });
+  });
+});
+
 describe("native agent model catalogue command", () => {
   test("rejects an unknown host catalogue provider before launching a probe", async () => {
     await withCommands(async (invoke) => {

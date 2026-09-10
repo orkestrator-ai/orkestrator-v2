@@ -283,6 +283,7 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialAgentModel,
         launchSettings.initialReasoningEffort,
         launchSettings.initialPromptAttachments,
+        launchSettings.initialFastMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
       if (

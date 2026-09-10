@@ -632,6 +632,14 @@ export abstract class StorageProjects extends StorageBase {
         else if (isAgentPlatform(value)) environment.initialAgentPlatform = value;
         else throw new Error("Invalid initial agent platform");
       }
+      if ("initialFastMode" in updates) {
+        const value = updates.initialFastMode;
+        // Key presence rather than truthiness, so clearing the launch intent
+        // and choosing Normal stay distinguishable.
+        if (value == null) environment.initialFastMode = undefined;
+        else if (typeof value === "boolean") environment.initialFastMode = value;
+        else throw new Error("Invalid initial fast mode");
+      }
       if ("initialPromptAttachments" in updates) {
         if (updates.initialPromptAttachments == null) {
           environment.initialPromptAttachments = undefined;

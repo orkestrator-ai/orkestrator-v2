@@ -388,6 +388,7 @@ export async function updateEnvironmentAgentSettings(
   initialAgentModel?: string,
   initialReasoningEffort?: string,
   initialPromptAttachments?: InitialPromptImageAttachment[],
+  initialFastMode?: boolean,
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_agent_settings", {
     environmentId,
@@ -396,6 +397,9 @@ export async function updateEnvironmentAgentSettings(
     ...(initialAgentModel ? { initialAgentModel } : {}),
     ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
     ...(initialPromptAttachments ? { initialPromptAttachments } : {}),
+    // A boolean check, not truthiness: an explicit Normal is a choice the
+    // launcher made and must not be dropped the way `false` would be.
+    ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
   });
 }
 
@@ -407,6 +411,7 @@ export async function prepareEnvironmentAgentLaunch(
     initialPrompt?: string;
     model?: string;
     reasoningEffort?: string;
+    fastMode?: boolean;
     conversationMode?: "plan" | "build";
     attachments?: InitialPromptImageAttachment[];
   },
@@ -418,6 +423,7 @@ export async function prepareEnvironmentAgentLaunch(
     ...(input.initialPrompt !== undefined ? { initialPrompt: input.initialPrompt } : {}),
     ...(input.model ? { initialAgentModel: input.model } : {}),
     ...(input.reasoningEffort ? { initialReasoningEffort: input.reasoningEffort } : {}),
+    ...(typeof input.fastMode === "boolean" ? { initialFastMode: input.fastMode } : {}),
     ...(input.conversationMode ? { initialConversationMode: input.conversationMode } : {}),
     ...(input.attachments ? { initialPromptAttachments: input.attachments } : {}),
   });

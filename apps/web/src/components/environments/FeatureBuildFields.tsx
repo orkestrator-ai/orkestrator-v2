@@ -556,10 +556,11 @@ function ModelPicker({
       selectedReasoningId={reasoningId}
       selectedReasoningLabel={reasoningOptions.find((option) => option.id === reasoningId)?.label}
       onReasoningChange={(effort) =>
+        // Spread the row: rebuilding it from agent/model alone silently drops
+        // the Fast/Normal choice made on the same picker.
         onSelectionChange({
-          agent: selection.agent,
-          model: selection.model,
-          ...(effort === "default" ? {} : { reasoningEffort: effort }),
+          ...selection,
+          reasoningEffort: effort === "default" ? undefined : effort,
         })
       }
       speedCapable={speedCapable}

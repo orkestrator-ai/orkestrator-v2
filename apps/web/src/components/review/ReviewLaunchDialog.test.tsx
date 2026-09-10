@@ -144,6 +144,18 @@ const catalog: ReviewModelCatalog = {
   opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast", "deep"] }],
 };
 
+/** Claude A carries a speed axis; Claude B deliberately does not. */
+const speedCatalog: ReviewModelCatalog = {
+  ...catalog,
+  claude: [
+    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"], supportsSpeed: true },
+    { id: "claude-b", name: "Claude B", reasoningEfforts: ["xhigh"] },
+  ],
+  opencode: [
+    { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast"], supportsSpeed: true },
+  ],
+};
+
 /** A model with no reasoning efforts, and a provider whose catalog is empty. */
 const sparseCatalog: ReviewModelCatalog = {
   claude: [
@@ -499,6 +511,55 @@ describe("ReviewLaunchDialog", () => {
       model: "sonnet",
       reasoningEffort: "high",
     });
+  });
+
+  test("submits the Fast choice the picker offered", () => {
+    const { onConfirm } = renderDialog({ catalog: speedCatalog });
+
+    openPicker();
+    const speed = within(screen.getByRole("group", { name: "Speed mode" }));
+    fireEvent.click(speed.getByRole("menuitemradio", { name: /Fast/ }));
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: true }));
+  });
+
+  test("opens on the configured speed and keeps it through a same-platform model change", () => {
+    const { onConfirm } = renderDialog({
+      catalog: speedCatalog,
+      preferredModels: { claude: "claude-b" },
+      preferredFastModes: { claude: true },
+    });
+
+    // Claude B has no speed axis, so the control is hidden and nothing is sent.
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+
+    // Moving to a speed-capable model on the same platform picks the
+    // preference back up rather than silently starting at Normal.
+    chooseModel(/Claude A/);
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "claude-a", fastMode: true }),
+    );
+  });
+
+  test("drops speed on a platform that owns no speed surface", () => {
+    // OpenCode advertises no Fast/Normal anywhere, so a catalogue entry that
+    // claims one must not produce a control or a submitted value.
+    const { onConfirm } = renderDialog({
+      catalog: speedCatalog,
+      defaultTabType: "opencode",
+      preferredFastModes: { opencode: true },
+    });
+
+    openPicker();
+    expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
   });
 
   test("configures looped review with allowance 6 by default and supports 1 through 10", () => {

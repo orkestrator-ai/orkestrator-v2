@@ -110,6 +110,14 @@ export function effortLabel(effort: string): string {
  *
  * Settings and launchers share this so `supportsSpeed` cannot be dropped on
  * the way into `AgentModelPicker`.
+ *
+ * The row caption is `providerLabel`, falling back to `description` and only
+ * then to the platform name. That fallback is deliberate and applies to every
+ * picker: Claude and Codex catalogue entries carry a description but no
+ * provider, so without it their rows would all read "Claude"/"Codex" and the
+ * one thing distinguishing them — what the model is for — would be dropped.
+ * The review and build launchers already resolved the caption this way; the
+ * other pickers did not, and that inconsistency is what this mapper removes.
  */
 export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): AgentModel {
   return {

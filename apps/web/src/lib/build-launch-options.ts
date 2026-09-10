@@ -10,6 +10,7 @@ export interface BuildLaunchDefaults {
   defaultEnvironmentType: EnvironmentType;
   preferredModels: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes: Partial<Record<LaunchAgent, boolean>>;
 }
 
 /**
@@ -32,6 +33,7 @@ export function buildLaunchDefaults(
   const tiers = agentSettingsTiers(config, projectId);
   const preferredModels: Partial<Record<AgentPlatform, string>> = {};
   const preferredReasoningEfforts: Partial<Record<AgentPlatform, string>> = {};
+  const preferredFastModes: Partial<Record<AgentPlatform, boolean>> = {};
   for (const platform of AGENT_PLATFORMS) {
     const resolved = resolveAgentPlatformSettings(tiers, platform);
     // `"default"` is a placeholder no provider knows, so it is dropped rather
@@ -40,6 +42,7 @@ export function buildLaunchDefaults(
     if (resolved.reasoningEffort && resolved.reasoningEffort !== "default") {
       preferredReasoningEfforts[platform] = resolved.reasoningEffort;
     }
+    if (typeof resolved.fastMode === "boolean") preferredFastModes[platform] = resolved.fastMode;
   }
   return {
     defaultAgent,
@@ -47,5 +50,6 @@ export function buildLaunchDefaults(
       repository?.lastEnvironmentType ?? (projectHasLocalPath ? "local" : "containerized"),
     preferredModels,
     preferredReasoningEfforts,
+    preferredFastModes,
   };
 }

@@ -719,6 +719,7 @@ export function clearPendingAgentLaunchUpdates(): Partial<Environment> {
     initialAgentPlatform: undefined,
     initialAgentModel: undefined,
     initialReasoningEffort: undefined,
+    initialFastMode: undefined,
     initialConversationMode: undefined,
     initialPromptAttachments: undefined,
   };

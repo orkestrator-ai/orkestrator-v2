@@ -29,6 +29,12 @@ const catalog: AgentModelCatalog = {
   pi: [{ id: "anthropic/claude-pi", name: "Claude Pi", reasoningEfforts: ["high"] }],
 };
 
+/** Opus carries a speed axis; the OpenCode entry's platform owns none. */
+const speedCatalog: AgentModelCatalog = {
+  ...catalog,
+  claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"], supportsSpeed: true }],
+};
+
 function setFavorites(favoriteModels: AgentModelRef[]) {
   const config = useConfigStore.getState().config;
   useConfigStore.setState({
@@ -47,6 +53,77 @@ function chooseFavorite(row: string, name: RegExp) {
     within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", { name }),
   );
 }
+
+/** Opens `row`'s picker and chooses a Fast/Normal option. */
+function chooseSpeed(row: string, name: RegExp) {
+  fireEvent.pointerDown(screen.getByRole("button", { name: `${row} model` }));
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", { name }),
+  );
+}
+
+describe("MultiReviewLaunchDialog speed", () => {
+  test("carries each row's Fast choice independently into the launch", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={speedCatalog}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    chooseSpeed("Reviewer 1", /Fast/);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.reviewers[0]).toMatchObject({ agent: "claude", fastMode: true });
+    // Reviewer 2 was never touched, so it must not inherit the choice.
+    expect(selection.reviewers[1]).not.toHaveProperty("fastMode");
+  });
+
+  test("seeds every row, including the fix model, from the configured speed", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={speedCatalog}
+        preferredFastModes={{ claude: true }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    const selection = onConfirm.mock.calls[0]![0];
+    expect(selection.reviewers.every((reviewer) => reviewer.fastMode === true)).toBe(true);
+    expect(selection.reviewModel.fastMode).toBe(true);
+    expect(selection.fixModel.fastMode).toBe(true);
+  });
+
+  test("omits speed from the opening selection when nothing configures it", () => {
+    const defaults: MultiReviewLaunchDefaults = {
+      defaultAgent: "claude",
+      catalog: speedCatalog,
+    };
+
+    expect(defaultMultiReviewLaunchSelection(defaults).reviewers[0]).not.toHaveProperty("fastMode");
+  });
+
+  test("omits speed on a platform that owns no speed surface", () => {
+    expect(
+      defaultMultiReviewLaunchSelection({
+        defaultAgent: "opencode",
+        catalog: speedCatalog,
+        preferredFastModes: { opencode: true },
+      }).reviewers[0],
+    ).not.toHaveProperty("fastMode");
+  });
+});
 
 describe("MultiReviewLaunchDialog", () => {
   test("preserves and renders OpenCode provider captions", () => {
@@ -361,7 +438,7 @@ describe("MultiReviewLaunchDialog", () => {
   test("pins Fast independently on consolidation and each reviewer", () => {
     const selection = defaultMultiReviewLaunchSelection({
       defaultAgent: "claude",
-      catalog,
+      catalog: speedCatalog,
       preferredFastModes: { claude: true },
       reviewerDefaults: [
         {

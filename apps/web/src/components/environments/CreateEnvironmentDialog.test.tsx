@@ -4,6 +4,7 @@ import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-the
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { useConfigStore } from "@/stores/configStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 
 const baseConfig = useConfigStore.getState().config;
@@ -12,6 +13,7 @@ afterEach(() => {
   cleanup();
   useConfigStore.setState({ config: baseConfig });
   useOpenCodeStore.setState({ models: new Map() });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
 });
 
 /**
@@ -27,6 +29,72 @@ function expectModelPickerTheme(picker: HTMLElement): void {
 }
 
 describe("CreateEnvironmentDialog initial prompt attachments", () => {
+  test("shows and submits every capability exposed by the selected Cursor model", async () => {
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        global: {
+          ...baseConfig.global,
+          enabledAgentPlatforms: ["cursor"],
+          favoriteModels: [],
+          agentSettings: {
+            ...baseConfig.global.agentSettings,
+            defaultAgent: "cursor",
+            platforms: {
+              ...baseConfig.global.agentSettings?.platforms,
+              cursor: { mode: "native", model: "grok-4.6" },
+            },
+          },
+        },
+      },
+    });
+    useAgentModelCatalogStore.setState({
+      cursorModels: [
+        {
+          platform: "cursor",
+          id: "grok-4.6",
+          label: "Cursor Grok 4.6",
+          reasoning: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+          defaultReasoningId: "high",
+          supportsSpeed: true,
+        },
+      ],
+      grokModels: [],
+      piModels: [],
+    });
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    await act(async () => fireEvent.pointerDown(picker));
+    expect(screen.getByRole("group", { name: "Reasoning", hidden: true })).toBeTruthy();
+    const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
+    fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        agentType: "cursor",
+        model: "grok-4.6",
+        fastMode: true,
+      }),
+    );
+  });
+
   test("labels an unqualified configured OpenCode model across environment and feature pickers", async () => {
     useConfigStore.setState({
       config: {

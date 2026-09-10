@@ -652,6 +652,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode: "native",
         initialAgentModel: selection.model,
         initialReasoningEffort: selection.reasoningEffort,
+        initialFastMode: selection.fastMode,
       });
       setReviewDialogOpen(false);
     },
@@ -789,6 +790,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         const agent = getReviewAgent(selection.tabType);
         const reviewDefault = actionDefaultFor("review");
         const configuredFastMode =
+          selection.fastMode ??
           (agent === reviewDefault.agent ? reviewDefault.fastMode : undefined) ??
           preferredFastModesByPlatform[agent];
         const fastMode =
@@ -1113,6 +1115,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode: "native",
         initialAgentModel: selection.model,
         initialReasoningEffort: selection.reasoningEffort,
+        initialFastMode: selection.fastMode,
       });
       if (!created) {
         setScriptLaunchError(
@@ -1524,6 +1527,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           agentLaunchMode: "native",
           initialAgentModel: selection.model,
           initialReasoningEffort: selection.reasoningEffort,
+          initialFastMode: selection.fastMode,
         },
         prDialogTarget.targetBranch,
       );
@@ -1830,6 +1834,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           agentLaunchMode: "native",
           initialAgentModel: selection.model,
           initialReasoningEffort: selection.reasoningEffort,
+          initialFastMode: selection.fastMode,
         },
         targetBranch: resolveDialogTarget.targetBranch,
         // The dialog stays open on failure and owns the message, so the toast

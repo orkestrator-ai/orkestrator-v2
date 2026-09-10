@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   LAUNCH_AGENT_OPTIONS,
   defaultEffortFor,
+  defaultFastModeFor,
   effortLabel,
   firstModelFor,
   modelSupportsSpeed,
@@ -179,6 +180,7 @@ describe("toPickerModel", () => {
       label: "Cursor Grok 4.6",
       providerLabel: "Grok",
       description: "Grok on Cursor",
+      reasoning: [{ id: "high", label: "High" }],
       supportsSpeed: true,
     });
   });
@@ -191,6 +193,93 @@ describe("toPickerModel", () => {
       id: "default",
       label: "Default",
     });
+  });
+
+  test("captions a description-only entry with its description", () => {
+    // Claude and Codex catalogue entries carry no provider, so without this
+    // fallback every one of their rows would caption as the bare platform name.
+    expect(
+      toPickerModel("claude", {
+        id: "sonnet",
+        name: "Sonnet",
+        description: "Sonnet 5 - Efficient for routine tasks",
+        reasoningEfforts: [],
+      }),
+    ).toEqual({
+      platform: "claude",
+      id: "sonnet",
+      label: "Sonnet",
+      providerLabel: "Sonnet 5 - Efficient for routine tasks",
+      description: "Sonnet 5 - Efficient for routine tasks",
+    });
+  });
+
+  test("prefers an explicit provider label over the description", () => {
+    expect(
+      toPickerModel("opencode", {
+        id: "anthropic/claude-sonnet-5",
+        name: "Sonnet 5",
+        providerLabel: "anthropic",
+        description: "anthropic",
+        reasoningEfforts: [],
+      }).providerLabel,
+    ).toBe("anthropic");
+  });
+
+  test("leaves the caption unset when the entry has neither field", () => {
+    // The picker then falls back to the platform name on its own.
+    expect(
+      toPickerModel("claude", { id: "bare", name: "Bare", reasoningEfforts: [] }),
+    ).not.toHaveProperty("providerLabel");
+  });
+});
+
+describe("defaultFastModeFor", () => {
+  const speedCatalog: AgentModelCatalog = {
+    claude: [
+      { id: "fast", name: "Fast", reasoningEfforts: [], supportsSpeed: true },
+      { id: "normal-only", name: "Normal only", reasoningEfforts: [] },
+    ],
+    codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: [], supportsSpeed: true }],
+    opencode: [],
+  };
+
+  test("returns the platform's configured preference for a speed-capable model", () => {
+    expect(defaultFastModeFor("claude", "fast", speedCatalog, { claude: true })).toBe(true);
+  });
+
+  test("keeps an explicit Normal preference rather than treating it as unset", () => {
+    // `false` is a choice a settings tier made; collapsing it to undefined
+    // would hand the run back to the provider default.
+    expect(defaultFastModeFor("claude", "fast", speedCatalog, { claude: false })).toBe(false);
+  });
+
+  test("is unset when no tier expressed a preference", () => {
+    expect(defaultFastModeFor("claude", "fast", speedCatalog)).toBeUndefined();
+    expect(defaultFastModeFor("claude", "fast", speedCatalog, {})).toBeUndefined();
+  });
+
+  test("drops a preference the selected model cannot honour", () => {
+    expect(
+      defaultFastModeFor("claude", "normal-only", speedCatalog, { claude: true }),
+    ).toBeUndefined();
+  });
+
+  test("drops a preference on a platform with no speed surface", () => {
+    expect(
+      defaultFastModeFor("opencode", "default", speedCatalog, { opencode: true }),
+    ).toBeUndefined();
+    expect(defaultFastModeFor("pi", "default", speedCatalog, { pi: true })).toBeUndefined();
+  });
+
+  test("reads only the requested platform's preference", () => {
+    expect(defaultFastModeFor("claude", "fast", speedCatalog, { codex: true })).toBeUndefined();
+  });
+
+  test("trusts the provider when no model is pinned or the catalogue is stale", () => {
+    // A missing catalogue match must not silently downgrade a stored Fast.
+    expect(defaultFastModeFor("claude", undefined, speedCatalog, { claude: true })).toBe(true);
+    expect(defaultFastModeFor("claude", "retired", speedCatalog, { claude: true })).toBe(true);
   });
 });
 

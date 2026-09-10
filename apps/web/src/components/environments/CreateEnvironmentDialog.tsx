@@ -76,7 +76,13 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
-import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
+import {
+  defaultFastModeFor,
+  effortLabel,
+  modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
+} from "@/lib/agent-launch";
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
 import { FeatureBuildFields } from "./FeatureBuildFields";
 import {
@@ -255,6 +261,7 @@ export interface ClaudeOptions {
    */
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   initialPrompt: string;
   initialPromptAttachments: InitialPromptImageAttachment[];
   networkAccessMode: NetworkAccessMode;
@@ -371,16 +378,23 @@ export function CreateEnvironmentDialog({
     toggleFavorite: toggleFavoriteModel,
     reorderFavorites,
   } = useAgentModelFavorites();
-  const { resolvedModelsByPlatform, resolvedEffortsByPlatform } = useMemo(() => {
-    const models: Partial<Record<AgentPlatform, string>> = {};
-    const efforts: Partial<Record<AgentPlatform, string>> = {};
-    for (const platform of enabledAgentPlatforms) {
-      const resolved = resolveAgentPlatformSettings(agentTiers, platform);
-      if (resolved.model) models[platform] = resolved.model;
-      if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
-    }
-    return { resolvedModelsByPlatform: models, resolvedEffortsByPlatform: efforts };
-  }, [agentTiers, enabledAgentPlatforms]);
+  const { resolvedModelsByPlatform, resolvedEffortsByPlatform, resolvedFastModesByPlatform } =
+    useMemo(() => {
+      const models: Partial<Record<AgentPlatform, string>> = {};
+      const efforts: Partial<Record<AgentPlatform, string>> = {};
+      const fastModes: Partial<Record<AgentPlatform, boolean>> = {};
+      for (const platform of enabledAgentPlatforms) {
+        const resolved = resolveAgentPlatformSettings(agentTiers, platform);
+        if (resolved.model) models[platform] = resolved.model;
+        if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
+        if (typeof resolved.fastMode === "boolean") fastModes[platform] = resolved.fastMode;
+      }
+      return {
+        resolvedModelsByPlatform: models,
+        resolvedEffortsByPlatform: efforts,
+        resolvedFastModesByPlatform: fastModes,
+      };
+    }, [agentTiers, enabledAgentPlatforms]);
   const openCodeDefaults = resolveAgentPlatformSettings(agentTiers, "opencode");
   const configuredOpenCodeModel =
     (newProjectDefault.agent === "opencode" ? newProjectDefault.model : undefined) ??
@@ -509,10 +523,12 @@ export function CreateEnvironmentDialog({
           ? { [newProjectDefault.agent]: newProjectDefault.reasoningEffort }
           : {}),
       },
+      fastModes: resolvedFastModesByPlatform,
     }),
     [
       resolvedModelsByPlatform,
       resolvedEffortsByPlatform,
+      resolvedFastModesByPlatform,
       configClaudeMode,
       configCodexMode,
       configDefaultAgent,
@@ -541,6 +557,7 @@ export function CreateEnvironmentDialog({
       return {
         model: defaults.model,
         reasoningEffort: defaults.reasoningEffort,
+        fastMode: defaults.fastMode,
       };
     },
     [configuredAgentDefaults, modelCatalog],
@@ -559,6 +576,17 @@ export function CreateEnvironmentDialog({
   const [piMode, setPiMode] = useState<AgentStyle>(initialAgentDefaults.piMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
+  const [fastMode, setFastMode] = useState(initialAgentDefaults.fastMode);
+  const featureActionDefault = useCallback(
+    (key: Parameters<typeof resolvedActionDefault>[1]) => {
+      const action = resolvedActionDefault(agentTiers, key, enabledAgentPlatforms);
+      return {
+        ...action,
+        fastMode: resolvedFastModesByPlatform[action.agent],
+      };
+    },
+    [agentTiers, enabledAgentPlatforms, resolvedFastModesByPlatform],
+  );
   /**
    * The models "Customize models" opens on.
    *
@@ -575,19 +603,16 @@ export function CreateEnvironmentDialog({
           agent: agentType,
           model,
           reasoningEffort,
+          fastMode,
         },
-        review: resolvedActionDefault(agentTiers, "review", enabledAgentPlatforms),
-        review2: resolvedActionDefault(agentTiers, "review2", enabledAgentPlatforms),
-        reviewPreparation: resolvedActionDefault(
-          agentTiers,
-          "reviewPreparation",
-          enabledAgentPlatforms,
-        ),
-        address: resolvedActionDefault(agentTiers, "fixReviewIssues", enabledAgentPlatforms),
-        pr: resolvedActionDefault(agentTiers, "pr", enabledAgentPlatforms),
-        resolve: resolvedActionDefault(agentTiers, "resolve", enabledAgentPlatforms),
+        review: featureActionDefault("review"),
+        review2: featureActionDefault("review2"),
+        reviewPreparation: featureActionDefault("reviewPreparation"),
+        address: featureActionDefault("fixReviewIssues"),
+        pr: featureActionDefault("pr"),
+        resolve: featureActionDefault("resolve"),
       }),
-    [agentTiers, agentType, enabledAgentPlatforms, model, modelCatalog, reasoningEffort],
+    [agentType, fastMode, featureActionDefault, model, modelCatalog, reasoningEffort],
   );
   const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
   const [featureName, setFeatureName] = useState("");
@@ -736,6 +761,7 @@ export function CreateEnvironmentDialog({
     setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
+    setFastMode(initialAgentDefaults.fastMode);
     agentSelectionTouchedRef.current = false;
     setInitialPrompt("");
     initialPromptAttachmentsRef.current = [];
@@ -1154,6 +1180,7 @@ export function CreateEnvironmentDialog({
     setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
+    setFastMode(initialAgentDefaults.fastMode);
   }, [initialAgentDefaults, open]);
 
   /**
@@ -1164,13 +1191,7 @@ export function CreateEnvironmentDialog({
    */
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
-    modelsForAgent(modelCatalog, platform).map((option) => ({
-      platform,
-      id: option.id,
-      label: option.name,
-      providerLabel: option.providerLabel,
-      description: option.description,
-    })),
+    modelsForAgent(modelCatalog, platform).map((option) => toPickerModel(platform, option)),
   );
   const selectedModel = availableModels.find((candidate) => candidate.id === model);
   const availableReasoningEfforts =
@@ -1185,6 +1206,8 @@ export function CreateEnvironmentDialog({
           })),
         ]
       : [];
+  const speedCapable = platformOwnsSpeed(agentType);
+  const speedAvailable = speedCapable && selectedModel?.supportsSpeed === true;
 
   useEffect(() => {
     if (!open) return;
@@ -1194,6 +1217,7 @@ export function CreateEnvironmentDialog({
       const nextSelection = getInitialAgentSelection(agentType);
       setModel(nextSelection.model);
       setReasoningEffort(nextSelection.reasoningEffort);
+      setFastMode(nextSelection.fastMode);
       return;
     }
 
@@ -1214,6 +1238,7 @@ export function CreateEnvironmentDialog({
       const nextSelection = getInitialAgentSelection(nextAgent);
       setModel(nextSelection.model);
       setReasoningEffort(nextSelection.reasoningEffort);
+      setFastMode(nextSelection.fastMode);
     },
     [agentType, getInitialAgentSelection],
   );
@@ -1229,6 +1254,10 @@ export function CreateEnvironmentDialog({
         nextModel.platform === agentType
           ? reasoningEffort
           : getInitialAgentSelection(nextModel.platform).reasoningEffort;
+      const nextFastMode =
+        nextModel.platform === agentType
+          ? fastMode
+          : getInitialAgentSelection(nextModel.platform).fastMode;
 
       setAgentType(nextModel.platform);
       setModel(nextModel.id);
@@ -1237,8 +1266,16 @@ export function CreateEnvironmentDialog({
           ? nextReasoningEffort
           : "default",
       );
+      setFastMode(
+        defaultFastModeFor(
+          nextModel.platform,
+          nextModel.id,
+          modelCatalog,
+          typeof nextFastMode === "boolean" ? { [nextModel.platform]: nextFastMode } : undefined,
+        ),
+      );
     },
-    [agentType, getInitialAgentSelection, modelCatalog, reasoningEffort],
+    [agentType, fastMode, getInitialAgentSelection, modelCatalog, reasoningEffort],
   );
 
   // The picker resolves a model to `selectAgentModel`; this id-only form is the
@@ -1405,6 +1442,7 @@ export function CreateEnvironmentDialog({
               ? undefined
               : model,
           reasoningEffort: reasoningEffort === "default" ? undefined : reasoningEffort,
+          fastMode: speedAvailable ? fastMode : undefined,
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
           networkAccessMode,
@@ -1445,6 +1483,8 @@ export function CreateEnvironmentDialog({
       model,
       hasAvailableOpenCodeModels,
       reasoningEffort,
+      fastMode,
+      speedAvailable,
       initialPrompt,
       initialPromptAttachments,
       localEnvironmentAvailable,
@@ -1766,6 +1806,10 @@ export function CreateEnvironmentDialog({
                       reasoningOptions.find((option) => option.id === reasoningEffort)?.label
                     }
                     onReasoningChange={selectReasoningEffort}
+                    speedCapable={speedCapable}
+                    fastModeAvailable={speedAvailable}
+                    fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
+                    onFastModeChange={speedAvailable ? setFastMode : undefined}
                     disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
                     title="Choose agent, model, and reasoning"
                     className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}

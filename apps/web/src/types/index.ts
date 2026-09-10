@@ -185,6 +185,8 @@ export interface Environment {
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
   initialReasoningEffort?: string;
+  /** One-shot Fast/Normal choice for the agent tab created from pendingAgentLaunch. */
+  initialFastMode?: boolean;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
   /** Files waiting to be written into the workspace before the first prompt. */

@@ -1129,6 +1129,9 @@ describe("HierarchicalSidebar", () => {
         "sonnet",
         undefined,
         [],
+        // No speed was offered for this launch, so the platform tier decides
+        // rather than a one-shot Normal being pinned here.
+        undefined,
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "", {

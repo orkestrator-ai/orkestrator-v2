@@ -1400,6 +1400,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         catalog={reviewModelCatalog}
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={reviewLaunchDefaults.preferredFastModes}
         onConfirm={handleConfiguredReview}
       />
       <ReviewLaunchDialog
@@ -1419,6 +1420,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         catalog={reviewModelCatalog}
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={reviewLaunchDefaults.preferredFastModes}
         busy={loopedReviewLaunchPending}
         onConfirm={handleLoopedReview}
       />
@@ -1452,6 +1454,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         enabledAgents={enabledAgentList}
         preferredModels={scriptLaunchDefaults.preferredModels}
         preferredReasoningEfforts={scriptLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={scriptLaunchDefaults.preferredFastModes}
         returnFocusRef={createScriptButtonRef}
         returnFocusFallback={() =>
           window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches
@@ -1475,6 +1478,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         enabledAgents={enabledAgentList}
         preferredModels={prLaunchDefaults.preferredModels}
         preferredReasoningEfforts={prLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={prLaunchDefaults.preferredFastModes}
         targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
         returnFocusRef={createPrButtonRef}
         // Below the mobile breakpoint this toolbar lives inside the tools
@@ -1508,6 +1512,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         enabledAgents={enabledAgentList}
         preferredModels={resolveLaunchDefaults.preferredModels}
         preferredReasoningEfforts={resolveLaunchDefaults.preferredReasoningEfforts}
+        preferredFastModes={resolveLaunchDefaults.preferredFastModes}
         targetBranch={resolveDialogTarget?.targetBranch ?? targetBranch}
         returnFocusRef={resolveButtonRef}
         returnFocusFallback={() =>

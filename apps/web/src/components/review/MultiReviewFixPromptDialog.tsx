@@ -15,10 +15,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
-  modelSupportsSpeed,
   modelsForAgent,
+  platformOwnsSpeed,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -48,16 +49,17 @@ function catalogSelection(
   const effort = defaultEffortFor(selection.agent, model, catalog, {
     [selection.agent]: selection.reasoningEffort,
   });
+  const fastMode = defaultFastModeFor(
+    selection.agent,
+    model,
+    catalog,
+    typeof selection.fastMode === "boolean" ? { [selection.agent]: selection.fastMode } : undefined,
+  );
   return {
     agent: selection.agent,
     model,
     ...(effort === "default" ? {} : { reasoningEffort: effort }),
-    // Speed belongs to the workflow's fix decision. Dropping it here would run
-    // a custom fix at a different speed from the one the Fix action uses.
-    ...(typeof selection.fastMode === "boolean" &&
-    modelSupportsSpeed(selection.agent, catalog, model)
-      ? { fastMode: selection.fastMode }
-      : {}),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }
 
@@ -107,19 +109,26 @@ export function MultiReviewFixPromptDialog({
       id: effort,
       label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
     })) ?? [];
+  const speedCapable = platformOwnsSpeed(selection.agent);
+  const speedAvailable = speedCapable && selectedModel?.supportsSpeed === true;
 
   const selectModel = (agent: LaunchAgent, model: string) => {
     const effort = defaultEffortFor(agent, model, catalog);
-    // Speed is a per-platform capability, so it survives a model change within
-    // one provider and is dropped when the provider itself changes.
-    const fastMode = agent === selection.agent ? selection.fastMode : undefined;
+    // Speed survives a model change within one provider when the new model can
+    // honour it, and is dropped when the provider changes.
+    const fastMode = defaultFastModeFor(
+      agent,
+      model,
+      catalog,
+      agent === selection.agent && typeof selection.fastMode === "boolean"
+        ? { [agent]: selection.fastMode }
+        : undefined,
+    );
     setSelection({
       agent,
       model,
       ...(effort === "default" ? {} : { reasoningEffort: effort }),
-      ...(typeof fastMode === "boolean" && modelSupportsSpeed(agent, catalog, model)
-        ? { fastMode }
-        : {}),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
     });
   };
 
@@ -167,6 +176,14 @@ export function MultiReviewFixPromptDialog({
                   ...current,
                   reasoningEffort: reasoningEffort || undefined,
                 }))
+              }
+              speedCapable={speedCapable}
+              fastModeAvailable={speedAvailable}
+              fastModeEnabled={speedAvailable ? (selection.fastMode ?? false) : false}
+              onFastModeChange={
+                speedAvailable
+                  ? (fastMode) => setSelection((current) => ({ ...current, fastMode }))
+                  : undefined
               }
               title="Custom fix model"
               className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"

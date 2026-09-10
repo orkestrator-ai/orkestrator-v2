@@ -13,11 +13,14 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
   modelsForAgent,
   LAUNCH_AGENT_OPTIONS,
+  platformOwnsSpeed,
+  toPickerModel,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -27,6 +30,7 @@ export interface AgentLaunchSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /** The workflow being launched. Every entry restyles the same picker. */
@@ -43,6 +47,7 @@ interface AgentLaunchDialogProps {
   enabledAgents: LaunchAgent[];
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
   /** Base branch the launch targets, shown so it can be verified. */
   targetBranch?: string;
   returnFocusRef?: RefObject<HTMLElement | null>;
@@ -76,6 +81,7 @@ export function AgentLaunchDialog({
   enabledAgents,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   targetBranch,
   returnFocusRef,
   returnFocusFallback,
@@ -90,6 +96,9 @@ export function AgentLaunchDialog({
   const [model, setModel] = useState(initialModel);
   const [reasoningEffort, setReasoningEffort] = useState(() =>
     defaultEffortFor(defaultAgent, initialModel, catalog, preferredReasoningEfforts),
+  );
+  const [fastMode, setFastMode] = useState(() =>
+    defaultFastModeFor(defaultAgent, initialModel, catalog, preferredFastModes),
   );
   const wasOpenRef = useRef(false);
 
@@ -107,7 +116,8 @@ export function AgentLaunchDialog({
     setReasoningEffort(
       defaultEffortFor(defaultAgent, nextModel, catalog, preferredReasoningEfforts),
     );
-  }, [catalog, defaultAgent, open, preferredModels, preferredReasoningEfforts]);
+    setFastMode(defaultFastModeFor(defaultAgent, nextModel, catalog, preferredFastModes));
+  }, [catalog, defaultAgent, open, preferredFastModes, preferredModels, preferredReasoningEfforts]);
 
   const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
@@ -126,13 +136,7 @@ export function AgentLaunchDialog({
   const pickerModels = useMemo<AgentModel[]>(
     () =>
       enabledAgents.flatMap((platform) =>
-        modelsForAgent(catalog, platform).map((option) => ({
-          platform,
-          id: option.id,
-          label: option.name,
-          providerLabel: option.providerLabel,
-          description: option.description,
-        })),
+        modelsForAgent(catalog, platform).map((option) => toPickerModel(platform, option)),
       ),
     [catalog, enabledAgents],
   );
@@ -146,14 +150,25 @@ export function AgentLaunchDialog({
         : [],
     [effortAvailable, reasoningEfforts],
   );
+  const speedCapable = platformOwnsSpeed(agent);
+  const speedAvailable = speedCapable && selectedModel?.supportsSpeed === true;
 
   // Model and provider move together: applying them separately would validate
   // the new model id against the previously selected provider's catalog.
   const selectAgentModel = (nextModel: AgentModel) => {
+    const previousFastMode = nextModel.platform === agent ? fastMode : undefined;
     setAgent(nextModel.platform);
     setModel(nextModel.id);
     setReasoningEffort(
       defaultEffortFor(nextModel.platform, nextModel.id, catalog, preferredReasoningEfforts),
+    );
+    setFastMode(
+      defaultFastModeFor(nextModel.platform, nextModel.id, catalog, {
+        ...preferredFastModes,
+        ...(typeof previousFastMode === "boolean"
+          ? { [nextModel.platform]: previousFastMode }
+          : {}),
+      }),
     );
   };
 
@@ -163,6 +178,7 @@ export function AgentLaunchDialog({
     setAgent(nextAgent);
     setModel(nextModel);
     setReasoningEffort(defaultEffortFor(nextAgent, nextModel, catalog, preferredReasoningEfforts));
+    setFastMode(defaultFastModeFor(nextAgent, nextModel, catalog, preferredFastModes));
   };
 
   const isResolve = kind === "resolve-conflicts";
@@ -252,6 +268,7 @@ export function AgentLaunchDialog({
               agent,
               model: selectedModel?.id ?? model,
               reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
+              fastMode: speedAvailable ? fastMode : undefined,
             });
           }}
         >
@@ -294,6 +311,10 @@ export function AgentLaunchDialog({
                   reasoningOptions.find((option) => option.id === effectiveEffort)?.label
                 }
                 onReasoningChange={setReasoningEffort}
+                speedCapable={speedCapable}
+                fastModeAvailable={speedAvailable}
+                fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
+                onFastModeChange={speedAvailable ? setFastMode : undefined}
                 title="Choose agent, model, and reasoning"
                 className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
               />

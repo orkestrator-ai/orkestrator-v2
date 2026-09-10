@@ -15,6 +15,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
   modelSupportsSpeed,
@@ -88,11 +89,17 @@ export function resolveFeatureBuildStep(
     catalog,
     configured.reasoningEffort ? { [agent]: configured.reasoningEffort } : undefined,
   );
+  const fastMode = defaultFastModeFor(
+    agent,
+    model,
+    catalog,
+    typeof configured.fastMode === "boolean" ? { [agent]: configured.fastMode } : undefined,
+  );
   return {
     agent,
     model,
     ...(reasoningEffort === "default" ? {} : { reasoningEffort }),
-    ...(typeof configured.fastMode === "boolean" ? { fastMode: configured.fastMode } : {}),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }
 

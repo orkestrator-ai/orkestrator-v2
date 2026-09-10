@@ -110,14 +110,32 @@ export function effortLabel(effort: string): string {
  *
  * Settings and launchers share this so `supportsSpeed` cannot be dropped on
  * the way into `AgentModelPicker`.
+ *
+ * The row caption is `providerLabel`, falling back to `description` and only
+ * then to the platform name. That fallback is deliberate and applies to every
+ * picker: Claude and Codex catalogue entries carry a description but no
+ * provider, so without it their rows would all read "Claude"/"Codex" and the
+ * one thing distinguishing them — what the model is for — would be dropped.
+ * The review and build launchers already resolved the caption this way; the
+ * other pickers did not, and that inconsistency is what this mapper removes.
  */
 export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): AgentModel {
   return {
     platform,
     id: option.id,
     label: option.name,
-    ...(option.providerLabel ? { providerLabel: option.providerLabel } : {}),
+    ...(option.providerLabel || option.description
+      ? { providerLabel: option.providerLabel ?? option.description }
+      : {}),
     ...(option.description ? { description: option.description } : {}),
+    ...(option.reasoningEfforts.length > 0
+      ? {
+          reasoning: option.reasoningEfforts.map((effort) => ({
+            id: effort,
+            label: effortLabel(effort),
+          })),
+        }
+      : {}),
     ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
   };
 }
@@ -142,4 +160,22 @@ export function modelSupportsSpeed(
     (option) => option.id === modelId || option.resolvedModel === modelId,
   );
   return model ? model.supportsSpeed === true : true;
+}
+
+/**
+ * Initial Fast/Normal value for a launch picker.
+ *
+ * Absence means either the selected model has no speed axis or no settings tier
+ * chooses an override. Pickers render that unset state as Normal, but launches
+ * keep it unset so the provider's own default is not replaced merely by opening
+ * a dialog.
+ */
+export function defaultFastModeFor(
+  platform: LaunchAgent,
+  modelId: string | undefined,
+  catalog: AgentModelCatalog,
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>,
+): boolean | undefined {
+  if (!modelSupportsSpeed(platform, catalog, modelId)) return undefined;
+  return preferredFastModes?.[platform];
 }

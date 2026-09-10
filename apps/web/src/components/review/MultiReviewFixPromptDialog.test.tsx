@@ -34,6 +34,20 @@ const catalog: AgentModelCatalog = {
   ],
 };
 
+/** GPT-5.6 carries a speed axis; GPT-5.4 deliberately does not. */
+const speedCatalog: AgentModelCatalog = {
+  ...catalog,
+  codex: [
+    {
+      id: "gpt-5.6",
+      name: "GPT-5.6",
+      reasoningEfforts: ["low", "medium", "high"],
+      supportsSpeed: true,
+    },
+    { id: "gpt-5.4", name: "GPT-5.4", reasoningEfforts: ["low", "medium", "high"] },
+  ],
+};
+
 function setFavoritesEmpty() {
   const config = useConfigStore.getState().config;
   useConfigStore.setState({
@@ -143,6 +157,56 @@ describe("MultiReviewFixPromptDialog", () => {
       { agent: "claude", model: "opus", reasoningEffort: "xhigh" },
       DEFAULT_MULTI_REVIEW_FIX_PROMPT,
     );
+  });
+
+  test("submits the Fast choice and keeps it across a reasoning change", () => {
+    const { onSubmit } = renderDialog({ catalog: speedCatalog });
+    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+
+    fireEvent.pointerDown(picker);
+    const speed = within(screen.getByRole("group", { name: "Speed mode" }));
+    fireEvent.click(speed.getByRole("menuitemradio", { name: /Fast/ }));
+
+    // Reasoning and speed share one picker, so an edit to either must extend
+    // the selection rather than rebuild it.
+    fireEvent.pointerDown(picker);
+    const reasoning = within(screen.getByRole("group", { name: "Reasoning" }));
+    fireEvent.click(reasoning.getByRole("menuitemradio", { name: "Low" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "low", fastMode: true },
+      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+    );
+  });
+
+  test("carries the workflow's stored speed into the reopened dialog", () => {
+    const { onSubmit } = renderDialog({
+      catalog: speedCatalog,
+      defaultSelection: {
+        agent: "codex",
+        model: "gpt-5.6",
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ fastMode: true });
+  });
+
+  test("drops a stored speed the chosen model cannot honour", () => {
+    const { onSubmit } = renderDialog({
+      catalog: speedCatalog,
+      defaultSelection: { agent: "codex", model: "gpt-5.4", fastMode: true },
+    });
+
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom fix model" }));
+    expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty("fastMode");
   });
 
   test("falls back from a retired model to a catalog model with supported efforts", () => {

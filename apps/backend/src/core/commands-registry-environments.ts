@@ -165,6 +165,7 @@ export function registerEnvironmentCommands(
         initialAgentPlatform,
         initialAgentModel,
         initialReasoningEffort,
+        initialFastMode,
         initialConversationMode,
         controlRequestId,
         delegationBaseBranch,
@@ -243,6 +244,10 @@ export function registerEnvironmentCommands(
         }
         env.initialAgentModel = asOptionalString(initialAgentModel)?.trim() || undefined;
         env.initialReasoningEffort = asOptionalString(initialReasoningEffort)?.trim() || undefined;
+        if (initialFastMode !== undefined && typeof initialFastMode !== "boolean") {
+          throw new Error("initialFastMode must be a boolean");
+        }
+        env.initialFastMode = initialFastMode;
         if (
           initialConversationMode !== undefined &&
           initialConversationMode !== "plan" &&
@@ -555,6 +560,7 @@ export function registerEnvironmentCommands(
         initialAgentPlatform,
         initialAgentModel,
         initialReasoningEffort,
+        initialFastMode,
         initialConversationMode,
         initialPrompt,
         initialPromptAttachments,
@@ -582,6 +588,7 @@ export function registerEnvironmentCommands(
           updates.initialAgentPlatform = undefined;
           updates.initialAgentModel = undefined;
           updates.initialReasoningEffort = undefined;
+          updates.initialFastMode = undefined;
           updates.initialConversationMode = undefined;
           updates.initialPromptAttachments = undefined;
           updates.initialPromptPresentation = undefined;
@@ -598,6 +605,12 @@ export function registerEnvironmentCommands(
       }
       if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
         updates.initialReasoningEffort = initialReasoningEffort;
+      }
+      if (initialFastMode !== undefined && typeof initialFastMode !== "boolean") {
+        throw new Error("initialFastMode must be a boolean");
+      }
+      if (pendingAgentLaunch !== false && typeof initialFastMode === "boolean") {
+        updates.initialFastMode = initialFastMode;
       }
       if (pendingAgentLaunch !== false && initialPrompt !== undefined) {
         updates.initialPrompt = asString(initialPrompt, "initialPrompt");

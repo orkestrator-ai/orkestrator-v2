@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as realDialog from "@/components/ui/dialog";
 
 const realDialogSnapshot = { ...realDialog };
@@ -43,7 +43,7 @@ beforeEach(() => {
 
 const catalog: AgentModelCatalog = {
   claude: [
-    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"] },
+    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"], supportsSpeed: true },
     { id: "claude-fixed", name: "Claude Fixed", reasoningEfforts: [] },
   ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
@@ -373,6 +373,44 @@ describe("AgentLaunchDialog", () => {
     rerender(<AgentLaunchDialog {...props} open={false} />);
     rerender(<AgentLaunchDialog {...props} open />);
     expect(picker().textContent).toContain("Claude Fixed");
+  });
+
+  test("submits the Fast choice the picker offered", () => {
+    const { onConfirm } = renderDialog({ kind: "create-script", targetBranch: undefined });
+
+    openPicker();
+    const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
+    fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
+    closePicker();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: true }));
+  });
+
+  test("opens on the configured speed and submits it untouched", () => {
+    const { onConfirm } = renderDialog({
+      kind: "create-script",
+      targetBranch: undefined,
+      preferredFastModes: { claude: true },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: true }));
+  });
+
+  test("suppresses a configured speed on a model that has no speed axis", () => {
+    // The picker hides the control for such a model, so submitting a Fast the
+    // user could not see or change would launch something they never chose.
+    const { onConfirm } = renderDialog({
+      kind: "create-script",
+      targetBranch: undefined,
+      preferredModels: { claude: "claude-fixed" },
+      preferredFastModes: { claude: true },
+    });
+
+    expect(screen.queryByRole("group", { name: "Speed mode", hidden: true })).toBe(null);
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
   });
 
   test("keeps an in-progress choice when the catalogue is refreshed while open", () => {

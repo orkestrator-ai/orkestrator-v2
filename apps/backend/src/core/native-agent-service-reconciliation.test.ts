@@ -3147,6 +3147,63 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("prefers the environment's one-shot speed over the platform tier's", async () => {
+      const { provider, createSession } = createProviderStub("codex");
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-speed-",
+          environment: {
+            pendingAgentLaunch: true,
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { mode: "native", fastMode: true } },
+            },
+            // A launcher offered Normal for this one run. The durable Fast
+            // setting must not overrule the choice the user just made.
+            initialFastMode: false,
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(createSession).toHaveBeenCalledWith(
+            "build",
+            "Agent Session",
+            expect.objectContaining({ fastMode: false }),
+          );
+          // One-shot means one shot: the next launch falls back to the tier.
+          expect((await storage.getEnvironment("env-1"))?.initialFastMode).toBeUndefined();
+        },
+      );
+    });
+
+    test("falls back to the platform tier when no one-shot speed was pinned", async () => {
+      const { provider, createSession } = createProviderStub("codex");
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-speed-tier-",
+          environment: {
+            pendingAgentLaunch: true,
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { mode: "native", fastMode: true } },
+            },
+          },
+          provider: async () => provider,
+        },
+        async ({ service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(createSession).toHaveBeenCalledWith(
+            "build",
+            "Agent Session",
+            expect.objectContaining({ fastMode: true }),
+          );
+        },
+      );
+    });
+
     test("dispatches an attachment-only startup prompt before clearing its images", async () => {
       const { provider, send } = createProviderStub("codex");
       await withService(

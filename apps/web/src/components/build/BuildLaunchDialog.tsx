@@ -30,10 +30,13 @@ import {
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
   modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
   type AgentModelCatalog,
   type AgentModelOption,
   type LaunchAgent,
@@ -45,6 +48,7 @@ export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 export interface BuildLaunchSelection {
@@ -141,6 +145,7 @@ interface BuildLaunchDialogProps {
   defaultEnvironmentType: EnvironmentType;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
   /** Offers source-ticket comments as optional build context. */
   commentContext?: BuildLaunchCommentContextOption;
   /** Disables the submit button while a start request is in flight. */
@@ -152,12 +157,18 @@ interface BuildLaunchDialogProps {
   onConfirm: (selection: BuildLaunchSelection) => void;
 }
 
-type StepState = { agent: LaunchAgent; model: string; reasoningEffort: string };
+type StepState = {
+  agent: LaunchAgent;
+  model: string;
+  reasoningEffort: string;
+  fastMode?: boolean;
+};
 
 interface ResolvedStep {
   model: AgentModelOption | undefined;
   efforts: string[];
   effort: string;
+  fastMode?: boolean;
 }
 
 function initialStepState(
@@ -165,12 +176,14 @@ function initialStepState(
   catalog: AgentModelCatalog,
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
+  preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
 ): StepState {
   const model = firstModelFor(agent, catalog, preferredModels);
   return {
     agent,
     model,
     reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
+    fastMode: defaultFastModeFor(agent, model, catalog, preferredFastModes),
   };
 }
 
@@ -179,8 +192,15 @@ function initialSteps(
   catalog: AgentModelCatalog,
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
+  preferredFastModes: BuildLaunchDialogProps["preferredFastModes"],
 ): Record<BuildStepKey, StepState> {
-  const initial = initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts);
+  const initial = initialStepState(
+    agent,
+    catalog,
+    preferredModels,
+    preferredReasoningEfforts,
+    preferredFastModes,
+  );
   return Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, { ...initial }])) as Record<
     BuildStepKey,
     StepState
@@ -189,19 +209,7 @@ function initialSteps(
 
 function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]): AgentModel[] {
   return enabledPlatforms.flatMap((agent) =>
-    (catalog[agent] ?? []).map((model) => ({
-      platform: agent,
-      id: model.id,
-      label: model.name,
-      ...(model.providerLabel || model.description
-        ? { providerLabel: model.providerLabel ?? model.description }
-        : {}),
-      description: model.description,
-      reasoning: model.reasoningEfforts.map((effort) => ({
-        id: effort,
-        label: effortLabel(effort),
-      })),
-    })),
+    (catalog[agent] ?? []).map((model) => toPickerModel(agent, model)),
   );
 }
 
@@ -218,6 +226,7 @@ function BuildStepCard({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   favorites,
   onToggleFavorite,
   onReorderFavorites,
@@ -235,16 +244,22 @@ function BuildStepCard({
   catalog: AgentModelCatalog;
   preferredModels: BuildLaunchDialogProps["preferredModels"];
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"];
+  preferredFastModes: BuildLaunchDialogProps["preferredFastModes"];
   favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
   onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
   onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
   onChange: (next: StepState) => void;
 }) {
   const selectModel = (agent: LaunchAgent, model: string) => {
+    const previousFastMode = agent === state.agent ? state.fastMode : undefined;
     onChange({
       agent,
       model,
       reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
+      fastMode: defaultFastModeFor(agent, model, catalog, {
+        ...preferredFastModes,
+        ...(typeof previousFastMode === "boolean" ? { [agent]: previousFastMode } : {}),
+      }),
     });
   };
   const reasoningOptions =
@@ -257,6 +272,8 @@ function BuildStepCard({
   const modelLabel =
     resolved.model?.name ?? (state.model === "default" ? "Choose a model" : state.model);
   const pickerLabel = `${title} step model`;
+  const speedCapable = platformOwnsSpeed(state.agent);
+  const speedAvailable = speedCapable && resolved.model?.supportsSpeed === true;
 
   return (
     <li
@@ -311,6 +328,12 @@ function BuildStepCard({
             : undefined
         }
         onReasoningChange={(reasoningEffort) => onChange({ ...state, reasoningEffort })}
+        speedCapable={speedCapable}
+        fastModeAvailable={speedAvailable}
+        fastModeEnabled={speedAvailable ? (state.fastMode ?? false) : false}
+        onFastModeChange={
+          speedAvailable ? (fastMode) => onChange({ ...state, fastMode }) : undefined
+        }
         title={pickerLabel}
         className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5 md:max-w-none"
       />
@@ -345,6 +368,7 @@ export function BuildLaunchDialog({
   defaultEnvironmentType,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   commentContext,
   busy = false,
   localEnvironmentAvailable = true,
@@ -372,7 +396,13 @@ export function BuildLaunchDialog({
   );
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
-    initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts),
+    initialSteps(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+    ),
   );
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
   const wasOpenRef = useRef(false);
@@ -395,7 +425,15 @@ export function BuildLaunchDialog({
       return defaultEnvironmentType;
     });
     setIncludeComments(commentContext?.defaultIncluded ?? true);
-    setSteps(initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
+    setSteps(
+      initialSteps(
+        defaultAgent,
+        catalog,
+        preferredModels,
+        preferredReasoningEfforts,
+        preferredFastModes,
+      ),
+    );
   }, [
     catalog,
     commentContext?.defaultIncluded,
@@ -406,6 +444,7 @@ export function BuildLaunchDialog({
     open,
     preferredModels,
     preferredReasoningEfforts,
+    preferredFastModes,
   ]);
 
   useEffect(() => {
@@ -427,7 +466,8 @@ export function BuildLaunchDialog({
         (step.reasoningEffort === "default" || efforts.includes(step.reasoningEffort))
           ? step.reasoningEffort
           : "default";
-      return [key, { model, efforts, effort }] as const;
+      const fastMode = model?.supportsSpeed === true ? step.fastMode : undefined;
+      return [key, { model, efforts, effort, fastMode }] as const;
     });
     return Object.fromEntries(entries) as Record<BuildStepKey, ResolvedStep>;
   }, [catalog, steps]);
@@ -482,6 +522,7 @@ export function BuildLaunchDialog({
                     model: resolved[key].model?.id ?? steps[key].model,
                     reasoningEffort:
                       resolved[key].effort === "default" ? undefined : resolved[key].effort,
+                    fastMode: resolved[key].fastMode,
                   },
                 ]),
               ) as Record<BuildStepKey, BuildLaunchStepSelection>,
@@ -604,6 +645,7 @@ export function BuildLaunchDialog({
                     catalog={catalog}
                     preferredModels={preferredModels}
                     preferredReasoningEfforts={preferredReasoningEfforts}
+                    preferredFastModes={preferredFastModes}
                     favorites={pickerFavorites}
                     onToggleFavorite={toggleFavorite}
                     onReorderFavorites={reorderPickerFavorites}

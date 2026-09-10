@@ -290,6 +290,32 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("sends the one-shot speed choice, including an explicit Normal", async () => {
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      { defaultAgent: "codex" },
+      true,
+      "gpt-5.6-sol",
+      "high",
+      undefined,
+      false,
+    );
+
+    // `false` is a Normal the launcher chose, not an unset option, so the
+    // falsy-omission rule the other keys follow must not apply to it.
+    expect(invokeMock.mock.calls[0]![1]).toMatchObject({ initialFastMode: false });
+  });
+
+  test("carries the one-shot speed through an atomic restart launch", async () => {
+    await prepareEnvironmentAgentLaunch("env-1", {
+      agent: "codex",
+      model: "gpt-5.6-sol",
+      fastMode: true,
+    });
+
+    expect(invokeMock.mock.calls[0]![1]).toMatchObject({ initialFastMode: true });
+  });
+
   test("omits the one-shot option keys when they are absent or blank", async () => {
     // Key absence is meaningful on the backend: `update_environment_agent_settings`
     // leaves a stored option alone when its key is missing, so an unset option
@@ -299,6 +325,7 @@ describe("backend setup wrappers", () => {
     const payload = invokeMock.mock.calls[0]![1] as Record<string, unknown>;
     expect(payload).not.toHaveProperty("initialAgentModel");
     expect(payload).not.toHaveProperty("initialReasoningEffort");
+    expect(payload).not.toHaveProperty("initialFastMode");
     expect(payload.pendingAgentLaunch).toBe(true);
   });
 

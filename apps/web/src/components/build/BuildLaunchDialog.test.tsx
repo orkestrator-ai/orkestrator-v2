@@ -132,9 +132,30 @@ function choosePlatform(step: (typeof STEP_LABELS)[number], platform: string) {
   fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 }
 
+function chooseSpeed(step: (typeof STEP_LABELS)[number], name: RegExp) {
+  openPicker(step);
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Speed mode" })).getByRole("menuitemradio", { name }),
+  );
+}
+
 function submit() {
   fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 }
+
+/** Claude A carries a speed axis; Claude B deliberately does not. */
+const speedCatalog: AgentModelCatalog = {
+  ...catalog,
+  claude: [
+    { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"], supportsSpeed: true },
+    {
+      id: "claude-b",
+      name: "Claude B",
+      description: "Fast implementation model",
+      reasoningEfforts: ["xhigh"],
+    },
+  ],
+};
 
 describe("BuildLaunchDialog", () => {
   test("shows the ordered pipeline immediately with one model picker per step", () => {
@@ -200,6 +221,56 @@ describe("BuildLaunchDialog", () => {
         "resolve-conflicts": shared,
       },
     });
+  });
+
+  test("keeps each step's speed independent and carries it to the launch", () => {
+    const { onConfirm } = renderDialog({ catalog: speedCatalog });
+
+    chooseSpeed("Review", /Fast/);
+    submit();
+
+    const steps = onConfirm.mock.calls[0]![0].steps;
+    expect(steps.review.fastMode).toBe(true);
+    // Every other step keeps the provider default rather than inheriting the
+    // one card the user touched.
+    expect(steps.build.fastMode).toBeUndefined();
+    expect(steps.address.fastMode).toBeUndefined();
+  });
+
+  test("keeps a step's speed when its reasoning level changes", () => {
+    const { onConfirm } = renderDialog({ catalog: speedCatalog });
+
+    chooseSpeed("Build", /Fast/);
+    chooseReasoning("Build", /High/);
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build).toMatchObject({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
+
+  test("drops a step's speed when it moves to a model with no speed axis", () => {
+    const { onConfirm } = renderDialog({ catalog: speedCatalog });
+
+    chooseSpeed("Build", /Fast/);
+    chooseVisibleModel("Build", /Claude B/);
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build).toMatchObject({ model: "claude-b" });
+    expect(onConfirm.mock.calls[0]![0].steps.build.fastMode).toBeUndefined();
+  });
+
+  test("seeds every step from the configured speed", () => {
+    const { onConfirm } = renderDialog({
+      catalog: speedCatalog,
+      preferredFastModes: { claude: true },
+    });
+
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build.fastMode).toBe(true);
+    expect(onConfirm.mock.calls[0]![0].steps["resolve-conflicts"].fastMode).toBe(true);
   });
 
   test("keeps every step's model, platform and reasoning independent", () => {

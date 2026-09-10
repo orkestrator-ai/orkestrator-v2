@@ -75,6 +75,42 @@ describe("resolveFeatureBuildStep", () => {
   });
 });
 
+describe("resolveFeatureBuildStep speed", () => {
+  const speedCatalog: AgentModelCatalog = {
+    ...catalog,
+    claude: [
+      { id: "sonnet", name: "Sonnet", reasoningEfforts: ["low", "high"], supportsSpeed: true },
+      { id: "opus", name: "Opus", reasoningEfforts: ["high", "max"] },
+    ],
+  };
+
+  test("carries a configured Fast choice onto a speed-capable model", () => {
+    expect(
+      resolveFeatureBuildStep({ agent: "claude", model: "sonnet", fastMode: true }, speedCatalog)
+        .fastMode,
+    ).toBe(true);
+  });
+
+  test("keeps an explicit Normal rather than treating it as unset", () => {
+    expect(
+      resolveFeatureBuildStep({ agent: "claude", model: "sonnet", fastMode: false }, speedCatalog)
+        .fastMode,
+    ).toBe(false);
+  });
+
+  test("omits speed when the model has no speed axis", () => {
+    expect(
+      resolveFeatureBuildStep({ agent: "claude", model: "opus", fastMode: true }, speedCatalog),
+    ).not.toHaveProperty("fastMode");
+  });
+
+  test("omits speed when the step configures none", () => {
+    expect(
+      resolveFeatureBuildStep({ agent: "claude", model: "sonnet" }, speedCatalog),
+    ).not.toHaveProperty("fastMode");
+  });
+});
+
 describe("defaultFeatureBuildModels", () => {
   test("opens on two reviewers, each from its own Settings entry", () => {
     const state = models();
@@ -114,11 +150,11 @@ describe("defaultFeatureBuildModels", () => {
       review2: { agent: "codex", model: "gpt-5.6" },
       reviewPreparation: { agent: "claude", model: "opus", fastMode: false },
       address: { agent: "codex", model: "gpt-5.6" },
-      pr: { agent: "claude", model: "sonnet", fastMode: true },
+      pr: { agent: "claude", model: "opus", fastMode: true },
       resolve: { agent: "claude", model: "opus" },
     });
 
-    expect(state.pr).toMatchObject({ agent: "claude", model: "sonnet", fastMode: true });
+    expect(state.pr).toMatchObject({ agent: "claude", model: "opus", fastMode: true });
     expect(state.reviewPreparation).toMatchObject({
       agent: "claude",
       model: "opus",
@@ -126,7 +162,7 @@ describe("defaultFeatureBuildModels", () => {
     });
     expect(featureBuildStepConfigs(state).steps.pr).toEqual({
       agent: "claude",
-      model: "sonnet",
+      model: "opus",
       fastMode: true,
     });
     expect(featureBuildStepConfigs(state).reviewPreparation).toEqual({
@@ -178,6 +214,27 @@ describe("featureBuildStepConfigs", () => {
       { agent: "claude", model: "sonnet", reasoningEffort: "high" },
       { agent: "claude", model: "sonnet", reasoningEffort: "high" },
     ]);
+  });
+
+  test("carries each row's Fast choice into its step config", () => {
+    const state = models();
+    state.build = { ...state.build, fastMode: true };
+    state.address = { ...state.address, fastMode: false };
+    state.reviewers[0] = { ...state.reviewers[0]!, fastMode: true };
+
+    const configured = featureBuildStepConfigs(state);
+    expect(configured.steps.build).toEqual({
+      agent: "claude",
+      model: "opus",
+      reasoningEffort: "max",
+      fastMode: true,
+    });
+    // An explicit Normal must reach the backend rather than being dropped as
+    // falsy, or the step silently inherits the provider default instead.
+    expect(configured.steps.address?.fastMode).toBe(false);
+    expect(configured.reviewers[0]?.fastMode).toBe(true);
+    // A row that chose nothing leaves the key off entirely.
+    expect(configured.steps.pr).not.toHaveProperty("fastMode");
   });
 
   test("preserves one reviewer and falls back safely when the list is empty", () => {

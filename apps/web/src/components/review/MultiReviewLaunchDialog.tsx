@@ -20,9 +20,11 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
   modelsForAgent,
+  platformOwnsSpeed,
   toPickerModel,
   type AgentModelCatalog,
   type LaunchAgent,
@@ -87,7 +89,7 @@ function initialRow(
 ): PickerRow {
   const model = firstModelFor(agent, catalog, preferredModels);
   const effort = defaultEffortFor(agent, model, catalog, preferredEfforts);
-  const fastMode = preferredFastModes?.[agent];
+  const fastMode = defaultFastModeFor(agent, model, catalog, preferredFastModes);
   return {
     key: createUuid(),
     agent,
@@ -264,6 +266,8 @@ function ModelRow({
       id: effort,
       label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
     })) ?? [];
+  const speedCapable = platformOwnsSpeed(row.agent);
+  const speedAvailable = speedCapable && selected?.supportsSpeed === true;
   /**
    * Applies the chosen model *and* the platform it came from in one update.
    *
@@ -275,13 +279,17 @@ function ModelRow({
    */
   const selectModel = (agent: LaunchAgent, modelId: string) => {
     const effort = defaultEffortFor(agent, modelId, catalog, row.preferredReasoningEfforts);
-    const fastMode = row.preferredFastModes?.[agent];
+    const previousFastMode = agent === row.agent ? row.fastMode : undefined;
+    const fastMode = defaultFastModeFor(agent, modelId, catalog, {
+      ...row.preferredFastModes,
+      ...(typeof previousFastMode === "boolean" ? { [agent]: previousFastMode } : {}),
+    });
     onChange({
       ...row,
       agent,
       model: modelId,
       reasoningEffort: effort === "default" ? undefined : effort,
-      ...(typeof fastMode === "boolean" ? { fastMode } : { fastMode: undefined }),
+      fastMode,
     });
   };
   return (
@@ -326,6 +334,10 @@ function ModelRow({
             reasoningEffort: reasoningEffort || undefined,
           })
         }
+        speedCapable={speedCapable}
+        fastModeAvailable={speedAvailable}
+        fastModeEnabled={speedAvailable ? (row.fastMode ?? false) : false}
+        onFastModeChange={speedAvailable ? (fastMode) => onChange({ ...row, fastMode }) : undefined}
         title={label}
         className="min-h-11 w-full border border-border/70 bg-input-surface py-2.5 md:max-w-none md:flex-1"
       />
@@ -360,7 +372,7 @@ export function MultiReviewLaunchDialog({
     );
   const fallbackDefaults = useMemo<MultiReviewRowDefaults>(
     () => ({ defaultAgent, preferredModels, preferredReasoningEfforts, preferredFastModes }),
-    [defaultAgent, preferredModels, preferredReasoningEfforts, preferredFastModes],
+    [defaultAgent, preferredFastModes, preferredModels, preferredReasoningEfforts],
   );
   const [reviewers, setReviewers] = useState<PickerRow[]>(() => [
     makeRow(),

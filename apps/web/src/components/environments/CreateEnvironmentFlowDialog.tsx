@@ -114,6 +114,7 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
     pendingAgentLaunch: options.launchAgent,
     initialAgentModel: options.launchAgent ? options.model : undefined,
     initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
+    initialFastMode: options.launchAgent ? options.fastMode : undefined,
     initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
   };
 }
@@ -282,6 +283,7 @@ export function CreateEnvironmentFlowDialog({
         launchSettings.initialAgentModel,
         launchSettings.initialReasoningEffort,
         launchSettings.initialPromptAttachments,
+        launchSettings.initialFastMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
       if (
@@ -301,6 +303,7 @@ export function CreateEnvironmentFlowDialog({
         // stale model in the transient options store for the next reader.
         model: options.launchAgent ? options.model : undefined,
         reasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
+        fastMode: options.launchAgent ? options.fastMode : undefined,
       });
 
       setProjectCollapsed(projectId, false);

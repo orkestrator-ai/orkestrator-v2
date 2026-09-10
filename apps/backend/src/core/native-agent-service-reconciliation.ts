@@ -1246,6 +1246,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const claudeNativeBackend = resolveAgentPlatformSettings(tiers, "claude").claudeNativeBackend;
     const model = environment.initialAgentModel ?? resolved.model;
     const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
+    // Same one-shot-over-tier rule as the two above: a launcher that offered a
+    // Fast/Normal control for this run must win over the platform's durable
+    // setting, or the choice the user made in the dialog is silently ignored.
+    const fastMode = environment.initialFastMode ?? resolved.fastMode;
     const conversationMode = environment.initialConversationMode;
     const parameterValues = agent === "claude" ? claudeNativeParameterValues(resolved) : undefined;
     const nativeProviderLaunch =
@@ -1317,7 +1321,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             initialPrompt: prompt || undefined,
             model,
             reasoningEffort,
-            fastMode: resolved.fastMode,
+            fastMode,
             activateTab: true,
           });
         } else {
@@ -1326,7 +1330,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             initialPrompt: prompt || undefined,
             model,
             reasoningEffort,
-            fastMode: resolved.fastMode,
+            fastMode,
           });
           if (!command) throw new Error(`${agent} does not support terminal launch`);
           await this.invoke("launch_terminal_job", {
@@ -1344,6 +1348,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           initialAgentPlatform: undefined,
           initialAgentModel: undefined,
           initialReasoningEffort: undefined,
+          initialFastMode: undefined,
           initialConversationMode: undefined,
           initialPromptAttachments: undefined,
           initialPromptPresentation: undefined,
@@ -1423,7 +1428,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         model,
         reasoningEffort,
         ...(conversationMode ? { mode: conversationMode } : {}),
-        ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
+        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(parameterValues ? { parameterValues } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
@@ -1462,7 +1467,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               model,
               reasoningEffort,
               ...(conversationMode ? { sessionMode: conversationMode } : {}),
-              ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
+              ...(typeof fastMode === "boolean" ? { fastMode } : {}),
               ...(parameterValues ? { parameterValues } : {}),
             });
 
@@ -1481,6 +1486,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         initialAgentPlatform: undefined,
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
+        initialFastMode: undefined,
         initialConversationMode: undefined,
         initialPromptAttachments: undefined,
         initialPromptPresentation: undefined,
@@ -1522,6 +1528,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               initialAgentPlatform: undefined,
               initialAgentModel: undefined,
               initialReasoningEffort: undefined,
+              initialFastMode: undefined,
               initialConversationMode: undefined,
               initialPromptAttachments: undefined,
               initialPromptPresentation: undefined,

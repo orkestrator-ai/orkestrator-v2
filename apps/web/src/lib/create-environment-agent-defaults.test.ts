@@ -22,6 +22,83 @@ const configured = {
   reasoningEfforts: { codex: "medium" },
 };
 
+const speedCatalog: AgentModelCatalog = {
+  claude: [
+    { id: "sonnet", name: "Sonnet", reasoningEfforts: ["low", "high"], supportsSpeed: true },
+    { id: "slow-only", name: "Slow only", reasoningEfforts: [] },
+  ],
+  codex: [{ id: "gpt-default", name: "Default Codex", reasoningEfforts: ["medium"] }],
+  opencode: [{ id: "open/default", name: "Open default", reasoningEfforts: [] }],
+};
+
+describe("resolveCreateEnvironmentAgentDefaults speed", () => {
+  test("carries the configured Fast choice for the chosen platform", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: speedCatalog,
+        enabledAgents: ["claude"],
+        configured: { ...configured, fastModes: { claude: true } },
+      }).fastMode,
+    ).toBe(true);
+  });
+
+  test("keeps an explicit Normal rather than dropping it", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: speedCatalog,
+        enabledAgents: ["claude"],
+        configured: { ...configured, fastModes: { claude: false } },
+      }).fastMode,
+    ).toBe(false);
+  });
+
+  test("omits speed entirely when nothing configures it", () => {
+    // Absence is what lets the provider keep its own default, so the key must
+    // not be present at all rather than present and undefined.
+    const defaults = resolveCreateEnvironmentAgentDefaults({
+      catalog: speedCatalog,
+      enabledAgents: ["claude"],
+      configured,
+    });
+
+    expect(defaults).not.toHaveProperty("fastMode");
+  });
+
+  test("omits speed when the resolved model has no speed axis", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: speedCatalog,
+        enabledAgents: ["claude"],
+        configured: {
+          ...configured,
+          models: { claude: "slow-only" },
+          fastModes: { claude: true },
+        },
+      }),
+    ).not.toHaveProperty("fastMode");
+  });
+
+  test("omits speed when the chosen platform owns no speed surface", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: speedCatalog,
+        enabledAgents: ["opencode"],
+        configured: { ...configured, agent: "opencode", fastModes: { opencode: true } },
+      }),
+    ).not.toHaveProperty("fastMode");
+  });
+
+  test("reads the platform actually chosen, not the configured-but-disabled one", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: speedCatalog,
+        enabledAgents: ["opencode"],
+        configured: { ...configured, fastModes: { claude: true } },
+      }),
+    ).not.toHaveProperty("fastMode");
+  });
+});
+
 describe("resolveCreateEnvironmentAgentDefaults", () => {
   test("takes agent, modes, model, and reasoning from configured settings", () => {
     expect(

@@ -319,6 +319,16 @@ export interface Environment {
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
   initialReasoningEffort?: string;
+  /**
+   * One-shot Fast/Normal choice for the agent tab created from
+   * pendingAgentLaunch.
+   *
+   * Separate from the platform tier's `fastMode` for the same reason the two
+   * fields above are: a launcher may pick a speed for this one run without
+   * that becoming the environment's durable setting. Absent means the tier
+   * decides.
+   */
+  initialFastMode?: boolean;
   /** One-shot conversation mode for the agent tab created from pendingAgentLaunch. */
   initialConversationMode?: "plan" | "build";
   initialPrompt?: string;

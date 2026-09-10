@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { BUNDLED_APP_VERSION, resolveDisplayedAppVersion } from "./app-version";
+import {
+  BUNDLED_APP_VERSION,
+  resolveDisplayedAppVersion,
+  type DisplayedAppVersion,
+} from "./app-version";
 import webPackage from "../../package.json";
 
 describe("app version", () => {
@@ -9,15 +13,29 @@ describe("app version", () => {
   });
 
   test("prefers a real runtime version over the bundle", () => {
-    expect(resolveDisplayedAppVersion("2.16.0")).toBe("2.16.0");
-    expect(resolveDisplayedAppVersion(" 2.16.0 ")).toBe("2.16.0");
+    expect(resolveDisplayedAppVersion("2.16.0")).toEqual({
+      version: "2.16.0",
+      source: "runtime",
+    });
+    expect(resolveDisplayedAppVersion(" 2.16.0 ")).toEqual({
+      version: "2.16.0",
+      source: "runtime",
+    });
   });
 
   test("falls back to the bundle when runtime is missing or unset", () => {
-    expect(resolveDisplayedAppVersion(null)).toBe(BUNDLED_APP_VERSION);
-    expect(resolveDisplayedAppVersion(undefined)).toBe(BUNDLED_APP_VERSION);
-    expect(resolveDisplayedAppVersion("")).toBe(BUNDLED_APP_VERSION);
-    expect(resolveDisplayedAppVersion("0.0.0")).toBe(BUNDLED_APP_VERSION);
-    expect(resolveDisplayedAppVersion("   ")).toBe(BUNDLED_APP_VERSION);
+    const bundled: DisplayedAppVersion = { version: BUNDLED_APP_VERSION, source: "bundled" };
+    expect(resolveDisplayedAppVersion(null)).toEqual(bundled);
+    expect(resolveDisplayedAppVersion(undefined)).toEqual(bundled);
+    expect(resolveDisplayedAppVersion("")).toEqual(bundled);
+    expect(resolveDisplayedAppVersion("0.0.0")).toEqual(bundled);
+    expect(resolveDisplayedAppVersion("   ")).toEqual(bundled);
+  });
+
+  test("marks the source so a fallback is never read as a backend answer", () => {
+    // The debug tab renders this distinction, so losing it would silently turn
+    // an unreachable backend into a plausible-looking version.
+    expect(resolveDisplayedAppVersion("9.8.7-test").source).toBe("runtime");
+    expect(resolveDisplayedAppVersion(null).source).toBe("bundled");
   });
 });

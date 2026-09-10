@@ -289,7 +289,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       .then((version) => {
         if (!cancelled) setRuntimeAppVersion(version);
       })
-      .catch(() => {
+      .catch((error) => {
+        // The debug tab exists to diagnose the running install, so a probe that
+        // never answered has to leave a trace rather than quietly hand the
+        // reader the bundle's own version as if the backend had reported it.
+        console.error("[settings] Failed to read the running app version:", error);
         if (!cancelled) setRuntimeAppVersion(null);
       });
     return () => {
@@ -1839,7 +1843,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           The Orkestrator version running on this machine
         </p>
         <p className="mt-2 font-mono text-sm text-foreground" aria-live="polite">
-          {appVersion}
+          {appVersion.version}
+          {appVersion.source === "bundled" ? (
+            <span className="ml-2 font-sans text-xs text-muted-foreground">
+              from this bundle; the backend did not report a version
+            </span>
+          ) : null}
         </p>
       </div>
       <div>

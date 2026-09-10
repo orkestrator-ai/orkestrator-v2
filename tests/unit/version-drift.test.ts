@@ -574,6 +574,23 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  test("every workspace manifest carries the root version", () => {
+    // Electron reports the root manifest's version to the backend, while the
+    // settings debug tab falls back to the version compiled into the web
+    // bundle whenever the backend has none. A partial bump leaves those two
+    // disagreeing and shows a stale version wherever the fallback is all there
+    // is: development runs and the standalone backend.
+    const rootVersion = (JSON.parse(read("package.json")) as { version?: string }).version;
+    expect(rootVersion).toMatch(/^\d+\.\d+\.\d+/);
+
+    for (const manifestPath of packageManifestPaths()) {
+      const manifest = JSON.parse(read(manifestPath)) as { version?: string };
+      expect(manifest.version, `${manifestPath} disagrees with the root package.json`).toBe(
+        rootVersion,
+      );
+    }
+  });
+
   test("Codex: config/codex-version.json is the single source of truth for every pin", () => {
     // The app-server binary and the generated protocol bindings are only valid
     // as a matched pair, so every place that names a Codex version has to agree

@@ -1214,6 +1214,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       messages: bounded.messages,
       messageWindow: {
         ...bounded.window,
+        // The provider may already have cut history before this window was
+        // bounded. Preserve that gap so the tab exposes transcript recovery.
+        truncated: !complete || bounded.window.truncated,
         canLoadEarlier: !complete || bounded.window.truncated,
       },
       ...(snapshot.title ? { title: snapshot.title } : {}),

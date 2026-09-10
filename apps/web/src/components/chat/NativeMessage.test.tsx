@@ -2878,6 +2878,34 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByAltText("Thumbnail: diagram.png")).toBeTruthy();
   });
 
+  test("loads a deferred inline image from its detail reference", async () => {
+    // OpenCode persists a pasted attachment as a data URL and a bare filename,
+    // so the projection moves the bytes behind `detailRef`; with no readable
+    // path the renderer must fetch them rather than show an empty tile.
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      fileDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+    }));
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "image",
+            content: "clipboard.png",
+            filename: "clipboard.png",
+            imageSource: "attachment",
+            detailRef: "detail-image-1",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-image-1"));
+    const thumbnail = (await screen.findByAltText("Thumbnail: clipboard.png")) as HTMLImageElement;
+    expect(thumbnail.src).toBe("data:image/png;base64,iVBORw0KGgo=");
+  });
+
   test("renders only the user text and image when an initial prompt includes path boilerplate", async () => {
     const rawContent =
       "Make the profile match\n\n" +

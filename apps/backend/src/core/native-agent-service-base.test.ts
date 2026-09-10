@@ -643,7 +643,7 @@ describe("NativeAgentService", () => {
     });
   }
 
-  test("defers heavy tool fields and removes a staged image data URL", async () => {
+  test("defers heavy tool fields and image data URLs", async () => {
     const messages = [
       {
         id: "user-1",
@@ -659,6 +659,25 @@ describe("NativeAgentService", () => {
             type: "file",
             content: "clipboard.png",
             fileUrl: "data:image/png;base64,still-required",
+          },
+          {
+            // The shape OpenCode's normalizer emits for a pasted attachment: a
+            // first-class image part carrying only a bare filename and bytes.
+            type: "image",
+            content: "photo.png",
+            filename: "photo.png",
+            imageSource: "attachment",
+            fileUrl: "data:image/png;base64,open-code-image",
+          },
+          {
+            // Larger than the tool-output detail cap: an image still has to be
+            // deferred, because one attached screenshot can outweigh a whole
+            // transcript window.
+            type: "image",
+            content: "huge.png",
+            filename: "huge.png",
+            imageSource: "attachment",
+            fileUrl: `data:image/png;base64,${"b".repeat(5_000_000)}`,
           },
         ],
         createdAt: "2026-08-15T10:00:00.000Z",
@@ -707,7 +726,26 @@ describe("NativeAgentService", () => {
           parts: Array<Record<string, unknown>>;
         }>;
         expect(projected[0]?.parts[0]?.fileUrl).toBeUndefined();
-        expect(projected[0]?.parts[1]?.fileUrl).toBe("data:image/png;base64,still-required");
+        // No readable path: the inline bytes move behind a detail reference so
+        // one pasted image cannot evict the rest of the live transcript.
+        expect(projected[0]?.parts[1]?.fileUrl).toBeUndefined();
+        expect(projected[0]?.parts[1]?.detailRef).toBeString();
+        const imageDetails = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: projected[0]?.parts[1]?.detailRef as string,
+        });
+        expect(imageDetails).toMatchObject({ fileDataUrl: "data:image/png;base64,still-required" });
+        expect(projected[0]?.parts[2]?.fileUrl).toBeUndefined();
+        expect(projected[0]?.parts[2]?.detailRef).toBeString();
+        const openCodeImageDetails = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: projected[0]?.parts[2]?.detailRef as string,
+        });
+        expect(openCodeImageDetails).toMatchObject({
+          fileDataUrl: "data:image/png;base64,open-code-image",
+        });
+        expect(projected[0]?.parts[3]?.fileUrl).toBeUndefined();
+        expect(projected[0]?.parts[3]?.detailRef).toBeString();
         const tool = projected[1]?.parts[0];
         expect(tool?.toolOutput).toBeUndefined();
         expect(tool?.toolDiff).toEqual({

@@ -267,6 +267,7 @@ export function MessagePart({
         <FilePart
           path={part.content}
           fileUrl={part.fileUrl}
+          detailRef={part.detailRef}
           filename={part.filename}
           containerId={containerId}
           eagerPreview={eagerImagePreview}

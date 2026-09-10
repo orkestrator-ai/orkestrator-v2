@@ -187,8 +187,10 @@ export function ImagePart({
       <FilePart
         path={caption || part.filename || "image"}
         fileUrl={part.fileUrl}
+        detailRef={part.detailRef}
         filename={part.filename}
         containerId={containerId}
+        alwaysImage
         // Provenance is the reason to show it at all, so it loads without a
         // click — unlike a generic file row, which may be one of many.
         eagerPreview

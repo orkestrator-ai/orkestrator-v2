@@ -48,6 +48,7 @@ import {
   NATIVE_SYNC_REVISION_TTL_MS,
   NATIVE_SLASH_COMMAND_CACHE_LIMIT,
   NATIVE_SLASH_COMMAND_TTL_MS,
+  NATIVE_FILE_DETAIL_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES,
   NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES,
   NATIVE_TOOL_DETAIL_MAX_BYTES,
@@ -408,6 +409,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     messageId: string,
     partPath: string,
     details: Omit<NativeAgentToolDetails, "detailRef">,
+    /**
+     * Per-entry ceiling. Defaults to the tool-output cap; a deferred image
+     * raises it because one attachment legitimately outweighs a tool result.
+     */
+    maximumBytes: number = NATIVE_TOOL_DETAIL_MAX_BYTES,
   ): string {
     const serializedDetails = JSON.stringify(details);
     const detailRef = createHash("sha256")
@@ -416,7 +422,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       .slice(0, 32);
     let stored: NativeAgentToolDetails = { detailRef, ...details };
     let bytes = Buffer.byteLength(serializedDetails) + detailRef.length + 32;
-    if (bytes > NATIVE_TOOL_DETAIL_MAX_BYTES) {
+    if (bytes > maximumBytes) {
       stored = {
         detailRef,
         toolError: "Tool details exceeded the deferred display limit.",
@@ -462,18 +468,44 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const backgroundTaskId = backgroundTaskIdFromProjectedLaunch(part);
     if (backgroundTaskId) projected.backgroundTaskId = backgroundTaskId;
 
-    // A staged path is the durable image reference. Re-sending the same image
-    // as an inline data URL on every snapshot only duplicates transport bytes.
-    if (
-      part.type === "file" &&
-      typeof part.content === "string" &&
-      (part.content.startsWith("/") ||
-        part.content.startsWith("file://") ||
-        /^[A-Za-z]:[\\/]/.test(part.content)) &&
-      typeof part.fileUrl === "string" &&
-      part.fileUrl.startsWith("data:image/")
-    ) {
-      delete projected.fileUrl;
+    /*
+     * A file/image part can name its bytes three ways: a readable workspace
+     * path, an inline data URL, or a remote URL. The live window must never be
+     * dominated by inline bytes, because a single pasted screenshot is larger
+     * than the whole 512 KiB target and would evict every other message.
+     *
+     * - A readable path is the durable reference: the renderer re-reads the
+     *   file, so the inline copy is pure duplication.
+     * - With no path (OpenCode persists a pasted attachment as a bare filename
+     *   plus a data URL) the bytes only exist inline. Move them behind a detail
+     *   reference the renderer fetches on demand, provided they still fit the
+     *   detail cache; an oversized image keeps its inline copy rather than
+     *   losing its preview entirely.
+     * - Remote URLs are already a reference and stay put.
+     */
+    const inlineFileUrl =
+      typeof part.fileUrl === "string" && part.fileUrl.startsWith("data:")
+        ? part.fileUrl
+        : undefined;
+    if (inlineFileUrl && (part.type === "file" || part.type === "image")) {
+      const content = typeof part.content === "string" ? part.content : "";
+      const readablePath =
+        content.startsWith("/") || content.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(content);
+      if (readablePath) {
+        delete projected.fileUrl;
+      } else if (
+        inlineFileUrl.startsWith("data:image/") &&
+        Buffer.byteLength(inlineFileUrl) <= NATIVE_FILE_DETAIL_MAX_BYTES - 256
+      ) {
+        delete projected.fileUrl;
+        projected.detailRef = this.cacheToolDetails(
+          sessionKey,
+          messageId,
+          partPath,
+          { fileDataUrl: inlineFileUrl },
+          NATIVE_FILE_DETAIL_MAX_BYTES,
+        );
+      }
     }
 
     const rawDiff =

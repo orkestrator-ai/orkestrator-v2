@@ -1104,19 +1104,39 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * detached app-server thread. The ordinary getMessages path remains the
    * exact recovery surface; progressive display uses this preview first.
    */
-  getCachedMessages(
-    sessionId: string,
-  ): { messages: NormalizedMessage[]; freshness: "cached" | "current" } | null {
+  getCachedMessages(sessionId: string): {
+    messages: NormalizedMessage[];
+    freshness: "cached" | "current";
+    complete: boolean;
+  } | null {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
     const context = this.registry.getThreadForSession(sessionId);
+    const complete = this.transcriptComplete(sessionId);
     // An attached thread's transcript is the same array `getMessages` would
     // return, so it is current; only the detached fallback to the retained
     // local tail is a cache. Reporting the difference is what lets the backend
     // decide whether the tail is worth persisting for the next cold start.
     if (context)
-      return { messages: this.messagesForSession(session, context), freshness: "current" };
-    return { messages: [...session.localMessages], freshness: "cached" };
+      return {
+        messages: this.messagesForSession(session, context),
+        freshness: "current",
+        complete,
+      };
+    return { messages: [...session.localMessages], freshness: "cached", complete };
+  }
+
+  /**
+   * Whether every message this session ever held is still readable.
+   *
+   * The local ring buffer is the only transcript store the bridge silently
+   * evicts from, and for a session whose rollout could not be resumed it holds
+   * the whole conversation. Reporting the drop is what stops the display from
+   * presenting the retained tail as the complete history; the dropped messages
+   * are genuinely gone, so this is a notice rather than a paging cursor.
+   */
+  transcriptComplete(sessionId: string): boolean {
+    return this.registry.getSession(sessionId)?.localMessagesTrimmed !== true;
   }
 
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {

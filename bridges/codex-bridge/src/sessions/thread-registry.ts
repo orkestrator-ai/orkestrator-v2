@@ -114,6 +114,15 @@ export interface BridgeSession {
   pendingAttachments: PromptAttachmentInput[];
   /** Built-in slash-command transcript entries, which have no Codex rollout. */
   localMessages: NormalizedMessage[];
+  /**
+   * True once the `localMessages` ring buffer has dropped an entry.
+   *
+   * The buffer is the whole transcript for a session whose rollout could not be
+   * resumed, so a silent drop is lost history rather than a discarded `/help`.
+   * Readers report it so the display can say history is missing instead of
+   * presenting the retained tail as the complete conversation.
+   */
+  localMessagesTrimmed: boolean;
   /** Bounded content-free attention index used by the no-touch activity poll. */
   asyncQuestionItemIds: string[];
   /**
@@ -259,6 +268,7 @@ export class ThreadRegistry {
       | "createdAt"
       | "pendingAttachments"
       | "localMessages"
+      | "localMessagesTrimmed"
       | "messageRevision"
       | "contentEpoch"
       | "asyncQuestionItemIds"
@@ -270,6 +280,7 @@ export class ThreadRegistry {
       structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
       pendingAttachments: [],
       localMessages: [],
+      localMessagesTrimmed: false,
       asyncQuestionItemIds: [],
       messageRevision: 0,
       contentEpoch: 0,
@@ -294,6 +305,7 @@ export class ThreadRegistry {
       | "createdAt"
       | "pendingAttachments"
       | "localMessages"
+      | "localMessagesTrimmed"
       | "messageRevision"
       | "contentEpoch"
       | "asyncQuestionItemIds"
@@ -305,6 +317,7 @@ export class ThreadRegistry {
       structuredOutputTurns: session.structuredOutputTurns?.map((entry) => ({ ...entry })),
       pendingAttachments: [],
       localMessages: [],
+      localMessagesTrimmed: false,
       asyncQuestionItemIds: [...(session.asyncQuestionItemIds ?? [])],
       messageRevision: 0,
       contentEpoch: 0,
@@ -338,7 +351,10 @@ export class ThreadRegistry {
     if (messages.length === 0) return;
     session.localMessages.push(...messages);
     const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
-    if (excess > 0) session.localMessages.splice(0, excess);
+    if (excess > 0) {
+      session.localMessages.splice(0, excess);
+      session.localMessagesTrimmed = true;
+    }
     appendAsyncQuestionItemIds(session.asyncQuestionItemIds, messages);
     session.messageRevision += 1;
   }

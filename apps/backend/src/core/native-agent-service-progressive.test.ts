@@ -25,9 +25,11 @@ describe("native agent progressive remainder", () => {
       parts: [{ type: "text", text: "Earlier response activity" }],
       createdAt: "2026-09-09T00:01:00.000Z",
     };
-    // Codex has already trimmed the prompt and older response parts to fit
-    // its preview. The surviving message needs no further backend trimming.
-    const stub = createProviderStub("codex", {
+    // The provider has already trimmed the prompt and older response parts to
+    // fit the preview it serves before hydration finishes, and says so with
+    // `complete: false`. The surviving message needs no further backend
+    // trimming, so nothing local reports the gap.
+    const stub = createProviderStub("claude", {
       transcriptSnapshot: async () => ({
         messages: [{ ...response, parts: [] }],
         complete: false,
@@ -40,7 +42,7 @@ describe("native agent progressive remainder", () => {
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
-          agent: "codex" as const,
+          agent: "claude" as const,
           logicalSessionKey: "env-env-1:progressive-trimmed",
         };
         await service.ensureSession(identity);

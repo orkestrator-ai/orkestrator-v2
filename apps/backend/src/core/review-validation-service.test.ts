@@ -148,6 +148,8 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
     ],
     limitations: [],
   });
+  const previousScheduler = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+  process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(root, ".orkestrator", "test-scheduler");
   try {
     let run = await controlReviewValidation("env", initial, "start", context);
     const deadline = Date.now() + 10000;
@@ -200,6 +202,8 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
   } finally {
     await stopEnvironmentReviewValidation("env", context).catch(() => {});
     await controlReviewValidation("env", initial, "cancel", context).catch(() => {});
+    if (previousScheduler === undefined) delete process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
+    else process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = previousScheduler;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -168,7 +168,7 @@ export type EnvironmentCommandRunner = (
 
 export type ReviewPreparationValidation = {
   command: string;
-  status: "passed" | "failed" | "skipped";
+  status: "passed" | "failed" | "skipped" | "incomplete";
   exitCode: number | null;
   stdoutPath: string | null;
   stderrPath: string | null;
@@ -280,7 +280,12 @@ export function parseReviewPreparationValidation(
     if (command.trim().length === 0) {
       throw new Error(`Expected validation[${index}].command to be non-empty`);
     }
-    if (entry.status !== "passed" && entry.status !== "failed" && entry.status !== "skipped") {
+    if (
+      entry.status !== "passed" &&
+      entry.status !== "failed" &&
+      entry.status !== "skipped" &&
+      entry.status !== "incomplete"
+    ) {
       throw new Error(`Invalid validation[${index}].status`);
     }
     const status = entry.status;
@@ -293,7 +298,12 @@ export function parseReviewPreparationValidation(
       throw new Error(`Expected validation[${index}].limitation to be a non-empty string or null`);
     }
 
-    if (status === "skipped") {
+    if (status === "incomplete" && !limitation)
+      throw new Error("Incomplete validation requires a limitation");
+    if (
+      status === "skipped" ||
+      (status === "incomplete" && entry.stdoutPath === null && entry.stderrPath === null)
+    ) {
       if (
         entry.exitCode !== null ||
         entry.stdoutPath !== null ||
@@ -315,7 +325,7 @@ export function parseReviewPreparationValidation(
 
     if (
       !Number.isInteger(entry.exitCode) &&
-      !(status === "failed" && entry.exitCode === null && limitation)
+      !((status === "failed" || status === "incomplete") && entry.exitCode === null && limitation)
     ) {
       throw new Error(
         `Expected validation[${index}].exitCode to be an integer or a documented abnormal termination`,
@@ -906,7 +916,10 @@ export async function generateLoopedReviewPackage(
     // unpersistable — the whole workflow snapshot failed validation on save and
     // the round died with a `package` failure that a retry reproduced exactly.
     const limitation = entry.limitation === null ? {} : { limitation: entry.limitation };
-    if (entry.status === "skipped") {
+    if (
+      entry.status === "skipped" ||
+      (entry.status === "incomplete" && entry.stdoutPath === null)
+    ) {
       return {
         command: entry.command,
         status: entry.status,

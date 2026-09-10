@@ -39,6 +39,10 @@ export function reviewValidationResultElapsedMs(
   now = Date.now(),
 ): number | null {
   if (result.status !== "running") return result.durationMs > 0 ? result.durationMs : null;
+  if (result.executionUpdatedAt) {
+    const live = elapsedMs(result.executionUpdatedAt, undefined, now);
+    return result.durationMs + Math.min(2000, live ?? 0);
+  }
   if (!result.startedAt) return result.durationMs;
   const live = elapsedMs(result.startedAt, undefined, now);
   return live === null ? result.durationMs : Math.max(result.durationMs, live);
@@ -122,7 +126,7 @@ function ValidationOutputModal({
     let timeout: number | undefined;
     const poll = async () => {
       await refresh();
-      if (!cancelled && result?.status === "running") {
+      if (!cancelled && (result?.status === "running" || result?.status === "queued")) {
         timeout = window.setTimeout(() => void poll(), 2_000);
       }
     };
@@ -264,7 +268,13 @@ export function ReviewValidationStatus({
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="font-semibold">Validation</h3>
         <span className="text-muted-foreground">
-          {run.status === "planned" ? "Queued" : run.status}
+          {run.status === "planned" ||
+          (run.status === "running" &&
+            (run.queueReason ||
+              (run.results.some((result) => result.status === "queued") &&
+                !run.results.some((result) => result.status === "running"))))
+            ? "Queued"
+            : run.status}
         </span>
       </div>
       <p className="mb-2 text-muted-foreground">
@@ -275,6 +285,11 @@ export function ReviewValidationStatus({
         {run.sealingDurationMs !== undefined &&
           `Packaging: ${(run.sealingDurationMs / 1000).toFixed(1)}s.`}
       </p>
+      {run.queueReason && (
+        <p role="status" className="mb-2 text-muted-foreground">
+          {run.queueReason}
+        </p>
+      )}
       <ul className="space-y-2">
         {run.results.map((result) => {
           const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
@@ -289,8 +304,11 @@ export function ReviewValidationStatus({
                 <span className="flex items-start justify-between gap-3">
                   <code className="min-w-0 break-all">{result.command}</code>
                   <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-                    {result.status}
+                    {result.status === "queued" ? "waiting for capacity" : result.status}
                     {resultElapsedMs !== null ? ` · ${(resultElapsedMs / 1000).toFixed(1)}s` : ""}
+                    {(result.queuedMs ?? 0) > 0
+                      ? ` · queued ${((result.queuedMs ?? 0) / 1000).toFixed(1)}s`
+                      : ""}
                     <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
                   </span>
                 </span>

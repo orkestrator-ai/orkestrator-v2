@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "cooperativeCommands": ["mise run test", "mise run test:all", "mise run test:changed"]
+}

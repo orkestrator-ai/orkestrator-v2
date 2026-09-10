@@ -163,7 +163,9 @@ export async function readReviewValidationOutput(
     typeof parsed.resultId !== "string" ||
     typeof parsed.status !== "string" ||
     parsed.resultId !== resultId ||
-    !["pending", "running", "passed", "failed", "skipped"].includes(parsed.status) ||
+    !["pending", "queued", "running", "passed", "failed", "skipped", "incomplete"].includes(
+      parsed.status,
+    ) ||
     !validStream(parsed.stdout) ||
     !validStream(parsed.stderr)
   ) {
@@ -246,7 +248,12 @@ export function validationPreparation(run: ReviewValidationRun): ReviewPreparati
     throw new Error(run.error ?? "Review validation has not completed");
   return {
     validation: run.results.map((r) => {
-      if (r.status !== "passed" && r.status !== "failed" && r.status !== "skipped")
+      if (
+        r.status !== "passed" &&
+        r.status !== "failed" &&
+        r.status !== "skipped" &&
+        r.status !== "incomplete"
+      )
         throw new Error("Validation command is unsettled");
       return {
         command: `cd ${quoteShell(run.plan.commands.find((cmd) => cmd.id === r.id)!.cwd)} && ${r.command}`,

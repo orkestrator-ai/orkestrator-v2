@@ -20,6 +20,13 @@ describe("formatAgentDurationMs", () => {
     expect(formatAgentDurationMs(10_000)).toBe("10s");
     expect(formatAgentDurationMs(125_000)).toBe("2m 5s");
   });
+
+  test("carries an hour unit for a task that outlived its turn", () => {
+    // A background task is the child that routinely runs for hours, and the
+    // minute-only formatter would report the second of these as "185m 3s".
+    expect(formatAgentDurationMs(3_600_000)).toBe("1h 0m 0s");
+    expect(formatAgentDurationMs(11_103_000)).toBe("3h 5m 3s");
+  });
 });
 
 describe("nativeAgentElapsedMs", () => {
@@ -92,6 +99,10 @@ describe("formatNativeAgentElapsed", () => {
   test("formats an active runtime in whole seconds", () => {
     expect(formatNativeAgentElapsed({ status: "active", elapsedMs: 125_000 })).toBe("2m 5s");
     expect(formatNativeAgentElapsed({ status: "active", elapsedMs: 28 })).toBe("0s");
+  });
+
+  test("carries an hour unit while a long-running task is still ticking", () => {
+    expect(formatNativeAgentElapsed({ status: "active", elapsedMs: 11_103_400 })).toBe("3h 5m 3s");
   });
 
   test("formats a settled runtime with millisecond precision under one second", () => {

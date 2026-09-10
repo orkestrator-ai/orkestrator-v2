@@ -113,6 +113,7 @@ describe("Claude activity in the shared native transcript", () => {
         toolUseId: "bash-1",
         description: "Run the dev server",
         status: "running",
+        startedAt: "2026-08-16T09:59:58.000Z",
       },
     });
 
@@ -120,6 +121,7 @@ describe("Claude activity in the shared native transcript", () => {
       id: "bg-dev",
       description: "Run the dev server",
       status: "running",
+      startedAt: "2026-08-16T09:59:58.000Z",
     });
     // The launch tool succeeded; the task it launched has not.
     expect(decorated?.parts[0]?.toolState).toBe("success");
@@ -128,6 +130,52 @@ describe("Claude activity in the shared native transcript", () => {
     const [normalized] = normalizeNativeMessages([decorated!]);
     expect(normalized?.parts[0]?.type).toBe("task-group");
     expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(new Set(["bg-dev"]));
+  });
+
+  test("normalizes the bridge's epoch launch clock into the card's ISO form", () => {
+    // The projection carries `startedAt` as ISO and the bridge's own record
+    // carries it as epoch milliseconds. The card reads one shape.
+    const [decorated] = applyClaudeBackgroundTaskStates([backgroundLaunch()], {
+      "bg-dev": {
+        id: "bg-dev",
+        toolUseId: "bash-1",
+        status: "running",
+        startedAt: Date.parse("2026-08-16T09:59:58.000Z"),
+      },
+    });
+
+    expect(decorated?.parts[0]?.backgroundTask?.startedAt).toBe("2026-08-16T09:59:58.000Z");
+  });
+
+  test("drops a launch clock no date can represent rather than throwing", () => {
+    /*
+     * A bridge reporting nanoseconds lands outside the range `Date` covers, and
+     * `toISOString` throws there. This decoration runs inside a render-path
+     * memo, so a throw would take the whole transcript down to lose one timer.
+     */
+    const decorate = () =>
+      applyClaudeBackgroundTaskStates([backgroundLaunch()], {
+        "bg-dev": {
+          id: "bg-dev",
+          toolUseId: "bash-1",
+          status: "running",
+          startedAt: 1.7e18,
+        },
+      });
+
+    expect(decorate).not.toThrow();
+    expect(decorate()[0]?.parts[0]?.backgroundTask?.startedAt).toBeUndefined();
+  });
+
+  test("falls back to the launch row's own clock when the snapshot has none", () => {
+    const launch = backgroundLaunch();
+    launch.parts[0]!.createdAt = "2026-08-16T09:59:00.000Z";
+
+    const [decorated] = applyClaudeBackgroundTaskStates([launch], {
+      "bg-dev": { id: "bg-dev", toolUseId: "bash-1", status: "running" },
+    });
+
+    expect(decorated?.parts[0]?.backgroundTask?.startedAt).toBe("2026-08-16T09:59:00.000Z");
   });
 
   test("applies a late settle stamp when the terminal status is unchanged", () => {
@@ -211,6 +259,11 @@ describe("Claude activity in the shared native transcript", () => {
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+      const part = rows[0]?.parts[0];
+      expect(part?.type === "task-group" && part.task.createdAt).toBe("2026-08-16T09:59:00.000Z");
+      expect(part?.type === "task-group" && part.task.backgroundTask?.startedAt).toBe(
+        "2026-08-16T09:59:00.000Z",
+      );
     });
 
     test("prefers the transcript's newest clock to the launch clock for a live task", () => {

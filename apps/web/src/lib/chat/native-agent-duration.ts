@@ -1,16 +1,18 @@
-import { formatElapsed } from "@/lib/format-elapsed";
+import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { parseBackendTurnStartedAt } from "@/lib/session-timer";
 import type { NativeAgentStatus } from "./native-agent-status";
 
 /**
  * Format a settled agent runtime. Sub-second values stay in milliseconds so a
- * genuinely short child is distinguishable from a still-running one.
+ * genuinely short child is distinguishable from a still-running one. Longer
+ * ones carry an hour unit: a background task is the one child that routinely
+ * outlives its launching turn, and minutes alone stop reading as a duration.
  */
 export function formatAgentDurationMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 10) return `${seconds.toFixed(1).replace(/\.0$/, "")}s`;
-  return formatElapsed(Math.round(seconds));
+  return formatElapsedWithHours(Math.round(seconds));
 }
 
 /**
@@ -47,7 +49,7 @@ export function formatNativeAgentElapsed(options: {
   const { status, elapsedMs } = options;
   if (elapsedMs === undefined) return undefined;
   if (status === "active") {
-    return formatElapsed(Math.floor(elapsedMs / 1000));
+    return formatElapsedWithHours(Math.floor(elapsedMs / 1000));
   }
   return formatAgentDurationMs(elapsedMs);
 }

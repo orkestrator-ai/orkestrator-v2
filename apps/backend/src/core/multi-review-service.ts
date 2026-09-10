@@ -896,7 +896,7 @@ export class MultiReviewService {
         ) {
           throw new Error("A reviewer can no longer be restarted after fix work begins");
         }
-        if (workflow.reviewSnapshotStale === true) {
+        if (workflow.reviewSnapshotStale === true && workflow.reviewPackage) {
           throw new Error("Restart the full Multi Review to review the updated worktree snapshot");
         }
         if (
@@ -1740,7 +1740,7 @@ export class MultiReviewService {
           }
         : {}),
       reviewSnapshot: async () =>
-        promptWorktreeSnapshot(await this.assertReviewSnapshotCurrent(workflow, token)),
+        promptWorktreeSnapshot(await this.reviewSnapshotForDispatch(workflow, token)),
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         this.resolveUnattendedInteractions(workflow, token, provider, providerSessionId),
       abandonSession: (selection, providerSessionId) =>
@@ -2089,11 +2089,13 @@ export class MultiReviewService {
         } else if (request.kind === "consolidate") {
           const reviewSnapshot = workflow.reviewPackage
             ? undefined
-            : await this.assertReviewSnapshotCurrent(workflow, token);
+            : await this.reviewSnapshotForDispatch(workflow, token);
           if (workflow.reviewPackage) await this.assertReviewPackageIntegrity(workflow, token);
           prompt = createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
             worktree: reviewSnapshot ? promptWorktreeSnapshot(reviewSnapshot) : undefined,
+            worktreeChangedDuringReview:
+              !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
             reviewPackage: workflow.reviewPackage,
             reports: consolidationReports(workflow.reviewers),
           });
@@ -2624,16 +2626,15 @@ export class MultiReviewService {
   }
 
   /**
-   * Fails closed before dispatch when the long-running review source drifted.
+   * Observes live-worktree drift before dispatch without stopping Multi Review.
    *
-   * Drift is judged on HEAD and the uncommitted path set, not on content. The
-   * reviewers are explicitly told validation "may write generated artifacts and
-   * tool caches", so a byte-level comparison would fail the workflow for doing
-   * exactly what it asked for; the path set is also the contract the build
-   * pipeline's own validation guard already enforces. The content fingerprint
-   * stays on the snapshot as the evidence quoted to reviewers.
+   * The first mismatch becomes a durable warning. Later reviewers and
+   * consolidation continue from the original prompt evidence, while their own
+   * repository inspection and the consolidation limitation make the mixed
+   * observation explicit. Immutable package verification remains fail-closed
+   * in `assertReviewPackageIntegrity`.
    */
-  private async assertReviewSnapshotCurrent(
+  private async reviewSnapshotForDispatch(
     workflow: MultiReviewWorkflow,
     token: string,
   ): Promise<MultiReviewWorktreeSnapshot> {
@@ -2647,12 +2648,19 @@ export class MultiReviewService {
       await this.save(workflow, token);
       return adopted;
     }
-    await assertReviewSnapshotCurrent(
-      (command, args) => this.invoke(command, args),
-      workflow.environmentId,
-      baseline,
-      "Multi Review",
-    );
+    if (workflow.reviewSnapshotStale === true) return baseline;
+    try {
+      await assertReviewSnapshotCurrent(
+        (command, args) => this.invoke(command, args),
+        workflow.environmentId,
+        baseline,
+        "Multi Review",
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewSnapshotChangedError)) throw error;
+      workflow.reviewSnapshotStale = true;
+      await this.save(workflow, token);
+    }
     return baseline;
   }
 

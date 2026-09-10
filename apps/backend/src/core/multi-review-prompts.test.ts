@@ -176,6 +176,22 @@ describe("multi review consolidation prompt", () => {
     }
   });
 
+  test("records live-worktree drift as a limitation without rejecting the reports", () => {
+    const prompt = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+      worktree: {
+        status: "clean",
+        head: "1111111111111111111111111111111111111111",
+      },
+      worktreeChangedDuringReview: true,
+    });
+
+    expect(prompt).toContain("The repository worktree changed after this Multi Review started");
+    expect(prompt).toContain("continued instead of discarding completed work");
+    expect(prompt).toContain("Preserve that fact as a limitation");
+  });
+
   test("identifies the verified package as authoritative consolidation scope", () => {
     const reviewPackage = testGeneratedReviewPackage({
       packageId: "review-package-test-r1",

@@ -945,7 +945,7 @@ function MultiReviewOverviewTab({
                     workflow.phase === "ready" ||
                     workflow.phase === "failed") &&
                   workflow.activeRequest?.kind !== "prepare" &&
-                  workflow.reviewSnapshotStale !== true &&
+                  !(workflow.reviewSnapshotStale === true && workflow.reviewPackage) &&
                   workflow.fixResult === undefined &&
                   !(workflow.phase === "failed" && workflow.consolidatedReport !== undefined);
                 const canUnstick =
@@ -1159,6 +1159,13 @@ function MultiReviewOverviewTab({
               <h2 className="text-sm font-semibold">Fix result</h2>
               <p className="mt-2 text-sm text-foreground/85">{workflow.fixResult.summary}</p>
             </section>
+          )}
+
+          {workflow.reviewSnapshotStale === true && !workflow.reviewPackage && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500">
+              The repository worktree changed after this Multi Review started. The review continued,
+              so reviewer reports may reflect different worktree states.
+            </div>
           )}
 
           {(error || workflow.error) && (

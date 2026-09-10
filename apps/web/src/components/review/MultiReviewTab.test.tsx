@@ -1600,7 +1600,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(unstickReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
   });
 
-  test("disables reviewer restart when the worktree snapshot is stale", async () => {
+  test("shows a repository-change note and allows reviewer restart", async () => {
     const stale = { ...readyWorkflow(), reviewSnapshotStale: true };
     useMultiReviewStore.getState().replaceWorkflow(stale);
     const restartReviewer = mock(async () => stale);
@@ -1621,13 +1621,19 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    expect(
+      screen.getByText(
+        "The repository worktree changed after this Multi Review started. The review continued, so reviewer reports may reflect different worktree states.",
+      ),
+    ).toBeTruthy();
+
     fireEvent.contextMenu(
       screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
     );
     const restart = await screen.findByRole("menuitem", { name: "Restart" });
-    expect(restart.hasAttribute("data-disabled")).toBe(true);
+    expect(restart.hasAttribute("data-disabled")).toBe(false);
     fireEvent.click(restart);
-    expect(restartReviewer).not.toHaveBeenCalled();
+    await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(stale.id, "reviewer-1"));
   });
 
   test("disables Unstick without a sent turn or a running reviewer", async () => {

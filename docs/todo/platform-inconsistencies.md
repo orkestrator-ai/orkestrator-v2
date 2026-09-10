@@ -118,9 +118,10 @@ Both return well-formed rows (`sessionId`, `cwd`, `title`, `updatedAt`) from
 `session/list` for a cwd with history, and both replay the full conversation
 through `session/update` on `session/load`. Driving the real bridge against the
 real binaries, `GET /session/list` answers 200 with signed session tokens and
-`POST /session/resume` answers a hydrated transcript — user turns, assistant
-turns, thinking parts — plus the model/mode catalog. Listing keeps working while
-a session is live on the bridge. So the whole path (capability table → UI →
+`POST /session/resume` hydrates the bridge session and answers only its new
+bridge session ID; the bounded transcript route then returns the replayed user
+turns, assistant turns and thinking parts. Listing keeps working while a session
+is live on the bridge. So the whole path (capability table → UI →
 `listResumableSessions`/`resumeSession` → bridge → vendor) is verified for both
 shipping builds. The Grok row was promoted to full when the pin moved to 1.0.10
 and that exact binary — the one in `toolchain-manifest.ts` and

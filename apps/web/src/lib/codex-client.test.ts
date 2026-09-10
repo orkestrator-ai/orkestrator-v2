@@ -498,12 +498,12 @@ describe("codex-client getSessionMessages", () => {
   });
 
   test("returns messages without appending todo snapshots when resuming a session", async () => {
-    mockFetch(
-      async () =>
-        new Response(
-          JSON.stringify({
-            sessionId: "session-1",
-            title: "Resume",
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ sessionId: "session-1", title: "Resume" }, { status: 201 })
+        : Response.json({
             messages: [
               {
                 id: "msg-2",
@@ -523,9 +523,8 @@ describe("codex-client getSessionMessages", () => {
                 planReview: true,
               },
             ],
-          }),
-        ),
-    );
+          });
+    });
 
     const resumed = await resumeSession(client, { threadId: "thread-1" });
 
@@ -579,6 +578,63 @@ describe("codex-client getSessionMessages", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("keeps the resumed session when transcript hydration fails", async () => {
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ sessionId: "session-1", title: "Resume" }, { status: 201 })
+        : new Response(null, { status: 404 });
+    });
+
+    try {
+      await expect(resumeSession(client, { threadId: "thread-1" })).resolves.toEqual({
+        session: { sessionId: "session-1", title: "Resume" },
+        messages: [],
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("keeps the resumed session when transcript hydration is malformed", async () => {
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ sessionId: "session-1" }, { status: 201 })
+        : Response.json({ messages: "not-an-array" });
+    });
+
+    try {
+      const resumed = await resumeSession(client, { threadId: "thread-1" });
+      expect(resumed?.session.sessionId).toBe("session-1");
+      expect(resumed?.messages).toEqual([]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("preserves transcript truncation metadata when resuming", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ sessionId: "session-1" }, { status: 201 })
+        : Response.json({
+            messages: [],
+            messageWindow: { truncated: true, omittedMessages: 7 },
+          });
+    });
+
+    const resumed = await resumeSession(client, { threadId: "thread-1" });
+    expect(resumed?.messageWindow).toEqual({ truncated: true, omittedMessages: 7 });
   });
 
   test("returns messages as-is when no TodoWrite parts exist", async () => {

@@ -42,6 +42,14 @@ export function publicSession(state: SessionState): JsonObject {
   };
 }
 
+/** Mutation acknowledgement; transcript hydration has its own bounded route. */
+export function publicSessionReference(state: SessionState): JsonObject {
+  return {
+    sessionId: state.id,
+    ...(state.title ? { title: state.title } : {}),
+  };
+}
+
 export function publicStatus(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
@@ -49,6 +57,7 @@ export function publicStatus(state: SessionState): JsonObject {
     ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
     error: state.error,
     revision: state.revision,
+    ...(state.sessionFile ? { resumableSessionId: state.sessionFile } : {}),
     // The backend reads the title from this route and no other — `/session/:id`
     // carries one too, but nothing calls it for Pi. Omitting it here left the
     // title Pi reports in `session_info_changed` stranded in bridge state.

@@ -34,6 +34,11 @@ export function publicSession(state: SessionState): JsonObject {
   };
 }
 
+/** Mutation acknowledgement; transcript hydration has its own bounded route. */
+export function publicSessionReference(state: SessionState): JsonObject {
+  return { sessionId: state.id };
+}
+
 export function boundTranscriptForRead(state: SessionState): void {
   /*
    * `boundTranscript` opens with a full `JSON.stringify(state.messages)`, so a

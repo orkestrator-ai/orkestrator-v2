@@ -190,11 +190,16 @@ describe("NativeAgentService transcript projection", () => {
   });
 
   test("orders resumable sessions by most recent activity", async () => {
-    const stub = createProviderStub("claude", {
+    const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        resumableSessionId: "current-thread",
+      }),
     });
     (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
       { sessionId: "older", updatedAt: "2026-08-01T00:00:00.000Z" },
+      { sessionId: "current-thread", updatedAt: "2026-08-15T00:00:00.000Z" },
       { sessionId: "undated" },
       { sessionId: "newest", updatedAt: "2026-08-14T00:00:00.000Z", status: "running" as const },
     ];
@@ -206,7 +211,7 @@ describe("NativeAgentService transcript projection", () => {
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
-          agent: "claude" as const,
+          agent: "codex" as const,
           logicalSessionKey: "env-env-1:tab-resume",
         };
         await service.ensureSession(identity);
@@ -215,6 +220,92 @@ describe("NativeAgentService transcript projection", () => {
         // which field each provider sorts on. Undated entries sink.
         expect(entries.map((entry) => entry.sessionId)).toEqual(["newest", "older", "undated"]);
         expect(entries[0]?.status).toBe("running");
+      },
+    );
+  });
+
+  test("filters the stored provider session when no state snapshot is available", async () => {
+    const stub = createProviderStub("codex");
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: "provider-session" },
+      { sessionId: "other-thread" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-fallback-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-resume-fallback",
+        };
+        await service.ensureSession(identity);
+        await expect(service.listProjectionResumableSessions(identity)).resolves.toEqual([
+          { sessionId: "other-thread" },
+        ]);
+      },
+    );
+  });
+
+  test("falls back to the stored provider session when state snapshot fails", async () => {
+    const stub = createProviderStub("codex", {
+      sessionStateSnapshot: async () => {
+        throw new Error("status unavailable");
+      },
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: "provider-session" },
+      { sessionId: "other-thread" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-status-failure-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-resume-status-failure",
+        };
+        await service.ensureSession(identity);
+        const entries = await service.listProjectionResumableSessions(identity);
+        expect(entries.map((entry) => entry.sessionId)).toEqual(["other-thread"]);
+        expect(stub.sessionStateSnapshot).toHaveBeenCalledWith("provider-session");
+      },
+    );
+  });
+
+  test("filters an ACP-backed agent's external resumable identity", async () => {
+    const externalSessionId = "acp-session:c2Vzc2lvbi0x.signature";
+    const stub = createProviderStub("grok", {
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        resumableSessionId: externalSessionId,
+      }),
+    });
+    (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
+      { sessionId: externalSessionId, title: "Current Grok conversation" },
+      { sessionId: "acp-session:b3RoZXI.signature", title: "Other Grok conversation" },
+    ];
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-resume-grok-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "grok" as const,
+          logicalSessionKey: "env-env-1:tab-grok-resume",
+        };
+        await service.ensureSession(identity);
+        const entries = await service.listProjectionResumableSessions(identity);
+        expect(entries).toEqual([
+          { sessionId: "acp-session:b3RoZXI.signature", title: "Other Grok conversation" },
+        ]);
       },
     );
   });

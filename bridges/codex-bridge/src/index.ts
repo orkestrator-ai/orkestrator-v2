@@ -1220,7 +1220,14 @@ app.post("/session/resume", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const resumed = await appServerRuntime.resumeSession(body);
   if (!resumed) return c.json({ error: "threadId is required" }, 400);
-  return c.json(resumed, 201);
+  return c.json(
+    {
+      sessionId: resumed.sessionId,
+      ...(resumed.title ? { title: resumed.title } : {}),
+      threadId: resumed.threadId,
+    },
+    201,
+  );
 });
 
 app.post("/session/:id/config", async (c) => {
@@ -1517,8 +1524,14 @@ app.post("/session/:id/fork", async (c) => {
   // first turn" sent users looking for a running turn that was not there.
   switch (result.outcome) {
     case "created": {
-      const { outcome: _outcome, ...payload } = result;
-      return c.json(payload, 201);
+      return c.json(
+        {
+          sessionId: result.sessionId,
+          ...(result.title ? { title: result.title } : {}),
+          threadId: result.threadId,
+        },
+        201,
+      );
     }
     case "not-found":
       return c.json({ error: "Session not found" }, 404);

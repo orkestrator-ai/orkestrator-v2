@@ -1979,6 +1979,7 @@ describe("HTTP bridge progressive transcript", () => {
       return Response.json({
         status: "running",
         phase: "running",
+        threadId: "thread-1",
         title: "Session title",
         messageRevision: 12,
         capabilities: { interactions: { kinds: ["question", 42] } },
@@ -1992,6 +1993,7 @@ describe("HTTP bridge progressive transcript", () => {
       phase: "running",
       title: "Session title",
       providerRevision: 12,
+      resumableSessionId: "thread-1",
       interactionKinds: ["question"],
       controls: { modelId: "gpt-5.5", mode: "plan" },
     });
@@ -1999,6 +2001,27 @@ describe("HTTP bridge progressive transcript", () => {
     // liveness touch on some bridges and is the slow path this split avoids.
     expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
     expect(state).not.toHaveProperty("messages");
+  });
+
+  test("prefers an explicit resumable identity and drops invalid identities", async () => {
+    for (const [resumableSessionId, expected] of [
+      ["  external-session  ", "external-session"],
+      ["   ", undefined],
+      [42, undefined],
+    ] as const) {
+      const { provider } = httpProvider(
+        () =>
+          Response.json({
+            status: "idle",
+            threadId: "codex-thread",
+            resumableSessionId,
+          }),
+        codexConnection,
+      );
+
+      const state = await provider.sessionStateSnapshot!("session-1");
+      expect(state.resumableSessionId).toBe(expected ?? "codex-thread");
+    }
   });
 
   test("carries runtime error advisories in transcript-free session state", async () => {

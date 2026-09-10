@@ -578,13 +578,29 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
      * was not necessarily at the top. Unknown timestamps sink to the bottom
      * instead of sorting as 1970.
      */
-    const entries = await provider.listResumableSessions();
+    const sessionKey = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const current = await this.storage.getNativeAgentSession(sessionKey);
+    const [entries, currentState] = await Promise.all([
+      provider.listResumableSessions(),
+      current?.providerSessionId && provider.sessionStateSnapshot
+        ? provider.sessionStateSnapshot(current.providerSessionId).catch(() => undefined)
+        : Promise.resolve(undefined),
+    ]);
+    const currentResumableSessionId =
+      currentState?.resumableSessionId ?? current?.providerSessionId;
     const activityAt = (entry: NativeAgentResumeEntry) => {
       const raw = entry.updatedAt ?? entry.createdAt;
       const parsed = raw ? Date.parse(raw) : Number.NaN;
       return Number.isNaN(parsed) ? 0 : parsed;
     };
-    return [...entries].sort((left, right) => activityAt(right) - activityAt(left)).slice(0, 512);
+    return entries
+      .filter((entry) => entry.sessionId !== currentResumableSessionId)
+      .sort((left, right) => activityAt(right) - activityAt(left))
+      .slice(0, 512);
   }
 
   async resumeProjectionSession(

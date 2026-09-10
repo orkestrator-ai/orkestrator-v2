@@ -1454,7 +1454,7 @@ describe("forking", () => {
       threadId: "thread-hydrated",
       mode: "build",
     });
-    const messages = resumed!.messages;
+    const messages = (await h.runtime.getMessages(resumed!.sessionId))!;
     expect(messages.map((message) => message.turnId)).toEqual([
       "turn-a",
       "turn-a",
@@ -1533,7 +1533,8 @@ describe("forking", () => {
       threadId: "thread-no-turns",
       mode: "build",
     });
-    expect(await h.runtime.forkSession(resumed!.sessionId, resumed!.messages[0]!.id)).toEqual({
+    const messages = (await h.runtime.getMessages(resumed!.sessionId))!;
+    expect(await h.runtime.forkSession(resumed!.sessionId, messages[0]!.id)).toEqual({
       outcome: "no-fork-point",
     });
     expect(h.child().requests.some((request) => request.method === "thread/fork")).toBe(false);
@@ -1577,9 +1578,10 @@ describe("forking", () => {
     });
 
     const resumed = await h.runtime.resumeSession({ threadId: "thread-legacy", mode: "build" });
-    expect(resumed!.messages[0]?.turnId).toBeUndefined();
+    const messages = (await h.runtime.getMessages(resumed!.sessionId))!;
+    expect(messages[0]?.turnId).toBeUndefined();
 
-    const forked = await h.runtime.forkSession(resumed!.sessionId, resumed!.messages[0]!.id);
+    const forked = await h.runtime.forkSession(resumed!.sessionId, messages[0]!.id);
     expect(forked).toMatchObject({ outcome: "created" });
     expect(h.child().requests.at(-1)?.params).toMatchObject({ lastTurnId: "turn-real" });
   });

@@ -242,6 +242,8 @@ export interface ProviderSendOptions {
 export interface ProviderInteractiveSnapshot {
   status: ProviderStatus;
   messages: unknown[];
+  /** Stable provider identity accepted by list/resume, when distinct from the live handle. */
+  resumableSessionId?: string;
   /** False when the provider supplied only a bounded transcript tail. */
   messagesComplete?: boolean;
   title?: string;

@@ -37,6 +37,11 @@ export function publicSession(state: SessionState): JsonObject {
   };
 }
 
+/** Mutation acknowledgement; transcript hydration has its own bounded route. */
+export function publicSessionReference(state: SessionState): JsonObject {
+  return { sessionId: state.id };
+}
+
 export function publicStatus(state: SessionState, readiness?: NativeAgentReadiness): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
@@ -44,6 +49,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     ...(state.activeRun ? { turnId: state.activeRun.id } : {}),
     error: state.error,
     revision: state.revision,
+    ...(state.agentId ? { resumableSessionId: state.agentId } : {}),
     composer: state.composer,
     ...(state.policy ? { policy: state.policy } : {}),
     ...(readiness ? { readiness } : {}),

@@ -310,13 +310,16 @@ describe("session collection route outcomes", () => {
         outcome = {
           sessionId: "session-resumed",
           threadId: "thread-1",
-          messages: [],
+          messages: [{ content: "x".repeat(300 * 1024) }],
         };
         const resumed = await jsonRequest("/session/resume", "POST", {
           threadId: "thread-1",
         });
         expect(resumed.status).toBe(201);
-        expect(await resumed.json()).toEqual(outcome);
+        expect(await resumed.json()).toEqual({
+          sessionId: "session-resumed",
+          threadId: "thread-1",
+        });
       },
     );
   });
@@ -1109,7 +1112,7 @@ describe("fork route outcomes", () => {
     }
   });
 
-  test("returns the created session without leaking the internal outcome tag", async () => {
+  test("returns only fork metadata without leaking transcript state", async () => {
     await withRuntimeMethod(
       "forkSession",
       async () => ({
@@ -1117,7 +1120,7 @@ describe("fork route outcomes", () => {
         sessionId: "session-fork",
         title: "Parent (fork)",
         threadId: "fork-1",
-        messages: [],
+        messages: [{ content: "x".repeat(300 * 1024) }],
       }),
       async () => {
         const response = await jsonRequest("/session/session-1/fork", "POST", {});
@@ -1126,7 +1129,6 @@ describe("fork route outcomes", () => {
           sessionId: "session-fork",
           title: "Parent (fork)",
           threadId: "fork-1",
-          messages: [],
         });
       },
     );

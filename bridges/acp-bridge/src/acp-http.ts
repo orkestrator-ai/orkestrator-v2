@@ -40,6 +40,7 @@ import {
   agentRuntime,
   clientSessionKeys,
   configuredAcpMcpServers,
+  externalSessionToken,
   provider,
   sessions,
   isObject,
@@ -59,6 +60,7 @@ import {
   publicApprovals,
   publicContextUsage,
   publicSession,
+  publicSessionReference,
   setPromptJournal,
   setStructuredResult,
 } from "./acp-public.js";
@@ -136,7 +138,7 @@ export async function route(
       parseComposerPatch(body),
       effectiveExecutionPolicy(isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined),
     );
-    return json(response, 201, publicSession(state));
+    return json(response, 201, publicSessionReference(state));
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
@@ -220,6 +222,10 @@ export async function route(
       error: state.error,
       revision: state.revision,
       composer: state.sessionConfig.composer,
+      ...(state.acpSessionId
+        ? { resumableSessionId: externalSessionToken(state.acpSessionId) }
+        : {}),
+      ...(state.policy ? { policy: state.policy } : {}),
       ...(contextUsage ? { contextUsage } : {}),
       runtime: publicRuntime(state),
     });

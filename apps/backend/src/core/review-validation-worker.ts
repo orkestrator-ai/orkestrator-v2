@@ -22,6 +22,11 @@ const createScheduler = (${HOST_TEST_SCHEDULER_SOURCE});
 let scheduler;
 const tickets = new Set();
 const QUEUE_TIMEOUT_MS = Math.max(1000, Math.min(7200000, Number(process.env.ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS) || 1800000));
+// A cooperative child does real setup before its first publish (shell profile,
+// mise/toolchain resolution, transpilation). That is not a stalled runner, so it
+// gets a generous window; only its last successful read is treated as stale.
+const COOPERATIVE_STARTUP_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STARTUP_MS) || 60000));
+const COOPERATIVE_STALE_MS = Math.max(1000, Math.min(600000, Number(process.env.ORKESTRATOR_COOPERATIVE_STALE_MS) || 10000));
 const MAX_STREAM_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
 let totalBytes = 0;
@@ -61,13 +66,10 @@ function snapshotMatches() {
 async function execute(cmd, index) {
   const result = run.results[index];
   let ticket;
+  let streams = [];
   const queuedAt = Date.now();
   result.status = "queued";
   result.queuedMs = 0;
-  // Occupy this command's local slot even while it waits on the host. Otherwise
-  // later commands could leapfrog its dependency/resource reservation.
-  active.set(cmd.id, { cmd, stop: () => {} });
-  const channel = path.join(directory, "scheduler-" + index + ".json");
   let cooperative = false;
   try {
     const configPath = path.join(root, ".orkestrator-test-scheduler.json");
@@ -77,6 +79,14 @@ async function execute(cmd, index) {
       cooperative = config.version === 1 && Array.isArray(config.cooperativeCommands) && config.cooperativeCommands.includes(cmd.command);
     }
   } catch {}
+  // Occupy this command's local slot even while it waits on the host. Otherwise
+  // later commands could leapfrog its dependency/resource reservation. A
+  // cooperative command admits itself inside its child, so it does not consume
+  // this worker's weight budget until that admission reports it running; a
+  // weight-2 cooperative child would otherwise stall unrelated local work for
+  // the whole host wait.
+  active.set(cmd.id, { cmd, stop: () => {}, weight: cooperative ? 0 : cmd.weight });
+  const channel = path.join(directory, "scheduler-" + index + ".json");
   try {
     if (!cooperative) {
       scheduler ??= createScheduler();
@@ -103,12 +113,21 @@ async function execute(cmd, index) {
   const cwd = fs.realpathSync(path.resolve(root, cmd.cwd));
   if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error("Validation working directory escapes the workspace");
   const ordinal = String(index + 1).padStart(2, "0");
-  const streams = ["stdout", "stderr"].map(name => {
-    const file = path.join(directory, "validation-" + ordinal + "." + name + ".txt");
-    const fd = fs.openSync(file, "wx", 0o600);
-    result[name + "Path"] = path.relative(root, file).split(path.sep).join("/");
-    return { name, file, fd, hash: createHash("sha256"), bytes: 0 };
-  });
+  // Open both artifacts before recording either path. A one-sided pair is
+  // rejected by the preparation contract, so failing the second open must not
+  // leave a path a reviewer would be told to read.
+  try {
+    for (const name of ["stdout", "stderr"]) {
+      const file = path.join(directory, "validation-" + ordinal + "." + name + ".txt");
+      const fd = fs.openSync(file, "wx", 0o600);
+      streams.push({ name, file, fd, hash: createHash("sha256"), bytes: 0 });
+    }
+  } catch (error) {
+    for (const stream of streams) { try { fs.closeSync(stream.fd); } catch {} try { fs.unlinkSync(stream.file); } catch {} }
+    streams.length = 0;
+    throw error;
+  }
+  for (const stream of streams) result[stream.name + "Path"] = path.relative(root, stream.file).split(path.sep).join("/");
   result.status = "running";
   result.startedAt = new Date().toISOString();
   const started = performance.now();
@@ -134,10 +153,14 @@ async function execute(cmd, index) {
       killTree(child, "SIGTERM");
       forceKill = setTimeout(() => killTree(child, "SIGKILL"), 1000);
     };
-    active.set(cmd.id, { cmd, stop: stopJob });
+    active.set(cmd.id, { cmd, stop: stopJob, weight: cooperative ? 0 : cmd.weight });
     try { if (ticket && child.pid) scheduler.registerChild(ticket, child.pid); }
     catch { stopJob("Validation reservation could not record its child; evidence is incomplete"); }
     let projection;
+    // Measure staleness from the last successful read, not from spawn. Before
+    // the first publish the channel does not exist, so every read fails; a cold
+    // startup must not be mistaken for a dead runner.
+    let lastProgressAt = started;
     const updateClock = () => {
       if (!cooperative) return;
       try {
@@ -146,16 +169,19 @@ async function execute(cmd, index) {
         const value = JSON.parse(fs.readFileSync(channel, "utf8"));
         if (value.version !== 1 || !["queued", "running", "completed", "incomplete"].includes(value.state) ||
             !Number.isSafeInteger(value.executionMs) || value.executionMs < 0 || !Number.isSafeInteger(value.queuedMs) || value.queuedMs < 0 ||
-            !Number.isFinite(value.heartbeat) || Date.now() - value.heartbeat > 10000) throw new Error();
+            !Number.isFinite(value.heartbeat) || Date.now() - value.heartbeat > COOPERATIVE_STALE_MS) throw new Error();
         projection = value;
+        lastProgressAt = performance.now();
         result.status = value.state === "queued" ? "queued" : "running";
         result.durationMs = value.executionMs;
         result.queuedMs = value.queuedMs;
         result.executionUpdatedAt = new Date(value.heartbeat).toISOString();
+        const job = active.get(cmd.id);
+        if (job && value.state === "running") job.weight = cmd.weight;
         if (value.queuedMs >= QUEUE_TIMEOUT_MS) stopJob("Host capacity wait expired; validation is incomplete");
         if (value.executionMs >= cmd.timeoutMs) stopJob("Validation command timed out");
       } catch {
-        if (performance.now() - started > 10000) stopJob("Cooperative test runner stopped reporting scheduling progress; validation is incomplete");
+        if (performance.now() - lastProgressAt > (projection ? COOPERATIVE_STALE_MS : COOPERATIVE_STARTUP_MS)) stopJob("Cooperative test runner stopped reporting scheduling progress; validation is incomplete");
       }
     };
     const timeout = cooperative ? setInterval(updateClock, 100) : setTimeout(() => stopJob("Validation command timed out"), cmd.timeoutMs);
@@ -207,6 +233,12 @@ async function execute(cmd, index) {
     result.status = "incomplete";
     result.limitation = error.message || "Validation infrastructure was unavailable";
     result.queuedMs = Date.now() - queuedAt;
+    // Never leave one artifact path without the other: preparation rejects a
+    // one-sided pair, which would turn this failure into an unparseable result.
+    result.stdoutPath = null;
+    result.stderrPath = null;
+    for (const stream of streams) { try { fs.closeSync(stream.fd); } catch {} try { fs.unlinkSync(stream.file); } catch {} }
+    streams.length = 0;
     persist();
   } finally {
     active.delete(cmd.id);
@@ -258,7 +290,7 @@ async function main() {
           continue;
         }
         const jobs = Array.from(active.values());
-        if (jobs.reduce((sum, job) => sum + job.cmd.weight, 0) + cmd.weight > 2) continue;
+        if (jobs.reduce((sum, job) => sum + job.weight, 0) + cmd.weight > 2) continue;
         if (jobs.some(job => cmd.resources.includes("*") || job.cmd.resources.includes("*") || cmd.resources.some(resource => job.cmd.resources.includes(resource)))) continue;
         pending.delete(index);
         const task = execute(cmd, index).catch(() => {

@@ -37,7 +37,8 @@ export function createTestAdmission(
   });
   const capacity = scheduler.capacity();
   const owner = scheduler.owner(root);
-  const jobs = new Map<string, "queued" | "running">();
+  type AdmissionJob = { state: "queued" | "running"; enqueuedAt: number; startedAt: number };
+  const jobs = new Map<string, AdmissionJob>();
   const channel = env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE;
   const queueTimeout = Math.max(
     1000,
@@ -46,22 +47,31 @@ export function createTestAdmission(
   let cancelled = false,
     incomplete = false,
     sequence = 0;
-  let lastUpdate = Date.now(),
-    executionMs = 0,
+  // Finalized wait/execution totals. A live job's contribution is added at
+  // publish time, so only intervals with an actual queued or running ticket are
+  // counted; runner setup, idle gaps, and finalization are excluded.
+  let executionMs = 0,
     queuedMs = 0;
   let lastState = "queued";
+  const settle = (id: string) => {
+    const job = jobs.get(id);
+    if (!job) return;
+    if (job.state === "running") executionMs += Date.now() - job.startedAt;
+    else queuedMs += Date.now() - job.enqueuedAt;
+    jobs.delete(id);
+  };
   function publish(done = false) {
     const now = Date.now();
-    if (lastState === "running") executionMs += now - lastUpdate;
-    else if (lastState === "queued") queuedMs += now - lastUpdate;
-    lastUpdate = now;
-    lastState = done
-      ? incomplete
-        ? "incomplete"
-        : "completed"
-      : Array.from(jobs.values()).includes("running")
-        ? "running"
-        : "queued";
+    let execution = executionMs,
+      queued = queuedMs,
+      running = false;
+    for (const job of jobs.values()) {
+      if (job.state === "running") {
+        execution += now - job.startedAt;
+        running = true;
+      } else queued += now - job.enqueuedAt;
+    }
+    lastState = done ? (incomplete ? "incomplete" : "completed") : running ? "running" : "queued";
     if (!channel) return;
     const temp = channel + "." + process.pid + "." + ++sequence;
     writeFileSync(
@@ -71,8 +81,8 @@ export function createTestAdmission(
         pid: process.pid,
         state: lastState,
         heartbeat: now,
-        executionMs,
-        queuedMs,
+        executionMs: execution,
+        queuedMs: queued,
       }),
       { mode: 0o600, flag: "wx" },
     );
@@ -113,7 +123,7 @@ export function createTestAdmission(
                 ...resources,
               ],
         });
-        jobs.set(id, "queued");
+        jobs.set(id, { state: "queued", enqueuedAt: Date.now(), startedAt: 0 });
         log(`QUEUED ${group.name}: waiting for host capacity`);
         publish();
         const queuedAt = Date.now();
@@ -147,7 +157,12 @@ export function createTestAdmission(
               "Repository changed while queued; group did not run against a stale snapshot",
             );
         }
-        jobs.set(id, "running");
+        const job = jobs.get(id);
+        if (job) {
+          queuedMs += Date.now() - job.enqueuedAt;
+          job.state = "running";
+          job.startedAt = Date.now();
+        }
         publish();
         log(
           `RUNNING ${group.name} (${workers} worker slots; waited ${((Date.now() - queuedAt) / 1000).toFixed(1)}s)`,
@@ -168,17 +183,28 @@ export function createTestAdmission(
           output: error instanceof Error ? error.message : String(error),
         };
       } finally {
-        if (id) {
-          scheduler.release(id);
-          jobs.delete(id);
+        // Releasing or publishing must never replace the group's real result: a
+        // failed release or artifact write is incomplete evidence, not a lost
+        // run. Without this guard a throw here rejects Promise.all in runAllTests.
+        try {
+          if (id) {
+            scheduler.release(id);
+            settle(id);
+          }
+          publish();
+        } catch {
+          incomplete = true;
         }
-        publish();
       }
     },
     close() {
       clearInterval(heartbeat);
       try {
-        publish(true);
+        try {
+          publish(true);
+        } catch {
+          incomplete = true;
+        }
       } finally {
         scheduler.close();
       }

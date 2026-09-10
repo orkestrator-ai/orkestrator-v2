@@ -255,6 +255,8 @@ Configuration (use the same settings in all participating launchers):
 | `ORKESTRATOR_TEST_HOST_MEMORY_MIB` | Lower the estimated host memory budget |
 | `ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` | Wait deadline, from 1 second to 2 hours |
 | `ORKESTRATOR_TEST_SCHEDULER_DIR` | Private same-user SQLite directory; normally leave unset |
+| `ORKESTRATOR_COOPERATIVE_STARTUP_MS` | First-publish allowance before a cooperative runner is treated as stalled |
+| `ORKESTRATOR_COOPERATIVE_STALE_MS` | Silence after its last channel read before a cooperative runner is treated as stalled |
 
 An active queue keeps its original budget; changed settings apply when idle.
 The old `ORKESTRATOR_TEST_ALLOW_CONCURRENT` override no longer bypasses admission.
@@ -277,8 +279,11 @@ whole budget (`weight: 2`), plus named exclusive resources. These declarations
 must honestly describe internally parallel commands. This repository declares
 its exact aggregate commands in `.orkestrator-test-scheduler.json`: they instead
 reserve their constituent groups and publish bounded scheduling state through a
-private per-command channel, avoiding nested/double reservations. A missing or
-stale cooperative heartbeat makes validation incomplete.
+private per-command channel, avoiding nested/double reservations. A cooperative
+runner's startup (shell profile, toolchain resolution, transpilation) is allowed
+a generous first-publish window before it is considered stalled; staleness is
+then measured from its last successful read, not from spawn. A missing or stale
+cooperative heartbeat makes validation incomplete.
 Declared exclusive resources also reach those groups: constituents of one
 command may share them internally, but another command cannot use them while
 an owning group is running.

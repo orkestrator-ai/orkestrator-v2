@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, writeFile, readFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -96,6 +96,44 @@ async function completed(root: string, run: ReviewValidationRun) {
   }
   expect(["planned", "running"]).not.toContain(next.status);
   return next;
+}
+async function waitFor(
+  root: string,
+  run: ReviewValidationRun,
+  timeoutMs: number,
+  extraEnv: Record<string, string> = {},
+) {
+  let next = await control(root, run, "start", extraEnv);
+  const deadline = Date.now() + timeoutMs;
+  while (["planned", "running"].includes(next.status) && Date.now() < deadline) {
+    await Bun.sleep(100);
+    next = await control(root, run, "status");
+  }
+  expect(["planned", "running"]).not.toContain(next.status);
+  return next;
+}
+async function cooperativeFixture(
+  commands: ReviewValidationPlan["commands"],
+  scripts: Record<string, string>,
+) {
+  const context = await fixture(commands);
+  const modulePath = path.resolve(import.meta.dir, "../../../../scripts/test-admission.ts");
+  await writeFile(
+    path.join(context.root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: Object.keys(scripts).map((name) => `bun ${name}`),
+    }),
+  );
+  for (const [name, source] of Object.entries(scripts))
+    await writeFile(
+      path.join(context.root, name),
+      source.replaceAll("__MODULE__", JSON.stringify(modulePath)),
+    );
+  context.git("add", ".");
+  context.git("commit", "-m", "cooperative runner");
+  context.run.plan.headRef = context.git("rev-parse", "HEAD");
+  return context;
 }
 afterEach(async () => {
   for (const { root, run } of fixtures.splice(0)) {
@@ -386,3 +424,195 @@ admission.close(); process.exitCode = result.status ?? 1;
     scheduler.close();
   }
 });
+
+test("a failed second artifact open becomes a metadata-only incomplete result", async () => {
+  const { root, run } = await fixture([command("check", "printf hello")]);
+  const artifactDirectory = path.join(root, ".orkestrator", "review-artifacts", run.id);
+  await mkdir(artifactDirectory, { recursive: true });
+  await writeFile(path.join(artifactDirectory, "validation-01.stderr.txt"), "pre-existing\n");
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.results[0]).toMatchObject({
+    status: "incomplete",
+    stdoutPath: null,
+    stderrPath: null,
+  });
+  expect(done.results[0]!.limitation).toBeTruthy();
+  // The one-sided pair must remain parseable preparation evidence.
+  const evidence = parseReviewPreparationValidation(
+    validationPreparation(done).validation,
+    done.id,
+  );
+  expect(evidence[0]).toMatchObject({ status: "incomplete", stdoutPath: null, stderrPath: null });
+});
+
+test("a cooperative command queued on the host does not hold the local runner slot", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("cooperative", "bun cooperative.ts", {
+        weight: 2,
+        timeoutMs: 30000,
+        resources: ["shared-database"],
+      }),
+      command("independent", "touch .orkestrator/independent-ran"),
+    ],
+    {
+      "cooperative.ts": `import { createTestAdmission } from __MODULE__;
+const admission = createTestAdmission(import.meta.dir, process.env, console.log);
+const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1 }, async () => { await Bun.sleep(50); return { status: 0 }; });
+admission.close(); process.exitCode = result.status ?? 1;
+`,
+    },
+  );
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 2,
+    memoryMiB: 4096,
+  });
+  const ticket = scheduler.enqueue({
+    owner: scheduler.owner(root),
+    workers: 1,
+    memoryMiB: 1,
+    resources: ["resource:" + createHash("sha256").update("shared-database").digest("hex")],
+  });
+  try {
+    await control(root, run, "start", {
+      ORKESTRATOR_TEST_HOST_WORKERS: "2",
+      ORKESTRATOR_TEST_HOST_MEMORY_MIB: "4096",
+    });
+    const queuedDeadline = Date.now() + 8000;
+    while (Date.now() < queuedDeadline) {
+      if ((await control(root, run, "status")).results[0]!.status === "queued") break;
+      await Bun.sleep(50);
+    }
+    const ranDeadline = Date.now() + 5000;
+    while (
+      !(await Bun.file(path.join(root, ".orkestrator/independent-ran")).exists()) &&
+      Date.now() < ranDeadline
+    )
+      await Bun.sleep(50);
+    expect(await Bun.file(path.join(root, ".orkestrator/independent-ran")).exists()).toBe(true);
+    expect((await control(root, run, "status")).results[0]!.status).toBe("queued");
+    scheduler.release(ticket);
+    const done = await completed(root, run);
+    expect(done.results.map((result) => result.status)).toEqual(["passed", "passed"]);
+  } finally {
+    scheduler.release(ticket);
+    scheduler.close();
+  }
+}, 30000);
+
+test("a cooperative channel that goes stale is marked incomplete", async () => {
+  const { root, run } = await cooperativeFixture(
+    [command("stale", "bun stale.ts", { weight: 1, timeoutMs: 30000, resources: ["stale"] })],
+    {
+      "stale.ts": `const fs = require("node:fs");
+fs.writeFileSync(process.env.ORKESTRATOR_VALIDATION_SCHEDULER_STATE, JSON.stringify({ version: 1, pid: process.pid, state: "running", heartbeat: Date.now(), executionMs: 0, queuedMs: 0 }));
+setInterval(() => {}, 1000);
+`,
+    },
+  );
+  const done = await waitFor(root, run, 15000, { ORKESTRATOR_COOPERATIVE_STALE_MS: "800" });
+  expect(done.results[0]!.status).toBe("incomplete");
+  expect(done.results[0]!.limitation).toContain("stopped reporting");
+});
+
+test("a cooperative runner that exits without sealing is incomplete", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("unsealed", "bun unsealed.ts", {
+        weight: 1,
+        timeoutMs: 5000,
+        resources: ["unsealed"],
+      }),
+    ],
+    {
+      "unsealed.ts": `import { createTestAdmission } from __MODULE__;
+createTestAdmission(import.meta.dir, process.env, console.log);
+process.exit(0);
+`,
+    },
+  );
+  const done = await completed(root, run);
+  expect(done.results[0]!.status).toBe("incomplete");
+  expect(done.results[0]!.limitation).toContain("did not seal");
+});
+
+test("review validation queues across worktrees and rehydrates hashed artifacts", async () => {
+  const first = await fixture([
+    command("first", "sleep 8; printf first-output", { timeoutMs: 20000 }),
+  ]);
+  const second = await fixture([command("second", "printf second-output")]);
+  const schedulerDirectory = await mkdtemp(path.join(tmpdir(), "review-shared-scheduler-"));
+  const scheduler = createHostTestScheduler({
+    directory: schedulerDirectory,
+    workers: 2,
+    memoryMiB: 4096,
+  });
+  const blocker = scheduler.enqueue({ owner: "c".repeat(64), workers: 1, memoryMiB: 1 });
+  const env = {
+    ORKESTRATOR_TEST_SCHEDULER_DIR: schedulerDirectory,
+    ORKESTRATOR_TEST_HOST_WORKERS: "2",
+    ORKESTRATOR_TEST_HOST_MEMORY_MIB: "4096",
+  };
+  try {
+    await control(first.root, first.run, "start", env);
+    const firstDeadline = Date.now() + 8000;
+    let firstState = await control(first.root, first.run, "status");
+    while (
+      ["pending", "queued"].includes(firstState.results[0]!.status) &&
+      ["planned", "running"].includes(firstState.status) &&
+      Date.now() < firstDeadline
+    ) {
+      await Bun.sleep(50);
+      firstState = await control(first.root, first.run, "status");
+    }
+    expect(firstState.results[0]!.status).toBe("running");
+    await control(second.root, second.run, "start", env);
+    // The second worktree waits for the one remaining host slot.
+    const secondDeadline = Date.now() + 5000;
+    let secondState = await control(second.root, second.run, "status");
+    while (
+      secondState.results[0]!.status === "pending" &&
+      ["planned", "running"].includes(secondState.status) &&
+      Date.now() < secondDeadline
+    ) {
+      await Bun.sleep(50);
+      secondState = await control(second.root, second.run, "status");
+    }
+    expect(secondState.results[0]!.status).toBe("queued");
+    scheduler.release(blocker);
+    const doneFirst = await completed(first.root, first.run);
+    const doneSecond = await completed(second.root, second.run);
+    expect(doneFirst.results[0]!.status).toBe("passed");
+    expect(doneSecond.results[0]!.status).toBe("passed");
+    expect(doneFirst.results[0]!.stdoutSha256).toHaveLength(64);
+    expect(doneSecond.results[0]!.stdoutSha256).toHaveLength(64);
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+    await rm(schedulerDirectory, { recursive: true, force: true });
+  }
+}, 30000);
+
+test("a cooperative startup slower than ten seconds is not mistaken for a stalled runner", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("slow-start", "bun slow-cooperative.ts", {
+        weight: 1,
+        timeoutMs: 30000,
+        resources: ["slow-startup"],
+      }),
+    ],
+    {
+      "slow-cooperative.ts": `import { createTestAdmission } from __MODULE__;
+await Bun.sleep(11000);
+const admission = createTestAdmission(import.meta.dir, process.env, console.log);
+const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1 }, async () => ({ status: 0 }));
+admission.close(); process.exitCode = result.status ?? 1;
+`,
+    },
+  );
+  const done = await waitFor(root, run, 25000, { ORKESTRATOR_COOPERATIVE_STARTUP_MS: "30000" });
+  expect(done.results[0]!.status).toBe("passed");
+}, 30000);

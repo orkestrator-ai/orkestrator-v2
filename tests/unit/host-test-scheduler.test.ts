@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import {
   createHostTestScheduler,
   HOST_TEST_SCHEDULER_SOURCE,
@@ -271,4 +272,86 @@ console.log(child.pid); setInterval(() => {}, 1000);
       } catch {}
     }
   }
+});
+
+test("a reused owner pid releases capacity instead of stranding it", async () => {
+  const { scheduler, directory, request } = fixture();
+  const owner = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      `const scheduler = (${HOST_TEST_SCHEDULER_SOURCE})(${JSON.stringify({ directory, workers: request.workers, memoryMiB: 128 })}); const id = scheduler.enqueue(${JSON.stringify(request)}); console.log(id); setInterval(() => {}, 1000);`,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  try {
+    const reader = owner.stdout.getReader();
+    const id = new TextDecoder().decode((await reader.read()).value).trim();
+    reader.releaseLock();
+    expect(id).toMatch(/^[a-f0-9-]{36}$/);
+    owner.kill("SIGKILL");
+    await owner.exited;
+    // Simulate pid reuse: the dead owner's pid now belongs to an unrelated live
+    // process, so only the birth token can tell them apart.
+    const db = new Database(path.join(directory, "queue.sqlite"));
+    try {
+      db.query("UPDATE jobs SET pid=?, pidBorn=? WHERE id=?").run(
+        process.pid,
+        "unrelated-live-process",
+        id,
+      );
+    } finally {
+      db.close();
+    }
+    const next = scheduler.enqueue({ ...request, owner: "b".repeat(64) });
+    expect(scheduler.poll(next).state).toBe("running");
+    scheduler.release(next);
+  } finally {
+    owner.kill("SIGKILL");
+    await owner.exited;
+  }
+});
+
+test("admission queue time excludes runner setup and idle gaps", async () => {
+  const { directory } = fixture();
+  const channel = path.join(directory, "channel.json");
+  const admission = createTestAdmission(
+    directory,
+    {
+      ORKESTRATOR_TEST_SCHEDULER_DIR: directory,
+      ORKESTRATOR_VALIDATION_SCHEDULER_STATE: channel,
+    },
+    () => {},
+  );
+  const group = { name: "timing", command: "unused", args: [], exclusive: true };
+  await Bun.sleep(350); // setup before the first group
+  await admission.run(group, async () => ({ status: 0 }));
+  await Bun.sleep(350); // idle gap between groups
+  await admission.run(group, async () => ({ status: 0 }));
+  admission.close();
+  const value = JSON.parse(readFileSync(channel, "utf8")) as { queuedMs: number };
+  expect(value.queuedMs).toBeLessThan(200);
+});
+
+test("a failed publish in the admission finally does not discard a group's result", async () => {
+  const { directory } = fixture();
+  const channelDirectory = path.join(directory, "channel");
+  mkdirSync(channelDirectory);
+  const channel = path.join(channelDirectory, "state.json");
+  const admission = createTestAdmission(
+    directory,
+    {
+      ORKESTRATOR_TEST_SCHEDULER_DIR: directory,
+      ORKESTRATOR_VALIDATION_SCHEDULER_STATE: channel,
+    },
+    () => {},
+  );
+  const group = { name: "fixture", command: "unused", args: [], exclusive: true };
+  expect((await admission.run(group, async () => ({ status: 0 }))).status).toBe(0);
+  rmSync(channelDirectory, { recursive: true, force: true });
+  // The channel can no longer be written; the run must still resolve rather than
+  // reject and lose the group's result.
+  const result = await admission.run(group, async () => ({ status: 0 }));
+  expect(result).toMatchObject({ status: 75, infrastructureError: true });
+  admission.close();
 });

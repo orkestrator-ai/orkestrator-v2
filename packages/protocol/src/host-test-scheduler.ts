@@ -40,6 +40,9 @@ export function createHostTestScheduler(
     const number = Number(value);
     return Number.isSafeInteger(number) && number > 0 ? Math.min(number, max) : fallback;
   };
+  // The owner pid never changes for this factory, so its birth token is read
+  // once instead of spawning `ps` on every enqueue.
+  const selfBorn = birth(process.pid);
   const hardwareWorkers = Math.max(1, Math.min(8, os.availableParallelism() - 2));
   const hardwareMemory = Math.max(512, Math.floor((os.totalmem() / 1048576) * 0.65));
   const workers = positive(
@@ -75,7 +78,7 @@ export function createHostTestScheduler(
   );
   db.exec(`CREATE TABLE IF NOT EXISTS jobs (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
-    owner TEXT NOT NULL, pid INTEGER NOT NULL, child INTEGER,
+    owner TEXT NOT NULL, pid INTEGER NOT NULL, pidBorn TEXT, child INTEGER,
     workers INTEGER NOT NULL, memory INTEGER NOT NULL, resources TEXT NOT NULL,
     state TEXT NOT NULL, queued INTEGER NOT NULL, admitted INTEGER
   ); CREATE TABLE IF NOT EXISTS owners (id TEXT PRIMARY KEY, served INTEGER NOT NULL);
@@ -85,6 +88,7 @@ export function createHostTestScheduler(
     id: string;
     owner: string;
     pid: number;
+    pidBorn: string | null;
     child: number | null;
     childBorn: string | null;
     cohort: string | null;
@@ -107,24 +111,30 @@ export function createHostTestScheduler(
   const remove = (id: string) => db.query("DELETE FROM jobs WHERE id=?").run(id);
   const transaction = <T>(fn: () => T): T => db.transaction(fn).immediate();
   transaction(() => {
-    if (
-      !db
-        .query<{ name: string }, []>("PRAGMA table_info(jobs)")
-        .all()
-        .some((column) => column.name === "childBorn")
-    )
-      db.exec("ALTER TABLE jobs ADD COLUMN childBorn TEXT");
-    if (
-      !db
-        .query<{ name: string }, []>("PRAGMA table_info(jobs)")
-        .all()
-        .some((column) => column.name === "cohort")
-    )
-      db.exec("ALTER TABLE jobs ADD COLUMN cohort TEXT");
+    const columns = db
+      .query<{ name: string }, []>("PRAGMA table_info(jobs)")
+      .all()
+      .map((column) => column.name);
+    if (!columns.includes("childBorn")) db.exec("ALTER TABLE jobs ADD COLUMN childBorn TEXT");
+    if (!columns.includes("cohort")) db.exec("ALTER TABLE jobs ADD COLUMN cohort TEXT");
+    if (!columns.includes("pidBorn")) db.exec("ALTER TABLE jobs ADD COLUMN pidBorn TEXT");
   });
   const reap = () => {
+    // Reading a pid's birth token costs a process spawn, so read each distinct
+    // pid at most once per reap and short-circuit the common same-process owner.
+    const births = new Map<number, string | null>();
     for (const job of jobs()) {
-      if (job.state !== "draining" && alive(job.pid)) continue;
+      // A bare pid is not identity: a dead owner's pid can be reused by an
+      // unrelated long-lived process, which would strand this reservation
+      // forever. Only trust the owner when its birth token still matches; when
+      // birth is unknown on either side, retain capacity rather than risk
+      // running alongside a live owner.
+      if (job.state !== "draining" && alive(job.pid)) {
+        if (job.pid === process.pid && job.pidBorn === selfBorn) continue;
+        if (!births.has(job.pid)) births.set(job.pid, birth(job.pid));
+        const currentBirth = births.get(job.pid);
+        if (!job.pidBorn || !currentBirth || job.pidBorn === currentBirth) continue;
+      }
       // A runner killed mid-turn may leave its detached process group alive.
       // Drain that exact registered group before lending its capacity again.
       if (job.child && alive(process.platform === "win32" ? job.child : -job.child)) {
@@ -236,11 +246,12 @@ export function createHostTestScheduler(
           request.owner,
         );
         db.query(
-          "INSERT INTO jobs (id,owner,pid,workers,memory,resources,state,queued,cohort) VALUES (?,?,?,?,?,?,'queued',?,?)",
+          "INSERT INTO jobs (id,owner,pid,pidBorn,workers,memory,resources,state,queued,cohort) VALUES (?,?,?,?,?,?,?,'queued',?,?)",
         ).run(
           id,
           request.owner,
           process.pid,
+          selfBorn,
           request.workers,
           request.memoryMiB,
           JSON.stringify(request.resources ?? []),

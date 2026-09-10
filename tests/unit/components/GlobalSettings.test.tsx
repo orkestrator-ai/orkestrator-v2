@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -12,6 +12,7 @@ import {
 } from "../../../packages/protocol/src/review-prompt";
 import { MAX_OPENCODE_MODEL_PROVIDERS } from "../../../packages/protocol/src/native-agent";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
+import { BUNDLED_APP_VERSION } from "@/lib/app-version";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -45,6 +46,7 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
 const mockGetLogDirectory = mock(async () => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
 const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
+const mockGetAppVersion = mock(async () => "2.15.1");
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
     updated: [],
@@ -102,6 +104,7 @@ mock.module("@/lib/backend", () => ({
   getLogDirectory: mockGetLogDirectory,
   getLogStorageStats: mockGetLogStorageStats,
   cleanupLogs: mockCleanupLogs,
+  getAppVersion: mockGetAppVersion,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
@@ -148,6 +151,8 @@ describe("GlobalSettings", () => {
     mockSetGitHubToken.mockClear();
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
+    mockGetAppVersion.mockClear();
+    mockGetAppVersion.mockImplementation(async () => "2.15.1");
     mockGetLogDirectory.mockClear();
     mockGetLogDirectory.mockImplementation(async () => null);
     mockGetLogStorageStats.mockClear();
@@ -1066,6 +1071,7 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
+    expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
   });
 
@@ -1868,6 +1874,50 @@ describe("GlobalSettings", () => {
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
+  });
+
+  test("shows the running app version on the debug tab", async () => {
+    mockGetAppVersion.mockResolvedValue("9.8.7-test");
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("App version")).toBeTruthy();
+    expect(await screen.findByText("9.8.7-test")).toBeTruthy();
+    expect(screen.queryByText(/from this bundle/)).toBeNull();
+    expect(mockGetAppVersion).toHaveBeenCalled();
+  });
+
+  test("marks the debug version as bundled when the backend does not answer", async () => {
+    // Without the marker an unreachable backend is indistinguishable from a
+    // healthy one, on the single tab whose job is to say what is running.
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    mockGetAppVersion.mockRejectedValue(new Error("backend offline"));
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText(/from this bundle/)).toBeTruthy();
+    expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+    consoleError.mockRestore();
+  });
+
+  test("marks the debug version as bundled when the backend reports the unset placeholder", async () => {
+    mockGetAppVersion.mockResolvedValue("0.0.0");
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText(/from this bundle/)).toBeTruthy();
+    expect(screen.getByText(BUNDLED_APP_VERSION)).toBeTruthy();
+  });
+
+  test("reads the app version only while the debug tab is active", async () => {
+    // The probe is a backend round trip on every settings open unless the
+    // section gate holds, so assert the gate rather than the fetch alone.
+    mockGetAppVersion.mockResolvedValue("3.2.1-active");
+    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    expect(screen.getByText("Preferred Editor")).toBeTruthy();
+    expect(mockGetAppVersion).not.toHaveBeenCalled();
+
+    rerender(<GlobalSettings activeSection="debug" />);
+    expect(await screen.findByText("3.2.1-active")).toBeTruthy();
+    expect(mockGetAppVersion).toHaveBeenCalledTimes(1);
   });
 
   test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {

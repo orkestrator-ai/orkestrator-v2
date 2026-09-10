@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
+import { APP_VERSION } from "./constants.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import {
@@ -32,6 +33,16 @@ function deferred<T>() {
 describe("system usage", () => {
   test("registers the renderer snapshot command", () => {
     expect(createCommandRegistry().has("get_system_usage")).toBe(true);
+  });
+
+  test("reports the sanitized running app version", () => {
+    const commands = new Map<string, CommandHandler>();
+    registerSystemCommands((name, handler) => commands.set(name, handler));
+    expect(createCommandRegistry().has("get_app_version")).toBe(true);
+    expect(commands.get("get_app_version")!({}, {} as CommandContext)).toBe(APP_VERSION);
+    expect(() => commands.get("get_app_version")!({ extra: true }, {} as CommandContext)).toThrow(
+      /Unexpected arguments field: extra/,
+    );
   });
 
   test("passes the backend data directory to the registered reader", async () => {

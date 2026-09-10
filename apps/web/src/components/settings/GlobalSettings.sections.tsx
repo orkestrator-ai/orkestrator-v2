@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { resolveDisplayedAppVersion } from "@/lib/app-version";
 import * as backend from "@/lib/backend";
 import {
   Loader2,
@@ -278,6 +279,29 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     handleBackgroundColorChange,
     handleTestDomains,
   } = settings;
+
+  const [runtimeAppVersion, setRuntimeAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeSection !== "debug") return;
+    let cancelled = false;
+    backend
+      .getAppVersion()
+      .then((version) => {
+        if (!cancelled) setRuntimeAppVersion(version);
+      })
+      .catch((error) => {
+        // The debug tab exists to diagnose the running install, so a probe that
+        // never answered has to leave a trace rather than quietly hand the
+        // reader the bundle's own version as if the backend had reported it.
+        console.error("[settings] Failed to read the running app version:", error);
+        if (!cancelled) setRuntimeAppVersion(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection]);
+  const appVersion = resolveDisplayedAppVersion(runtimeAppVersion);
+
   // --- Section renderers ---
 
   const isUsingDefaultReviewInstruction = reviewInstruction === DEFAULT_REVIEW_INSTRUCTION;
@@ -1813,6 +1837,20 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderDebug = () => (
     <div className="max-w-2xl space-y-5">
+      <div>
+        <h3 className="text-sm font-medium text-foreground">App version</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          The Orkestrator version running on this machine
+        </p>
+        <p className="mt-2 font-mono text-sm text-foreground" aria-live="polite">
+          {appVersion.version}
+          {appVersion.source === "bundled" ? (
+            <span className="ml-2 font-sans text-xs text-muted-foreground">
+              from this bundle; the backend did not report a version
+            </span>
+          ) : null}
+        </p>
+      </div>
       <div>
         <h3 className="text-sm font-medium text-foreground">Save Logs for Debugging</h3>
         <p className="text-xs text-muted-foreground mt-1">

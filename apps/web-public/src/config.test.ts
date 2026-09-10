@@ -21,7 +21,7 @@ describe("public client deployment configuration", () => {
     // use Turbo's `--` separator, which would fold into the dependency `build`
     // task's hash and split the cache between `bun run build` and `bun run test`.
     expect(manifest.scripts["test:workspace"]).toBe(
-      "bun test src --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+      "bun test src --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/web-public.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     );
 
     const tsconfig = JSON.parse(read("tsconfig.json")) as {

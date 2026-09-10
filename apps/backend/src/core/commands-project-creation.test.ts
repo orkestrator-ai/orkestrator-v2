@@ -290,8 +290,16 @@ describe("create_project_from_scratch", () => {
   });
 
   test("rolls back when GitHub CLI is definitely missing", async () => {
+    let sawCommittedRepository = false;
     const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
       if (command === "gh") {
+        const source = args.find((arg) => arg.startsWith("--source="))?.slice(9);
+        if (!source) throw new Error("missing source path");
+        expect(await fs.readdir(source)).toEqual([".git"]);
+        await expect(
+          shellRunCommand("git", ["-C", source, "log", "-1", "--format=%an%n%s"]),
+        ).resolves.toMatchObject({ stdout: "Orkestrator\nInitial commit\n" });
+        sawCommittedRepository = true;
         throw new CommandFailedError("spawn gh ENOENT", { executableMissing: true });
       }
       return shellRunCommand(command, args, options);
@@ -299,7 +307,13 @@ describe("create_project_from_scratch", () => {
     await withProjectCreation(runCommand, async (invoke, _storage, root) => {
       const projectPath = path.join(root, "missing-gh");
       await expect(invoke(projectPath)).rejects.toThrow("GitHub CLI is not installed");
-      await expect(fs.access(projectPath)).rejects.toThrow();
+      const retainedEntries = await fs
+        .readdir(projectPath)
+        .catch((error: NodeJS.ErrnoException) =>
+          error.code === "ENOENT" ? null : Promise.reject(error),
+        );
+      expect(retainedEntries === null ? null : retainedEntries.slice(0, 32)).toBeNull();
+      expect(sawCommittedRepository).toBe(true);
     });
   });
 

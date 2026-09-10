@@ -323,7 +323,7 @@ These are repo-specific and will silently corrupt a split if ignored.
    flake fixed in `docs/flaky-tests.md` for the diff-stats cache tests.
 
 8. **Run with `test:logged`.** Terminal buffers are not authoritative; the exit
-   status is. See `AGENTS.md` and `docs/test-logs.md`.
+   status is. See `AGENTS.md` and `docs/development/testing-guide.md`.
 
 9. **Record flakes.** If a test fails in the aggregate run but passes alone,
    `docs/flaky-tests.md` is the only registry — add or update its entry in the

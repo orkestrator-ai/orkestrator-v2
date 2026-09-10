@@ -63,6 +63,8 @@ export interface ProviderPromptImage {
 export interface ProviderSessionRegistration {
   origin: AgentInteractionOrigin;
   interactionPolicy: AgentInteractionPolicy;
+  /** Backend-owned leaf-review identity, reconstructed from durable workflow state. */
+  reviewerSession?: boolean;
   phase?: string;
   workflowId?: string;
   provider?: ProviderAgent;
@@ -189,6 +191,14 @@ export type ProviderNativeAgentSessionAction =
 export interface ProviderCreateSessionOptions {
   /** Explicit tool restriction for providers without a native read-only mode. */
   readOnly?: boolean;
+  /**
+   * Backend-owned identity for one leaf review session.
+   *
+   * OpenCode persists this marker with the session so a recreated provider can
+   * distinguish a reviewer from a coordinator before temporarily granting the
+   * reviewer's constrained shell rules.
+   */
+  reviewerSession?: boolean;
   clientSessionKey?: string;
   mode?: ProviderExecutionMode;
   model?: string;
@@ -204,6 +214,12 @@ export interface ProviderCreateSessionOptions {
 export interface ProviderSendOptions {
   /** Per-turn mutation boundary; independent of plan/build response semantics. */
   readOnly?: boolean;
+  /**
+   * OpenCode reviewer exception: allow a constrained set of read-only shell
+   * commands under this backend policy while readOnly disables mutation tools.
+   * Resupplied on dispatch, but applied only to a durably marked reviewer.
+   */
+  reviewShellPolicy?: NativeAgentExecutionPolicy;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];

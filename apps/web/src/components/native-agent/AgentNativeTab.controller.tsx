@@ -1767,11 +1767,19 @@ export function SharedNativeAgentController({
       transcriptHeader={
         truncatedWindow ? (
           <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-            <span>
-              {truncatedWindow.truncationReason === "bytes" && !canLoadEarlier
-                ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
-                : "Earlier messages are not shown."}
-            </span>
+            {!canLoadEarlier ? (
+              <span>
+                {/*
+                 * Only the byte ceiling can be named as the cause. A window the
+                 * client marked non-pageable because history aged out carries
+                 * either the server's count reason or none at all, and blaming
+                 * the 16 MiB cap for it would state a trim that never happened.
+                 */}
+                {truncatedWindow.truncationReason === "bytes"
+                  ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
+                  : "Earlier messages are not shown."}
+              </span>
+            ) : null}
             {canLoadEarlier ? (
               <Button
                 type="button"

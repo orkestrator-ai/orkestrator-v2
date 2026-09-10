@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelListItem } from "@cursor/sdk";
 import type { AgentModel, NativeAgentComposerState } from "@orkestrator/protocol/native-agent";
-import { __testing, contextWindowForModelId, emptyComposer, modelSelection } from "./models.js";
+import {
+  __testing,
+  contextWindowForModelId,
+  emptyComposer,
+  listModels,
+  modelSelection,
+  useCursorModelsForTests,
+} from "./models.js";
 
 /** Shaped like a real Cursor model: an effort axis plus a speed toggle. */
 const opus: AgentModel = {
@@ -145,6 +152,52 @@ describe("modelSelection", () => {
 });
 
 describe("model catalogue", () => {
+  test("an obsolete in-flight probe cannot overwrite an injected catalogue", async () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    let releaseOld!: (items: ModelListItem[]) => void;
+    const oldItems = new Promise<ModelListItem[]>((resolve) => {
+      releaseOld = resolve;
+    });
+    const oldModel = { id: "old-model", displayName: "Old model" };
+    const injectedModel = { id: "injected-model", displayName: "Injected model" };
+    const restoreOld = useCursorModelsForTests({
+      list: () => oldItems,
+    } as typeof import("@cursor/sdk").Cursor.models);
+    let restoreInjected: (() => void) | undefined;
+
+    try {
+      process.env.CURSOR_API_KEY = "test-key";
+      const obsoleteProbe = listModels();
+      await Promise.resolve();
+
+      restoreInjected = useCursorModelsForTests({
+        list: async () => [injectedModel],
+      } as typeof import("@cursor/sdk").Cursor.models);
+      expect(await listModels()).toEqual([
+        expect.objectContaining({ id: "injected-model", label: "Injected model" }),
+      ]);
+
+      releaseOld([oldModel]);
+      await expect(obsoleteProbe).resolves.toEqual([
+        expect.objectContaining({ id: "old-model", label: "Old model" }),
+      ]);
+      expect(await listModels()).toEqual([
+        expect.objectContaining({ id: "injected-model", label: "Injected model" }),
+      ]);
+
+      restoreInjected();
+      restoreInjected = undefined;
+      expect(await listModels()).toEqual([
+        expect.objectContaining({ id: "old-model", label: "Old model" }),
+      ]);
+    } finally {
+      restoreInjected?.();
+      restoreOld();
+      if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previousApiKey;
+    }
+  });
+
   test("normalizes independent controls and retains defaults without a variant parameter", () => {
     const item: ModelListItem = {
       id: "claude-opus-5",

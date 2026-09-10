@@ -7,6 +7,13 @@ const read = (relativePath: string) => readFileSync(path.join(root, relativePath
 type MiseTask = { run?: string | string[]; env?: Record<string, string> };
 const miseTasks = () =>
   (Bun.TOML.parse(read("mise.toml")) as { tasks: Record<string, MiseTask> }).tasks;
+const BRIDGE_MANIFESTS = [
+  "bridges/acp-bridge/package.json",
+  "bridges/claude-bridge/package.json",
+  "bridges/codex-bridge/package.json",
+  "bridges/cursor-bridge/package.json",
+  "bridges/pi-bridge/package.json",
+];
 
 describe("monorepo orchestration scripts", () => {
   test("backend build externalizes Sharp and vendors its complete runtime closure", () => {
@@ -180,21 +187,97 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain("Failing groups:");
   });
 
-  test("full tests cover the bridge packages, which have no workspace test script", () => {
-    // bridges/* are not in the turbo `test:workspace` filters and declare no
-    // `test` script, so they only run if test-all.ts invokes them directly.
+  test("full tests cover bridge packages through a dedicated Turbo task", () => {
     const source = read("scripts/test-all.ts");
     expect(source).toContain('name: "bridges"');
-    expect(source).toContain('"test", "bridges"');
+    expect(source).toContain('"test:bridge"');
 
-    for (const bridge of [
-      "bridges/claude-bridge/package.json",
-      "bridges/codex-bridge/package.json",
-    ]) {
+    for (const bridge of BRIDGE_MANIFESTS) {
       const scripts =
         (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toBeUndefined();
+      expect(scripts["test:bridge"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-1}");
     }
+
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { inputs?: string[]; passThroughEnv?: string[] }>;
+    };
+    expect(turbo.tasks?.["test:bridge"]?.inputs).toContain("$TURBO_ROOT$/bunfig.toml");
+    expect(turbo.tasks?.["test:bridge"]?.passThroughEnv).toContain("ORKESTRATOR_TEST_WORKERS");
+    expect(turbo.tasks?.["test:workspace"]?.inputs).toContain("$TURBO_ROOT$/tests/setup-node.ts");
+    expect(turbo.tasks?.["test:workspace"]?.passThroughEnv).toContain(
+      "ORKESTRATOR_TEST_TIMINGS_DIR",
+    );
+  });
+
+  test("bridge suites carry the root preload harness Turbo's package cwd would drop", () => {
+    // Turbo runs each script from its own package, and Bun reads `bunfig.toml`
+    // from the invocation directory without walking up. Anything the root
+    // bunfig preloads — the happy-dom registration, the git-config isolation,
+    // `CODEX_BRIDGE_NO_SERVER`, the bounded diagnostics — therefore has to be
+    // named explicitly, or bridge tests silently run without it and the codex
+    // suite binds a real port.
+    const preloads = (Bun.TOML.parse(read("bunfig.toml")) as { test?: { preload?: string[] } }).test
+      ?.preload;
+    expect(preloads?.length).toBeGreaterThan(0);
+
+    for (const bridge of BRIDGE_MANIFESTS) {
+      const scripts =
+        (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
+      for (const preload of preloads ?? []) {
+        // `./tests/setup.ts` at the root is `../../tests/setup.ts` from a bridge.
+        expect(scripts["test:bridge"]).toContain(`--preload ${preload.replace(/^\.\//, "../../")}`);
+      }
+    }
+  });
+
+  test("aggregate test tasks never replay a cached pass", () => {
+    // A cache hit would let a group report success having executed nothing,
+    // which is worth far less than the seconds it saves on a suite that still
+    // tracks live flakes in docs/flaky-tests.md.
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { cache?: boolean }>;
+    };
+    expect(turbo.tasks?.["test:bridge"]?.cache).toBe(false);
+    expect(turbo.tasks?.["test:workspace"]?.cache).toBe(false);
+    // `build` stays cacheable: it is the expensive dependency, and replaying it
+    // does not weaken any assertion.
+    expect(turbo.tasks?.build?.cache).not.toBe(false);
+  });
+
+  test("the aggregate runner relays interrupts to its detached groups", () => {
+    // `detached` puts each group in its own process group, which is what lets a
+    // watchdog kill a whole tree — and also what stops the terminal's Ctrl+C
+    // from ever reaching it. Without this relay the suite's children outlive it.
+    const source = read("scripts/test-all.ts");
+    expect(source).toContain(
+      'const interruptSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]',
+    );
+    expect(source).toContain("process.once(signal, listener)");
+    expect(source).toContain('terminateActiveGroups("SIGKILL")');
+    // Handlers are removed once the run unwinds so repeated runs cannot stack.
+    expect(source).toContain("process.off(signal, listener)");
+  });
+
+  test("aggregate Turbo groups stream task output instead of buffering it", () => {
+    // `--output-logs=errors-only` buffers a whole Turbo run into one silent
+    // window, which starves the runner's no-progress watchdog and gets a
+    // healthy slow group killed.
+    const source = read("scripts/test-all.ts");
+    expect(source).not.toContain("--output-logs=errors-only");
+    expect(source).toContain("--output-logs=new-only");
+  });
+
+  test("Turbo uses its automatic worktree-shared cache", () => {
+    expect(read("mise.toml")).not.toContain("--cache-dir");
+    expect(read("scripts/test-all.ts")).not.toContain('"--cache-dir"');
+  });
+
+  test("provides a changed-tests fast path without weakening the full suite", () => {
+    const tasks = miseTasks();
+    expect(tasks.test.run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"].run).toBe("bun scripts/test-all.ts");
+    expect(tasks["test:changed"].env).toEqual({ ORKESTRATOR_TEST_AFFECTED: "1" });
   });
 
   test("the component e2e project never claims the agent-testing suite", () => {

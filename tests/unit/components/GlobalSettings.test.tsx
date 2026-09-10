@@ -1882,7 +1882,7 @@ describe("GlobalSettings", () => {
 
     expect(await screen.findByText("App version")).toBeTruthy();
     expect(await screen.findByText("9.8.7-test")).toBeTruthy();
-    expect(screen.queryByText(/from this bundle/)).toBeNull();
+    expect(screen.queryByText(/from this bundle/) === null).toBe(true);
     expect(mockGetAppVersion).toHaveBeenCalled();
   });
 

@@ -76,7 +76,10 @@ import {
   sessions,
   touchSession,
 } from "./session-manager-core.js";
-import { releaseQueryControl } from "./session-manager-background-tasks.js";
+import {
+  LIVE_BACKGROUND_TASK_STATUSES,
+  releaseQueryControl,
+} from "./session-manager-background-tasks.js";
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -112,21 +115,32 @@ type PromptDispatchHandle = core.PromptDispatchHandle;
 export async function getSessionActivity(sessionId: string): Promise<SessionActivity> {
   const session = sessions.get(sessionId);
   if (session) {
+    // A running turn that has parked a question or a plan approval is blocked
+    // on the user, not on Claude. The backend renders those differently and
+    // must not treat them as progress it should wait out.
+    //
+    // This outranks the background-task sweep below. A backgrounded Bash
+    // command started earlier in the same turn stays live while that turn asks
+    // for permission, so checking tasks first would report the ordinary case
+    // as progress: the sidebar would pulse blue instead of amber, and the
+    // durable attention edge that hangs off `waiting` would never fire for a
+    // question nobody is looking at.
+    if (session.status === "running" && sessionHasPendingInteractions(sessionId)) return "waiting";
     // A parent turn can finish and release the composer while tasks it launched
     // keep running in the same session. Those tasks are still environment work:
     // retiring the sidebar indicator here paints the environment green even
     // though its task cards are visibly active. Pending and paused tasks are
     // unfinished too, so they keep the working indicator just like running
     // tasks do.
-    const hasUnfinishedBackgroundTask = Object.values(session.backgroundTasks ?? {}).some(
-      (task) => task.status === "pending" || task.status === "running" || task.status === "paused",
+    //
+    // `readyForInput` on the activity route is what stops this from also
+    // meaning "busy": consumers that gate on a free composer read that flag
+    // rather than this state.
+    const hasUnfinishedBackgroundTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
+      LIVE_BACKGROUND_TASK_STATUSES.has(task.status),
     );
     if (hasUnfinishedBackgroundTask) return "working";
-    if (session.status !== "running") return "idle";
-    // A running turn that has parked a question or a plan approval is blocked
-    // on the user, not on Claude. The backend renders those differently and
-    // must not treat them as progress it should wait out.
-    return sessionHasPendingInteractions(sessionId) ? "waiting" : "working";
+    return session.status === "running" ? "working" : "idle";
   }
 
   const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);

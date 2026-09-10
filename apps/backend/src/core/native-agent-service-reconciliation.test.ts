@@ -1257,6 +1257,195 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("announces a released composer once, on the edge the bridge actually reports", async () => {
+    // The production sequence for a Claude session with live background tasks:
+    // readiness is *absent* while the turn runs, then appears when the parent
+    // turn releases the composer. `false` never crosses the wire.
+    let observation: ProviderActivityObservation = { state: "working" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-edge-once-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "working", readyForInput: true };
+        await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasUnreadWork: true,
+        });
+
+        // The bridge repeats `readyForInput: true` on every poll for as long as
+        // the tasks run. Only the release is news.
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+      },
+    );
+  });
+
+  test("does not announce readiness regained without a live turn behind it", async () => {
+    // A bridge restart drops the session from residency, so the sweep records
+    // `idle` with no readiness. Materializing it again brings the flag back
+    // with no turn in between, and that must not read as attention.
+    let observation: ProviderActivityObservation = { state: "idle" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-regained-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "idle", readyForInput: true };
+        await service.reconcileAgentActivity();
+
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "idle",
+        });
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+      },
+    );
+  });
+
+  test("keeps the turn-end edge when a provider reports readiness as false", async () => {
+    // Reporting "not ready" accurately must not be weaker than omitting the
+    // field: the historical idle edge still owes the user an announcement.
+    let observation: ProviderActivityObservation = { state: "working" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-false-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "idle", readyForInput: false };
+        await service.reconcileAgentActivity();
+
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "idle",
+          hasUnreadWork: true,
+        });
+      },
+    );
+  });
+
+  test("a released composer takes mail even while background work keeps it working", async () => {
+    // The indicator view and the turn view answer different questions. Mail
+    // injection only claims an `idle` mailbox, so reading the raw `working`
+    // here would silence a worker for as long as its dev server runs.
+    let observation: ProviderActivityObservation = { state: "working" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-mail-gate-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        const input = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "tab-1",
+        };
+
+        await service.reconcileAgentActivity();
+        expect(service.sessionActivitySnapshot("env-1", "claude", "tab-1")).toBe("working");
+        expect(service.sessionTurnActivitySnapshot("env-1", "claude", "tab-1")).toBe("working");
+        expect(await service.mailInjectPresence(input)).toBe("working");
+
+        observation = { state: "working", readyForInput: true };
+        await service.reconcileAgentActivity();
+
+        // The environment keeps pulsing for its task cards…
+        expect(service.sessionActivitySnapshot("env-1", "claude", "tab-1")).toBe("working");
+        // …while everything gating on a free composer sees the released turn.
+        expect(service.sessionTurnActivitySnapshot("env-1", "claude", "tab-1")).toBe("idle");
+        expect(await service.mailInjectPresence(input)).toBe("idle");
+      },
+    );
+  });
+
+  test("a parked turn is never mistaken for a free composer", async () => {
+    let observation: ProviderActivityObservation = { state: "waiting" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-waiting-gate-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect(service.sessionTurnActivitySnapshot("env-1", "claude", "tab-1")).toBe("waiting");
+        expect(
+          await service.mailInjectPresence({
+            environmentId: "env-1",
+            agent: "claude",
+            logicalSessionKey: "tab-1",
+          }),
+        ).toBe("waiting");
+      },
+    );
+  });
+
   test("does not evict the provider when async-question attention persistence fails", async () => {
     const { provider, observeActivity, dispose } = createProviderStub("codex", {
       observeActivity: async () => ({

@@ -372,6 +372,62 @@ describe("getSessionActivity", () => {
     await promptPromise;
   });
 
+  test("a parked question outranks a live background task", async () => {
+    const state = createSession("asking with background work");
+    track(state.id);
+
+    const promptPromise = sendPrompt(state.id, "ask me something");
+    const call = await nextQueryCall();
+    // The ordinary shape: a backgrounded Bash command started earlier in this
+    // same turn is still alive when the turn stops to ask for permission.
+    state.backgroundTasks = {
+      "background-1": { id: "background-1", status: "running" },
+    };
+    const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Which one?" }],
+    });
+    await waitFor(() => getPendingQuestions(state.id).length === 1);
+
+    expect(state.status).toBe("running");
+    // Reporting `working` here would pulse the sidebar blue instead of amber
+    // and drop the attention edge for a question nobody is looking at.
+    expect(await getSessionActivity(state.id)).toBe("waiting");
+
+    const [question] = getPendingQuestions(state.id);
+    expect(dismissQuestion(question!.id)).toBe(true);
+    await toolPromise;
+    expect(await getSessionActivity(state.id)).toBe("working");
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("a parked plan approval outranks a live background task", async () => {
+    const state = createSession("planning with background work");
+    track(state.id);
+
+    const promptPromise = sendPrompt(state.id, "make a plan", {
+      permissionMode: "plan",
+    });
+    const call = await nextQueryCall();
+    state.backgroundTasks = {
+      "background-1": { id: "background-1", status: "pending" },
+    };
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "do stuff",
+    });
+    await waitFor(() => getPendingPlanApprovals(state.id).length === 1);
+
+    expect(await getSessionActivity(state.id)).toBe("waiting");
+
+    const [approval] = getPendingPlanApprovals(state.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+    await toolPromise;
+
+    call.finish();
+    await promptPromise;
+  });
+
   test("does not refresh the idle clock, unlike getSession", async () => {
     const state = await persistedSession();
     const readAt = Date.now() - 60_000;

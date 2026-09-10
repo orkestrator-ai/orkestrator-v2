@@ -439,7 +439,10 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
-/* Animate real layout height so the bottom-anchored transcript follows the reveal. */
+/*
+ * Animate real layout height, not a transform, so the bottom-anchored transcript
+ * follows the reveal instead of the skeleton sliding over the last message.
+ */
 .session-refresh-reveal {
   display: grid;
   grid-template-rows: 0fr;
@@ -454,6 +457,11 @@ body[data-orkestrator-dev-profile]::before {
   opacity: 1;
 }
 
+/*
+ * The transcript skeleton stays mounted and animates off the attribute, but the
+ * pinned one enters the compose dock already active. Without a starting style
+ * there is no previous value to transition from, so it would pop to full height.
+ */
 @starting-style {
   .session-refresh-reveal[data-active="true"] {
     grid-template-rows: 0fr;

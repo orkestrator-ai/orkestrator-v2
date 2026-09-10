@@ -324,8 +324,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
   const refreshingSession =
     displayAvailable && connectionState === "connecting" && sessionEstablished;
-  // An established but empty session still needs a visible loading indicator.
-  const composerCentered = centerCompose && !hasTranscriptCards && !refreshingSession;
+  const composerCentered = centerCompose && !hasTranscriptCards;
+  /*
+   * The transcript-end skeleton is the primary indicator, but the centered
+   * layout fades the whole transcript out and a reader scrolled away from the
+   * bottom never reaches its footer. The dock's notice row is visible in both
+   * layouts and at any scroll position, so it carries the fallback.
+   */
+  const pinRefreshShimmer = refreshingSession && (composerCentered || !isAtBottom);
   const connectionNotice =
     displayAvailable && connectionState === "error" ? (
       <div
@@ -361,6 +367,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       </div>
     ) : null;
 
+  const desyncNotice = desynced ? (
+    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+      <AlertCircle className="h-4 w-4 shrink-0" />
+      Live updates disconnected. A full session refresh will run when the connection returns.
+    </div>
+  ) : null;
+
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       {/*
@@ -379,6 +392,22 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         {agentActivityAnnouncement?.text ? (
           <span key={agentActivityAnnouncement.seq}>{agentActivityAnnouncement.text}</span>
         ) : null}
+      </span>
+      {/*
+        The refresh is a shimmer on screen and nothing else, so this region is
+        the only way a screen reader hears about it. Same shape as the region
+        above and for the same reason: `aria-live` has to be in the document
+        before the text arrives, or the insertion is not a change to announce.
+        Only `role` is conditional, and only so that a settled shell exposes no
+        stray status node.
+      */}
+      <span
+        role={refreshingSession ? "status" : undefined}
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {refreshingSession ? `Refreshing ${agentLabel} session…` : null}
       </span>
       <div
         className={cn(
@@ -456,7 +485,12 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   </div>
                 </div>
               )}
-              <SessionRefreshShimmer active={refreshingSession} agentLabel={agentLabel} />
+              {/*
+                Only while the transcript is the visible surface. The centered
+                layout fades it out, and a skeleton animating behind `opacity-0`
+                is work nobody sees.
+              */}
+              <SessionRefreshShimmer active={refreshingSession && !composerCentered} />
               {/*
                 The dock floats over the transcript, so its full live height must
                 be reserved here. That keeps a growing composer — plus any pinned
@@ -508,20 +542,18 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           ) : null
         }
         /*
-         * The desync banner gets its own always-visible row rather than sharing
-         * the top strip: `topAccessory` is suppressed while the composer is
-         * centered, and a tab that never received a message is centered — which
-         * is exactly the state a desynced tab is in.
+         * Connection-level state gets its own always-visible row rather than
+         * sharing the top strip: `topAccessory` is suppressed while the composer
+         * is centered, and a tab that never received a message is centered —
+         * which is exactly the state a desynced or refreshing tab is in.
+         *
+         * A live refresh outranks the desync banner, which describes the
+         * recovery this row is already showing in progress.
          */
         notice={
           connectionNotice ??
-          (desynced ? (
-            <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              Live updates disconnected. A full session refresh will run when the connection
-              returns.
-            </div>
-          ) : null)
+          (pinRefreshShimmer ? <SessionRefreshShimmer active variant="pinned" /> : null) ??
+          desyncNotice
         }
         topAccessory={
           topAccessory || !isAtBottom ? (

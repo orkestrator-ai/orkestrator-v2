@@ -17,6 +17,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type {
   LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
+  ReviewValidationOutput,
   StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import type {
@@ -58,6 +59,18 @@ import type {
   NativeAgentDiscoveryUpdate,
   NativeAgentDiscoverySection,
 } from "@orkestrator/protocol/native-agent";
+
+export async function getReviewValidationOutput(
+  environmentId: string,
+  runId: string,
+  resultId: string,
+): Promise<ReviewValidationOutput> {
+  return invoke<ReviewValidationOutput>("get_review_validation_output", {
+    environmentId,
+    runId,
+    resultId,
+  });
+}
 import {
   isNativeAgentMessagePage,
   isNativeAgentProjectionUpdate,

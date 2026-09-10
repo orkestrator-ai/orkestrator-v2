@@ -2063,6 +2063,25 @@ describe("backend command wrapper coverage", () => {
     void preparation;
   });
 
+  test("requests validation output by authoritative environment and step identity", async () => {
+    const output = {
+      resultId: "typecheck",
+      status: "passed" as const,
+      stdout: { contentBase64: "b2sK", totalBytes: 3, startOffset: 0 },
+      stderr: null,
+    };
+    invokeMock.mockResolvedValueOnce(output);
+
+    await expect(
+      backendWrappers.getReviewValidationOutput("env-1", "validation-1", "typecheck"),
+    ).resolves.toEqual(output);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_review_validation_output", {
+      environmentId: "env-1",
+      runId: "validation-1",
+      resultId: "typecheck",
+    });
+  });
+
   test("forwards backend-owned merge and cleanup intent as one command", async () => {
     const result = {
       outcome: "pending" as const,

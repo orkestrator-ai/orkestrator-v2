@@ -31,6 +31,22 @@ export interface ReviewValidationResult {
   limitation: string | null;
 }
 
+/** Maximum tail returned for each validation output stream in one UI snapshot. */
+export const REVIEW_VALIDATION_OUTPUT_MAX_BYTES = 512 * 1024;
+
+export interface ReviewValidationOutputStream {
+  contentBase64: string;
+  totalBytes: number;
+  startOffset: number;
+}
+
+export interface ReviewValidationOutput {
+  resultId: string;
+  status: ReviewValidationResult["status"];
+  stdout: ReviewValidationOutputStream | null;
+  stderr: ReviewValidationOutputStream | null;
+}
+
 /** Durable projection of an environment-owned process, independent of any agent session. */
 export interface ReviewValidationRun {
   id: string;

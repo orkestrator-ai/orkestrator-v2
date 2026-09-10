@@ -1,4 +1,7 @@
-import { controlReviewValidation } from "./review-validation-service.js";
+import {
+  controlReviewValidation,
+  readReviewValidationOutput,
+} from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
@@ -36,6 +39,14 @@ export function registerReviewWorkflowCommands(
       ),
     );
   }
+  register("get_review_validation_output", ({ environmentId, runId, resultId }, context) =>
+    readReviewValidationOutput(
+      asNonBlankString(environmentId, "environmentId"),
+      asNonBlankString(runId, "runId"),
+      asNonBlankString(resultId, "resultId"),
+      context,
+    ),
+  );
 
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage

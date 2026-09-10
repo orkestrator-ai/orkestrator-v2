@@ -1579,6 +1579,17 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
           sent.prompt.includes("You are independent reviewer"),
         ),
       ).toHaveLength(2);
+      const initialReviewerPrompts = [...provider.sends.values()].filter((sent) =>
+        sent.prompt.includes("You are independent reviewer"),
+      );
+      expect(initialReviewerPrompts[0]?.prompt).toContain("**Authoritative worktree state**");
+      expect(initialReviewerPrompts[1]?.prompt).toContain(
+        "**Pinned worktree state (known stale)**",
+      );
+      expect(initialReviewerPrompts[1]?.prompt).toContain(
+        "This recorded path set is no longer authoritative",
+      );
+      expect(initialReviewerPrompts[1]?.prompt).not.toContain("**Authoritative worktree state**");
       const consolidation = [...provider.sends.values()].find((sent) =>
         sent.prompt.includes("<multi-review-reports-json>"),
       );
@@ -1611,6 +1622,11 @@ test("MultiReviewService notes snapshot changes between reviewers and continues"
       });
       // Once recorded, drift is a note rather than a gate for later dispatches.
       expect(probes).toHaveLength(3);
+      const restartedPrompt = [...provider.sends.values()].filter((sent) =>
+        sent.prompt.includes("You are independent reviewer"),
+      )[2]?.prompt;
+      expect(restartedPrompt).toContain("**Pinned worktree state (known stale)**");
+      expect(restartedPrompt).toContain("Reconcile it against the live worktree");
     },
     {
       invoke: (async (_command: string, args?: Record<string, unknown>) => {
@@ -1707,6 +1723,51 @@ test("MultiReviewService consolidates reports after snapshot drift with a limita
               paths: ["src/feature.ts", "src/appeared.ts"],
               fingerprint: "c".repeat(64),
             };
+      }) as <T>() => Promise<T>,
+    },
+  );
+});
+
+test("MultiReviewService preserves completed reports when retrying an unrelated failure after drift", async () => {
+  const provider = new Provider();
+  let probes = 0;
+  await withService(
+    "env-drift-unrelated-retry",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "sonnet" },
+      ]);
+      await waitUntil(async () => {
+        const current = await snapshot(started.id);
+        return current?.phase === "consolidating" && current.reviewSnapshotStale === true;
+      });
+      provider.invalidConsolidatedReports = 4;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      const failed = (await snapshot(started.id))!;
+      expect(failed.reviewPackage).toBeUndefined();
+      expect(failed.reviewSnapshotStale).toBe(true);
+      expect(failed.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(true);
+      expect(failed.reviewers.every((reviewer) => reviewer.report !== undefined)).toBe(true);
+
+      const reports = failed.reviewers.map((reviewer) => reviewer.report);
+      const retried = await service.retry(started.id);
+      expect(retried.phase).toBe("consolidating");
+      expect(retried.reviewSnapshotStale).toBe(true);
+      expect(retried.reviewers.map((reviewer) => reviewer.report)).toEqual(reports);
+      expect(retried.reviewers.every((reviewer) => reviewer.status === "completed")).toBe(true);
+    },
+    {
+      invoke: (async () => {
+        probes += 1;
+        return probes <= 2
+          ? { head: REVIEW_HEAD, paths: [], fingerprint: REVIEW_FINGERPRINT }
+          : { head: REVIEW_HEAD, paths: ["src/appeared.ts"], fingerprint: "d".repeat(64) };
       }) as <T>() => Promise<T>,
     },
   );
@@ -5241,6 +5302,9 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
       expect(retried.phase).toBe("preparing");
       expect(retried.reviewSession).toBeUndefined();
       expect(retried.fixSession).toBeUndefined();
+      expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
+      expect(retried.reviewers.every((reviewer) => reviewer.report === undefined)).toBe(true);
+      expect(retried.consolidatedReport).toBeUndefined();
       expect(retried.fixSessionKey).not.toBe(oldFixSessionKey);
       expect(provider.aborted).toContain(ready.reviewSession!.providerSessionId);
       expect(provider.aborted).toContain("provider-stale-fix");

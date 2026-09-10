@@ -661,10 +661,11 @@ export class MultiReviewService {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
-      if (workflow.reviewSnapshotStale === true) {
-        const replacement = workflow.reviewPackage
-          ? undefined
-          : await this.captureReviewWorktreeSnapshot(workflow.environmentId);
+      // A stale immutable package is unusable and requires a full preparation
+      // reset. Live-worktree drift on a legacy/no-package review is advisory:
+      // completed reports remain useful (with the drift limitation attached),
+      // so an unrelated later failure must take the targeted retry path below.
+      if (workflow.reviewSnapshotStale === true && workflow.reviewPackage) {
         for (const reviewer of workflow.reviewers) {
           await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
           if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
@@ -703,7 +704,6 @@ export class MultiReviewService {
           delete workflow.fixSession;
           workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
         }
-        if (replacement) workflow.reviewWorktreeSnapshot = replacement;
         workflow.phase = "preparing";
         delete workflow.reviewPackage;
         delete workflow.validationRun;
@@ -1741,6 +1741,8 @@ export class MultiReviewService {
         : {}),
       reviewSnapshot: async () =>
         promptWorktreeSnapshot(await this.reviewSnapshotForDispatch(workflow, token)),
+      worktreeChangedDuringReview: () =>
+        !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         this.resolveUnattendedInteractions(workflow, token, provider, providerSessionId),
       abandonSession: (selection, providerSessionId) =>

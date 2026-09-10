@@ -1636,6 +1636,53 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(stale.id, "reviewer-1"));
   });
 
+  test("keeps reviewer restart disabled when immutable package evidence is stale", async () => {
+    const stale: MultiReviewWorkflow = {
+      ...reviewingWorkflow(),
+      reviewSnapshotStale: true,
+      reviewPackage: {
+        kind: "file",
+        id: "package-1",
+        round: 1,
+        preparedAt: "2026-08-14T00:00:00.000Z",
+        targetBranch: "main",
+        baseRef: "origin/main",
+        headRef: "HEAD",
+        filePath: ".orkestrator/review-packages/package-1.json",
+        sha256: "a".repeat(64),
+        bytes: 2048,
+        changedFileCount: 2,
+        limitations: [],
+      },
+    };
+    useMultiReviewStore.getState().replaceWorkflow(stale);
+    const restartReviewer = mock(async () => stale);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: stale.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => stale)}
+        commands={{
+          address: mock(async () => stale),
+          retry: mock(async () => stale),
+          cancel: mock(async () => stale),
+          stopReviewer: mock(async () => stale),
+          restartReviewer,
+          unstickReviewer: mock(async () => stale),
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
+    );
+    const restart = await screen.findByRole("menuitem", { name: "Restart" });
+    expect(restart.hasAttribute("data-disabled")).toBe(true);
+    fireEvent.click(restart);
+    expect(restartReviewer).not.toHaveBeenCalled();
+  });
+
   test("disables Unstick without a sent turn or a running reviewer", async () => {
     const reviewing = reviewingWorkflow();
     reviewing.reviewers[0] = { ...reviewing.reviewers[0]!, dispatchState: undefined };

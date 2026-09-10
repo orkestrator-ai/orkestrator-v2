@@ -107,7 +107,6 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
-  openCodeReviewPermissionRules,
   OPENCODE_READ_ONLY_TURN_TOOLS,
   openCodePromptParts,
   openCodeReasoningVariant,
@@ -116,6 +115,7 @@ import {
   resolveAllowedOpenCodeModelProviders,
   waitForOpenCodeRetry,
 } from "./opencode-provider-helpers.js";
+import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
 
 const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
 export type { OpenCodeProviderDependencies } from "./opencode-provider-helpers.js";
@@ -169,6 +169,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
+  private readonly reviewPermissions: OpenCodeReviewSessionPermissions;
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
   private readonly now: () => number;
@@ -214,6 +215,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         },
       });
     this.messageIds = dependencies.openCodeMessageIdCoordinator ?? defaultOpenCodeMessageIds;
+    this.reviewPermissions = new OpenCodeReviewSessionPermissions(
+      this.client,
+      connection.directory,
+      () => this.requestOptions(),
+      (sessionId, policy) => this.sessionPolicies.set(sessionId, policy),
+    );
     this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
       this.requestOptions(),
     );
@@ -246,6 +253,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.lifecycle.ownedSessions.add(sessionId);
     this.streamState.register(sessionId);
     this.interactionTracker.register(sessionId, interaction);
+    if (interaction?.reviewerSession) this.reviewPermissions.registerCandidate(sessionId);
     if (!this.autoAnswerRequests) return;
     const activeReconciliation = this.reconciliation;
     const reconciliation = activeReconciliation
@@ -678,18 +686,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     try {
-      const effectivePolicy = options.policy ? effectiveOpenCodePolicy(options.policy) : undefined;
-      const permission = effectivePolicy ? openCodePermissionRules(effectivePolicy) : undefined;
-      const response = await this.client.session.create(
-        { title: label, ...(permission ? { permission } : {}) },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode session creation");
-      if (!response.data?.id) throw new Error("OpenCode returned an empty session");
-      this.lifecycle.rememberExistingSession(response.data.id);
-      this.registerSession(response.data.id, options.interaction);
-      if (effectivePolicy) this.sessionPolicies.set(response.data.id, effectivePolicy);
-      return response.data.id;
+      const created = await this.reviewPermissions.createSession(label, options);
+      this.lifecycle.rememberExistingSession(created.sessionId);
+      this.registerSession(created.sessionId, options.interaction);
+      if (created.policy) this.sessionPolicies.set(created.sessionId, created.policy);
+      return created.sessionId;
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode session creation is unavailable", {
         cause: error,
@@ -703,7 +704,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const selectedModel = options.model ?? this.connection.model;
     const model = openCodeModelSelection(selectedModel);
     const variant = openCodeReasoningVariant(options, this.connection.effort);
-    // Validate the caller-owned marker locally before consulting OpenCode.
     openCodeRequestMarker(options.requestId);
     await this.assertSelectedModelAvailable(selectedModel);
     // A submission that names one of OpenCode's commands runs as that command
@@ -732,34 +732,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
-      const reviewShellPolicy = options.readOnly ? options.reviewShellPolicy : undefined;
-      if (reviewShellPolicy) {
-        // The legacy tools map replaces session permissions. Use the complete
-        // backend policy plus editing restrictions so enabling reviewer bash
-        // cannot discard an environment deny or an approval requirement.
-        const existingPolicy = this.sessionPolicies.get(sessionId);
-        const effectivePolicy = effectiveOpenCodePolicy(
-          existingPolicy?.id === "coordinator-read-only" ? existingPolicy : reviewShellPolicy,
-        );
-        try {
-          const updated = await this.client.session.update(
-            {
-              sessionID: sessionId,
-              directory: this.connection.directory,
-              permission: openCodeReviewPermissionRules(effectivePolicy),
-            },
-            this.requestOptions(),
-          );
-          assertSdkResponse(updated, "OpenCode reviewer permission update");
-        } catch (error) {
-          // No prompt has been sent: a failed permission update is not an
-          // ambiguous dispatch and must never fall through to unrestricted work.
-          throw new ProviderUnavailableError("OpenCode reviewer permissions are unavailable", {
-            cause: error,
-          });
-        }
-        this.sessionPolicies.set(sessionId, effectivePolicy);
-      }
+      const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
       let response;
       try {
         response = command
@@ -792,7 +765,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
                 model,
                 agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
                 variant,
-                ...(options.readOnly && !reviewShellPolicy
+                ...(options.readOnly && !reviewShellEnabled
                   ? { tools: OPENCODE_READ_ONLY_TURN_TOOLS }
                   : {}),
               },
@@ -854,7 +827,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         throw new Error(`OpenCode lifecycle snapshot omitted ${sessionId}`);
       }
       if (lifecycle === "running") return "running";
-      if (lifecycle === "idle" || lifecycle === "missing") return lifecycle;
+      if (lifecycle === "missing") return "missing";
+      await this.reviewPermissions.restoreIfNeeded(sessionId);
+      if (lifecycle === "idle") return "idle";
       return "error";
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode status is unavailable", {

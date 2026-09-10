@@ -200,13 +200,119 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
   ];
 }
 
-/** Reviewers inspect Git evidence through bash; consolidation retains the full mask. */
+/**
+ * Whole commands a reviewer may run through OpenCode's shell tools.
+ *
+ * OpenCode patterns are simple globs, not a shell parser. The broad forms are
+ * followed by mutation/injection denies below; last match wins in OpenCode.
+ */
+const OPENCODE_REVIEW_SHELL_ALLOW_PATTERNS = Object.freeze([
+  "pwd",
+  "ls",
+  "ls *",
+  "cat *",
+  "head *",
+  "tail *",
+  "wc *",
+  "stat *",
+  "grep *",
+  "rg *",
+  "find *",
+  "git status",
+  "git status *",
+  "git diff",
+  "git diff *",
+  "git log",
+  "git log *",
+  "git show",
+  "git show *",
+  "git blame *",
+  "git cat-file *",
+  "git describe",
+  "git describe *",
+  "git grep *",
+  "git ls-files",
+  "git ls-files *",
+  "git ls-tree *",
+  "git merge-base *",
+  "git name-rev *",
+  "git rev-list *",
+  "git rev-parse *",
+  "git shortlog",
+  "git shortlog *",
+  "git show-ref",
+  "git show-ref *",
+  "git whatchanged",
+  "git whatchanged *",
+]);
+
+/** Later than the allows, so command chaining and write-capable flags lose. */
+const OPENCODE_REVIEW_SHELL_DENY_PATTERNS = Object.freeze([
+  "*&*",
+  "*|*",
+  "*;*",
+  "*<*",
+  "*>*",
+  "*`*",
+  "*$(*",
+  "*\n*",
+  "*\r*",
+  "*--output *",
+  "*--output=*",
+  "*-o *",
+  "*--ext-diff*",
+  "*--textconv*",
+  "*--filters*",
+  "*--open-files-in-pager*",
+  "*--pre*",
+  "*--hostname-bin*",
+  "*-delete*",
+  "*-exec*",
+  "*-execdir*",
+  "*-fls*",
+  "*-fprint*",
+  "*-fprintf*",
+  "*-ok*",
+  "*-okdir*",
+]);
+
+function openCodeReviewShellAction(policy: NativeAgentExecutionPolicy): "allow" | "ask" | "deny" {
+  const denied = new Set(policy.toolPolicy?.deny ?? []);
+  // OpenCode has used both ids for the same capability. A deny under either
+  // spelling is a deny under both, including the coordinator's `shell` rule.
+  if (denied.has("*") || denied.has("bash") || denied.has("shell")) return "deny";
+  const allowed = new Set(policy.toolPolicy?.allow ?? []);
+  if (allowed.has("*") || allowed.has("bash") || allowed.has("shell")) return "allow";
+  return policy.approvals === "auto-approve"
+    ? "allow"
+    : policy.approvals === "deny"
+      ? "deny"
+      : "ask";
+}
+
+/** Reviewers inspect evidence through constrained shell commands. */
 export function openCodeReviewPermissionRules(policy: NativeAgentExecutionPolicy) {
+  const shellAction = openCodeReviewShellAction(policy);
   return [
     ...openCodePermissionRules(policy),
     ...Object.keys(OPENCODE_READ_ONLY_TURN_TOOLS)
       .filter((permission) => permission !== "bash" && permission !== "shell")
       .map((permission) => ({ permission, pattern: "*", action: "deny" as const })),
+    ...["bash", "shell"].flatMap((permission) => [
+      { permission, pattern: "*", action: "deny" as const },
+      ...(shellAction === "deny"
+        ? []
+        : OPENCODE_REVIEW_SHELL_ALLOW_PATTERNS.map((pattern) => ({
+            permission,
+            pattern,
+            action: shellAction,
+          }))),
+      ...OPENCODE_REVIEW_SHELL_DENY_PATTERNS.map((pattern) => ({
+        permission,
+        pattern,
+        action: "deny" as const,
+      })),
+    ]),
   ];
 }
 

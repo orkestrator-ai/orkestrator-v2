@@ -4909,6 +4909,7 @@ test("Multi Review prepares and consolidates with its review model before openin
             (entry) =>
               entry.options?.mode === "plan" &&
               entry.options?.readOnly === true &&
+              entry.options?.reviewerSession === true &&
               entry.options.policy?.id === "pipeline",
           ),
       ).toBe(true);

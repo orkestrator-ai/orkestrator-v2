@@ -86,37 +86,53 @@ function ValidationOutputModal({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const requestIdRef = useRef(0);
+  const inFlightRequestRef = useRef<number | null>(null);
   const hasArtifacts = Boolean(result?.stdoutPath || result?.stderrPath);
+  const resultId = result?.id;
 
   const refresh = useCallback(async () => {
-    if (!open || !result || !hasArtifacts) return;
+    if (!open || !resultId || !hasArtifacts || inFlightRequestRef.current !== null) return;
     const requestId = ++requestIdRef.current;
+    inFlightRequestRef.current = requestId;
     setLoading(true);
     setError(null);
     try {
-      const next = await loadOutput(environmentId, run.id, result.id);
+      const next = await loadOutput(environmentId, run.id, resultId);
       if (requestId !== requestIdRef.current) return;
       setOutput(next);
     } catch (reason) {
       if (requestId !== requestIdRef.current) return;
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      if (inFlightRequestRef.current === requestId) inFlightRequestRef.current = null;
       if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, [environmentId, hasArtifacts, loadOutput, open, result, run.id]);
+  }, [environmentId, hasArtifacts, loadOutput, open, resultId, run.id]);
 
   useEffect(() => {
     if (!open) {
       requestIdRef.current += 1;
+      inFlightRequestRef.current = null;
       setOutput(null);
       setError(null);
       setLoading(false);
       return;
     }
-    void refresh();
-    if (result?.status !== "running") return;
-    const interval = window.setInterval(() => void refresh(), 2_000);
-    return () => window.clearInterval(interval);
+    let cancelled = false;
+    let timeout: number | undefined;
+    const poll = async () => {
+      await refresh();
+      if (!cancelled && result?.status === "running") {
+        timeout = window.setTimeout(() => void poll(), 2_000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      requestIdRef.current += 1;
+      inFlightRequestRef.current = null;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
   }, [open, refresh, result?.status]);
 
   const stdout = useMemo(() => streamOutput("stdout", output?.stdout ?? null), [output]);

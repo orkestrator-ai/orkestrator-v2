@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import { afterEach, describe, expect, jest, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type {
+  ReviewValidationOutput,
+  ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
 
 afterEach(cleanup);
@@ -143,6 +146,55 @@ describe("ReviewValidationStatus", () => {
     await waitFor(() => expect(screen.getByText(/1 pass/)).toBeTruthy());
     expect(screen.getByText(/warning/)).toBeTruthy();
     expect(loadOutput).toHaveBeenCalledWith("env-1", "validation-1", "check");
+  });
+
+  test("waits for a slow running read to settle before scheduling the next poll", async () => {
+    const run = runningValidation();
+    let resolveFirst!: (output: ReviewValidationOutput) => void;
+    const first = new Promise<ReviewValidationOutput>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const loadOutput = mock(() => first);
+    const output: ReviewValidationOutput = {
+      resultId: "check",
+      status: "running",
+      stdout: {
+        contentBase64: btoa("still running\n"),
+        totalBytes: 14,
+        startOffset: 0,
+      },
+      stderr: null,
+    };
+
+    jest.useFakeTimers();
+    try {
+      render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
+      fireEvent.click(
+        screen.getByRole("button", { name: "View terminal output for bun run check" }),
+      );
+      await act(async () => Promise.resolve());
+
+      expect(loadOutput).toHaveBeenCalledTimes(1);
+      act(() => jest.advanceTimersByTime(10_000));
+      expect(loadOutput).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveFirst(output);
+        await first;
+        await Promise.resolve();
+      });
+      expect(screen.getByText(/still running/)).toBeTruthy();
+
+      act(() => jest.advanceTimersByTime(1_999));
+      expect(loadOutput).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+        await Promise.resolve();
+      });
+      expect(loadOutput).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("opens skipped steps without trying to read a missing artifact", () => {

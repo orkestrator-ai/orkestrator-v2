@@ -204,6 +204,12 @@ export interface ProviderCreateSessionOptions {
 export interface ProviderSendOptions {
   /** Per-turn mutation boundary; independent of plan/build response semantics. */
   readOnly?: boolean;
+  /**
+   * OpenCode reviewer exception: allow shell investigation under this backend
+   * policy while readOnly still disables editing tools. Shell commands are not
+   * a read-only sandbox. Resupplied on dispatch so recovery needs no UI state.
+   */
+  reviewShellPolicy?: NativeAgentExecutionPolicy;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];

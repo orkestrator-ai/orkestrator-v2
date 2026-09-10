@@ -200,6 +200,16 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
   ];
 }
 
+/** Reviewers inspect Git evidence through bash; consolidation retains the full mask. */
+export function openCodeReviewPermissionRules(policy: NativeAgentExecutionPolicy) {
+  return [
+    ...openCodePermissionRules(policy),
+    ...Object.keys(OPENCODE_READ_ONLY_TURN_TOOLS)
+      .filter((permission) => permission !== "bash" && permission !== "shell")
+      .map((permission) => ({ permission, pattern: "*", action: "deny" as const })),
+  ];
+}
+
 /**
  * OpenCode's read-only agent, pinned for coordinator prompts.
  *

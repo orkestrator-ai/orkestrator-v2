@@ -844,6 +844,9 @@ export class ReviewFanoutRunner {
                 : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
             mode: host.reviewerMode ?? "build",
             ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
+            ...(host.reviewerMode === "plan" && reviewer.agent === "opencode"
+              ? { reviewShellPolicy: await host.executionPolicy() }
+              : {}),
             model: reviewerModel(reviewer),
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),

@@ -473,6 +473,21 @@ function stepOpenTitle(
   return `Open the ${sessionName} session in a new tab`;
 }
 
+type ReviewTileActivation = { kind: "pointer"; pointerId: number } | { kind: "keyboard" } | null;
+
+/**
+ * Keep the browser-only trusted-click exception independently testable: DOM
+ * test environments cannot manufacture events whose `isTrusted` flag is true.
+ */
+export function allowsReviewTileActivation(
+  requireDirectActivation: boolean,
+  hasDirectActivation: boolean,
+  clickDetail: number,
+  isTrusted: boolean,
+): boolean {
+  return !requireDirectActivation || hasDirectActivation || (clickDetail === 0 && isTrusted);
+}
+
 function MultiReviewStepSection({
   heading,
   name,
@@ -504,7 +519,35 @@ function MultiReviewStepSection({
    */
   requireDirectActivation?: boolean;
 }) {
-  const directActivationRef = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const directActivationRef = useRef<ReviewTileActivation>(null);
+
+  useEffect(() => {
+    if (!requireDirectActivation) return;
+
+    const clearFinishedPointerOutsideButton = (event: PointerEvent) => {
+      const activation = directActivationRef.current;
+      if (activation?.kind !== "pointer" || activation.pointerId !== event.pointerId) return;
+
+      const target = event.target;
+      if (!(target instanceof Node) || !buttonRef.current?.contains(target)) {
+        directActivationRef.current = null;
+      }
+    };
+    const clearCancelledPointer = (event: PointerEvent) => {
+      const activation = directActivationRef.current;
+      if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
+        directActivationRef.current = null;
+      }
+    };
+
+    window.addEventListener("pointerup", clearFinishedPointerOutsideButton);
+    window.addEventListener("pointercancel", clearCancelledPointer);
+    return () => {
+      window.removeEventListener("pointerup", clearFinishedPointerOutsideButton);
+      window.removeEventListener("pointercancel", clearCancelledPointer);
+    };
+  }, [requireDirectActivation]);
 
   return (
     <section className="rounded-xl border border-border/60 bg-card/35 p-4">
@@ -514,38 +557,48 @@ function MultiReviewStepSection({
       </div>
       <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
         <button
+          ref={buttonRef}
           type="button"
           disabled={!canOpen}
           aria-label={openLabel}
           title={openTitle}
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-          onPointerDown={() => {
-            directActivationRef.current = true;
+          onPointerDown={(event) => {
+            if (event.isPrimary === false || event.button !== 0) return;
+            directActivationRef.current = {
+              kind: "pointer",
+              pointerId: event.pointerId,
+            };
           }}
-          onPointerCancel={() => {
-            directActivationRef.current = false;
-          }}
-          onPointerLeave={() => {
-            directActivationRef.current = false;
+          onPointerCancel={(event) => {
+            const activation = directActivationRef.current;
+            if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
+              directActivationRef.current = null;
+            }
           }}
           onBlur={() => {
-            directActivationRef.current = false;
+            if (directActivationRef.current?.kind === "keyboard") {
+              directActivationRef.current = null;
+            }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
-              directActivationRef.current = true;
+              directActivationRef.current = { kind: "keyboard" };
             }
           }}
           onClick={(event) => {
-            const directActivation = directActivationRef.current;
-            directActivationRef.current = false;
+            const hasDirectActivation = directActivationRef.current !== null;
+            directActivationRef.current = null;
             // A trusted detail-zero click is an assistive-technology
             // activation. Pointer and keyboard activation are armed above;
             // synthetic/carry-over clicks are deliberately ignored.
             if (
-              requireDirectActivation &&
-              !directActivation &&
-              !(event.detail === 0 && event.nativeEvent.isTrusted)
+              !allowsReviewTileActivation(
+                requireDirectActivation,
+                hasDirectActivation,
+                event.detail,
+                event.nativeEvent.isTrusted,
+              )
             ) {
               return;
             }

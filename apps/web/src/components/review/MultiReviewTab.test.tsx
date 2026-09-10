@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -16,6 +16,7 @@ import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
+  allowsReviewTileActivation,
   consolidationStep,
   fixSessionRuntimeStep,
   fixSessionRuntimeSummary,
@@ -30,9 +31,14 @@ import {
 } from "./MultiReviewTab";
 
 function activateReviewTile(button: HTMLElement): void {
-  fireEvent.pointerDown(button);
-  fireEvent.pointerUp(button);
-  fireEvent.click(button);
+  fireEvent.pointerDown(button, {
+    pointerType: "mouse",
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+  });
+  fireEvent.pointerUp(button, { pointerType: "mouse", pointerId: 1, isPrimary: true, button: 0 });
+  fireEvent.click(button, { detail: 1 });
 }
 
 const report: StructuredReviewReport = {
@@ -158,6 +164,33 @@ function TabRegistrar({
     return () => terminal.setCreateTab(null);
   }, [createTab, terminal]);
   return null;
+}
+
+function ReviewMountDuringPointerGesture({
+  workflow,
+  createTab,
+}: {
+  workflow: MultiReviewWorkflow;
+  createTab: (type: CreatableTabType, options?: CreateTabOptions) => boolean;
+}) {
+  const [reviewMounted, setReviewMounted] = useState(false);
+
+  return (
+    <TerminalProvider>
+      <TabRegistrar createTab={createTab} />
+      {reviewMounted ? (
+        <MultiReviewTab
+          data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      ) : (
+        <button type="button" onPointerDown={() => setReviewMounted(true)}>
+          Launch review
+        </button>
+      )}
+    </TerminalProvider>
+  );
 }
 
 beforeEach(() => {
@@ -1950,6 +1983,180 @@ describe("MultiReviewTab pipeline step cards", () => {
     fireEvent.keyDown(card, { key: "Enter" });
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["touch", "pen"] as const)(
+    "keeps a %s activation armed through the post-pointerup leave events",
+    (pointerType) => {
+      const workflow = preparingWorkflow();
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+      render(
+        <TerminalProvider>
+          <TabRegistrar createTab={createTab} />
+          <MultiReviewTab
+            data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+            isActive
+            hydrateWorkflow={mock(async () => workflow)}
+          />
+        </TerminalProvider>,
+      );
+
+      const card = screen.getByRole("button", {
+        name: "Open review package generation session",
+      });
+      const pointer = { pointerType, pointerId: 11, isPrimary: true, button: 0 };
+      fireEvent.pointerDown(card, pointer);
+      fireEvent.pointerUp(card, pointer);
+      fireEvent.pointerOut(card, pointer);
+      fireEvent.pointerLeave(card, pointer);
+      fireEvent.click(card, { detail: 1 });
+
+      expect(createTab).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("keeps a pointer activation armed when it leaves, re-enters, and releases on the tile", () => {
+    const workflow = preparingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    const card = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    const pointer = { pointerType: "mouse", pointerId: 12, isPrimary: true, button: 0 };
+    fireEvent.pointerDown(card, pointer);
+    fireEvent.pointerLeave(card, pointer);
+    fireEvent.pointerEnter(card, pointer);
+    fireEvent.pointerUp(card, pointer);
+    fireEvent.click(card, { detail: 1 });
+
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("disarms pointer activation when the gesture is cancelled or released outside", () => {
+    const workflow = preparingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    const card = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    fireEvent.pointerDown(card, {
+      pointerType: "touch",
+      pointerId: 13,
+      isPrimary: true,
+      button: 0,
+    });
+    fireEvent.pointerCancel(card, { pointerType: "touch", pointerId: 13, isPrimary: true });
+    fireEvent.click(card, { detail: 1 });
+    expect(createTab).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(card, {
+      pointerType: "mouse",
+      pointerId: 14,
+      isPrimary: true,
+      button: 0,
+    });
+    fireEvent.pointerLeave(card, { pointerType: "mouse", pointerId: 14, isPrimary: true });
+    fireEvent.pointerUp(document.body, {
+      pointerType: "mouse",
+      pointerId: 14,
+      isPrimary: true,
+      button: 0,
+    });
+    fireEvent.click(card, { detail: 1 });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("focus loss disarms keyboard activation without cancelling a pointer activation", () => {
+    const workflow = preparingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />
+      </TerminalProvider>,
+    );
+
+    const card = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    fireEvent.keyDown(card, { key: "Enter" });
+    fireEvent.blur(card);
+    fireEvent.click(card, { detail: 1 });
+    expect(createTab).not.toHaveBeenCalled();
+
+    const pointer = { pointerType: "touch", pointerId: 15, isPrimary: true, button: 0 };
+    fireEvent.pointerDown(card, pointer);
+    fireEvent.blur(card);
+    fireEvent.pointerUp(card, pointer);
+    fireEvent.click(card, { detail: 1 });
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("accepts only a trusted detail-zero click without an armed input", () => {
+    expect(allowsReviewTileActivation(true, false, 0, true)).toBe(true);
+    expect(allowsReviewTileActivation(true, false, 0, false)).toBe(false);
+    expect(allowsReviewTileActivation(true, false, 1, true)).toBe(false);
+    expect(allowsReviewTileActivation(true, true, 1, false)).toBe(true);
+    expect(allowsReviewTileActivation(false, false, 1, false)).toBe(true);
+  });
+
+  test("rejects click-through when the coordinator tile mounts during another gesture", () => {
+    const workflow = preparingWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(<ReviewMountDuringPointerGesture workflow={workflow} createTab={createTab} />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Launch review" }), {
+      pointerType: "touch",
+      pointerId: 16,
+      isPrimary: true,
+      button: 0,
+    });
+    const card = screen.getByRole("button", {
+      name: "Open review package generation session",
+    });
+    fireEvent.pointerUp(card, {
+      pointerType: "touch",
+      pointerId: 16,
+      isPrimary: true,
+      button: 0,
+    });
+    fireEvent.click(card, { detail: 1 });
+
+    expect(createTab).not.toHaveBeenCalled();
   });
 
   test("opens preparation and consolidation separately from the fix tab", () => {

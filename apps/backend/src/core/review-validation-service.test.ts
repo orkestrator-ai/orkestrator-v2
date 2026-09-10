@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import {
   controlReviewValidation,
+  readReviewValidationOutput,
   stopEnvironmentReviewValidation,
   validationPreparation,
 } from "./review-validation-service.js";
@@ -72,6 +73,10 @@ test("real backend runner seals hashed evidence and refuses a moved head or repl
       run = await controlReviewValidation("env", run, "status", context);
     }
     expect(run.status).toBe("completed");
+    const output = await readReviewValidationOutput("env", run.id, "check", context);
+    expect(Buffer.from(output.stdout!.contentBase64, "base64").toString()).toBe("evidence");
+    expect(output.stdout).toMatchObject({ totalBytes: 8, startOffset: 0 });
+    expect(output.stderr).toMatchObject({ contentBase64: "", totalBytes: 0, startOffset: 0 });
     const preparation = validationPreparation(run);
     const validation = parseReviewPreparationValidation(preparation.validation, run.id);
     expect(validation[0]!.stdoutSha256).toHaveLength(64);

@@ -923,7 +923,11 @@ function MultiReviewOverviewTab({
             onOpen={() => presentReviewSession(workflow)}
           />
           {workflow.validationRun && (
-            <ReviewValidationStatus run={workflow.validationRun} now={reviewPanelNow} />
+            <ReviewValidationStatus
+              environmentId={data.environmentId}
+              run={workflow.validationRun}
+              now={reviewPanelNow}
+            />
           )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">

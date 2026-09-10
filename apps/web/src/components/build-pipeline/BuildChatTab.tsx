@@ -749,7 +749,11 @@ export function BuildChatTab({
       <BuildCompletionStatus pipeline={pipeline} />
       {pipeline.validationRun && (
         <div className="max-h-64 overflow-auto px-4 py-2">
-          <ReviewValidationStatus run={pipeline.validationRun} now={validationNow} />
+          <ReviewValidationStatus
+            environmentId={data.environmentId}
+            run={pipeline.validationRun}
+            now={validationNow}
+          />
         </div>
       )}
 

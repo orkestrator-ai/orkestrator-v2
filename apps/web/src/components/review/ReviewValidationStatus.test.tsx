@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
 
@@ -69,14 +69,22 @@ describe("ReviewValidationStatus", () => {
   test("uses the live clock for the validation run and every running command", () => {
     const run = runningValidation();
     const view = render(
-      <ReviewValidationStatus run={run} now={Date.parse("2026-09-08T20:00:10.000Z")} />,
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        now={Date.parse("2026-09-08T20:00:10.000Z")}
+      />,
     );
 
     expect(screen.getByText(/Validation: 10\.0s\./)).toBeTruthy();
     expect(screen.getByText("running · 5.0s")).toBeTruthy();
 
     view.rerender(
-      <ReviewValidationStatus run={run} now={Date.parse("2026-09-08T20:00:13.000Z")} />,
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        now={Date.parse("2026-09-08T20:00:13.000Z")}
+      />,
     );
     expect(screen.getByText(/Validation: 13\.0s\./)).toBeTruthy();
     expect(screen.getByText("running · 8.0s")).toBeTruthy();
@@ -86,7 +94,13 @@ describe("ReviewValidationStatus", () => {
     const run = runningValidation();
     run.results[0]!.limitation = "A prerequisite did not pass.";
     run.results[1]!.limitation = "A prerequisite did not pass.";
-    render(<ReviewValidationStatus run={run} now={Date.parse("2026-09-08T20:00:10.000Z")} />);
+    render(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        now={Date.parse("2026-09-08T20:00:10.000Z")}
+      />,
+    );
 
     expect(screen.getByText("bun run check").closest("li")?.textContent).toContain(
       "A prerequisite did not pass.",
@@ -100,5 +114,47 @@ describe("ReviewValidationStatus", () => {
     expect(notes.querySelector(".text-amber-500") === null).toBe(true);
     fireEvent.click(screen.getByText("Notes"));
     expect(screen.getByText("No CI workflows are present.")).toBeTruthy();
+  });
+
+  test("opens a modal and loads the selected command's captured output", async () => {
+    const run = runningValidation();
+    const loadOutput = mock(async () => ({
+      resultId: "check",
+      status: "passed" as const,
+      stdout: {
+        contentBase64: btoa("1 pass\n"),
+        totalBytes: 7,
+        startOffset: 0,
+      },
+      stderr: {
+        contentBase64: btoa("warning\n"),
+        totalBytes: 8,
+        startOffset: 0,
+      },
+    }));
+    run.results[0]!.status = "passed";
+    run.results[0]!.exitCode = 0;
+
+    render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
+    fireEvent.click(screen.getByRole("button", { name: "View terminal output for bun run check" }));
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("Terminal output")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/1 pass/)).toBeTruthy());
+    expect(screen.getByText(/warning/)).toBeTruthy();
+    expect(loadOutput).toHaveBeenCalledWith("env-1", "validation-1", "check");
+  });
+
+  test("opens skipped steps without trying to read a missing artifact", () => {
+    const run = runningValidation();
+    const loadOutput = mock(async () => {
+      throw new Error("should not load");
+    });
+    render(<ReviewValidationStatus environmentId="env-1" run={run} loadOutput={loadOutput} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View terminal output for bun run build" }));
+
+    expect(screen.getByText("This step was skipped, so it has no terminal output.")).toBeTruthy();
+    expect(loadOutput).not.toHaveBeenCalled();
   });
 });

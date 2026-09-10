@@ -643,6 +643,7 @@ export class InteractionSnapshotTracker {
     // particular identifies the generation that owns any live request.
     this.registrations.set(sessionId, {
       ...existing,
+      reviewerSession: existing.reviewerSession ?? interaction.reviewerSession,
       phase: existing.phase ?? interaction.phase,
       workflowId: existing.workflowId ?? interaction.workflowId,
       provider: existing.provider ?? interaction.provider,

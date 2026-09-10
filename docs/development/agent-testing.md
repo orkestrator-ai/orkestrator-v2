@@ -5,6 +5,11 @@ instance. A profile has its own Electron `userData`, backend registry, browser
 gateway, worktrees, fixture, logs, Docker owner, and development image tag. It
 binds only to `127.0.0.1` and never configures Tailscale Serve.
 
+This guide covers the isolated application and browser workflow. Use
+[testing-guide.md](testing-guide.md) first to choose between focused,
+changed-only, aggregate, browser, agent, and iOS suites and to diagnose runner
+timeouts, cache behavior, or failure artifacts.
+
 ## Prerequisites
 
 - macOS or Linux, mise with the repository-pinned Bun 1.4.2 installed, and
@@ -159,26 +164,27 @@ copied `testProject` only.
 ## Automated checks
 
 Run focused package typechecks/tests first, with bounded `--parallel` workers on
-direct suites. Every automated command must use the repository's logged runner,
-which streams stdout/stderr to private storage, preserves the child exit status,
-deletes raw output on success, and compresses bounded failure evidence. Run each
-command separately so its result belongs to one check:
+direct suites. The aggregate runner already uses bounded logs; run every other
+automated command through the repository's logged runner. It streams
+stdout/stderr to private storage, preserves the child exit status, deletes raw
+output on success, and compresses bounded failure evidence. Run each command
+separately so its result belongs to one check:
 
 ```bash
-mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
-mise run test:logged --name changed-component -- \
+mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged -- --name changed-component -- \
   bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
   --parallel=2 --only-failures
 
 ORKESTRATOR_AGENT_TEST_PROFILE=codex-qa \
 ORKESTRATOR_AGENT_TEST_RUN_ID=codex-qa \
-mise run test:logged --name agent-browser -- mise run test:agent:browser
+mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 
-mise run test:logged --name agent-electron -- mise run test:agent:electron
+mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
 # Against a profile started with --fixture-environments local,container:
 ORKESTRATOR_AGENT_TEST_PROFILE=container-qa \
-mise run test:logged --name agent-docker -- mise run test:agent:docker
+mise run test:logged -- --name agent-docker -- mise run test:agent:docker
 
 # Run for cross-cutting or release-sensitive changes:
 mise run test
@@ -186,6 +192,11 @@ mise run test
 # Release validation, including the serial iOS suite:
 mise run test:all
 ```
+
+The Playwright agent commands are opt-in and are not included in `mise run
+test`. They require the matching profile and fixture preparation described in
+this document. `mise run test:all` adds the serial iOS suite, not the agent
+browser suites.
 
 Do not add another `tee`; the terminal harness may already retain output, and a
 second verbatim copy recreates the disk-amplification problem. On failure the
@@ -201,7 +212,8 @@ gzip -cd "$ORK_TEST_ARTIFACT_DIR/agent-browser.log.gz" | tail -n 200
 
 The exit status is authoritative. Pattern searches are diagnostic only; some
 tests print expected errors while exercising failure handling. See
-[`../test-logs.md`](../test-logs.md) for source bounds, retention, and cleanup.
+[testing-guide.md](testing-guide.md#logged-commands-and-failure-artifacts) for
+source bounds, watchdogs, retention, and cleanup.
 
 The browser suite uses the auth file outside Playwright to mint a 60-second,
 single-use loopback bootstrap, exchanges it by POST, and never puts the durable

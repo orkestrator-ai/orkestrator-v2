@@ -120,6 +120,14 @@ export class ReviewSnapshotUnverifiableError extends Error {
   }
 }
 
+/** A pre-dispatch policy read can be retried because no provider request ran. */
+class ReviewerPolicyUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Reviewer execution policy is temporarily unavailable", { cause });
+    this.name = "ReviewerPolicyUnavailableError";
+  }
+}
+
 export function isReviewSnapshotError(error: unknown): boolean {
   return (
     error instanceof ReviewSnapshotChangedError || error instanceof ReviewSnapshotUnverifiableError
@@ -600,9 +608,11 @@ export interface ReviewFanoutHost {
   reviewerPrompt?(reviewerIndex: number, reviewerCount: number): Promise<string>;
   /**
    * Re-verifies the pinned worktree and returns the prompt projection of it.
-   * Throws {@link ReviewSnapshotChangedError} on drift.
+   * Owners choose whether drift is fatal or is recorded for prompt qualification.
    */
   reviewSnapshot?(): Promise<ReviewWorktreeSnapshot>;
+  /** True when the owner tolerated live-worktree drift after pinning the snapshot. */
+  worktreeChangedDuringReview?(): boolean;
   resolveUnattendedInteractions(
     provider: BuildPipelineProvider,
     providerSessionId: string,
@@ -677,6 +687,11 @@ export class ReviewFanoutRunner {
           throw error;
         }
         if (this.isFatal(error)) throw error;
+        if (error instanceof ReviewerPolicyUnavailableError) {
+          // The reviewer is still durably prepared. Leave it retryable instead
+          // of converting a storage read failure into a terminal review result.
+          return { kind: "working" };
+        }
         // The failure may have been raised while the provider turn was still
         // executing. Abort the session best-effort so that turn cannot keep
         // running through consolidation; the session id is kept so the
@@ -753,6 +768,7 @@ export class ReviewFanoutRunner {
           clientSessionKey: sessionKey,
           mode: host.reviewerMode ?? "build",
           ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
+          reviewerSession: true,
           model: reviewerModel(reviewer),
           effort: reviewer.reasoningEffort,
           ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
@@ -809,6 +825,7 @@ export class ReviewFanoutRunner {
             reviewerNumber: index + 1,
             reviewerCount,
             worktree,
+            worktreeChangedDuringReview: host.worktreeChangedDuringReview?.() === true,
           });
         }
       }
@@ -828,6 +845,16 @@ export class ReviewFanoutRunner {
           STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
         );
       }
+      let reviewShellPolicy: NativeAgentExecutionPolicy | undefined;
+      if (host.reviewerMode === "plan" && reviewer.agent === "opencode") {
+        try {
+          // Resolve every fallible argument before opening the at-most-once
+          // window. Once `dispatching` is saved, the next await must be send.
+          reviewShellPolicy = await host.executionPolicy();
+        } catch (error) {
+          throw new ReviewerPolicyUnavailableError(error);
+        }
+      }
       reviewer.dispatchState = "dispatching";
       await host.save();
       try {
@@ -844,6 +871,7 @@ export class ReviewFanoutRunner {
                 : (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema),
             mode: host.reviewerMode ?? "build",
             ...(host.reviewerMode === "plan" ? { readOnly: true } : {}),
+            ...(reviewShellPolicy ? { reviewShellPolicy } : {}),
             model: reviewerModel(reviewer),
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
@@ -968,6 +996,7 @@ export class ReviewFanoutRunner {
     return {
       origin: "looped-review" as const,
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      reviewerSession: true,
       phase: "review" as const,
       workflowId: this.host.workflowId,
       provider: reviewer.agent,

@@ -405,10 +405,39 @@ export function openCodeFake(): OpenCodeFake {
     session: {
       async create(parameters?: Record<string, unknown>) {
         createCalls.push(parameters);
+        const data =
+          createResponse.data && typeof createResponse.data === "object"
+            ? (createResponse.data as Record<string, unknown>)
+            : undefined;
+        if (!createResponse.error && typeof data?.id === "string") {
+          sessionGetResponses.set(data.id, {
+            data: { ...parameters, ...data },
+          });
+        }
         return createResponse;
       },
       async update(parameters: Record<string, unknown>) {
         updateCalls.push(parameters);
+        const sessionId = String(parameters.sessionID ?? "");
+        const current = sessionGetResponses.get(sessionId);
+        const currentData =
+          current?.data && typeof current.data === "object"
+            ? (current.data as Record<string, unknown>)
+            : {};
+        if (!updateResponse.error && sessionId) {
+          const permission =
+            Array.isArray(currentData.permission) && Array.isArray(parameters.permission)
+              ? [...currentData.permission, ...parameters.permission]
+              : parameters.permission;
+          sessionGetResponses.set(sessionId, {
+            data: {
+              ...currentData,
+              ...parameters,
+              ...(permission === undefined ? {} : { permission }),
+              id: sessionId,
+            },
+          });
+        }
         return updateResponse;
       },
       async promptAsync(parameters: Record<string, unknown>) {

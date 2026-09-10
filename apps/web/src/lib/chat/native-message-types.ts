@@ -41,6 +41,8 @@ export interface NativeBackgroundTask {
   description?: string;
   /** Absent when recovered from transcript tool results rather than a snapshot. */
   status?: NativeBackgroundTaskStatus;
+  /** Backend-reported launch clock, as an ISO timestamp. */
+  startedAt?: string;
   /**
    * Backend-reported terminal edge, as an ISO timestamp.
    *

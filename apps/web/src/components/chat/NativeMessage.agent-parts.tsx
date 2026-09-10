@@ -148,6 +148,23 @@ function useAgentRuntimeLabel(
   });
 }
 
+function backgroundTaskDurationMs(
+  startedAt: string | undefined,
+  settledAt: string | undefined,
+): number | undefined {
+  const startedAtMs = parseBackendTurnStartedAt(startedAt);
+  const settledAtMs = parseBackendTurnStartedAt(settledAt);
+  if (startedAtMs === undefined || settledAtMs === undefined || settledAtMs < startedAtMs) {
+    return undefined;
+  }
+  return settledAtMs - startedAtMs;
+}
+
+function RuntimeLabel({ value }: { value?: string }) {
+  if (!value) return null;
+  return <div className="shrink-0 tabular-nums text-[11px] text-muted-foreground/70">{value}</div>;
+}
+
 function usefulAgentOutput(output?: string): string | undefined {
   const trimmed = output?.trim();
   if (!trimmed) return undefined;
@@ -259,8 +276,8 @@ function AgentUsageStats({
   if (hideCounts) {
     if (!durationLabel && !tokenCountText) return null;
     return (
-      <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-        {durationLabel ? <div>{durationLabel}</div> : null}
+      <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
+        {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
         {tokenCountText ? <div>{tokenCountText}</div> : null}
       </div>
     );
@@ -268,26 +285,28 @@ function AgentUsageStats({
 
   if (tokenOnlyUsage && tokenCountText) {
     return (
-      <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+      <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
         <div>{tokenCountText}</div>
+        {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
       </div>
     );
   }
 
   const showTools = hasExternalUsage || toolCount > 0;
   const showUpdates = Boolean(tokenCountText) || updateCount > 0;
-  if (!showTools && !showUpdates) return null;
+  if (!showTools && !showUpdates && !durationLabel) return null;
 
   const toolCountLabel = hasExternalUsage
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
 
   return (
-    <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+    <div className="shrink-0 self-end text-right text-[11px] text-muted-foreground/70">
       {showTools ? <div>{toolCountLabel}</div> : null}
       {showUpdates ? (
         <div>{tokenCountText ?? `${updateCount} ${updateCount === 1 ? "update" : "updates"}`}</div>
       ) : null}
+      {durationLabel ? <div className="tabular-nums">{durationLabel}</div> : null}
     </div>
   );
 }
@@ -484,6 +503,7 @@ function StopBackgroundTaskButton({
  */
 export function BackgroundTaskCard({
   task,
+  launchStartedAt,
   command,
   result,
   resultPending = false,
@@ -493,6 +513,8 @@ export function BackgroundTaskCard({
   embedded = false,
 }: {
   task: NativeBackgroundTask;
+  /** Transcript launch clock used when an older snapshot has no `startedAt`. */
+  launchStartedAt?: string;
   /** The command or prompt that launched the task, shown collapsed. */
   command?: string;
   /** Launch output, shown in the expanded body. */
@@ -510,6 +532,13 @@ export function BackgroundTaskCard({
 }) {
   const [stopError, setStopError] = useState<string | null>(null);
   const presentation = backgroundTaskPresentation(task);
+  const startedAt = task.startedAt ?? launchStartedAt;
+  const durationLabel = useAgentRuntimeLabel(
+    presentation.status,
+    startedAt,
+    backgroundTaskDurationMs(startedAt, task.settledAt),
+    task.id,
+  );
   const description = task.description?.trim();
   // The header already carries the description, so the collapsed second line is
   // for what it does not say: the command actually running.
@@ -570,13 +599,18 @@ export function BackgroundTaskCard({
             )}
           />
         </CollapsibleTrigger>
-        {presentation.live ? (
-          <StopBackgroundTaskButton
-            task={task}
-            onStop={onStop}
-            onStopped={() => setStopError(null)}
-            onFailed={setStopError}
-          />
+        {presentation.live || durationLabel ? (
+          <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
+            {presentation.live ? (
+              <StopBackgroundTaskButton
+                task={task}
+                onStop={onStop}
+                onStopped={() => setStopError(null)}
+                onFailed={setStopError}
+              />
+            ) : null}
+            <RuntimeLabel value={durationLabel} />
+          </div>
         ) : null}
       </div>
 
@@ -872,8 +906,13 @@ export function TaskGroupPart({
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   const durationLabel = useAgentRuntimeLabel(
     status,
-    part.task.createdAt ?? part.createdAt,
-    numberToolArg(part.task.toolArgs, "durationMs"),
+    backgroundAgentTask?.startedAt ?? part.task.createdAt ?? part.createdAt,
+    backgroundAgentTask
+      ? backgroundTaskDurationMs(
+          backgroundAgentTask.startedAt ?? part.task.createdAt ?? part.createdAt,
+          backgroundAgentTask.settledAt,
+        )
+      : numberToolArg(part.task.toolArgs, "durationMs"),
     part.task.toolUseId ?? partKey,
   );
   // See `SubagentPart`: the parse is proportional to the 512 KiB output cap.
@@ -907,6 +946,7 @@ export function TaskGroupPart({
     return (
       <BackgroundTaskCard
         task={standaloneBackgroundTask}
+        launchStartedAt={part.task.createdAt ?? part.createdAt}
         command={stringToolArg(part.task.toolArgs, "command") ?? prompt}
         result={result}
         resultPending={Boolean(part.task.detailRef) && result === undefined}
@@ -978,11 +1018,14 @@ export function TaskGroupPart({
           </div>
         </CollapsibleTrigger>
         {backgroundPresentation?.live && backgroundAgentTask ? (
-          <StopBackgroundTaskButton
-            task={backgroundAgentTask}
-            onStopped={() => setStopError(null)}
-            onFailed={setStopError}
-          />
+          <div className="flex shrink-0 self-stretch flex-col items-end justify-between gap-1">
+            <StopBackgroundTaskButton
+              task={backgroundAgentTask}
+              onStopped={() => setStopError(null)}
+              onFailed={setStopError}
+            />
+            <RuntimeLabel value={durationLabel} />
+          </div>
         ) : null}
       </div>
       {stopError ? (

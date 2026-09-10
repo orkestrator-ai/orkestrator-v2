@@ -882,6 +882,7 @@ function sameBackgroundTask(
     left?.id === right?.id &&
     left?.description === right?.description &&
     left?.status === right?.status &&
+    left?.startedAt === right?.startedAt &&
     left?.settledAt === right?.settledAt
   );
 }
@@ -897,6 +898,18 @@ function sameBackgroundTask(
  */
 function settledAtField(settledAt: string | undefined): { settledAt?: string } {
   return settledAt ? { settledAt } : {};
+}
+
+function startedAtField(startedAt: string | undefined): { startedAt?: string } {
+  return startedAt ? { startedAt } : {};
+}
+
+function backgroundTaskStartedAt(
+  task: { startedAt?: number | string } | undefined,
+): string | undefined {
+  if (!task || task.startedAt === undefined) return undefined;
+  const epoch = typeof task.startedAt === "number" ? task.startedAt : Date.parse(task.startedAt);
+  return Number.isFinite(epoch) ? new Date(epoch).toISOString() : undefined;
 }
 
 /**
@@ -940,6 +953,8 @@ export interface ClaudeBackgroundTaskState {
   toolUseId?: string;
   description?: string;
   status: ClaudeBackgroundTask["status"];
+  /** Launch edge, in bridge epoch milliseconds or projection ISO form. */
+  startedAt?: number | string;
   /** Terminal edge as the bridge records it, in epoch milliseconds. */
   endedAt?: number;
   /** Terminal edge as the projection carries it; see `settledAt` there. */
@@ -968,6 +983,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       id: string;
       description?: string;
       status?: ClaudeBackgroundTask["status"];
+      startedAt?: string;
       settledAt?: string;
     }
   >();
@@ -988,6 +1004,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         id: taskId,
         description: authoritative?.description ?? stringArgument(part.toolArgs, "description"),
         status: authoritative?.status,
+        startedAt: backgroundTaskStartedAt(authoritative) ?? part.createdAt,
         settledAt: backgroundTaskSettledAt(authoritative),
       });
     }
@@ -1025,6 +1042,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
           description:
             authoritativeLaunch.description ?? stringArgument(part.toolArgs, "description"),
           status: authoritativeLaunch.status,
+          ...startedAtField(backgroundTaskStartedAt(authoritativeLaunch) ?? part.createdAt),
           ...settledAtField(backgroundTaskSettledAt(authoritativeLaunch)),
         };
       } else if (isAgentTool && agentState === undefined) {
@@ -1053,6 +1071,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             id: launch.id,
             description: launch.description ?? stringArgument(part.toolArgs, "description"),
             status: launch.status,
+            ...startedAtField(backgroundTaskStartedAt(launch) ?? part.createdAt),
             ...settledAtField(backgroundTaskSettledAt(launch)),
           };
           /*
@@ -1079,6 +1098,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             id: taskId,
             description: task.description,
             status: task.status,
+            ...startedAtField(backgroundTaskStartedAt(task)),
             ...settledAtField(backgroundTaskSettledAt(task)),
           };
         }
@@ -1192,10 +1212,12 @@ function createBackgroundTaskMessage(
           content: label,
           toolName: "BackgroundTask",
           agentState: backgroundTaskAgentStateFromStatus(task.status),
+          ...(task.startedAt ? { createdAt: task.startedAt } : {}),
           backgroundTask: {
             id: task.id,
             status: task.status,
             ...(task.description ? { description: task.description } : {}),
+            ...(task.startedAt ? { startedAt: task.startedAt } : {}),
             ...(task.settledAt ? { settledAt: task.settledAt } : {}),
           },
         },

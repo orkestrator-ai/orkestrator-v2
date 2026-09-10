@@ -3041,6 +3041,93 @@ describe("NativeMessage task list rendering", () => {
     expect(getClassTokens(singleLineAgent.firstElementChild)).not.toContain("items-start");
   });
 
+  test("shows a background task timer in the lower-right control rail", () => {
+    const startedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(startedAt) + 125_000;
+    try {
+      render(
+        <BackgroundTaskCard
+          task={{
+            id: "task-1",
+            description: "Run validation",
+            status: "running",
+            startedAt,
+          }}
+          command="mise run test"
+          open={false}
+          onOpenChange={() => {}}
+          onStop={async () => true}
+        />,
+      );
+
+      const timer = screen.getByText("2m 5s");
+      expect(getClassTokens(timer)).toContain("tabular-nums");
+      expect(getClassTokens(timer.parentElement)).toEqual(
+        expect.arrayContaining(["self-stretch", "items-end", "justify-between"]),
+      );
+      expect(screen.getByRole("button", { name: "Stop Run validation" })).toBeTruthy();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("freezes a completed background task timer at its backend settle clock", () => {
+    render(
+      <BackgroundTaskCard
+        task={{
+          id: "task-1",
+          description: "Run validation",
+          status: "completed",
+          startedAt: "2026-03-21T10:00:00.000Z",
+          settledAt: "2026-03-21T10:02:05.000Z",
+        }}
+        command="mise run test"
+        open={false}
+        onOpenChange={() => {}}
+        onStop={async () => true}
+      />,
+    );
+
+    expect(screen.getByText("2m 5s")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop Run validation" }) === null).toBe(true);
+  });
+
+  test("shows the same live timer below the stop control on background Agent cards", () => {
+    const startedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(startedAt) + 125_000;
+    try {
+      render(
+        <NativeMessage
+          stopBackgroundTask={async () => true}
+          message={makeMessage([
+            makeAgentTaskGroupPart({
+              task: {
+                createdAt: startedAt,
+                agentState: "active",
+                backgroundTask: {
+                  id: "agent-task-1",
+                  description: "Review validation",
+                  status: "running",
+                  startedAt,
+                },
+              },
+            }),
+          ])}
+        />,
+      );
+
+      const timer = screen.getByText("2m 5s");
+      expect(getClassTokens(timer.parentElement)).toEqual(
+        expect.arrayContaining(["self-stretch", "items-end", "justify-between"]),
+      );
+      expect(screen.getByRole("button", { name: "Stop Review validation" })).toBeTruthy();
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   test("collapses a Codex agent label whose role only restates its name", () => {
     // Codex multi-agent v2 derives both the name and the role from the same
     // task path, so rendering both would read "metadata_review (metadata_review)".

@@ -113,6 +113,7 @@ describe("Claude activity in the shared native transcript", () => {
         toolUseId: "bash-1",
         description: "Run the dev server",
         status: "running",
+        startedAt: "2026-08-16T09:59:58.000Z",
       },
     });
 
@@ -120,6 +121,7 @@ describe("Claude activity in the shared native transcript", () => {
       id: "bg-dev",
       description: "Run the dev server",
       status: "running",
+      startedAt: "2026-08-16T09:59:58.000Z",
     });
     // The launch tool succeeded; the task it launched has not.
     expect(decorated?.parts[0]?.toolState).toBe("success");
@@ -211,6 +213,11 @@ describe("Claude activity in the shared native transcript", () => {
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+      const part = rows[0]?.parts[0];
+      expect(part?.type === "task-group" && part.task.createdAt).toBe("2026-08-16T09:59:00.000Z");
+      expect(part?.type === "task-group" && part.task.backgroundTask?.startedAt).toBe(
+        "2026-08-16T09:59:00.000Z",
+      );
     });
 
     test("prefers the transcript's newest clock to the launch clock for a live task", () => {

@@ -17,6 +17,7 @@ import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
   defaultEffortFor,
   firstModelFor,
+  modelSupportsSpeed,
   modelsForAgent,
   type AgentModelCatalog,
   type LaunchAgent,
@@ -51,6 +52,12 @@ function catalogSelection(
     agent: selection.agent,
     model,
     ...(effort === "default" ? {} : { reasoningEffort: effort }),
+    // Speed belongs to the workflow's fix decision. Dropping it here would run
+    // a custom fix at a different speed from the one the Fix action uses.
+    ...(typeof selection.fastMode === "boolean" &&
+    modelSupportsSpeed(selection.agent, catalog, model)
+      ? { fastMode: selection.fastMode }
+      : {}),
   };
 }
 
@@ -85,7 +92,8 @@ export function MultiReviewFixPromptDialog({
       const next = catalogSelection(current, catalog);
       return current.agent === next.agent &&
         current.model === next.model &&
-        current.reasoningEffort === next.reasoningEffort
+        current.reasoningEffort === next.reasoningEffort &&
+        current.fastMode === next.fastMode
         ? current
         : next;
     });
@@ -102,10 +110,16 @@ export function MultiReviewFixPromptDialog({
 
   const selectModel = (agent: LaunchAgent, model: string) => {
     const effort = defaultEffortFor(agent, model, catalog);
+    // Speed is a per-platform capability, so it survives a model change within
+    // one provider and is dropped when the provider itself changes.
+    const fastMode = agent === selection.agent ? selection.fastMode : undefined;
     setSelection({
       agent,
       model,
       ...(effort === "default" ? {} : { reasoningEffort: effort }),
+      ...(typeof fastMode === "boolean" && modelSupportsSpeed(agent, catalog, model)
+        ? { fastMode }
+        : {}),
     });
   };
 

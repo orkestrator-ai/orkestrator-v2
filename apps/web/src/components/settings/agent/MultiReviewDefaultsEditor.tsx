@@ -167,15 +167,21 @@ function ReviewerDefaultPicker({
   const speedAvailable = modelSupportsSpeed(platform, catalog, effectiveModelId);
   const platformFastMode = resolveAgentPlatformSettings(tiers, platform).fastMode;
   const storedFastMode = entry?.fastMode;
-  const inheritedFastMode =
-    entry == null || inheritsFallbackFields ? fallbackEntry.fastMode : undefined;
+  const inheritedFastMode = inheritsFallbackFields ? fallbackEntry.fastMode : undefined;
   const effectiveFastMode = storedFastMode ?? inheritedFastMode ?? platformFastMode ?? null;
+  // Writing this row's entry replaces whatever it was following, whole. Carry
+  // the inherited model and reasoning level across so choosing a speed cannot
+  // quietly move the reviewer onto a different model.
   const persistSpeed = (fastMode: boolean | undefined) => {
     if (fastMode === undefined && entry == null) return;
+    const model = entry?.model ?? (inheritsFallbackFields ? fallbackEntry.model : undefined);
+    const reasoningEffort =
+      entry?.reasoningEffort ??
+      (inheritsFallbackFields ? fallbackEntry.reasoningEffort : undefined);
     onChange(
       actionDefaultEntry(platform, {
-        ...(entry?.model ? { model: entry.model } : {}),
-        ...(entry?.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(fastMode !== undefined ? { fastMode } : {}),
       }),
     );

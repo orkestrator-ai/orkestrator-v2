@@ -150,6 +150,49 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
     expect(screen.getByTestId("multi-review-default-1 speed-value").textContent).toBe("false");
   });
 
+  test("keeps the model a reviewer was following when it pins Fast", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+
+    function Harness() {
+      const [tier, setTier] = useState<AgentSettingsTier>({
+        defaultAgent: "claude",
+        actionDefaults: {
+          review: { platform: "claude", model: "claude-fast", reasoningEffort: "high" },
+        },
+      });
+      return (
+        <MultiReviewDefaultsEditor
+          tier={tier}
+          onChange={(next) => {
+            setTier(next);
+            onChange(next);
+          }}
+          tiers={{ global: tier }}
+          canInherit={false}
+          enabledPlatforms={["claude", "codex"]}
+          catalog={catalog}
+        />
+      );
+    }
+
+    render(<Harness />);
+    // Reviewer 2 follows Review until it stores something of its own. Writing a
+    // speed there must not drop the model and reasoning level it was showing.
+    fireEvent.click(screen.getByRole("button", { name: "multi-review-default-1 choose Fast" }));
+
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review2).toEqual({
+      platform: "claude",
+      model: "claude-fast",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].actionDefaults?.review).toEqual({
+      platform: "claude",
+      model: "claude-fast",
+      reasoningEffort: "high",
+    });
+  });
+
   test("labels the root-tier reset as the provider default", () => {
     render(<SettingsHarness canInherit={false} onChange={() => {}} />);
 

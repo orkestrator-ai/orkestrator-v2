@@ -311,6 +311,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     enabledAgentList,
     enabledAgents,
     launchDialogDefaultsFor,
+    launchDialogDefaultsFromResolved,
     configuredLaunchDialogDefaultsFor,
     handleReview,
     openReviewDialog,
@@ -380,21 +381,16 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       const entry =
         additionalReviewerDefaults[index - DEFAULT_MULTI_REVIEW_REVIEWER_COUNT] ?? undefined;
       if (!entry?.platform || !enabledAgents.has(entry.platform)) return reviewLaunchDefaults;
-      return {
-        defaultAgent: entry.platform,
-        preferredModels: {
-          ...reviewLaunchDefaults.preferredModels,
-          ...(entry.model ? { [entry.platform]: entry.model } : {}),
-        },
-        preferredReasoningEfforts: {
-          ...reviewLaunchDefaults.preferredReasoningEfforts,
-          ...(entry.reasoningEffort ? { [entry.platform]: entry.reasoningEffort } : {}),
-        },
-        preferredFastModes: {
-          ...reviewLaunchDefaults.preferredFastModes,
-          ...(entry.fastMode !== undefined ? { [entry.platform]: entry.fastMode } : {}),
-        },
-      };
+      // Built from this reviewer's own entry over the platform defaults, not
+      // over Reviewer 1's. Layering it on Review's preferences would hand this
+      // reviewer Review's model, reasoning level and speed whenever the two
+      // name the same platform.
+      return launchDialogDefaultsFromResolved({
+        agent: entry.platform,
+        ...(entry.model ? { model: entry.model } : {}),
+        ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+        ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+      });
     },
   );
 

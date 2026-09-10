@@ -440,20 +440,30 @@ export function AgentDefaultsPane({
               tiers,
               actionPlatform,
             ).fastMode;
-            const actionStoredSpeed = entry?.fastMode;
-            const actionInheritedSpeed =
-              entry == null
-                ? (inheritedEntry?.fastMode ?? actionPlatformSpeed)
-                : actionPlatformSpeed;
+            // The runtime resolver ignores an entry whose platform is disabled,
+            // whole. Read speed through the same two entries it would use, so
+            // the row never shows a value no launch can apply.
+            const activeEntry = platform ? entry : undefined;
+            const inheritedActionEntry =
+              activeEntry == null && inheritedPlatform === actionPlatform
+                ? inheritedEntry
+                : undefined;
+            const actionStoredSpeed = activeEntry?.fastMode;
+            const actionInheritedSpeed = inheritedActionEntry?.fastMode ?? actionPlatformSpeed;
             const persistAction = (
               nextPlatform: AgentPlatform,
               fields: Omit<AgentActionDefault, "platform"> = {},
             ) => setAction(key, actionDefaultEntry(nextPlatform, fields));
+            // A narrower tier's entry replaces its parent's whole, so writing
+            // speed onto a row that is still inheriting has to carry the model
+            // and reasoning level across with it. Without that, choosing Fast
+            // here would silently discard the parent's model.
             const persistActionSpeed = (fastMode: boolean | undefined) => {
               if (fastMode === undefined && entry == null) return;
+              const base = activeEntry ?? inheritedActionEntry;
               persistAction(actionPlatform, {
-                ...(entry?.model ? { model: entry.model } : {}),
-                ...(entry?.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
+                ...(base?.model ? { model: base.model } : {}),
+                ...(base?.reasoningEffort ? { reasoningEffort: base.reasoningEffort } : {}),
                 ...(fastMode !== undefined ? { fastMode } : {}),
               });
             };

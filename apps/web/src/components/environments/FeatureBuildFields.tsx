@@ -32,6 +32,7 @@ import {
 } from "@/lib/agent-launch";
 import {
   featureBuildReviewerRow,
+  retainedStepFastMode,
   type BuildIntent,
   type FeatureBuildModelState,
   type FeatureBuildReviewerRow,
@@ -508,6 +509,8 @@ function ModelPicker({
         ]
       : [];
   const reasoningId = selection.reasoningEffort ?? "default";
+  const keptFastMode = (platform: LaunchAgent, modelId: string) =>
+    retainedStepFastMode(selection, platform, modelId, catalog);
 
   /**
    * Moving platform re-resolves the model and reasoning level, because a model
@@ -544,6 +547,7 @@ function ModelPicker({
           agent: selection.agent,
           model: modelId,
           ...(effort === "default" ? {} : { reasoningEffort: effort }),
+          ...keptFastMode(selection.agent, modelId),
         });
       }}
       onModelSelect={(model) => {
@@ -553,6 +557,7 @@ function ModelPicker({
           agent: platform,
           model: model.id,
           ...(effort === "default" ? {} : { reasoningEffort: effort }),
+          ...keptFastMode(platform, model.id),
         });
       }}
       reasoningOptions={reasoningOptions}

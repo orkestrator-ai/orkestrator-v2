@@ -439,6 +439,69 @@ body[data-orkestrator-dev-profile]::before {
   }
 }
 
+/*
+ * Animate real layout height, not a transform, so the bottom-anchored transcript
+ * follows the reveal instead of the skeleton sliding over the last message.
+ */
+.session-refresh-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms ease-out;
+}
+
+.session-refresh-reveal[data-active="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/*
+ * The transcript skeleton stays mounted and animates off the attribute, but the
+ * pinned one enters the compose dock already active. Without a starting style
+ * there is no previous value to transition from, so it would pop to full height.
+ */
+@starting-style {
+  .session-refresh-reveal[data-active="true"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.session-refresh-shimmer > div {
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--color-muted-foreground) 18%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: agent-thinking-shimmer 1.8s linear infinite;
+}
+
+.session-refresh-reveal[data-active="false"] .session-refresh-shimmer > div {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-refresh-reveal {
+    transition: none;
+  }
+
+  .session-refresh-shimmer > div {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .session-refresh-shimmer > div {
+    background: GrayText;
+    forced-color-adjust: none;
+    animation: none;
+  }
+}
+
 @keyframes agent-connecting-pulse {
   0%,
   100% {

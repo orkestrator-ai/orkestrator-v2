@@ -638,7 +638,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <>
                           <p>New Native Agent Tab</p>
                           <p className="text-xs text-muted-foreground">
-                            ⌘N · Right-click for options
+                            ⌘T · Right-click for options
                           </p>
                         </>
                       }
@@ -678,7 +678,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <>
                           <p>New Terminal Tab</p>
                           <p className="text-xs text-muted-foreground">
-                            ⌘T · Right-click for agent CLIs
+                            ⌘R · Right-click for agent CLIs
                           </p>
                         </>
                       }
@@ -793,7 +793,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           Commit changes and review code
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ⌘R · ⌘⇧R or right-click/long-press to configure
+                          ⌘⇧R or right-click/long-press to configure
                         </p>
                       </>
                     }

@@ -1147,8 +1147,15 @@ describe("NativeAgentService", () => {
   });
 
   test.each([
-    ["claude", ["parameter:audit", "parameter:variant"]],
-    ["cursor", ["parameter:thinking", "parameter:context1m", "parameter:audit"]],
+    ["claude", ["parameter:audit", "parameter:variant", "parameter:summary"]],
+    [
+      "codex",
+      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:variant"],
+    ],
+    [
+      "cursor",
+      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:summary"],
+    ],
   ] as const)(
     "filters only provider-specific parameter controls for %s at the backend boundary",
     async (agent, expectedParameterControls) => {
@@ -1193,6 +1200,14 @@ describe("NativeAgentService", () => {
                 kind: "select",
                 options: [{ id: "provider-default", label: "Provider default" }],
                 defaultValue: "provider-default",
+                scope: "turn",
+              },
+              {
+                id: "summary",
+                label: "Reasoning summary",
+                kind: "select",
+                options: [{ id: "auto", label: "Automatic" }],
+                defaultValue: "auto",
                 scope: "turn",
               },
             ],

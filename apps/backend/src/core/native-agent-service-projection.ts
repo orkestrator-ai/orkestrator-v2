@@ -2981,9 +2981,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,
         // Claude's thinking/context choices are settings-backed session
-        // defaults, while Cursor's retired variant is a pre-combined parameter
-        // cross product. Remove only those provider-specific duplicates at the
-        // authoritative boundary so every renderer sees the same controls.
+        // defaults, Codex's reasoning summary is not part of the compact input
+        // bar, and Cursor's retired variant is a pre-combined parameter cross
+        // product. Remove only those provider-specific controls at the
+        // authoritative boundary so every renderer sees the same surface.
         composerControls: nativeComposerControls(
           composer,
           snapshot.status === "running" || blocked,
@@ -2992,6 +2993,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           (control) =>
             (input.agent !== "claude" ||
               (control.id !== "parameter:thinking" && control.id !== "parameter:context1m")) &&
+            (input.agent !== "codex" || control.id !== "parameter:summary") &&
             (input.agent !== "cursor" || control.id !== "parameter:variant"),
         ),
         composer,

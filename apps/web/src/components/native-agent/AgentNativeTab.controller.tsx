@@ -2040,6 +2040,13 @@ export function SharedNativeAgentController({
                 />
                 {(projection?.composerControls ?? [])
                   .filter((control) => control.id.startsWith("parameter:"))
+                  .filter(
+                    (control) =>
+                      (platform !== "claude" ||
+                        (control.id !== "parameter:thinking" &&
+                          control.id !== "parameter:context1m")) &&
+                      (platform !== "codex" || control.id !== "parameter:summary"),
+                  )
                   .map((control) => {
                     const parameterId = control.id.slice("parameter:".length);
                     if (control.kind === "toggle") {

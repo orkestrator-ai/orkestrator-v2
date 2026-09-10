@@ -3087,6 +3087,79 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText(/Audit mode: Off/)).toBeTruthy();
   });
 
+  test("hides Claude thinking and context controls in review tabs", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "select" as const,
+          id: "parameter:thinking",
+          label: "Thinking",
+          value: "adaptive",
+          options: [{ id: "adaptive", label: "Adaptive" }],
+        },
+        {
+          kind: "toggle" as const,
+          id: "parameter:context1m",
+          label: "1M context beta",
+          value: false,
+        },
+        {
+          kind: "toggle" as const,
+          id: "parameter:audit",
+          label: "Audit mode",
+          value: false,
+        },
+      ],
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="tab-claude-review-parameters"
+        data={identity("claude")}
+        isActive
+        isReviewTab
+      />,
+    );
+
+    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+    expect(screen.queryByText(/Thinking: Adaptive/)).toBeNull();
+    expect(screen.queryByText(/1M context beta: Off/)).toBeNull();
+  });
+
+  test("hides the Codex reasoning summary control in review tabs", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      composerControls: [
+        {
+          kind: "select" as const,
+          id: "parameter:summary",
+          label: "Reasoning summary",
+          value: "auto",
+          options: [{ id: "auto", label: "Automatic" }],
+        },
+        {
+          kind: "toggle" as const,
+          id: "parameter:audit",
+          label: "Audit mode",
+          value: false,
+        },
+      ],
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId="tab-codex-review-parameters"
+        data={identity("codex")}
+        isActive
+        isReviewTab
+      />,
+    );
+
+    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+    expect(screen.queryByText(/Reasoning summary: Automatic/)).toBeNull();
+  });
+
   test("renders model parameters supplied for a non-Claude platform", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),

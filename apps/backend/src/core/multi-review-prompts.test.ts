@@ -96,6 +96,21 @@ describe("multi review reviewer prompt", () => {
     expect(prompt).toContain("the change under review is the committed range");
   });
 
+  test("qualifies pinned evidence after live-worktree drift", () => {
+    const prompt = createMultiReviewerPrompt({
+      targetBranch: "main",
+      reviewerNumber: 2,
+      reviewerCount: 3,
+      worktree: { status: "clean", head: "1111111111111111111111111111111111111111" },
+      worktreeChangedDuringReview: true,
+    });
+
+    expect(prompt).toContain("**Pinned worktree state (known stale)**");
+    expect(prompt).toContain("This recorded state is no longer authoritative");
+    expect(prompt).toContain("Reconcile the committed range and live worktree");
+    expect(prompt).not.toContain("**Authoritative worktree state**");
+  });
+
   test("never claims a clean tree when the state was not observed", () => {
     const prompt = createMultiReviewerPrompt({
       targetBranch: "main",
@@ -174,6 +189,44 @@ describe("multi review consolidation prompt", () => {
       expect(prompt).not.toContain("examined an incomplete snapshot");
       expect(prompt).toContain("Semantically deduplicate equivalent issues");
     }
+  });
+
+  test("records live-worktree drift as a limitation without rejecting the reports", () => {
+    const prompt = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+      worktree: {
+        status: "clean",
+        head: "1111111111111111111111111111111111111111",
+      },
+      worktreeChangedDuringReview: true,
+    });
+
+    expect(prompt).toContain("The repository worktree changed after this Multi Review started");
+    expect(prompt).toContain("continued instead of discarding completed work");
+    expect(prompt).toContain("Preserve that fact as a limitation");
+    expect(prompt).toContain(
+      "do not carry its clean findings, passing validation, or ready verdict",
+    );
+  });
+
+  test("applies both dirty-baseline and drift scope protections", () => {
+    const prompt = createMultiReviewConsolidationPrompt({
+      targetBranch: "main",
+      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+      worktree: {
+        status: "dirty",
+        head: "1111111111111111111111111111111111111111",
+        paths: ["src/original.ts"],
+      },
+      worktreeChangedDuringReview: true,
+    });
+
+    expect(prompt).toContain("included uncommitted working-tree paths");
+    expect(prompt).toContain("The repository worktree changed after this Multi Review started");
+    expect(
+      prompt.match(/do not carry its clean findings, passing validation, or ready verdict/g),
+    ).toHaveLength(2);
   });
 
   test("identifies the verified package as authoritative consolidation scope", () => {

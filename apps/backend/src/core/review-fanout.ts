@@ -608,9 +608,11 @@ export interface ReviewFanoutHost {
   reviewerPrompt?(reviewerIndex: number, reviewerCount: number): Promise<string>;
   /**
    * Re-verifies the pinned worktree and returns the prompt projection of it.
-   * Throws {@link ReviewSnapshotChangedError} on drift.
+   * Owners choose whether drift is fatal or is recorded for prompt qualification.
    */
   reviewSnapshot?(): Promise<ReviewWorktreeSnapshot>;
+  /** True when the owner tolerated live-worktree drift after pinning the snapshot. */
+  worktreeChangedDuringReview?(): boolean;
   resolveUnattendedInteractions(
     provider: BuildPipelineProvider,
     providerSessionId: string,
@@ -823,6 +825,7 @@ export class ReviewFanoutRunner {
             reviewerNumber: index + 1,
             reviewerCount,
             worktree,
+            worktreeChangedDuringReview: host.worktreeChangedDuringReview?.() === true,
           });
         }
       }

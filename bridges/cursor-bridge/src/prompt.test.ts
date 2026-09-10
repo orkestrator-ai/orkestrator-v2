@@ -1524,4 +1524,69 @@ describe("context occupancy versus turn spend", () => {
     expect(usage).toMatchObject({ usedTokens: 40, lastTurnTokens: 40 });
     expect(usage?.maximumTokens).toBeUndefined();
   });
+
+  test("prefers the catalogue window over the curated table for the same model", async () => {
+    const state = runningSession();
+    // The curated table is a fallback for entries that carry no window, not an
+    // override. A live catalogue that starts reporting its own size — or that
+    // reports one Cursor has since changed — has to win, or the table would
+    // pin the gauge to a stale figure the provider no longer serves.
+    state.composer.models = [
+      { platform: "cursor", id: "grok-4-6", label: "Cursor Grok 4.6", contextWindow: 250_000 },
+    ];
+    state.composer.selectedModelId = "grok-4-6";
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 30,
+            outputTokens: 10,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 40,
+          },
+        };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 40,
+      maximumTokens: 250_000,
+    });
+  });
+
+  test("leaves the gauge unbounded for a model id no provider published", async () => {
+    const state = runningSession();
+    // `parseComposerPatch` stores the client's model id without checking it
+    // against the catalogue, so an inherited object key can reach the lookup.
+    state.composer.models = [];
+    state.composer.selectedModelId = "constructor";
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 30,
+            outputTokens: 10,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 40,
+          },
+        };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    const usage = publicContextUsage(state);
+    expect(usage).toMatchObject({ usedTokens: 40 });
+    expect(usage?.maximumTokens).toBeUndefined();
+  });
 });

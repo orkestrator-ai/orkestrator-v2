@@ -96,12 +96,12 @@ const FAST_PARAMETER = "fast";
  * - `claude-opus-5`, `claude-sonnet-5`, `claude-sonnet-4-6`: 1,000,000
  *   (Anthropic context-window docs: 1M is both the default and the maximum).
  */
-const KNOWN_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
-  "grok-4-6": 500_000,
-  "claude-opus-5": 1_000_000,
-  "claude-sonnet-5": 1_000_000,
-  "claude-sonnet-4-6": 1_000_000,
-};
+const KNOWN_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
+  ["grok-4-6", 500_000],
+  ["claude-opus-5", 1_000_000],
+  ["claude-sonnet-5", 1_000_000],
+  ["claude-sonnet-4-6", 1_000_000],
+]);
 
 /**
  * The context window for a Cursor model id, if one is confirmed above.
@@ -110,6 +110,12 @@ const KNOWN_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
  * `-fast` speed suffix, which selects a pricing variant of the same model
  * rather than a different window. Returns `undefined` for anything not
  * confirmed — the caller must render metrics-only, never invent a window.
+ *
+ * The id is untrusted: `parseComposerPatch` accepts whatever model the client
+ * names without checking it against the catalogue, so a session can carry an
+ * id no provider ever published. The table is a `Map` for that reason — an
+ * object literal answers inherited keys such as `constructor` with a function,
+ * which would satisfy the `number` return type only until something used it.
  */
 export function contextWindowForModelId(modelId: string | undefined): number | undefined {
   const normalized = (modelId ?? "")
@@ -118,7 +124,7 @@ export function contextWindowForModelId(modelId: string | undefined): number | u
     .replace(/[._]+/g, "-")
     .replace(/-fast$/, "");
   if (!normalized) return undefined;
-  return KNOWN_CONTEXT_WINDOWS[normalized];
+  return KNOWN_CONTEXT_WINDOWS.get(normalized);
 }
 
 function normalizeModel(item: ModelListItem): AgentModel {

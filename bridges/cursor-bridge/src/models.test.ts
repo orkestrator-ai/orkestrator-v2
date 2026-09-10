@@ -275,4 +275,21 @@ describe("context windows", () => {
     expect(contextWindowForModelId("grok-4-6-fast")).toBe(500_000);
     expect(contextWindowForModelId("Claude-Opus-5")).toBe(1_000_000);
   });
+
+  test("answers an inherited object key with no window", () => {
+    // The composer stores whatever model id the client names, so these reach
+    // the table verbatim. A plain object would answer `constructor` with the
+    // `Object` function and hand the gauge a non-number as its denominator.
+    for (const key of ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"]) {
+      expect(contextWindowForModelId(key)).toBeUndefined();
+    }
+  });
+
+  test("ignores whitespace and blank ids", () => {
+    expect(contextWindowForModelId("  grok-4-6  ")).toBe(500_000);
+    expect(contextWindowForModelId("   ")).toBeUndefined();
+    expect(contextWindowForModelId("")).toBeUndefined();
+    // `-fast` is a suffix on a known model, never a model of its own.
+    expect(contextWindowForModelId("-fast")).toBeUndefined();
+  });
 });

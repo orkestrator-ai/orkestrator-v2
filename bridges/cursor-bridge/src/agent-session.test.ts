@@ -34,8 +34,6 @@ const resumedOptions: Array<Record<string, unknown>> = [];
 let storedRuns: Array<Record<string, unknown>> = [];
 const deletedRunBatches: string[][] = [];
 let updatedAgent: Record<string, unknown> | undefined;
-const jsonlStoreRoots: string[] = [];
-const jsonlStores: object[] = [];
 const configuredStores: unknown[] = [];
 const platformOptions: Array<Record<string, unknown>> = [];
 const prewarmOptions: Array<Record<string, unknown>> = [];
@@ -78,10 +76,7 @@ class FakeJsonlLocalAgentStore {
   };
   readonly runEvents = { delete: async () => undefined };
 
-  constructor(root: string) {
-    jsonlStoreRoots.push(root);
-    jsonlStores.push(this);
-  }
+  constructor(_root: string) {}
 }
 
 const createTestPlatform = async (options: Record<string, unknown>) => {
@@ -192,9 +187,21 @@ beforeEach(() => {
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
 });
 
-test("configures one JSONL store below the bridge state directory", () => {
-  expect(jsonlStoreRoots).toEqual([join(bridgeStateRoot, "cursor-sdk")]);
-  expect(configuredStores).toEqual([jsonlStores[0]]);
+test("restoring injected runtime dependencies reinstates the prior SDK configure callback", () => {
+  const innerConfigured: unknown[] = [];
+  const restore = useCursorSdkRuntimeForTests({
+    configureStore: (store) => innerConfigured.push(store),
+    createPlatform:
+      createTestPlatform as unknown as typeof import("@cursor/sdk").createAgentPlatform,
+  });
+  const replacement = new FakeJsonlLocalAgentStore("unused") as unknown as LocalAgentStore;
+  const replaced = useCursorLocalAgentStoreForTests(replacement);
+  expect(innerConfigured).toEqual([replacement]);
+
+  restore();
+  const configuredBeforeRestore = configuredStores.length;
+  useCursorLocalAgentStoreForTests(replaced);
+  expect(configuredStores.slice(configuredBeforeRestore)).toEqual([testStore]);
 });
 
 describe("rewindSessionHistory", () => {
@@ -317,7 +324,7 @@ describe("ensureAgent", () => {
     expect(created[0]).toMatchObject({ local: { cwd: workingDirectory } });
     expect(platformOptions).toEqual([
       expect.objectContaining({
-        localStore: jsonlStores[0],
+        localStore: testStore,
         workspaceRef: workingDirectory,
         scopedWorkspaceRef: workingDirectory,
       }),
@@ -547,6 +554,22 @@ describe("ensureAgent", () => {
 });
 
 describe("listResumableSessions", () => {
+  test("restoring an injected Agent reinstates the prior session catalogue", async () => {
+    listed = { items: [{ agentId: "outer", status: "idle" }] };
+    const restore = useCursorAgentForTests({
+      ...testAgent,
+      list: async () => ({ items: [{ agentId: "inner", status: "idle" }] }),
+    } as typeof Agent);
+
+    try {
+      expect(await listResumableSessions()).toEqual([{ id: "inner", status: "idle" }]);
+    } finally {
+      restore();
+    }
+
+    expect(await listResumableSessions()).toEqual([{ id: "outer", status: "idle" }]);
+  });
+
   test("is empty rather than an error when nothing is signed in", async () => {
     delete process.env.CURSOR_API_KEY;
     expect(await listResumableSessions()).toEqual([]);

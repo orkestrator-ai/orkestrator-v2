@@ -15,6 +15,7 @@ import * as realCursorSdk from "@cursor/sdk";
 import {
   authStatus,
   beginLogin,
+  credentialStore,
   logout,
   resolveCredential,
   useCursorCredentialRuntimeForTests,
@@ -89,6 +90,42 @@ afterAll(() => {
 });
 
 describe("resolveCredential", () => {
+  test("restoring an injected runtime reinstates the prior store, auth, and identity clients", async () => {
+    stored = { apiKey: "outer-key", email: "outer@example.com" };
+    const outerStore = credentialStore;
+    let innerCredential: StoredCredential | undefined = {
+      apiKey: "inner-key",
+      email: "inner@example.com",
+    };
+    const innerStore = {
+      load: async () => innerCredential,
+      save: async (value: StoredCredential) => {
+        innerCredential = value;
+      },
+      clear: async () => {
+        innerCredential = undefined;
+      },
+    };
+    const restore = useCursorCredentialRuntimeForTests({
+      store: innerStore,
+      auth: {
+        status: async () => ({ status: "logged-in", email: "inner@example.com" }),
+      } as unknown as typeof realCursorSdk.Cursor.auth,
+      me: (async () => ({ apiKeyName: "Inner account" })) as typeof realCursorSdk.Cursor.me,
+    });
+
+    try {
+      expect(credentialStore).toBe(innerStore);
+      expect(await authStatus()).toMatchObject({ account: { label: "Inner account" } });
+    } finally {
+      restore();
+    }
+
+    expect(credentialStore).toBe(outerStore);
+    expect(await authStatus()).toMatchObject({ account: { label: "outer@example.com" } });
+    expect(meCalls).toBe(1);
+  });
+
   test("reports no credential when nothing is configured", async () => {
     expect(await resolveCredential()).toEqual({ source: "none" });
   });

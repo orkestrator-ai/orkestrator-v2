@@ -35,13 +35,17 @@ describe("Cursor stall diagnostics", () => {
     for (const flag of ["", "0", "false", "off", "true", "secret"])
       expect(cursorDebugEnabled(flag)).toBe(false);
     expect(cursorDebugEnabled("1")).toBe(true);
-    const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const previousShared = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const previousCursor = process.env.CURSOR_BRIDGE_DEBUG;
     try {
       delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      delete process.env.CURSOR_BRIDGE_DEBUG;
       expect(createRunDiagnostics(newSessionState())).toBeUndefined();
     } finally {
-      if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
-      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previous;
+      if (previousShared === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousShared;
+      if (previousCursor === undefined) delete process.env.CURSOR_BRIDGE_DEBUG;
+      else process.env.CURSOR_BRIDGE_DEBUG = previousCursor;
     }
   });
 

@@ -35,9 +35,31 @@ let authCache: { credential: string; expiresAt: number; value: BridgeAuthStatus 
  * unrelated Cursor state and a container can be handed exactly one credential
  * file. Falls back to the SDK default otherwise.
  */
-export let credentialStore: SdkCredentialStore = credentialFile
-  ? new FileCredentialStore(credentialFile)
-  : new FileCredentialStore();
+class LazyFileCredentialStore implements SdkCredentialStore {
+  private store: FileCredentialStore | undefined;
+
+  private delegate(): FileCredentialStore {
+    return (this.store ??= credentialFile
+      ? new FileCredentialStore(credentialFile)
+      : new FileCredentialStore());
+  }
+
+  load(): ReturnType<SdkCredentialStore["load"]> {
+    return this.delegate().load();
+  }
+
+  save(credentials: Parameters<SdkCredentialStore["save"]>[0]): Promise<void> {
+    return this.delegate().save(credentials);
+  }
+
+  clear(): Promise<void> {
+    return this.delegate().clear();
+  }
+}
+
+// Construction is lazy so a test can install its in-memory runtime before the
+// SDK ever resolves (or creates the parent of) its default ~/.cursor path.
+export let credentialStore: SdkCredentialStore = new LazyFileCredentialStore();
 let cursorAuth = Cursor.auth;
 let cursorMe: typeof Cursor.me | undefined = Cursor.me;
 

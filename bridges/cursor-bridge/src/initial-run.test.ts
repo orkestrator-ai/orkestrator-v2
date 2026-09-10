@@ -8,6 +8,7 @@ import { join } from "node:path";
 const previousStateDir = process.env.CURSOR_BRIDGE_STATE_DIR;
 const previousApiKey = process.env.CURSOR_API_KEY;
 const root = await mkdtemp(join(tmpdir(), "cursor-initial-run-"));
+process.env.CURSOR_BRIDGE_STATE_DIR = root;
 
 /**
  * The store is built here and installed in `beforeAll`, not selected through
@@ -53,13 +54,13 @@ let restoreRuntime: () => void;
 beforeAll(() => {
   restoreAgent = useCursorAgentForTests(testAgent);
   restoreRuntime = useCursorSdkRuntimeForTests({
-    configureStore: () => undefined,
+    configureStore: (configuredStore) =>
+      sdk.Cursor.configure({ local: { store: configuredStore } }),
     createPlatform: (async () => ({
       prewarmLocalWorkspace: async () => undefined,
     })) as unknown as typeof sdk.createAgentPlatform,
   });
   replacedStore = useCursorLocalAgentStoreForTests(store);
-  process.env.CURSOR_BRIDGE_STATE_DIR = root;
   process.env.CURSOR_API_KEY = "test-key";
 });
 

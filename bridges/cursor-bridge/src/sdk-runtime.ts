@@ -12,7 +12,8 @@ import { cursorSdkStateDirectoryPath, workingDirectory } from "./config.js";
 import { cursorSetupDebug } from "./run-diagnostics.js";
 import { createCursorSandboxBootstrap } from "./sandbox-bootstrap.js";
 
-const storeRoot = cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
+export const cursorLocalAgentStoreRoot =
+  cursorSdkStateDirectoryPath() ?? getDefaultSdkStateRoot(workingDirectory);
 
 let platform: Promise<CursorAgentPlatform> | undefined;
 let initializeSandbox = createCursorSandboxBootstrap();
@@ -31,7 +32,9 @@ let runtimeDependencies = {
  * variable — an earlier suite in the same process may already have evaluated
  * this file, and its store would be the one every later import received.
  */
-export let cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(storeRoot);
+export let cursorLocalAgentStore: LocalAgentStore = new JsonlLocalAgentStore(
+  cursorLocalAgentStoreRoot,
+);
 
 runtimeDependencies.configureStore(cursorLocalAgentStore);
 

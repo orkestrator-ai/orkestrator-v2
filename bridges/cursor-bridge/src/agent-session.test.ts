@@ -41,6 +41,7 @@ const jsonlStores: object[] = [];
 const configuredStores: unknown[] = [];
 const platformOptions: Array<Record<string, unknown>> = [];
 const prewarmOptions: Array<Record<string, unknown>> = [];
+const sandboxBootstrapOptions: Array<Record<string, unknown>> = [];
 let prewarmFails = false;
 let warmWorkspaceReleases = 0;
 
@@ -97,6 +98,12 @@ mock.module("@cursor/sdk", () => ({
     platformOptions.push(options);
     return {
       prewarmLocalWorkspace: async (options: Record<string, unknown>) => {
+        // Sandbox discovery has no model, tools or MCP configuration and
+        // releases its own lease before the session's workspace is warmed.
+        if (!("model" in options)) {
+          sandboxBootstrapOptions.push(options);
+          return async () => {};
+        }
         prewarmOptions.push(options);
         if (prewarmFails) throw new Error("workspace scan unavailable");
         return async () => {
@@ -139,11 +146,15 @@ const {
   rewindSessionHistory,
 } = await import("./agent-session.js");
 const { refreshAgentUsage } = await import("./prompt.js");
+const { resetCursorSandboxBootstrapForTests } = await import("./sdk-runtime.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
+  // The barrier is primed once per process by design, so without this only
+  // the first attaching test could observe whether an attach primes it.
+  resetCursorSandboxBootstrapForTests();
   sessions.clear();
   clientSessionKeys.clear();
   process.env.CURSOR_API_KEY = "test-key";
@@ -158,6 +169,7 @@ beforeEach(() => {
   deletedRunBatches.length = 0;
   updatedAgent = undefined;
   prewarmOptions.length = 0;
+  sandboxBootstrapOptions.length = 0;
   prewarmFails = false;
   warmWorkspaceReleases = 0;
   delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
@@ -294,6 +306,19 @@ describe("ensureAgent", () => {
     const { name: _name, ...createdOptions } = created[0]!;
     expect(prewarmOptions[0]).toEqual(createdOptions);
     expect(state.workspaceWarmRelease).toBeFunction();
+    // One probe for two racing attaches, ahead of either session's own
+    // warm-up, carrying none of the session's model, tools or MCP servers.
+    expect(sandboxBootstrapOptions).toEqual([
+      {
+        apiKey: "test-key",
+        local: {
+          cwd: workingDirectory,
+          settingSources: [],
+          sandboxOptions: { enabled: true },
+          autoReview: false,
+        },
+      },
+    ]);
 
     await detachAgent(state);
     expect(warmWorkspaceReleases).toBe(1);
@@ -372,6 +397,28 @@ describe("ensureAgent", () => {
       ],
     });
     expect(created[0]).not.toHaveProperty("disallowedTools");
+    expect(sandboxBootstrapOptions).toHaveLength(0);
+  });
+
+  test("local read-only reviews retain the provider sandbox and closed tool allowlist", async () => {
+    const state = newSessionState(undefined, {
+      id: "pipeline",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    });
+    state.readOnly = true;
+
+    await ensureAgent(state);
+
+    for (const tool of ["shell", "edit", "task", "webFetch", "webSearch"]) {
+      expect(created[0]?.tools).not.toContain(tool);
+    }
+    expect(created[0]).toMatchObject({
+      local: { sandboxOptions: { enabled: true }, autoReview: false },
+      tools: expect.arrayContaining(["read", "grep", "glob", "ls"]),
+    });
   });
 
   test("the coordinator process override does not re-enable a nested container sandbox", async () => {

@@ -367,6 +367,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 activity,
                 Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
                 sessionOwner,
+                observation?.readyForInput,
               )
             )
               completionCandidates.add(session.environmentId);
@@ -464,16 +465,48 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
      * what wakes held worker mail.
      */
     owner: "environment" | "coordinator" = "environment",
+    readyForInput?: boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
-    const previous =
-      observed?.providerSessionId === session.providerSessionId ? observed.state : undefined;
+    const currentObservation =
+      observed?.providerSessionId === session.providerSessionId ? observed : undefined;
+    const previous = currentObservation?.state;
+    /*
+     * Readiness is an edge layered on the state machine, not a replacement for
+     * it. A bridge that keeps `state` at `working` for background tasks still
+     * releases the composer when the parent turn ends, and that release is the
+     * moment worth announcing — but only when a turn was actually live to
+     * release. Requiring `previous === "working"` is what keeps an observation
+     * that merely *regains* the flag from counting: the absent-bridge sweep and
+     * a non-resident session both record `idle` with no readiness, so without
+     * that guard the next poll after the bridge returns and the session is
+     * materialized would mark the environment unread with no turn behind it.
+     */
+    const readinessEdge =
+      readyForInput === true &&
+      previous === "working" &&
+      currentObservation?.readyForInput !== true;
+    /*
+     * The historical edge stays live for every other shape, including an
+     * explicit `readyForInput: false`. Gating it on readiness being absent
+     * would make an accurate provider weaker than a silent one: a bridge that
+     * reports "not ready" alongside an idle turn would lose its attention edge
+     * entirely, while one that omits the field keeps it.
+     */
     const durableAttentionEdge =
-      (state === "idle" || state === "waiting") &&
-      (previous === "working" ||
-        (state === "idle" && observed === undefined && countUnknownIdleAsCompletion));
+      readinessEdge ||
+      ((state === "idle" || state === "waiting") &&
+        (previous === "working" ||
+          (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)));
     // PR reconciliation retains its narrower historical completion contract:
     // a parked waiting turn needs the user's attention, but it has not ended.
+    //
+    // Both flags key their "never seen before" case on `observed`, not on
+    // `currentObservation`. Rotating a session's provider id is not a first
+    // observation: this backend watched the previous turn under the old id, so
+    // the idle that follows a rotation is already accounted for and must not be
+    // replayed as a completion. `previous` still narrows to the current
+    // provider session, which is what keeps a rotation from inheriting an edge.
     const completed =
       state === "idle" &&
       (previous === "working" || (observed === undefined && countUnknownIdleAsCompletion));
@@ -489,6 +522,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
+      ...(readyForInput !== undefined ? { readyForInput } : {}),
     });
     if (previous !== state) {
       this.options.onActivityTransition?.({

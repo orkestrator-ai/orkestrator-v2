@@ -1630,6 +1630,33 @@ describe("session routes", () => {
       expect(mockGetSessionActivity).toHaveBeenCalledWith("s-1");
     });
 
+    test("reports that input is ready independently of continuing work", async () => {
+      mockPeekSession.mockImplementationOnce(
+        () => ({ id: "s-1", status: "idle" }) as ReturnType<typeof mockPeekSession>,
+      );
+      const res = await app.request("/session/s-1/activity");
+
+      expect(await jsonBody(res)).toEqual({ activity: "working", readyForInput: true });
+    });
+
+    test("withholds readiness while the session still holds a turn", async () => {
+      for (const status of ["running", "failed"] as const) {
+        mockPeekSession.mockImplementationOnce(
+          () => ({ id: "s-1", status }) as ReturnType<typeof mockPeekSession>,
+        );
+        const res = await app.request("/session/s-1/activity");
+
+        expect(await jsonBody(res)).toEqual({ activity: "working" });
+      }
+    });
+
+    test("withholds readiness for a session this process is not holding", async () => {
+      mockPeekSession.mockImplementationOnce(() => undefined);
+      const res = await app.request("/session/s-1/activity");
+
+      expect(await jsonBody(res)).toEqual({ activity: "working" });
+    });
+
     test("returns 200 with activity 'missing' for an unknown session", async () => {
       const res = await app.request("/session/s-unknown/activity");
 

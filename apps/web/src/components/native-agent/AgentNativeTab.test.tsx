@@ -2562,6 +2562,51 @@ describe("AgentNativeTab", () => {
     );
   });
 
+  test("keeps an unconfirmed prompt ahead of the streamed response", async () => {
+    // OpenCode can stream the assistant rows before its authoritative user echo
+    // lands. Appending the provisional prompt put the response above it and
+    // pinned the prompt to the bottom of the transcript; it must instead stay
+    // where it was submitted, ahead of every row the turn has produced.
+    renderVirtualizedMessages = true;
+    const tabId = "tab-optimistic-ordering";
+    const responseRow = {
+      id: "assistant-streaming",
+      role: "assistant" as const,
+      content: "Inspecting the layout",
+      parts: [{ type: "text" as const, content: "Inspecting the layout" }],
+      createdAt: "2026-08-26T14:02:00.000Z",
+    };
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+        ...(await defaultProjection(projectionInput)),
+        turn: { phase: "running" as const },
+        messages: [responseRow],
+      }));
+      return {
+        outcome: "unknown" as const,
+        requestId: input.requestId,
+        error: "The response was lost",
+      };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Make it narrower" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    const list = await screen.findByTestId("native-agent-transcript-test-list");
+    await waitFor(() => {
+      const rows = [...list.children].map((row) => row.textContent ?? "");
+      const promptIndex = rows.findIndex((row) => row.includes("Make it narrower"));
+      const responseIndex = rows.findIndex((row) => row.includes("Inspecting the layout"));
+      expect(responseIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeLessThan(responseIndex);
+    });
+  });
+
   test("clears a submitted draft after transcript confirmation lands while the environment is unmounted", async () => {
     const tabId = "tab-transcript-confirmed-while-unmounted";
     const sessionKey = createSessionKey("env-1", tabId);

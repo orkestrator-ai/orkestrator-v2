@@ -69,6 +69,7 @@ import {
   createPeerMailNativeMessageFromCarrier,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
+  positionOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
@@ -262,6 +263,16 @@ export function SharedNativeAgentController({
     createdAt: string;
     requestId?: string;
     confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
+    /**
+     * Raw ids of the transcript rows on screen when this prompt was submitted.
+     *
+     * The provisional bubble has to sit where the prompt belongs — after the
+     * rows that predate it and ahead of the assistant turn it starts — not at
+     * the tail of whatever the projection has delivered since. Without this
+     * anchor a slow authoritative echo renders the response above the prompt and
+     * pins the prompt to the bottom of the transcript for the whole turn.
+     */
+    priorDisplayIds?: readonly string[];
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -600,19 +611,28 @@ export function SharedNativeAgentController({
           ]
         : handoff.displayMessages;
     const base = providerBase;
-    const withOptimistic =
-      !optimisticPrompt || transcriptEchoedOptimistic
-        ? base
-        : [
-            ...base,
-            createOptimisticNativeMessage(
-              `optimistic-native:${sessionKey}`,
-              optimisticPrompt.text,
-              optimisticPrompt.attachments,
-              optimisticPrompt.createdAt,
-            ),
-          ];
-    return withOptimistic;
+    if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
+
+    const optimistic = createOptimisticNativeMessage(
+      `optimistic-native:${sessionKey}`,
+      optimisticPrompt.text,
+      optimisticPrompt.attachments,
+      optimisticPrompt.createdAt,
+    );
+    /*
+     * Insert the provisional prompt after the last row that was on screen when
+     * it was submitted, rather than appending it.
+     *
+     * The provider's authoritative user row can lag the first streamed
+     * assistant frame, and until it lands the optimistic bubble is the only
+     * representation of the prompt. Appending put the response *above* it and
+     * left the prompt pinned to the bottom of the transcript for the turn —
+     * exactly the inversion a slow echo produces. Anchoring on the pre-submit
+     * rows keeps the prompt ahead of every row the turn has produced since; when
+     * the real echo arrives the bubble is retired in place, with no jump.
+     */
+    const priorDisplayIds = optimisticPrompt.priorDisplayIds;
+    return positionOptimisticNativeMessage(base, optimistic, priorDisplayIds);
   }, [
     handoff.displayMessages,
     optimisticPrompt,
@@ -621,6 +641,20 @@ export function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
+  /**
+   * Raw ids of the rows on screen, captured so an optimistic prompt can be
+   * placed where it belongs.
+   *
+   * Distinct from {@link visibleAuthoritativeMessageIds}, which is normalized
+   * (assistant turns split into blocks, adjacent tool rows coalesced) and is
+   * matched against `normalizedMessages` for echo detection. The transcript is
+   * rendered from the raw rows — turn-stop markers included — so the insertion
+   * boundary for a provisional prompt is expressed in the same raw ids.
+   */
+  const visibleDisplayMessageIds = useMemo(
+    () => displayMessages.map((message) => message.id),
+    [displayMessages],
+  );
   /*
    * Tasks the transcript cannot show: the launch fell outside the loaded
    * window, or the tab resumed a session whose earlier turns were trimmed. The
@@ -1045,6 +1079,7 @@ export function SharedNativeAgentController({
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
+        priorDisplayIds: visibleDisplayMessageIds,
       });
       const options = {
         requestId: dispatchRequestId,
@@ -1167,6 +1202,7 @@ export function SharedNativeAgentController({
       tabId,
       updateDraft,
       visibleAuthoritativeMessageIds,
+      visibleDisplayMessageIds,
     ],
   );
 

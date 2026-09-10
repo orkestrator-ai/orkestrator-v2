@@ -200,6 +200,37 @@ export function createOptimisticNativeMessage(
   };
 }
 
+/**
+ * Insert a provisional prompt where it belongs in a transcript.
+ *
+ * `priorDisplayIds` are the raw ids of the rows on screen when the prompt was
+ * submitted. The bubble goes immediately after the last of them, so rows the
+ * turn produces afterwards — the authoritative echo and the assistant's
+ * response — stream in below it. Appending instead put the response above the
+ * prompt and left the prompt pinned to the bottom of the transcript whenever
+ * the provider's echo lagged the first streamed frame (OpenCode does this).
+ *
+ * With no anchor the bubble is appended, preserving the behavior of callers
+ * that never captured a boundary.
+ */
+export function positionOptimisticNativeMessage(
+  base: readonly NativeMessage[],
+  optimistic: NativeMessage,
+  priorDisplayIds: readonly string[] | undefined,
+): NativeMessage[] {
+  if (!priorDisplayIds) return [...base, optimistic];
+  const prior = new Set(priorDisplayIds);
+  let insertAt = 0;
+  for (let index = base.length - 1; index >= 0; index -= 1) {
+    const candidate = base[index];
+    if (candidate && prior.has(candidate.id)) {
+      insertAt = index + 1;
+      break;
+    }
+  }
+  return [...base.slice(0, insertAt), optimistic, ...base.slice(insertAt)];
+}
+
 export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): boolean {
   return (
     message.id.startsWith(ERROR_MESSAGE_PREFIX) ||
@@ -208,7 +239,6 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
     message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX)
   );
 }
-
 type PeerMailDisplayMessage = Pick<
   AgentMailMessage,
   "id" | "from" | "trust" | "subject" | "body" | "createdAt"

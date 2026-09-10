@@ -8,6 +8,7 @@ import {
   isOptimisticNativeMessage,
   mergeNativeMessagesPreservingClientOnly,
   normalizeMessageContent,
+  positionOptimisticNativeMessage,
 } from "./client-only-messages";
 import type { NativeMessage } from "./native-message-types";
 
@@ -938,5 +939,79 @@ describe("client-only optimistic messages", () => {
 
     expect(merged.map((message) => message.id)).toEqual(["server-9", systemId]);
     expect(merged[1]?.content).toBe("Named environment");
+  });
+});
+
+describe("positionOptimisticNativeMessage", () => {
+  const optimistic = createOptimisticNativeMessage("optimistic-native:session", "New prompt");
+
+  test("places the prompt after the last row that predates it", () => {
+    const base = [
+      createServerMessage("server-1", "Earlier turn", "2026-08-26T14:00:00.000Z"),
+      createServerMessage("server-2", "Assistant reply", "2026-08-26T14:01:00.000Z"),
+      createServerMessage("server-3", "Assistant response", "2026-08-26T14:02:00.000Z"),
+    ];
+
+    const positioned = positionOptimisticNativeMessage(base, optimistic, ["server-1", "server-2"]);
+
+    expect(positioned.map((message) => message.id)).toEqual([
+      "server-1",
+      "server-2",
+      "optimistic-native:session",
+      "server-3",
+    ]);
+  });
+
+  test("keeps the streaming response below the prompt when the echo has not arrived", () => {
+    // The bug: the assistant's streamed rows are the only new rows, and the
+    // prompt used to be appended after them, pinning it to the transcript
+    // bottom while the response grew above it.
+    const base = [
+      createServerMessage("server-1", "Earlier turn", "2026-08-26T14:00:00.000Z"),
+      createServerMessage("assistant-1", "Streaming", "2026-08-26T14:02:00.000Z"),
+      createServerMessage("assistant-2", "Still streaming", "2026-08-26T14:02:01.000Z"),
+    ];
+
+    const positioned = positionOptimisticNativeMessage(base, optimistic, ["server-1"]);
+
+    expect(positioned.map((message) => message.id)).toEqual([
+      "server-1",
+      "optimistic-native:session",
+      "assistant-1",
+      "assistant-2",
+    ]);
+  });
+
+  test("puts the prompt first when nothing was on screen at submit", () => {
+    const base = [createServerMessage("assistant-1", "Response", "2026-08-26T14:02:00.000Z")];
+
+    const positioned = positionOptimisticNativeMessage(base, optimistic, []);
+
+    expect(positioned.map((message) => message.id)).toEqual([
+      "optimistic-native:session",
+      "assistant-1",
+    ]);
+  });
+
+  test("puts the prompt first when every prior row was trimmed from the window", () => {
+    const base = [createServerMessage("assistant-1", "Response", "2026-08-26T14:02:00.000Z")];
+
+    const positioned = positionOptimisticNativeMessage(base, optimistic, ["trimmed-user"]);
+
+    expect(positioned.map((message) => message.id)).toEqual([
+      "optimistic-native:session",
+      "assistant-1",
+    ]);
+  });
+
+  test("appends the prompt when no submit boundary was captured", () => {
+    const base = [createServerMessage("assistant-1", "Response", "2026-08-26T14:02:00.000Z")];
+
+    const positioned = positionOptimisticNativeMessage(base, optimistic, undefined);
+
+    expect(positioned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "optimistic-native:session",
+    ]);
   });
 });

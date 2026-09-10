@@ -1233,6 +1233,18 @@ describe("NativeAgentService", () => {
               .map((control) => control.id)
               .filter((id) => id.startsWith("parameter:")),
           ).toEqual(Array.from(expectedParameterControls));
+
+          // The progressive read feeds the same rendered projection, so a
+          // control suppressed above must not reappear here.
+          const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+          expect(update.status).toBe("snapshot");
+          expect(
+            update.status === "snapshot"
+              ? update.value.composerControls
+                  .map((control) => control.id)
+                  .filter((id) => id.startsWith("parameter:"))
+              : undefined,
+          ).toEqual(Array.from(expectedParameterControls));
         },
       );
     },

@@ -5,6 +5,7 @@ import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-setting
 import {
   nativeAsyncQuestionRequestId,
   resolveReasoningId,
+  withoutSuppressedComposerControls,
   type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
@@ -2038,76 +2039,72 @@ export function SharedNativeAgentController({
                   }
                   disabled={settingsLocked}
                 />
-                {(projection?.composerControls ?? [])
-                  .filter((control) => control.id.startsWith("parameter:"))
-                  .filter(
-                    (control) =>
-                      (platform !== "claude" ||
-                        (control.id !== "parameter:thinking" &&
-                          control.id !== "parameter:context1m")) &&
-                      (platform !== "codex" || control.id !== "parameter:summary"),
-                  )
-                  .map((control) => {
-                    const parameterId = control.id.slice("parameter:".length);
-                    if (control.kind === "toggle") {
-                      return (
+                {withoutSuppressedComposerControls(
+                  platform,
+                  (projection?.composerControls ?? []).filter((control) =>
+                    control.id.startsWith("parameter:"),
+                  ),
+                ).map((control) => {
+                  const parameterId = control.id.slice("parameter:".length);
+                  if (control.kind === "toggle") {
+                    return (
+                      <Button
+                        key={control.id}
+                        type="button"
+                        variant={control.value ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-7 px-2 text-xs font-normal"
+                        disabled={settingsLocked || control.disabled}
+                        aria-pressed={control.value}
+                        onClick={() => {
+                          void updateControlsSafely({
+                            parameterValues: { [parameterId]: !control.value },
+                          });
+                        }}
+                      >
+                        {control.label}: {control.value ? "On" : "Off"}
+                      </Button>
+                    );
+                  }
+                  const selected = control.options.find((option) => option.id === control.value);
+                  return (
+                    <DropdownMenu key={control.id}>
+                      <DropdownMenuTrigger asChild>
                         <Button
-                          key={control.id}
                           type="button"
-                          variant={control.value ? "secondary" : "ghost"}
+                          variant="ghost"
                           size="sm"
-                          className="h-7 px-2 text-xs font-normal"
+                          className="h-7 gap-1 bg-elevated px-2 text-xs font-normal"
                           disabled={settingsLocked || control.disabled}
-                          aria-pressed={control.value}
-                          onClick={() => {
+                          title={control.label}
+                        >
+                          {control.label}: {selected?.label ?? control.value ?? "Default"}
+                          <ChevronDown className="size-3" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuRadioGroup
+                          value={control.value ?? ""}
+                          onValueChange={(value) => {
                             void updateControlsSafely({
-                              parameterValues: { [parameterId]: !control.value },
+                              parameterValues: { [parameterId]: value },
                             });
                           }}
                         >
-                          {control.label}: {control.value ? "On" : "Off"}
-                        </Button>
-                      );
-                    }
-                    const selected = control.options.find((option) => option.id === control.value);
-                    return (
-                      <DropdownMenu key={control.id}>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 gap-1 bg-elevated px-2 text-xs font-normal"
-                            disabled={settingsLocked || control.disabled}
-                            title={control.label}
-                          >
-                            {control.label}: {selected?.label ?? control.value ?? "Default"}
-                            <ChevronDown className="size-3" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start">
-                          <DropdownMenuRadioGroup
-                            value={control.value ?? ""}
-                            onValueChange={(value) => {
-                              void updateControlsSafely({
-                                parameterValues: { [parameterId]: value },
-                              });
-                            }}
-                          >
-                            {control.options.map((option) => (
-                              <DropdownMenuRadioItem
-                                key={option.id}
-                                value={option.id}
-                                disabled={option.disabled}
-                              >
-                                {option.label}
-                              </DropdownMenuRadioItem>
-                            ))}
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    );
-                  })}
+                          {control.options.map((option) => (
+                            <DropdownMenuRadioItem
+                              key={option.id}
+                              value={option.id}
+                              disabled={option.disabled}
+                            >
+                              {option.label}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                })}
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

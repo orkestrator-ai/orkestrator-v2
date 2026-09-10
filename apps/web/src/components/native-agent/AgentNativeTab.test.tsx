@@ -3087,77 +3087,113 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText(/Audit mode: Off/)).toBeTruthy();
   });
 
-  test("hides Claude thinking and context controls in review tabs", async () => {
+  const claudeSessionControls = [
+    {
+      kind: "select" as const,
+      id: "parameter:thinking",
+      label: "Thinking",
+      value: "adaptive",
+      options: [{ id: "adaptive", label: "Adaptive" }],
+    },
+    {
+      kind: "toggle" as const,
+      id: "parameter:context1m",
+      label: "1M context beta",
+      value: false,
+    },
+    {
+      kind: "toggle" as const,
+      id: "parameter:audit",
+      label: "Audit mode",
+      value: false,
+    },
+  ];
+
+  const codexSummaryControls = [
+    {
+      kind: "select" as const,
+      id: "parameter:summary",
+      label: "Reasoning summary",
+      value: "auto",
+      options: [{ id: "auto", label: "Automatic" }],
+    },
+    {
+      kind: "select" as const,
+      id: "parameter:effort",
+      label: "Effort",
+      value: "medium",
+      options: [{ id: "medium", label: "Medium" }],
+    },
+    {
+      kind: "toggle" as const,
+      id: "parameter:audit",
+      label: "Audit mode",
+      value: false,
+    },
+  ];
+
+  // The renderer guard keys on the platform alone, so it must behave the same
+  // in an ordinary tab and a review tab. Both are covered for each provider.
+  test.each([
+    ["review", true],
+    ["ordinary", false],
+  ] as const)("hides Claude thinking and context controls in a %s tab", async (kind, review) => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
-      composerControls: [
-        {
-          kind: "select" as const,
-          id: "parameter:thinking",
-          label: "Thinking",
-          value: "adaptive",
-          options: [{ id: "adaptive", label: "Adaptive" }],
-        },
-        {
-          kind: "toggle" as const,
-          id: "parameter:context1m",
-          label: "1M context beta",
-          value: false,
-        },
-        {
-          kind: "toggle" as const,
-          id: "parameter:audit",
-          label: "Audit mode",
-          value: false,
-        },
-      ],
+      composerControls: claudeSessionControls,
     }));
 
     render(
       <AgentNativeTab
-        tabId="tab-claude-review-parameters"
+        tabId={`tab-claude-${kind}-parameters`}
         data={identity("claude")}
         isActive
-        isReviewTab
+        isReviewTab={review}
       />,
     );
 
     expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
-    expect(screen.queryByText(/Thinking: Adaptive/)).toBeNull();
-    expect(screen.queryByText(/1M context beta: Off/)).toBeNull();
+    expect(screen.queryByText(/Thinking: Adaptive/) === null).toBe(true);
+    expect(screen.queryByText(/1M context beta: Off/) === null).toBe(true);
   });
 
-  test("hides the Codex reasoning summary control in review tabs", async () => {
+  test.each([
+    ["review", true],
+    ["ordinary", false],
+  ] as const)(
+    "hides only the Codex reasoning summary control in a %s tab",
+    async (kind, review) => {
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input)),
+        composerControls: codexSummaryControls,
+      }));
+
+      render(
+        <AgentNativeTab
+          tabId={`tab-codex-${kind}-parameters`}
+          data={identity("codex")}
+          isActive
+          isReviewTab={review}
+        />,
+      );
+
+      expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
+      // The filter must not swallow Codex's other parameter controls.
+      expect(screen.getByText(/Effort: Medium/)).toBeTruthy();
+      expect(screen.queryByText(/Reasoning summary: Automatic/) === null).toBe(true);
+    },
+  );
+
+  test("keeps the reasoning summary control for a platform other than Codex", async () => {
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input)),
-      composerControls: [
-        {
-          kind: "select" as const,
-          id: "parameter:summary",
-          label: "Reasoning summary",
-          value: "auto",
-          options: [{ id: "auto", label: "Automatic" }],
-        },
-        {
-          kind: "toggle" as const,
-          id: "parameter:audit",
-          label: "Audit mode",
-          value: false,
-        },
-      ],
+      composerControls: codexSummaryControls,
     }));
 
-    render(
-      <AgentNativeTab
-        tabId="tab-codex-review-parameters"
-        data={identity("codex")}
-        isActive
-        isReviewTab
-      />,
-    );
+    render(<AgentNativeTab tabId="tab-cursor-summary" data={freshTab("cursor")} isActive />);
 
-    expect(await screen.findByText(/Audit mode: Off/)).toBeTruthy();
-    expect(screen.queryByText(/Reasoning summary: Automatic/)).toBeNull();
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    expect(screen.getByText(/Reasoning summary: Automatic/)).toBeTruthy();
   });
 
   test("renders model parameters supplied for a non-Claude platform", async () => {

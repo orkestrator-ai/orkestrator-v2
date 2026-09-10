@@ -99,7 +99,14 @@ describe("ACP bridge", () => {
         }),
       });
       expect(resumedResponse.status).toBe(201);
-      const resumed = (await resumedResponse.json()) as {
+      const resumedMeta = (await resumedResponse.json()) as {
+        id: string;
+        sessionId: string;
+        status: string;
+      };
+      const resumed = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
+        headers: bridge.headers,
+      }).then((response) => response.json())) as {
         id: string;
         sessionId: string;
         status: string;
@@ -128,8 +135,8 @@ describe("ACP bridge", () => {
         method: "POST",
         headers: bridge.headers,
         body: JSON.stringify({ sessionId: resumed.id }),
-      }).then((response) => response.json())) as { id: string };
-      expect(duplicate.id).toBe(resumed.id);
+      }).then((response) => response.json())) as { sessionId: string };
+      expect(duplicate.sessionId).toBe(resumed.id);
     });
   }
 

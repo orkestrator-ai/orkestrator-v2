@@ -286,6 +286,15 @@ describe("session creation", () => {
 });
 
 describe("liveness routes", () => {
+  test("status exposes the provider identity accepted by resume", async () => {
+    const state = await createSession();
+    state.agentId = "cursor-agent-1";
+
+    expect(await (await call(`/session/${state.id}/status`)).json()).toMatchObject({
+      resumableSessionId: "cursor-agent-1",
+    });
+  });
+
   test("an unknown session answers activity in band rather than 404", async () => {
     const response = await call("/session/nope/activity");
     expect(response.status).toBe(200);

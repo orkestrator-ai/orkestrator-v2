@@ -74,10 +74,9 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: created.id }),
     });
     expect(resumed.status).toBe(201);
-    expect((await resumed.json()) as { id: string; status: string }).toMatchObject({
-      id: created.id,
-      status: "idle",
-    });
+    const resumedBody = (await resumed.json()) as { sessionId: string };
+    expect(resumedBody).toEqual({ sessionId: created.id });
+    expect(resumedBody).not.toHaveProperty("messages");
     expect(await fs.readFile(lifecycleFile, "utf8")).toContain("load:");
   });
 
@@ -102,7 +101,12 @@ describe("ACP bridge", () => {
     });
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ policy });
+    const resumed = (await response.json()) as { sessionId: string };
+    expect(
+      await nativeFetch(`${bridge.base}/session/${resumed.sessionId}/status`, {
+        headers: bridge.headers,
+      }).then((statusResponse) => statusResponse.json()),
+    ).toMatchObject({ policy });
   });
 
   test("pages the ACP session list and de-duplicates across pages", async () => {
@@ -143,7 +147,7 @@ describe("ACP bridge", () => {
         body: JSON.stringify({ sessionId: external!.id, modelId }),
       }).then(async (response) => ({
         status: response.status,
-        body: (await response.json()) as { id: string; composer: { selectedModelId?: string } },
+        body: (await response.json()) as { sessionId: string },
       }));
 
     const first = resume("composer-2.5");
@@ -156,10 +160,14 @@ describe("ACP bridge", () => {
     expect(winner.status).toBe(201);
     expect(second.status).toBe(201);
     // One ACP conversation, one bridge session.
-    expect(second.body.id).toBe(winner.body.id);
+    expect(second.body.sessionId).toBe(winner.body.sessionId);
     // The joining caller's controls were applied rather than silently
     // inheriting whatever the first caller asked for.
-    expect(second.body.composer.selectedModelId).toBe("gpt-5.5");
+    expect(
+      await nativeFetch(`${bridge.base}/session/${second.body.sessionId}/status`, {
+        headers: bridge.headers,
+      }).then((response) => response.json()),
+    ).toMatchObject({ composer: { selectedModelId: "gpt-5.5" } });
   });
 
   test("omits model attribution entirely when the agent advertises no model", async () => {
@@ -558,8 +566,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external!.id }),
     });
     expect(resumed.status).toBe(201);
-    const session = (await resumed.json()) as {
-      id: string;
+    const resumedMeta = (await resumed.json()) as { sessionId: string };
+    const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}/status`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
       contextUsage?: Record<string, unknown>;
     };
 
@@ -586,7 +596,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external!.id }),
     });
     expect(resumed.status).toBe(201);
-    const session = (await resumed.json()) as { contextUsage?: Record<string, unknown> };
+    const resumedMeta = (await resumed.json()) as { sessionId: string };
+    const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}/status`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { contextUsage?: Record<string, unknown> };
 
     expect(session.contextUsage).toMatchObject({
       usedTokens: 255,

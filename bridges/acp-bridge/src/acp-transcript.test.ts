@@ -80,7 +80,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: created.id }),
     });
     expect(resumed.status).toBe(201);
-    const after = (await resumed.json()) as {
+    const resumedMeta = (await resumed.json()) as { sessionId: string };
+    const after = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
       messages: Array<{ role: string; content: string; parts: Array<{ type: string }> }>;
     };
     // Replayed text and replayed tool calls are both suppressed: the agent is
@@ -111,7 +114,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external!.id }),
     });
     expect(resumed.status).toBe(201);
-    const session = (await resumed.json()) as {
+    const resumedMeta = (await resumed.json()) as { sessionId: string };
+    const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
       messages: Array<{
         role: string;
         content: string;
@@ -152,7 +158,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external!.id }),
     });
     expect(resumed.status).toBe(201);
-    const session = (await resumed.json()) as {
+    const resumedMeta = (await resumed.json()) as { sessionId: string };
+    const session = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
       status: string;
       baseIndex: number;
       messages: Array<{ role: string }>;
@@ -1844,8 +1853,10 @@ describe("ACP bridge", () => {
       body: JSON.stringify({ sessionId: external!.id }),
     });
     expect(resumedResponse.status).toBe(201);
-    const resumed = (await resumedResponse.json()) as {
-      id: string;
+    const resumedMeta = (await resumedResponse.json()) as { sessionId: string };
+    const resumed = (await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as {
       messages: Array<{ parts: Array<Record<string, unknown>> }>;
     };
     expect(
@@ -1854,7 +1865,7 @@ describe("ACP bridge", () => {
         .find((part) => part.toolUseId === "history-background-child"),
     ).toMatchObject({ toolState: "success", agentState: "failed" });
     expect(
-      await nativeFetch(`${bridge.base}/session/${resumed.id}/activity`, {
+      await nativeFetch(`${bridge.base}/session/${resumedMeta.sessionId}/activity`, {
         headers: bridge.headers,
       }).then((response) => response.json()),
     ).toEqual({ activity: "idle" });

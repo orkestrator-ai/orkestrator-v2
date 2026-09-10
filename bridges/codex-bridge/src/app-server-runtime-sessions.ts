@@ -178,7 +178,6 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     sessionId: string;
     title?: string;
     threadId: string;
-    messages: NormalizedMessage[];
   } | null> {
     const threadId =
       typeof body.threadId === "string" && body.threadId.trim().length > 0
@@ -216,7 +215,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       this.registry.appendLocalMessages(session, ...hydrated.messages);
       if (hydrated.messages.length > 0) this.registry.bumpContentEpoch(session);
       session.recoveredContextPending = hydrated.messages.length > 0;
-      return { sessionId, title: hydrated.title, threadId, messages: hydrated.messages };
+      return { sessionId, title: hydrated.title, threadId };
     }
 
     const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
@@ -259,7 +258,6 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       sessionId,
       title: session.title,
       threadId,
-      messages: context.messages,
     };
   }
 
@@ -280,7 +278,6 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         sessionId: string;
         title?: string;
         threadId: string;
-        messages: NormalizedMessage[];
       }
     | { outcome: "not-found" | "running" | "unknown-message" | "no-fork-point" | "unavailable" }
   > {
@@ -354,7 +351,6 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         sessionId: child.id,
         title: child.title,
         threadId: fork.id,
-        messages: context.messages,
       };
     } catch (error) {
       // The child session was registered above; failing here would leave an

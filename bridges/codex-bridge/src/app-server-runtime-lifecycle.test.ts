@@ -218,10 +218,9 @@ describe("session lifecycle", () => {
     // with reconstructed context.
     const resumed = await h.runtime.resumeSession({ threadId: "thread-gone", mode: "build" });
     expect(resumed).toMatchObject({ threadId: "thread-gone" });
-    expect(resumed!.messages.map((message) => message.content)).toEqual([
-      "Remember the parser constraint",
-      "I will preserve it.",
-    ]);
+    expect(
+      (await h.runtime.getMessages(resumed!.sessionId))!.map((message) => message.content),
+    ).toEqual(["Remember the parser constraint", "I will preserve it."]);
     expect(h.runtime.getStatus(resumed!.sessionId)?.messageRevision).toBe(1);
     expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBeNull();
     expect(

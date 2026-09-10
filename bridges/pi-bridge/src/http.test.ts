@@ -564,7 +564,8 @@ describe("successful lifecycle routes", () => {
         body: JSON.stringify({ sessionId: sessionFile }),
       });
       expect(response.status).toBe(201);
-      const body = (await response.json()) as { sessionId: string };
+      const body = (await response.json()) as { sessionId: string; messages?: unknown };
+      expect(body).not.toHaveProperty("messages");
 
       sessions.clear();
       clientSessionKeys.clear();
@@ -746,6 +747,15 @@ describe("successful lifecycle routes", () => {
 });
 
 describe("session routes", () => {
+  test("status exposes the provider identity accepted by resume", async () => {
+    const state = seedSession();
+    state.sessionFile = "/tmp/resumable-pi-session.jsonl";
+
+    expect(await (await call(`/session/${state.id}/status`)).json()).toMatchObject({
+      resumableSessionId: state.sessionFile,
+    });
+  });
+
   test("answers activity for an unknown session in band, never with a 404", async () => {
     // A 404 here would have the backend read "this bridge predates the route"
     // and fail the environment instead of dropping a dead session mapping.

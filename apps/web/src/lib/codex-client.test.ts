@@ -498,12 +498,12 @@ describe("codex-client getSessionMessages", () => {
   });
 
   test("returns messages without appending todo snapshots when resuming a session", async () => {
-    mockFetch(
-      async () =>
-        new Response(
-          JSON.stringify({
-            sessionId: "session-1",
-            title: "Resume",
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ sessionId: "session-1", title: "Resume" }, { status: 201 })
+        : Response.json({
             messages: [
               {
                 id: "msg-2",
@@ -523,9 +523,8 @@ describe("codex-client getSessionMessages", () => {
                 planReview: true,
               },
             ],
-          }),
-        ),
-    );
+          });
+    });
 
     const resumed = await resumeSession(client, { threadId: "thread-1" });
 

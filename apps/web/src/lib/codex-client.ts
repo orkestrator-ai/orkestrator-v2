@@ -805,12 +805,13 @@ export async function resumeSession(
     });
     if (!response.ok) return null;
     const data = await response.json();
+    if (typeof data.sessionId !== "string" || !data.sessionId) return null;
     return {
       session: {
         sessionId: data.sessionId,
         title: data.title,
       },
-      messages: Array.isArray(data.messages) ? data.messages : [],
+      messages: await getSessionMessages(client, data.sessionId, { throwOnError: true }),
     };
   } catch (error) {
     console.error("[codex-client] Failed to resume session:", error);

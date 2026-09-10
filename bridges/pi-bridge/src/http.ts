@@ -46,6 +46,7 @@ import {
   publicRuntime,
   publicSession,
   publicStatus,
+  publicSessionReference,
 } from "./public.js";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
@@ -265,7 +266,7 @@ async function routeGlobal(
       throw new HttpError(400, errorText(error));
     });
     await persistBarrier();
-    json(response, 201, publicSession(state));
+    json(response, 201, publicSessionReference(state));
     return true;
   }
   return false;

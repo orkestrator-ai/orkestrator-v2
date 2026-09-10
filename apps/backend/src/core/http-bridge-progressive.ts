@@ -214,6 +214,11 @@ export async function readHttpBridgeSessionState(input: {
   return {
     status,
     phase,
+    ...(typeof payload.resumableSessionId === "string" && payload.resumableSessionId.trim()
+      ? { resumableSessionId: payload.resumableSessionId.trim() }
+      : input.agent === "codex" && typeof payload.threadId === "string" && payload.threadId.trim()
+        ? { resumableSessionId: payload.threadId.trim() }
+        : {}),
     ...(typeof payload.title === "string" && payload.title.trim()
       ? { title: payload.title.trim() }
       : {}),

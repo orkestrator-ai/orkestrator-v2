@@ -1979,6 +1979,7 @@ describe("HTTP bridge progressive transcript", () => {
       return Response.json({
         status: "running",
         phase: "running",
+        threadId: "thread-1",
         title: "Session title",
         messageRevision: 12,
         capabilities: { interactions: { kinds: ["question", 42] } },
@@ -1992,6 +1993,7 @@ describe("HTTP bridge progressive transcript", () => {
       phase: "running",
       title: "Session title",
       providerRevision: 12,
+      resumableSessionId: "thread-1",
       interactionKinds: ["question"],
       controls: { modelId: "gpt-5.5", mode: "plan" },
     });

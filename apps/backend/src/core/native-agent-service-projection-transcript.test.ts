@@ -190,11 +190,16 @@ describe("NativeAgentService transcript projection", () => {
   });
 
   test("orders resumable sessions by most recent activity", async () => {
-    const stub = createProviderStub("claude", {
+    const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      sessionStateSnapshot: async () => ({
+        status: "idle",
+        resumableSessionId: "current-thread",
+      }),
     });
     (stub.provider as { listResumableSessions?: unknown }).listResumableSessions = async () => [
       { sessionId: "older", updatedAt: "2026-08-01T00:00:00.000Z" },
+      { sessionId: "current-thread", updatedAt: "2026-08-15T00:00:00.000Z" },
       { sessionId: "undated" },
       { sessionId: "newest", updatedAt: "2026-08-14T00:00:00.000Z", status: "running" as const },
     ];
@@ -206,7 +211,7 @@ describe("NativeAgentService transcript projection", () => {
       async ({ service }) => {
         const identity = {
           environmentId: "env-1",
-          agent: "claude" as const,
+          agent: "codex" as const,
           logicalSessionKey: "env-env-1:tab-resume",
         };
         await service.ensureSession(identity);

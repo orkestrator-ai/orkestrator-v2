@@ -136,17 +136,53 @@ test("real Electron main process shares one backend across independent windows",
       .then(() => backendChildPid(electronPid!));
     expect(backendPid).not.toBeNull();
 
-    await app.evaluate(({ BrowserWindow, Menu }) => {
-      const focusedWindow = BrowserWindow.getFocusedWindow();
-      const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
-      const newWindow = fileMenu?.submenu?.items.find((item) => item.label === "New Window");
-      if (!focusedWindow || !newWindow?.click)
-        throw new Error("New Window menu item is unavailable");
-      newWindow.click(undefined, focusedWindow, focusedWindow.webContents);
-    });
+    const actionBarControl = window.getByRole("button", { name: "Global settings" });
+    await expect(actionBarControl).toBeVisible();
+    await window.bringToFront();
+    await expect
+      .poll(() =>
+        app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null),
+      )
+      .toBe(`${profile.electronTitle} — Local`);
+    const invokeNewWindowAccelerator = () =>
+      app.evaluate(({ BrowserWindow, Menu }) => {
+        const focusedWindow = BrowserWindow.getFocusedWindow();
+        const fileMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "File");
+        const newWindow = fileMenu?.submenu?.items.find((item) => item.label === "New Window");
+        if (!focusedWindow || !newWindow?.click) {
+          throw new Error("New Window menu item is unavailable");
+        }
+        newWindow.click(undefined, focusedWindow, focusedWindow.webContents);
+      });
+    const dispatchRendererCommandN = () =>
+      window.evaluate(() => {
+        const event = new KeyboardEvent("keydown", {
+          key: "n",
+          code: "KeyN",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+    const rendererTabCount = await window.locator('[aria-label^="Close "]').count();
+
+    // Electron owns Command+N, but the DOM may observe the same keypress
+    // before or after the native accelerator depending on the host. Exercise
+    // the ActionBar listener on both sides of the real menu callback: neither
+    // ordering may add a renderer tab or a duplicate BrowserWindow.
+    expect(await dispatchRendererCommandN()).toBe(false);
+    await invokeNewWindowAccelerator();
+    expect(await dispatchRendererCommandN()).toBe(false);
     await expect
       .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
       .toBe(2);
+    await expect
+      .poll(() => window.locator('[aria-label^="Close "]').count())
+      .toBe(rendererTabCount);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(2);
     await expect
       .poll(
         () => app.windows().filter((candidate) => candidate.url().startsWith(rendererUrl)).length,
@@ -156,8 +192,8 @@ test("real Electron main process shares one backend across independent windows",
     const secondWindow = app
       .windows()
       .find((candidate) => candidate !== window && candidate.url().startsWith(rendererUrl));
-    expect(secondWindow).toBeDefined();
-    await expect(secondWindow!).toHaveTitle(profile.electronTitle);
+    if (!secondWindow) throw new Error("New Window accelerator did not open a renderer window");
+    await expect(secondWindow).toHaveTitle(profile.electronTitle);
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) =>
@@ -165,7 +201,7 @@ test("real Electron main process shares one backend across independent windows",
         ),
       )
       .toEqual([`${profile.electronTitle} — Local`, `${profile.electronTitle} — Local`]);
-    await secondWindow!
+    await secondWindow
       .evaluate(async () => {
         const api = (
           globalThis as typeof globalThis & {
@@ -191,7 +227,7 @@ test("real Electron main process shares one backend across independent windows",
       .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
       .toBe(1);
     expect(backendChildPid(electronPid!)).toBe(backendPid);
-    await secondWindow!
+    await secondWindow
       .evaluate(async () => {
         const api = (
           globalThis as typeof globalThis & {

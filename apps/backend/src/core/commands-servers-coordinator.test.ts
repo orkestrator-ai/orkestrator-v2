@@ -180,12 +180,20 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `await Bun.write(process.env.CODEX_HOME + "/captured.json", JSON.stringify({ codexPath: process.env.CODEX_PATH, policy: process.env.CODEX_BRIDGE_EXECUTION_POLICY, permissionProfile: process.env.CODEX_BRIDGE_PERMISSION_PROFILE, readableRuntimeRoot: process.env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
 `,
     );
+    // Production resolves managed tools through a stable symlink farm. Codex
+    // re-execs argv[0] inside its macOS sandbox helper, so the bridge must be
+    // given the canonical target that its permission profile also allowlists.
+    const managedBin = path.join(root, "managed-bin");
+    if (process.platform !== "win32") {
+      await fs.mkdir(managedBin);
+      await fs.symlink(path.join(root, "bin", "codex"), path.join(managedBin, "codex"));
+    }
     const project = await storage.addProject(createProject("remote", checkout));
     const coordinator = new CoordinatorService(storage, () => ({
       enabled: true,
@@ -202,6 +210,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       coordinators: coordinator,
       appRoot: root,
       resourceRoot: root,
+      ...(process.platform === "win32" ? {} : { toolchainBinDir: managedBin }),
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
       controlMcp: {
@@ -242,6 +251,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await expect(fs.access(path.join(isolatedHome, "config.toml"))).rejects.toThrow();
     expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
       {
+        codexPath: path.join(root, "bin", "codex"),
         policy: "coordinator-read-only",
         permissionProfile: `coordinator-${conversation.id}`,
         readableRuntimeRoot: path.join(root, "bin"),

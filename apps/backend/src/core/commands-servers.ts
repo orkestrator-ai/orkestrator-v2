@@ -190,7 +190,10 @@ export async function prepareCoordinatorCodexHome(
   }
 }
 
-async function coordinatorCodexRuntimeRoot(executable: string): Promise<string> {
+async function coordinatorCodexRuntime(executable: string): Promise<{
+  executable: string;
+  root: string;
+}> {
   const candidates =
     path.isAbsolute(executable) || executable.includes(path.sep)
       ? [path.resolve(executable)]
@@ -200,7 +203,7 @@ async function coordinatorCodexRuntimeRoot(executable: string): Promise<string> 
           .map((directory) => path.join(directory, executable));
   for (const candidate of candidates) {
     const canonical = await realpath(candidate).catch(() => null);
-    if (canonical) return path.dirname(canonical);
+    if (canonical) return { executable: canonical, root: path.dirname(canonical) };
   }
   throw retryableBridgeStartupError("Codex executable is unavailable");
 }
@@ -1049,9 +1052,16 @@ export async function startLocalServerUnlocked(
     // Forwarded to app-server as clientInfo.version.
     env.ORKESTRATOR_VERSION = APP_VERSION;
     if (coordinatorId) {
+      // Codex uses argv[0] to re-exec itself as the filesystem sandbox helper.
+      // The managed bin directory contains symlinks, while the coordinator's
+      // deny-by-default profile grants access only to the immutable runtime
+      // directory. Launch the canonical executable so the helper re-execs a
+      // path covered by the same permission profile.
+      const coordinatorRuntime = await coordinatorCodexRuntime(codexPath);
+      env.CODEX_PATH = coordinatorRuntime.executable;
       env.CODEX_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
       env.CODEX_BRIDGE_PERMISSION_PROFILE = `coordinator-${coordinatorConversationId!}`;
-      env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT = await coordinatorCodexRuntimeRoot(codexPath);
+      env.CODEX_BRIDGE_READABLE_RUNTIME_ROOT = coordinatorRuntime.root;
       const coordinatorCodexHome = path.join(
         context.storage.getDataDir(),
         "coordinator-runtime",

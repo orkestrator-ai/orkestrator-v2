@@ -657,7 +657,7 @@ describe("useNativeAgentSession sync-v1 history paging", () => {
       () => ({
         syncVersion: 1,
         status: "delta",
-        baseToken: useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)!.token,
+        baseToken: useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)!.token!,
         token: "token-after-delete",
         delta: {
           messageUpserts: [],

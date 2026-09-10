@@ -92,6 +92,32 @@ describe("native agent projection history cache", () => {
     expect(useNativeAgentProjectionStore.getState().historyEvictions.size).toBe(0);
   });
 
+  test("retains a progressive entry that carries no token or paging epoch", () => {
+    // A live tail read through the progressive transcript has neither: both are
+    // minted by the sync-v1 surfaces, which such a session never touches. The
+    // entry still has to survive so a remount can inherit its retained pages.
+    const live = projection("session-a-live", [{ id: "session-a-live-message" }]);
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(
+        "session-a",
+        projection("session-a-materialized", [{ id: "history-message" }, ...live.messages]),
+        {
+          liveProjection: live,
+          historyBootstrap: true,
+          historyComplete: false,
+          historyMessages: [{ id: "history-message" }],
+          historyBytes: 8,
+        },
+      );
+
+    const cached = useNativeAgentProjectionStore.getState().syncCaches.get("session-a");
+    expect(cached?.token).toBeUndefined();
+    expect(cached?.historyEpoch).toBeUndefined();
+    expect(cached?.historyBootstrap).toBe(true);
+    expect(cached?.historyMessages).toEqual([{ id: "history-message" }]);
+  });
+
   test("releases the eviction counter once nothing is left to compare against", () => {
     seedSession("session-a", 8);
     seedSession("session-b", 8);

@@ -29,6 +29,12 @@ import {
   reviewerStatusNote,
 } from "./MultiReviewTab";
 
+function activateReviewTile(button: HTMLElement): void {
+  fireEvent.pointerDown(button);
+  fireEvent.pointerUp(button);
+  fireEvent.click(button);
+}
+
 const report: StructuredReviewReport = {
   reviewScope: {
     targetBranch: "main",
@@ -1904,7 +1910,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     return workflow;
   }
 
-  test("opens the live preparation session in a new native tab", () => {
+  test("opens the live preparation session only after direct tile activation", () => {
     const workflow = preparingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
@@ -1924,7 +1930,11 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(screen.getByLabelText("Review package generation runtime")).toBeTruthy();
     const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(false);
+    // A presentation click without a matching tile interaction must not
+    // materialize the backend-owned coordinator session as another pane tab.
     fireEvent.click(card);
+    expect(createTab).not.toHaveBeenCalled();
+    activateReviewTile(card);
     expect(createTab).toHaveBeenCalledTimes(1);
     const [agent, options] = createTab.mock.calls[0]!;
     expect(agent).toBe("codex");
@@ -1935,6 +1945,11 @@ describe("MultiReviewTab pipeline step cards", () => {
       isReviewTab: true,
       hideStructuredOutput: true,
     });
+
+    createTab.mockClear();
+    fireEvent.keyDown(card, { key: "Enter" });
+    fireEvent.click(card);
+    expect(createTab).toHaveBeenCalledTimes(1);
   });
 
   test("opens preparation and consolidation separately from the fix tab", () => {
@@ -1977,8 +1992,10 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open review package generation session" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open consolidation session" }));
+    activateReviewTile(
+      screen.getByRole("button", { name: "Open review package generation session" }),
+    );
+    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
     fireEvent.click(screen.getByRole("button", { name: "Open fix model session" }));
 
     // Both coordinator cards resolve to the same dedicated tab identity, while
@@ -2044,7 +2061,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
     const card = screen.getByRole("button", { name: "Open review package generation session" });
     expect(card.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(card);
+    activateReviewTile(card);
     expect(createTab).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
   });
@@ -2345,7 +2362,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(card.getAttribute("title")).toBe(
       "Open the failed review package generation session in a new tab",
     );
-    fireEvent.click(card);
+    activateReviewTile(card);
     expect(createTab).toHaveBeenCalledTimes(1);
     // Consolidation never ran, so it stays unopenable and does not claim to have
     // failed alongside preparation.
@@ -2384,7 +2401,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     const card = screen.getByRole("button", { name: "Open consolidation session" });
     expect(card.hasAttribute("disabled")).toBe(false);
     expect(card.getAttribute("title")).toBe("Open the failed consolidation session in a new tab");
-    fireEvent.click(card);
+    activateReviewTile(card);
     expect(createTab).toHaveBeenCalledTimes(1);
     // Preparation finished, so it stays openable and keeps reading as finished.
     const preparation = screen.getByRole("button", {

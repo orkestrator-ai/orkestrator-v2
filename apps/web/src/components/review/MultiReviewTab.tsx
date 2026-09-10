@@ -485,6 +485,7 @@ function MultiReviewStepSection({
   openTitle,
   canOpen,
   onOpen,
+  requireDirectActivation = false,
 }: {
   heading: string;
   name: string;
@@ -497,7 +498,14 @@ function MultiReviewStepSection({
   openTitle: string;
   canOpen: boolean;
   onOpen: () => void;
+  /**
+   * Preparation and consolidation are backend-owned sessions. Keep them out of
+   * the pane layout until an input actually begins on their card.
+   */
+  requireDirectActivation?: boolean;
 }) {
+  const directActivationRef = useRef(false);
+
   return (
     <section className="rounded-xl border border-border/60 bg-card/35 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -511,7 +519,38 @@ function MultiReviewStepSection({
           aria-label={openLabel}
           title={openTitle}
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-          onClick={onOpen}
+          onPointerDown={() => {
+            directActivationRef.current = true;
+          }}
+          onPointerCancel={() => {
+            directActivationRef.current = false;
+          }}
+          onPointerLeave={() => {
+            directActivationRef.current = false;
+          }}
+          onBlur={() => {
+            directActivationRef.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              directActivationRef.current = true;
+            }
+          }}
+          onClick={(event) => {
+            const directActivation = directActivationRef.current;
+            directActivationRef.current = false;
+            // A trusted detail-zero click is an assistive-technology
+            // activation. Pointer and keyboard activation are armed above;
+            // synthetic/carry-over clicks are deliberately ignored.
+            if (
+              requireDirectActivation &&
+              !directActivation &&
+              !(event.detail === 0 && event.nativeEvent.isTrusted)
+            ) {
+              return;
+            }
+            onOpen();
+          }}
         >
           <MultiReviewStepIcon state={status.state} stalled={stalled} />
           <div className="min-w-0 flex-1">
@@ -921,6 +960,7 @@ function MultiReviewOverviewTab({
             )}
             canOpen={canOpenReviewStep(packageStatus)}
             onOpen={() => presentReviewSession(workflow)}
+            requireDirectActivation
           />
           {workflow.validationRun && (
             <ReviewValidationStatus run={workflow.validationRun} now={reviewPanelNow} />
@@ -1124,6 +1164,7 @@ function MultiReviewOverviewTab({
             )}
             canOpen={canOpenReviewStep(consolidationStatus)}
             onOpen={() => presentReviewSession(workflow)}
+            requireDirectActivation
           />
 
           <MultiReviewStepSection

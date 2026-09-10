@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "bun build src/index.ts --target=node --format=esm --external @cursor/sdk --outfile=dist/index.js && bun run vendor",
+    "test:bridge": "bun test src --preload ../../tests/register-dom.ts --preload ../../tests/setup.ts --only-failures ${ORKESTRATOR_TEST_TIMINGS_DIR:+--timings=$ORKESTRATOR_TEST_TIMINGS_DIR/cursor-bridge.json --update-timings} --parallel=${ORKESTRATOR_TEST_WORKERS:-1}",
     "vendor": "bun scripts/vendor.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "start": "node dist/index.js"

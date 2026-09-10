@@ -217,7 +217,7 @@ export interface MultiReviewWorkflow {
   validationRun?: ReviewValidationRun;
   /** Immutable evidence shared by all reviewers; absent on legacy workflows. */
   reviewPackage?: ReviewPackageReference;
-  /** Set when the worktree changed before all reports could be consolidated. */
+  /** Set when the live worktree changed during review, or immutable package evidence went stale. */
   reviewSnapshotStale?: boolean;
   phase: MultiReviewPhase;
   consolidatedReport?: StructuredReviewReport;

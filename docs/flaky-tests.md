@@ -10,6 +10,27 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## Missing-GitHub-CLI rollback fails in aggregate only (2026-09-10)
+
+- **Status:** open; isolated owner passes.
+- **Original command:** `mise run test`, using the default eight-worker plan
+  (four root workers, two bridge tasks, and two one-worker workspace tasks).
+- **Test:** `create_project_from_scratch > rolls back when GitHub CLI is
+  definitely missing`, in
+  `apps/backend/src/core/commands-project-creation.test.ts`.
+- **Failure:** the project-path access promise resolved where the test expected
+  it to reject, after the mocked missing `gh` executable should have triggered
+  rollback (28.04 ms).
+- **Suite counts:** backend 2,966 total; 2,958 passed, 8 failed, 5 errors. The
+  other failures came from the validation subprocess cluster and were traced to
+  an incompatible diagnostic `--no-orphans` experiment that was removed.
+- **Isolated rerun:** `mise exec -- bun test --cwd apps/backend
+  ./src/core/commands-project-creation.test.ts --parallel=1 --only-failures` →
+  39 passed, 0 failed in 981 ms.
+- **Hypothesis:** another aggregate owner races the temporary project path or
+  its mocked command environment. The isolated pass establishes a credible
+  flake but does not yet identify that owner.
+
 ## Resolved: Cursor SDK mocks in a shared-process run (2026-09-10)
 
 - **Status:** resolved in this change.
@@ -47,6 +68,13 @@ history rather than two partial ones.
   --only-failures`, now passes 342 tests across all 17 owners in 10.18 seconds.
   The three affected owners also pass 70 tests with `--parallel=3` in 8.55
   seconds. No assertion was removed or relaxed.
+- **Aggregate-environment hardening:** the runner also removes global and
+  provider-specific bridge diagnostic flags from every child environment, so a
+  live development profile cannot alter the authoritative suite's assertion
+  inputs. Before the dependency-injection fix, `env -u
+  ORKESTRATOR_BRIDGE_DEBUG mise exec -- bun test
+  ./bridges/cursor-bridge/src --parallel=4` passed 329 tests across all 17
+  owners in 8.96 seconds.
 
 ## 2026-09-08 review validation preparation
 

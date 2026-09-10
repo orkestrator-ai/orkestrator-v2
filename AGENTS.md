@@ -151,6 +151,13 @@ Playwright/E2E specifications and unrelated fixtures. Use `mise run test` for
 the repository's complete validation suite. Reserve `bun test` for an explicit
 test file or directory when intentionally running a focused subset.
 
+Before selecting or diagnosing a test workflow, read the detailed operator
+guide at
+[`docs/development/testing-guide.md`](docs/development/testing-guide.md). It is
+the source of truth for suite scope, changed-only testing, concurrency, caching,
+watchdogs, leases, failure artifacts, and escalation to browser, agent, Docker,
+or iOS validation.
+
 ### Updating Bun and lockfiles
 
 When bumping the Bun runtime, changing a dependency, or changing package
@@ -912,6 +919,11 @@ Files:
 
 ## Testing
 
+Follow
+[`docs/development/testing-guide.md`](docs/development/testing-guide.md) for the
+complete test-selection and diagnostic workflow. The commands below summarize
+the common paths; the guide owns the operational detail.
+
 For the complete repository suite, always invoke the mise task with
 `mise run test`; never substitute a bare root-level `bun test`. Direct
 `bun test` is appropriate only with an explicit focused path, as in the logged
@@ -919,12 +931,13 @@ root and bridge subset commands below.
 
 ```bash
 mise run test
+mise run test:changed # Fast affected-only feedback; not final handoff proof.
 mise run test:all # Includes the serial iOS suite when Xcode is available.
-mise run test:logged --name root-tests -- bun test ./tests --parallel=4 --only-failures
-mise run test:logged --name bridge-tests -- bun test bridges --parallel=2 --only-failures
-mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
-mise run test:logged --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
-mise run test:logged --name backend-typecheck -- bun run --cwd apps/backend typecheck
+mise run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
+mise run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures
+mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged -- --name desktop-typecheck -- bun run --cwd apps/desktop typecheck
+mise run test:logged -- --name backend-typecheck -- bun run --cwd apps/backend typecheck
 ```
 
 Run each command separately so its exit status maps to one suite. `mise run test`
@@ -938,7 +951,7 @@ Terminal and conversation buffers are not authoritative. Do not add a second
 `tee`, because that recreates an unbounded duplicate:
 
 ```bash
-mise run test:logged --name root-tests -- bun test ./tests --parallel=4 --only-failures
+mise run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures
 ```
 
 If a tool buffer maxes out, do not infer success or failure from the visible
@@ -952,9 +965,13 @@ gzip -cd "$ORK_TEST_ARTIFACT_DIR/root-tests.log.gz" | tail -n 200
 
 The exit status is authoritative; text matching is only a diagnostic aid because
 some tests intentionally exercise and print error paths. See
-[`docs/test-logs.md`](docs/test-logs.md) for limits and retention.
+[`docs/development/testing-guide.md`](docs/development/testing-guide.md#logged-commands-and-failure-artifacts)
+for limits and retention.
 
-When running tests for a code review, normally `mise run test` is adequite. Only use logged tests for interrogating those specific areas and where there's a need for the outputs. At code review this should already have been done. So `mise run test` is enough.
+When running tests for a code review, `mise run test` is normally adequate. Use
+focused logged tests while investigating specific areas. By review time those
+focused checks should already have been done, so the aggregate suite is the
+normal final proof.
 
 ### Required frontend-to-browser test cycle for agents
 
@@ -998,8 +1015,8 @@ At minimum, typecheck the web package and run the owning test file. Add backend
 or desktop typechecks when the change crosses those boundaries.
 
 ```bash
-mise run test:logged --name web-typecheck -- bun run --cwd apps/web typecheck
-mise run test:logged --name changed-component -- \
+mise run test:logged -- --name web-typecheck -- bun run --cwd apps/web typecheck
+mise run test:logged -- --name changed-component -- \
   bun --cwd=apps/web test src/path/to/ChangedComponent.test.tsx \
   --parallel=2 --only-failures
 ```
@@ -1077,18 +1094,18 @@ cleans up its environment.
 ```bash
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-settings-dialog \
 ORKESTRATOR_AGENT_TEST_RUN_ID=agent-settings-dialog \
-mise run test:logged --name agent-browser -- mise run test:agent:browser
+mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 ```
 
 Use the optional suites only when their layer is in scope:
 
 ```bash
 # Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
-mise run test:logged --name agent-electron -- mise run test:agent:electron
+mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
 # Requires a profile started with --fixture-environments local,container
 ORKESTRATOR_AGENT_TEST_PROFILE=agent-container-qa \
-mise run test:logged --name agent-docker -- mise run test:agent:docker
+mise run test:logged -- --name agent-docker -- mise run test:agent:docker
 ```
 
 The Docker suite is opt-in because it builds/starts the workspace-specific

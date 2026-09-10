@@ -1767,11 +1767,12 @@ export function SharedNativeAgentController({
       transcriptHeader={
         truncatedWindow ? (
           <div className="mx-auto flex max-w-3xl items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-            <span>
-              {truncatedWindow.truncationReason === "bytes" && !canLoadEarlier
-                ? "Earlier messages or tool activity were omitted to stay within the 16 MiB transcript limit."
-                : "Earlier messages are not shown."}
-            </span>
+            {!canLoadEarlier ? (
+              <span>
+                Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
+                limit.
+              </span>
+            ) : null}
             {canLoadEarlier ? (
               <Button
                 type="button"

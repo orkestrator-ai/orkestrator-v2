@@ -6415,8 +6415,11 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-byte-window" data={identity("cursor")} isActive />);
 
-      expect(await screen.findByText("Earlier messages are not shown.")).toBeTruthy();
-      fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+      const loadEarlierButton = await screen.findByRole("button", {
+        name: "Load earlier messages",
+      });
+      expect(screen.queryByText("Earlier messages are not shown.") === null).toBe(true);
+      fireEvent.click(loadEarlierButton);
       await waitFor(() =>
         expect(
           getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 200),

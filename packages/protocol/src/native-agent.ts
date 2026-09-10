@@ -412,6 +412,40 @@ export interface NativeAgentToggleControl {
 
 export type NativeAgentComposerControl = NativeAgentSelectControl | NativeAgentToggleControl;
 
+/**
+ * Parameter controls a provider surfaces in its model catalogue but that the
+ * compact input bar must not show.
+ *
+ * Claude's thinking and context choices are settings-backed session defaults,
+ * Codex's reasoning summary is configured outside the input bar, and Cursor's
+ * variant is a retired pre-combined parameter cross product.
+ *
+ * This table is the single definition of that policy. Every projection path
+ * and every renderer filters through {@link isSuppressedComposerParameter} so
+ * the two cannot drift apart; a control suppressed on one read must not
+ * reappear on another.
+ */
+export const SUPPRESSED_COMPOSER_PARAMETERS: Readonly<
+  Partial<Record<AgentPlatform, readonly string[]>>
+> = Object.freeze({
+  claude: Object.freeze(["parameter:thinking", "parameter:context1m"]),
+  codex: Object.freeze(["parameter:summary"]),
+  cursor: Object.freeze(["parameter:variant"]),
+});
+
+/** True when `controlId` must be hidden for `platform`. */
+export function isSuppressedComposerParameter(platform: string, controlId: string): boolean {
+  return SUPPRESSED_COMPOSER_PARAMETERS[platform as AgentPlatform]?.includes(controlId) === true;
+}
+
+/** Drop every control {@link isSuppressedComposerParameter} rejects. */
+export function withoutSuppressedComposerControls<TControl extends { readonly id: string }>(
+  platform: string,
+  controls: readonly TControl[],
+): TControl[] {
+  return controls.filter((control) => !isSuppressedComposerParameter(platform, control.id));
+}
+
 export interface NativeAgentCapabilities {
   attachments: {
     files: boolean;

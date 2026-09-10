@@ -4,6 +4,7 @@ import {
   NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   nativeAsyncQuestionItemId,
   recoverBackgroundTaskLaunchId,
+  withoutSuppressedComposerControls,
   type NativeAgentDiscoverySection,
   type NativeAgentDiscoverySectionState,
   type NativeAgentDiscoveryUpdate,
@@ -1520,10 +1521,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(stateSnapshot.error ? { error: stateSnapshot.error } : {}),
       },
       interactions: interactionSnapshot.requests,
-      composerControls: nativeComposerControls(
-        composer,
-        stateSnapshot.status === "running" || blocked,
-        capabilities,
+      // The progressive read feeds the same rendered projection as the full
+      // one, so it must apply the identical suppression table.
+      composerControls: withoutSuppressedComposerControls(
+        input.agent,
+        nativeComposerControls(
+          composer,
+          stateSnapshot.status === "running" || blocked,
+          capabilities,
+        ),
       ),
       composer,
       capabilities,
@@ -2983,19 +2989,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         },
         messages: renderedTranscript.messages,
         interactions: interactionSnapshot.requests,
-        // Claude's thinking/context choices are settings-backed session
-        // defaults, while Cursor's retired variant is a pre-combined parameter
-        // cross product. Remove only those provider-specific duplicates at the
-        // authoritative boundary so every renderer sees the same controls.
-        composerControls: nativeComposerControls(
-          composer,
-          snapshot.status === "running" || blocked,
-          capabilities,
-        ).filter(
-          (control) =>
-            (input.agent !== "claude" ||
-              (control.id !== "parameter:thinking" && control.id !== "parameter:context1m")) &&
-            (input.agent !== "cursor" || control.id !== "parameter:variant"),
+        // Remove the provider-specific controls the compact input bar does not
+        // own. Both projection reads apply the same shared table, so a control
+        // hidden on this path cannot reappear on the progressive one.
+        composerControls: withoutSuppressedComposerControls(
+          input.agent,
+          nativeComposerControls(composer, snapshot.status === "running" || blocked, capabilities),
         ),
         composer,
         ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),

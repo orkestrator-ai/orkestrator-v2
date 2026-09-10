@@ -1147,8 +1147,15 @@ describe("NativeAgentService", () => {
   });
 
   test.each([
-    ["claude", ["parameter:audit", "parameter:variant"]],
-    ["cursor", ["parameter:thinking", "parameter:context1m", "parameter:audit"]],
+    ["claude", ["parameter:audit", "parameter:variant", "parameter:summary"]],
+    [
+      "codex",
+      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:variant"],
+    ],
+    [
+      "cursor",
+      ["parameter:thinking", "parameter:context1m", "parameter:audit", "parameter:summary"],
+    ],
   ] as const)(
     "filters only provider-specific parameter controls for %s at the backend boundary",
     async (agent, expectedParameterControls) => {
@@ -1195,6 +1202,14 @@ describe("NativeAgentService", () => {
                 defaultValue: "provider-default",
                 scope: "turn",
               },
+              {
+                id: "summary",
+                label: "Reasoning summary",
+                kind: "select",
+                options: [{ id: "auto", label: "Automatic" }],
+                defaultValue: "auto",
+                scope: "turn",
+              },
             ],
           },
         ] as T;
@@ -1217,6 +1232,18 @@ describe("NativeAgentService", () => {
             projection?.composerControls
               .map((control) => control.id)
               .filter((id) => id.startsWith("parameter:")),
+          ).toEqual(Array.from(expectedParameterControls));
+
+          // The progressive read feeds the same rendered projection, so a
+          // control suppressed above must not reappear here.
+          const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+          expect(update.status).toBe("snapshot");
+          expect(
+            update.status === "snapshot"
+              ? update.value.composerControls
+                  .map((control) => control.id)
+                  .filter((id) => id.startsWith("parameter:"))
+              : undefined,
           ).toEqual(Array.from(expectedParameterControls));
         },
       );

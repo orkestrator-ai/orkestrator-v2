@@ -1190,9 +1190,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         ...(value.policy ? { policy: value.policy } : {}),
         ...(value.rateLimits ? { rateLimits: value.rateLimits } : {}),
         ...(current?.runtime ? { runtime: current.runtime } : {}),
-        ...(current?.runtimeHealthAuthoritative === undefined
-          ? {}
-          : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }),
+        ...(value.runtimeHealthAuthoritative === undefined
+          ? current?.runtimeHealthAuthoritative === undefined
+            ? {}
+            : { runtimeHealthAuthoritative: current.runtimeHealthAuthoritative }
+          : { runtimeHealthAuthoritative: value.runtimeHealthAuthoritative }),
         ...(current?.auth ? { auth: current.auth } : {}),
         notices: value.notices,
         ...(value.recoverableDispatch ? { recoverableDispatch: value.recoverableDispatch } : {}),

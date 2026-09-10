@@ -15,6 +15,7 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import { UNAPPLIED_NETWORK_RESTRICTION_NOTE } from "./native-agent-execution-policy.js";
+import { cursorConnection, httpProvider } from "./agent-provider-test-support.js";
 
 import {
   ProviderSessionFailedError,
@@ -277,14 +278,15 @@ describe("NativeAgentService", () => {
   });
 
   test("carries authoritative notices in progressive session state", async () => {
+    let notices = [
+      { kind: "warning" as const, message: "Provider is using a fallback" },
+      { kind: "stopped" as const, message: "Stopped by user" },
+    ];
     const stub = createProviderStub("cursor", {
       sessionStateSnapshot: async () => ({
         status: "idle",
         phase: "idle",
-        notices: [
-          { kind: "warning", message: "Provider is using a fallback" },
-          { kind: "stopped", message: "Stopped by user" },
-        ],
+        notices,
       }),
     });
     await withService(
@@ -302,6 +304,113 @@ describe("NativeAgentService", () => {
         expect(update.status === "snapshot" ? update.value.notices : undefined).toEqual([
           { kind: "warning", message: "Provider is using a fallback" },
         ]);
+
+        notices = [];
+        const recovered = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(recovered.status).toBe("snapshot");
+        expect(recovered.status === "snapshot" ? recovered.value.notices : undefined).toEqual([]);
+        expect(recovered.status === "snapshot" ? recovered.token : undefined).not.toBe(
+          update.status === "snapshot" ? update.token : undefined,
+        );
+      },
+    );
+  });
+
+  test("projects runtime advisories from the real HTTP bridge state path", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/session/create")) return Response.json({ sessionId: "cursor-session" });
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({
+          summary: {},
+          notices: [
+            {
+              id: "mcp:cursor-session:github",
+              message: "github MCP failed to start",
+              severity: "error",
+              source: "provider",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/approvals") || url.endsWith("/interactions")) {
+        return new Response("not found", { status: 404 });
+      }
+      return Response.json({ status: "idle" });
+    }, cursorConnection);
+    await withService(
+      { prefix: "orkestrator-progressive-http-notices-", provider: async () => provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-http-notices",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+
+        expect(update.status).toBe("snapshot");
+        expect(update.status === "snapshot" ? update.value.notices : undefined).toEqual([
+          {
+            kind: "advisory",
+            message: "github MCP failed to start",
+            occurrenceId: "mcp:cursor-session:github",
+            severity: "error",
+          },
+        ]);
+        expect(
+          update.status === "snapshot" ? update.value.runtimeHealthAuthoritative : undefined,
+        ).toBe(true);
+      },
+    );
+  });
+
+  test("composes persisted incomplete-turn notices and excludes terminal notices", async () => {
+    const providerNotices = [
+      { kind: "warning" as const, message: "Provider is using a fallback" },
+      { kind: "stopped" as const, message: "Stopped by user" },
+    ];
+    const stub = createProviderStub("opencode", {
+      sessionStateSnapshot: async () => ({ status: "idle", notices: providerNotices }),
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        notices: providerNotices,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-incomplete-notice-", provider: async () => stub.provider },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:progressive-incomplete-notice",
+        };
+        const session = await service.ensureSession(identity);
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        await storage.setOpenCodeIncompleteTurnNotice(key, session.providerSessionId, {
+          kind: "failed",
+          assistantMessageId: "assistant-1",
+          updatedAt: "2026-09-10T00:00:00.000Z",
+        });
+
+        const state = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(state.status).toBe("snapshot");
+        expect(state.status === "snapshot" ? state.value.notices : undefined).toEqual([
+          { kind: "warning", message: "Provider is using a fallback" },
+          {
+            kind: "incomplete-turn",
+            message: "The previous OpenCode turn ended before completion.",
+          },
+        ]);
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.notices).toEqual(
+          state.status === "snapshot" ? state.value.notices : undefined,
+        );
       },
     );
   });

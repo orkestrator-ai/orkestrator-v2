@@ -2000,4 +2000,37 @@ describe("HTTP bridge progressive transcript", () => {
     expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
     expect(state).not.toHaveProperty("messages");
   });
+
+  test("carries runtime error advisories in transcript-free session state", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({
+          summary: {},
+          notices: [
+            {
+              id: "mcp:session-1:github",
+              message: "github MCP failed to start",
+              severity: "error",
+              source: "provider",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/config")) return Response.json({ model: "gpt-5.5" });
+      return Response.json({ status: "idle" });
+    }, codexConnection);
+
+    const state = await provider.sessionStateSnapshot!("session-1");
+    expect(state.runtimeHealthAuthoritative).toBe(true);
+    expect(state.notices).toEqual([
+      {
+        kind: "advisory",
+        message: "github MCP failed to start",
+        occurrenceId: "mcp:session-1:github",
+        severity: "error",
+      },
+    ]);
+    expect(requests.some((request) => request.url.endsWith("/runtime-health"))).toBe(true);
+    expect(requests.every((request) => !request.url.includes("/messages"))).toBe(true);
+  });
 });

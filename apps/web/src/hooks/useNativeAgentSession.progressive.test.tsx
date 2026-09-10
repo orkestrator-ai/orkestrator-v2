@@ -532,6 +532,47 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.projection?.notices).toEqual([]);
   });
 
+  test("retains a runtime advisory until authoritative state reports it cleared", async () => {
+    const advisory = {
+      kind: "advisory" as const,
+      message: "github MCP failed to start",
+      severity: "error" as const,
+      occurrenceId: "mcp:session-1:github",
+    };
+    useNativeAgentProjectionStore.getState().setProjection(
+      "env-env-1:tab-1",
+      projection([message("m1")], {
+        notices: [advisory],
+        runtimeHealthAuthoritative: false,
+      }),
+    );
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [
+      () =>
+        stateSnapshot("state-unavailable-health", {
+          notices: [advisory],
+          runtimeHealthAuthoritative: false,
+        }),
+      () =>
+        stateSnapshot("state-recovered-health", {
+          notices: [],
+          runtimeHealthAuthoritative: true,
+        }),
+    ];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.notices).toEqual([advisory]);
+    expect(result.current.projection?.runtimeHealthAuthoritative).toBe(false);
+
+    transcriptUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.projection?.notices).toEqual([]);
+    expect(result.current.projection?.runtimeHealthAuthoritative).toBe(true);
+  });
+
   test("drops authority when the session state read fails", async () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [() => stateSnapshot("state-1")];

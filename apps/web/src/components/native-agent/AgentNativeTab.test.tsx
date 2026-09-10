@@ -5698,6 +5698,65 @@ describe("AgentNativeTab", () => {
       expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
+    test("dismisses notice toasts while their tab is inactive and restores them on return", async () => {
+      seedProjection({
+        notices: [{ kind: "warning", message: "Recovered provider notice" }],
+      });
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-active-notice"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      const toastId = (mockToastWarning.mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id;
+
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-active-notice"
+          data={identity("cursor")}
+          isActive={false}
+          refreshRequestId={0}
+        />,
+      );
+      await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledWith(toastId));
+
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-active-notice"
+          data={identity("cursor")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(2));
+    });
+
+    test("dismisses each open notice toast exactly once on unmount", async () => {
+      seedProjection({
+        notices: [{ kind: "warning", message: "Recovered provider notice" }],
+      });
+      const view = render(
+        <StrictMode>
+          <AgentNativeTab
+            tabId="tab-unmount-notice"
+            data={identity("cursor")}
+            isActive
+            refreshRequestId={0}
+          />
+        </StrictMode>,
+      );
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+      const toastId = (mockToastWarning.mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id;
+      mockToastDismiss.mockClear();
+
+      view.unmount();
+      await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledTimes(1));
+      expect(mockToastDismiss).toHaveBeenCalledWith(toastId);
+    });
+
     test("dismisses the reconnect toast as soon as the session recovers", async () => {
       seedProjection({
         connection: "connecting",

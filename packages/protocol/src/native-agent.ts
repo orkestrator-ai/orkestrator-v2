@@ -1381,6 +1381,8 @@ export interface NativeAgentSessionStateView {
   contextUsage?: NativeAgentContextUsage;
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
+  /** False when runtime-backed notices could not be refreshed for this state. */
+  runtimeHealthAuthoritative?: boolean;
   /**
    * Authoritative session notices, including an empty array when every prior
    * condition has cleared. Keeping these in the state domain lets a recovered
@@ -1968,6 +1970,10 @@ export function isNativeAgentSessionStateUpdate(
     state.interactions.length <= 512 &&
     Array.isArray(state.composerControls) &&
     state.composerControls.length <= 512 &&
+    Array.isArray(state.notices) &&
+    state.notices.length <= 512 &&
+    (state.runtimeHealthAuthoritative === undefined ||
+      typeof state.runtimeHealthAuthoritative === "boolean") &&
     state.capabilities &&
     typeof state.capabilities === "object" &&
     !Array.isArray(state.capabilities),

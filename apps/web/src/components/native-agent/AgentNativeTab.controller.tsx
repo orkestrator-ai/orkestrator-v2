@@ -1536,7 +1536,7 @@ export function SharedNativeAgentController({
             ? ("error" as const)
             : ("connecting" as const)));
   useEffect(() => {
-    const notices = (projection?.notices ?? []).filter(
+    const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
         !dismissedNoticeIds.includes(nativeNoticeDismissalId(notice)) &&
         // A recovered state is authoritative even if an older renderer cache
@@ -1581,6 +1581,7 @@ export function SharedNativeAgentController({
     connectionState,
     dismissNotice,
     dismissedNoticeIds,
+    isActive,
     noticeSessionIdentity,
     projection?.notices,
   ]);

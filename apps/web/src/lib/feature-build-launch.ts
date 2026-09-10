@@ -15,6 +15,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
   type AgentModelCatalog,
@@ -30,6 +31,7 @@ export interface FeatureBuildStepSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /** A reviewer row. The key is presentational: reviewers have no identity yet. */
@@ -60,6 +62,7 @@ export interface ConfiguredStepDefault {
   agent: AgentPlatform;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 /**
@@ -85,10 +88,17 @@ export function resolveFeatureBuildStep(
     catalog,
     configured.reasoningEffort ? { [agent]: configured.reasoningEffort } : undefined,
   );
+  const fastMode = defaultFastModeFor(
+    agent,
+    model,
+    catalog,
+    typeof configured.fastMode === "boolean" ? { [agent]: configured.fastMode } : undefined,
+  );
   return {
     agent,
     model,
     ...(reasoningEffort === "default" ? {} : { reasoningEffort }),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }
 
@@ -139,6 +149,7 @@ function stepConfig(selection: FeatureBuildStepSelection): BuildStepConfig {
     agent: selection.agent,
     model: selection.model,
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(typeof selection.fastMode === "boolean" ? { fastMode: selection.fastMode } : {}),
   };
 }
 

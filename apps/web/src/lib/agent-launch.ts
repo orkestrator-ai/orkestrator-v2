@@ -116,8 +116,18 @@ export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): 
     platform,
     id: option.id,
     label: option.name,
-    ...(option.providerLabel ? { providerLabel: option.providerLabel } : {}),
+    ...(option.providerLabel || option.description
+      ? { providerLabel: option.providerLabel ?? option.description }
+      : {}),
     ...(option.description ? { description: option.description } : {}),
+    ...(option.reasoningEfforts.length > 0
+      ? {
+          reasoning: option.reasoningEfforts.map((effort) => ({
+            id: effort,
+            label: effortLabel(effort),
+          })),
+        }
+      : {}),
     ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
   };
 }
@@ -142,4 +152,22 @@ export function modelSupportsSpeed(
     (option) => option.id === modelId || option.resolvedModel === modelId,
   );
   return model ? model.supportsSpeed === true : true;
+}
+
+/**
+ * Initial Fast/Normal value for a launch picker.
+ *
+ * Absence means either the selected model has no speed axis or no settings tier
+ * chooses an override. Pickers render that unset state as Normal, but launches
+ * keep it unset so the provider's own default is not replaced merely by opening
+ * a dialog.
+ */
+export function defaultFastModeFor(
+  platform: LaunchAgent,
+  modelId: string | undefined,
+  catalog: AgentModelCatalog,
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>,
+): boolean | undefined {
+  if (!modelSupportsSpeed(platform, catalog, modelId)) return undefined;
+  return preferredFastModes?.[platform];
 }

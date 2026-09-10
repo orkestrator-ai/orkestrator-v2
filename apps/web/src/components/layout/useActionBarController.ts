@@ -428,9 +428,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             ? { [actionDefault.agent]: actionDefault.reasoningEffort }
             : {}),
         },
+        preferredFastModes: preferredFastModesByPlatform,
       };
     },
-    [actionDefaultFor, preferredEffortsByPlatform, preferredModelsByPlatform],
+    [
+      actionDefaultFor,
+      preferredEffortsByPlatform,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+    ],
   );
   /** Launch-dialog preferences only when this action names an enabled platform. */
   const configuredLaunchDialogDefaultsFor = useCallback(
@@ -630,6 +636,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode: "native",
         initialAgentModel: selection.model,
         initialReasoningEffort: selection.reasoningEffort,
+        initialFastMode: selection.fastMode,
       });
       setReviewDialogOpen(false);
     },
@@ -765,7 +772,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       try {
         const { task } = findTaskForEnvironment(selectedEnvironmentId);
         const agent = getReviewAgent(selection.tabType);
-        const configuredFastMode = preferredFastModesByPlatform[agent];
+        const configuredFastMode = selection.fastMode ?? preferredFastModesByPlatform[agent];
         const fastMode =
           typeof configuredFastMode === "boolean" &&
           modelSupportsSpeed(agent, reviewModelCatalog, selection.model)
@@ -1085,6 +1092,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode: "native",
         initialAgentModel: selection.model,
         initialReasoningEffort: selection.reasoningEffort,
+        initialFastMode: selection.fastMode,
       });
       if (!created) {
         setScriptLaunchError(
@@ -1494,6 +1502,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           agentLaunchMode: "native",
           initialAgentModel: selection.model,
           initialReasoningEffort: selection.reasoningEffort,
+          initialFastMode: selection.fastMode,
         },
         prDialogTarget.targetBranch,
       );
@@ -1798,6 +1807,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           agentLaunchMode: "native",
           initialAgentModel: selection.model,
           initialReasoningEffort: selection.reasoningEffort,
+          initialFastMode: selection.fastMode,
         },
         targetBranch: resolveDialogTarget.targetBranch,
         // The dialog stays open on failure and owns the message, so the toast

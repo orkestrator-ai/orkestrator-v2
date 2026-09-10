@@ -11,6 +11,7 @@ export interface ClaudeOptions {
   initialPromptAttachments?: InitialPromptImageAttachment[];
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
 }
 
 export interface PendingNativeAgentLaunch {

@@ -179,6 +179,7 @@ describe("toPickerModel", () => {
       label: "Cursor Grok 4.6",
       providerLabel: "Grok",
       description: "Grok on Cursor",
+      reasoning: [{ id: "high", label: "High" }],
       supportsSpeed: true,
     });
   });

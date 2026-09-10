@@ -29,10 +29,13 @@ import {
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
   modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
   type AgentModelCatalog,
   type AgentModelOption,
   type LaunchAgent,
@@ -52,6 +55,7 @@ export interface ReviewLaunchSelection {
   tabType: ReviewTabType;
   model: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   passAllowance?: number;
 }
 
@@ -112,6 +116,7 @@ interface ReviewLaunchDialogProps {
   catalog: ReviewModelCatalog;
   preferredModels?: Partial<Record<ReviewAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<ReviewAgent, string>>;
+  preferredFastModes?: Partial<Record<ReviewAgent, boolean>>;
   kind?: "review" | "looped";
   busy?: boolean;
   onConfirm: (selection: ReviewLaunchSelection) => void;
@@ -124,6 +129,7 @@ export function ReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   kind = "review",
   busy = false,
   onConfirm,
@@ -156,6 +162,14 @@ export function ReviewLaunchDialog({
       preferredReasoningEfforts,
     ),
   );
+  const [fastMode, setFastMode] = useState(() =>
+    defaultFastModeFor(
+      getReviewAgent(defaultEnabledTabType),
+      initialModel,
+      catalog,
+      preferredFastModes,
+    ),
+  );
   const [passAllowance, setPassAllowance] = useState(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   const wasOpenRef = useRef(false);
 
@@ -178,8 +192,23 @@ export function ReviewLaunchDialog({
         preferredReasoningEfforts,
       ),
     );
+    setFastMode(
+      defaultFastModeFor(
+        getReviewAgent(defaultEnabledTabType),
+        nextModel,
+        catalog,
+        preferredFastModes,
+      ),
+    );
     setPassAllowance(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
-  }, [catalog, defaultEnabledTabType, open, preferredModels, preferredReasoningEfforts]);
+  }, [
+    catalog,
+    defaultEnabledTabType,
+    open,
+    preferredFastModes,
+    preferredModels,
+    preferredReasoningEfforts,
+  ]);
 
   const agent = getReviewAgent(tabType);
   const models = modelsForAgent(catalog, agent);
@@ -199,15 +228,7 @@ export function ReviewLaunchDialog({
   const pickerModels = useMemo<AgentModel[]>(
     () =>
       reviewPlatforms.flatMap((platform) =>
-        modelsForAgent(catalog, platform).map((option) => ({
-          platform,
-          id: option.id,
-          label: option.name,
-          ...(option.providerLabel || option.description
-            ? { providerLabel: option.providerLabel ?? option.description }
-            : {}),
-          description: option.description,
-        })),
+        modelsForAgent(catalog, platform).map((option) => toPickerModel(platform, option)),
       ),
     [catalog, reviewPlatforms],
   );
@@ -236,6 +257,8 @@ export function ReviewLaunchDialog({
         ...reasoningEfforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
       ]
     : [];
+  const speedCapable = platformOwnsSpeed(agent);
+  const speedAvailable = speedCapable && selectedModel?.supportsSpeed === true;
 
   const summary = useMemo(() => {
     const label = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.label;
@@ -256,6 +279,7 @@ export function ReviewLaunchDialog({
     setTabType(nativeTabType(nextAgent));
     setModel(nextModel);
     setReasoningEffort(defaultEffortFor(nextAgent, nextModel, catalog, preferredReasoningEfforts));
+    setFastMode(defaultFastModeFor(nextAgent, nextModel, catalog, preferredFastModes));
   };
 
   /**
@@ -267,10 +291,17 @@ export function ReviewLaunchDialog({
    */
   const handleModelSelect = (nextModel: AgentModel) => {
     const nextAgent = nextModel.platform as ReviewAgent;
+    const previousFastMode = nextAgent === agent ? fastMode : undefined;
     setTabType(nativeTabType(nextAgent));
     setModel(nextModel.id);
     setReasoningEffort(
       defaultEffortFor(nextAgent, nextModel.id, catalog, preferredReasoningEfforts),
+    );
+    setFastMode(
+      defaultFastModeFor(nextAgent, nextModel.id, catalog, {
+        ...preferredFastModes,
+        ...(typeof previousFastMode === "boolean" ? { [nextAgent]: previousFastMode } : {}),
+      }),
     );
   };
 
@@ -316,6 +347,7 @@ export function ReviewLaunchDialog({
               tabType,
               model: selectedModel?.id ?? model,
               reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
+              fastMode: speedAvailable ? fastMode : undefined,
               ...(kind === "looped" ? { passAllowance: Number(passAllowance) } : {}),
             });
           }}
@@ -365,6 +397,10 @@ export function ReviewLaunchDialog({
                     reasoningOptions.find((option) => option.id === effectiveEffort)?.label
                   }
                   onReasoningChange={setReasoningEffort}
+                  speedCapable={speedCapable}
+                  fastModeAvailable={speedAvailable}
+                  fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
+                  onFastModeChange={speedAvailable ? setFastMode : undefined}
                   title="Choose the review agent, model and reasoning"
                   className="min-h-11 w-full max-w-none border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-foreground md:max-w-none md:flex-1"
                 />

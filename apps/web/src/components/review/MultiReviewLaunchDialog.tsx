@@ -20,9 +20,11 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
   modelsForAgent,
+  platformOwnsSpeed,
   toPickerModel,
   type AgentModelCatalog,
   type LaunchAgent,
@@ -32,12 +34,14 @@ import { createUuid } from "@/lib/uuid";
 interface PickerRow extends MultiReviewModelSelection {
   key: string;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
 }
 
 export interface MultiReviewRowDefaults {
   defaultAgent: LaunchAgent;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
 }
 
 export interface MultiReviewLaunchSelection {
@@ -51,6 +55,7 @@ export interface MultiReviewLaunchDefaults {
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
   /** Exact reviewer rows a plain Multi Review starts with. */
   reviewerDefaults?: MultiReviewRowDefaults[];
   /** @deprecated Compatibility for callers that have not moved to reviewerDefaults. */
@@ -80,15 +85,19 @@ function initialRow(
   catalog: AgentModelCatalog,
   preferredModels?: Partial<Record<LaunchAgent, string>>,
   preferredEfforts?: Partial<Record<LaunchAgent, string>>,
+  preferredFastModes?: Partial<Record<LaunchAgent, boolean>>,
 ): PickerRow {
   const model = firstModelFor(agent, catalog, preferredModels);
   const effort = defaultEffortFor(agent, model, catalog, preferredEfforts);
+  const fastMode = defaultFastModeFor(agent, model, catalog, preferredFastModes);
   return {
     key: createUuid(),
     agent,
     model,
     preferredReasoningEfforts: preferredEfforts,
+    preferredFastModes,
     ...(effort === "default" ? {} : { reasoningEffort: effort }),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }
 
@@ -102,6 +111,7 @@ function initialConfiguredRow(
     catalog,
     defaults?.preferredModels ?? fallback.preferredModels,
     defaults?.preferredReasoningEfforts ?? fallback.preferredReasoningEfforts,
+    defaults?.preferredFastModes ?? fallback.preferredFastModes,
   );
 }
 
@@ -110,6 +120,7 @@ function cleanRow(row: PickerRow): MultiReviewModelSelection {
     agent: row.agent,
     model: row.model,
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
+    ...(typeof row.fastMode === "boolean" ? { fastMode: row.fastMode } : {}),
   };
 }
 
@@ -166,6 +177,7 @@ function initialRows({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   reviewerDefaults,
   secondReviewerDefaults,
   reviewModelDefaults,
@@ -180,6 +192,7 @@ function initialRows({
     catalog,
     preferredModels,
     preferredReasoningEfforts,
+    preferredFastModes,
     reviewerDefaults,
     secondReviewerDefaults,
     reviewModelDefaults,
@@ -189,6 +202,7 @@ function initialRows({
     defaultAgent,
     preferredModels,
     preferredReasoningEfforts,
+    preferredFastModes,
   };
   const configuredReviewers =
     reviewerDefaults && reviewerDefaults.length > 0
@@ -252,6 +266,8 @@ function ModelRow({
       id: effort,
       label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
     })) ?? [];
+  const speedCapable = platformOwnsSpeed(row.agent);
+  const speedAvailable = speedCapable && selected?.supportsSpeed === true;
   /**
    * Applies the chosen model *and* the platform it came from in one update.
    *
@@ -263,11 +279,17 @@ function ModelRow({
    */
   const selectModel = (agent: LaunchAgent, modelId: string) => {
     const effort = defaultEffortFor(agent, modelId, catalog, row.preferredReasoningEfforts);
+    const previousFastMode = agent === row.agent ? row.fastMode : undefined;
+    const fastMode = defaultFastModeFor(agent, modelId, catalog, {
+      ...row.preferredFastModes,
+      ...(typeof previousFastMode === "boolean" ? { [agent]: previousFastMode } : {}),
+    });
     onChange({
       ...row,
       agent,
       model: modelId,
       reasoningEffort: effort === "default" ? undefined : effort,
+      fastMode,
     });
   };
   return (
@@ -312,6 +334,10 @@ function ModelRow({
             reasoningEffort: reasoningEffort || undefined,
           })
         }
+        speedCapable={speedCapable}
+        fastModeAvailable={speedAvailable}
+        fastModeEnabled={speedAvailable ? (row.fastMode ?? false) : false}
+        onFastModeChange={speedAvailable ? (fastMode) => onChange({ ...row, fastMode }) : undefined}
         title={label}
         className="min-h-11 w-full border border-border/70 bg-input-surface py-2.5 md:max-w-none md:flex-1"
       />
@@ -326,6 +352,7 @@ export function MultiReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  preferredFastModes,
   reviewerDefaults,
   secondReviewerDefaults,
   reviewModelDefaults,
@@ -336,10 +363,16 @@ export function MultiReviewLaunchDialog({
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const makeRow = () =>
-    initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
+    initialRow(
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      preferredFastModes,
+    );
   const fallbackDefaults = useMemo<MultiReviewRowDefaults>(
-    () => ({ defaultAgent, preferredModels, preferredReasoningEfforts }),
-    [defaultAgent, preferredModels, preferredReasoningEfforts],
+    () => ({ defaultAgent, preferredModels, preferredReasoningEfforts, preferredFastModes }),
+    [defaultAgent, preferredFastModes, preferredModels, preferredReasoningEfforts],
   );
   const [reviewers, setReviewers] = useState<PickerRow[]>(() => [
     makeRow(),
@@ -365,6 +398,7 @@ export function MultiReviewLaunchDialog({
       catalog,
       preferredModels,
       preferredReasoningEfforts,
+      preferredFastModes,
       reviewerDefaults,
       secondReviewerDefaults,
       reviewModelDefaults,
@@ -381,6 +415,7 @@ export function MultiReviewLaunchDialog({
     open,
     preferredModels,
     preferredReasoningEfforts,
+    preferredFastModes,
     reviewerDefaults,
     reviewModelDefaults,
     secondReviewerDefaults,

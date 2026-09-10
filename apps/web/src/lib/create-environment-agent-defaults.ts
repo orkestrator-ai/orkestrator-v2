@@ -1,4 +1,5 @@
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   firstModelFor,
   type AgentModelCatalog,
@@ -16,6 +17,7 @@ interface ConfiguredCreateEnvironmentAgentDefaults {
   piMode: AgentStyle;
   models: Partial<Record<LaunchAgent, string>>;
   reasoningEfforts: Partial<Record<LaunchAgent, string>>;
+  fastModes?: Partial<Record<LaunchAgent, boolean>>;
 }
 
 export interface CreateEnvironmentAgentDefaults {
@@ -27,6 +29,7 @@ export interface CreateEnvironmentAgentDefaults {
   piMode: AgentStyle;
   model: string;
   reasoningEffort: string;
+  fastMode?: boolean;
 }
 
 /**
@@ -51,6 +54,7 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
   const agent = firstEnabledAgentPlatform(options.enabledAgents, configured.agent);
   const model = firstModelFor(agent, catalog, configured.models);
   const reasoningEffort = defaultEffortFor(agent, model, catalog, configured.reasoningEfforts);
+  const fastMode = defaultFastModeFor(agent, model, catalog, configured.fastModes);
 
   return {
     agent,
@@ -61,5 +65,6 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
     piMode: configured.piMode,
     model,
     reasoningEffort,
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
   };
 }

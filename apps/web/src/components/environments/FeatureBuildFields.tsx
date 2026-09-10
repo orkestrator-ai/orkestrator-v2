@@ -24,9 +24,12 @@ import { SegmentedSelector } from "@/components/ui/segmented-selector";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  defaultFastModeFor,
   defaultEffortFor,
   effortLabel,
   modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -294,17 +297,7 @@ function FeatureBuildModelPickers({
   } = useAgentModelFavorites();
 
   const pickerModels: AgentModel[] = enabledPlatforms.flatMap((platform) =>
-    modelsForAgent(catalog, platform).map((option) => ({
-      platform,
-      id: option.id,
-      label: option.name,
-      providerLabel: option.providerLabel,
-      description: option.description,
-      reasoning: option.reasoningEfforts.map((effort) => ({
-        id: effort,
-        label: effortLabel(effort),
-      })),
-    })),
+    modelsForAgent(catalog, platform).map((option) => toPickerModel(platform, option)),
   );
 
   const updateReviewers = useCallback(
@@ -508,6 +501,25 @@ function ModelPicker({
         ]
       : [];
   const reasoningId = selection.reasoningEffort ?? "default";
+  const speedCapable = platformOwnsSpeed(selection.agent);
+  const speedAvailable = speedCapable && selected?.supportsSpeed === true;
+
+  const selectionForModel = (agent: LaunchAgent, model: string) => {
+    const effort = defaultEffortFor(agent, model, catalog);
+    const previousFastMode = agent === selection.agent ? selection.fastMode : undefined;
+    const fastMode = defaultFastModeFor(
+      agent,
+      model,
+      catalog,
+      typeof previousFastMode === "boolean" ? { [agent]: previousFastMode } : undefined,
+    );
+    return {
+      agent,
+      model,
+      ...(effort === "default" ? {} : { reasoningEffort: effort }),
+      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+    };
+  };
 
   /**
    * Moving platform re-resolves the model and reasoning level, because a model
@@ -517,12 +529,7 @@ function ModelPicker({
   const selectPlatform = (platform: LaunchAgent) => {
     if (platform === selection.agent) return;
     const nextModel = modelsForAgent(catalog, platform)[0]?.id ?? "default";
-    const effort = defaultEffortFor(platform, nextModel, catalog);
-    onSelectionChange({
-      agent: platform,
-      model: nextModel,
-      ...(effort === "default" ? {} : { reasoningEffort: effort }),
-    });
+    onSelectionChange(selectionForModel(platform, nextModel));
   };
 
   return (
@@ -539,21 +546,11 @@ function ModelPicker({
       selectedModelId={selection.model}
       selectedModelLabel={selected?.name ?? "Select model"}
       onModelChange={(modelId) => {
-        const effort = defaultEffortFor(selection.agent, modelId, catalog);
-        onSelectionChange({
-          agent: selection.agent,
-          model: modelId,
-          ...(effort === "default" ? {} : { reasoningEffort: effort }),
-        });
+        onSelectionChange(selectionForModel(selection.agent, modelId));
       }}
       onModelSelect={(model) => {
         const platform = model.platform as LaunchAgent;
-        const effort = defaultEffortFor(platform, model.id, catalog);
-        onSelectionChange({
-          agent: platform,
-          model: model.id,
-          ...(effort === "default" ? {} : { reasoningEffort: effort }),
-        });
+        onSelectionChange(selectionForModel(platform, model.id));
       }}
       reasoningOptions={reasoningOptions}
       selectedReasoningId={reasoningId}
@@ -564,6 +561,12 @@ function ModelPicker({
           model: selection.model,
           ...(effort === "default" ? {} : { reasoningEffort: effort }),
         })
+      }
+      speedCapable={speedCapable}
+      fastModeAvailable={speedAvailable}
+      fastModeEnabled={speedAvailable ? (selection.fastMode ?? false) : false}
+      onFastModeChange={
+        speedAvailable ? (fastMode) => onSelectionChange({ ...selection, fastMode }) : undefined
       }
       disabled={disabled}
       className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}

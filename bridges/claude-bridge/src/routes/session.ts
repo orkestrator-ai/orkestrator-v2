@@ -1007,8 +1007,16 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
  * Registered as a two-segment path, so the `/:id` route above cannot shadow it.
  */
 session.get("/:id/activity", async (c) => {
-  const activity = await getSessionActivity(c.req.param("id"));
-  return c.json({ activity });
+  const sessionId = c.req.param("id");
+  const activity = await getSessionActivity(sessionId);
+  const resident = peekSession(sessionId);
+  return c.json({
+    activity,
+    // Readiness and activity deliberately diverge while background work is
+    // alive: the composer may accept a new prompt (and the bell may announce
+    // that fact) while the environment icon must remain blue and pulsing.
+    ...(resident?.status === "idle" ? { readyForInput: true } : {}),
+  });
 });
 
 /**

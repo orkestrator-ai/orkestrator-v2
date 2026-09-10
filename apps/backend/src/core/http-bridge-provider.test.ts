@@ -1395,6 +1395,29 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("reads input readiness independently of working activity", async () => {
+    const { provider } = httpProvider(
+      () => Response.json({ activity: "working", readyForInput: true }),
+      claudeConnection,
+    );
+
+    await expect(provider.observeActivity?.("session/1")).resolves.toEqual({
+      state: "working",
+      readyForInput: true,
+    });
+  });
+
+  test("rejects malformed activity readiness metadata", async () => {
+    const { provider } = httpProvider(
+      () => Response.json({ activity: "working", readyForInput: "yes" }),
+      claudeConnection,
+    );
+
+    await expect(provider.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+
   test("rejects malformed Codex activity attention metadata", async () => {
     for (const asyncQuestionItemIds of ["question-1", [""], ["x".repeat(2_049)]]) {
       const { provider } = httpProvider(

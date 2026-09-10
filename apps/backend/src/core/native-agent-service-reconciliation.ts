@@ -367,6 +367,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 activity,
                 Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
                 sessionOwner,
+                observation?.readyForInput,
               )
             )
               completionCandidates.add(session.environmentId);
@@ -464,14 +465,20 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
      * what wakes held worker mail.
      */
     owner: "environment" | "coordinator" = "environment",
+    readyForInput?: boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
-    const previous =
-      observed?.providerSessionId === session.providerSessionId ? observed.state : undefined;
+    const currentObservation =
+      observed?.providerSessionId === session.providerSessionId ? observed : undefined;
+    const previous = currentObservation?.state;
     const durableAttentionEdge =
-      (state === "idle" || state === "waiting") &&
-      (previous === "working" ||
-        (state === "idle" && observed === undefined && countUnknownIdleAsCompletion));
+      readyForInput === true
+        ? (currentObservation !== undefined && currentObservation.readyForInput !== true) ||
+          (currentObservation === undefined && countUnknownIdleAsCompletion)
+        : readyForInput === undefined &&
+          (state === "idle" || state === "waiting") &&
+          (previous === "working" ||
+            (state === "idle" && currentObservation === undefined && countUnknownIdleAsCompletion));
     // PR reconciliation retains its narrower historical completion contract:
     // a parked waiting turn needs the user's attention, but it has not ended.
     const completed =
@@ -489,6 +496,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
+      ...(readyForInput !== undefined ? { readyForInput } : {}),
     });
     if (previous !== state) {
       this.options.onActivityTransition?.({

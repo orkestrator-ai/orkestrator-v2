@@ -112,6 +112,16 @@ type PromptDispatchHandle = core.PromptDispatchHandle;
 export async function getSessionActivity(sessionId: string): Promise<SessionActivity> {
   const session = sessions.get(sessionId);
   if (session) {
+    // A parent turn can finish and release the composer while tasks it launched
+    // keep running in the same session. Those tasks are still environment work:
+    // retiring the sidebar indicator here paints the environment green even
+    // though its task cards are visibly active. Pending and paused tasks are
+    // unfinished too, so they keep the working indicator just like running
+    // tasks do.
+    const hasUnfinishedBackgroundTask = Object.values(session.backgroundTasks ?? {}).some(
+      (task) => task.status === "pending" || task.status === "running" || task.status === "paused",
+    );
+    if (hasUnfinishedBackgroundTask) return "working";
     if (session.status !== "running") return "idle";
     // A running turn that has parked a question or a plan approval is blocked
     // on the user, not on Claude. The backend renders those differently and

@@ -233,7 +233,7 @@ export abstract class NativeAgentServiceBase {
   /** Last provider-owned state per durable session, used for exact turn edges. */
   protected readonly observedSessionActivity = new Map<
     string,
-    { providerSessionId: string; state: AgentActivityState }
+    { providerSessionId: string; state: AgentActivityState; readyForInput?: boolean }
   >();
   /** In-flight incomplete-turn recoveries, coalesced per durable session. */
   protected readonly openCodeRecoveryTasks = new Map<string, Promise<void>>();

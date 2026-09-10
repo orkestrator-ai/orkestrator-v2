@@ -1221,6 +1221,42 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("announces ready input while background work keeps the environment working", async () => {
+    let observation: ProviderActivityObservation = {
+      state: "working",
+      readyForInput: false,
+    };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-ready-with-background-work-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "working", readyForInput: true };
+        await service.reconcileAgentActivity();
+
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasUnreadWork: true,
+        });
+      },
+    );
+  });
+
   test("does not evict the provider when async-question attention persistence fails", async () => {
     const { provider, observeActivity, dispose } = createProviderStub("codex", {
       observeActivity: async () => ({

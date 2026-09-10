@@ -1630,6 +1630,15 @@ describe("session routes", () => {
       expect(mockGetSessionActivity).toHaveBeenCalledWith("s-1");
     });
 
+    test("reports that input is ready independently of continuing work", async () => {
+      mockPeekSession.mockImplementationOnce(
+        () => ({ id: "s-1", status: "idle" }) as ReturnType<typeof mockPeekSession>,
+      );
+      const res = await app.request("/session/s-1/activity");
+
+      expect(await jsonBody(res)).toEqual({ activity: "working", readyForInput: true });
+    });
+
     test("returns 200 with activity 'missing' for an unknown session", async () => {
       const res = await app.request("/session/s-unknown/activity");
 

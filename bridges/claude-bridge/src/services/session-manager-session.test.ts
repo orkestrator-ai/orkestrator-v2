@@ -304,6 +304,26 @@ describe("getSessionActivity", () => {
     expect(await getSessionActivity(state.id)).toBe("idle");
   });
 
+  test("keeps an idle parent working until all background tasks and agents finish", async () => {
+    const state = createSession("background work");
+    track(state.id);
+
+    for (const status of ["pending", "running", "paused"] as const) {
+      state.backgroundTasks = {
+        "background-1": { id: "background-1", status },
+      };
+      expect(state.status).toBe("idle");
+      expect(await getSessionActivity(state.id)).toBe("working");
+    }
+
+    for (const status of ["completed", "failed", "killed"] as const) {
+      state.backgroundTasks = {
+        "background-1": { id: "background-1", status },
+      };
+      expect(await getSessionActivity(state.id)).toBe("idle");
+    }
+  });
+
   test("reports waiting while a question is parked", async () => {
     const state = createSession("asking");
     track(state.id);

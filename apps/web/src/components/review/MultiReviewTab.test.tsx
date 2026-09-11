@@ -487,7 +487,12 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(screen.getByLabelText("Review package generation runtime").textContent).toContain(
         "10s",
       );
-      expect(screen.getByText("running · 5.0s")).toBeTruthy();
+      const validationRow = () =>
+        screen.getByRole("button", { name: "View terminal output for bun run check" });
+      expect(validationRow().textContent).toContain("running");
+      expect(validationRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+        "5.0s",
+      );
 
       now = Date.parse("2026-09-08T20:00:13.000Z");
       act(() => tick?.());
@@ -495,7 +500,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(screen.getByLabelText("Review package generation runtime").textContent).toContain(
         "13s",
       );
-      expect(screen.getByText("running · 8.0s")).toBeTruthy();
+      expect(validationRow().textContent).toContain("running");
+      expect(validationRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+        "8.0s",
+      );
     } finally {
       view.unmount();
       Date.now = originalNow;

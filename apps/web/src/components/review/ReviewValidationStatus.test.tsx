@@ -79,7 +79,13 @@ describe("ReviewValidationStatus", () => {
     });
     const view = render(<ReviewValidationStatus environmentId="env-1" run={run} />);
     expect(screen.getByText("Queued")).toBeTruthy();
-    expect(screen.getByText("waiting for capacity · 0.3s · queued 12.0s")).toBeTruthy();
+    const queuedRow = screen.getByRole("button", {
+      name: "View terminal output for bun run check",
+    });
+    expect(queuedRow.textContent).toContain("waiting for capacity");
+    expect(queuedRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("0.3s");
+    expect(queuedRow.querySelector("[data-slot='validation-queued']")?.textContent).toBe("12.0s");
+    expect(queuedRow.textContent).toContain("queued");
     view.unmount();
     // The authoritative worker advances while no view is subscribed.
     run.status = "completed";
@@ -89,7 +95,16 @@ describe("ReviewValidationStatus", () => {
       limitation: "Host capacity wait expired; validation is incomplete",
     });
     render(<ReviewValidationStatus environmentId="env-1" run={run} />);
-    expect(screen.getByText("incomplete · 0.3s · queued 12.0s")).toBeTruthy();
+    const incompleteRow = screen.getByRole("button", {
+      name: "View terminal output for bun run check",
+    });
+    expect(incompleteRow.textContent).toContain("incomplete");
+    expect(incompleteRow.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+      "0.3s",
+    );
+    expect(incompleteRow.querySelector("[data-slot='validation-queued']")?.textContent).toBe(
+      "12.0s",
+    );
     expect(screen.getByText("Host capacity wait expired; validation is incomplete")).toBeTruthy();
     expect(screen.queryByText("failed") === null).toBe(true);
   });
@@ -105,7 +120,12 @@ describe("ReviewValidationStatus", () => {
     );
 
     expect(screen.getByText(/Validation: 10\.0s\./)).toBeTruthy();
-    expect(screen.getByText("running · 5.0s")).toBeTruthy();
+    const runningRow = () =>
+      screen.getByRole("button", { name: "View terminal output for bun run check" });
+    expect(runningRow().textContent).toContain("running");
+    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+      "5.0s",
+    );
 
     view.rerender(
       <ReviewValidationStatus
@@ -115,7 +135,38 @@ describe("ReviewValidationStatus", () => {
       />,
     );
     expect(screen.getByText(/Validation: 13\.0s\./)).toBeTruthy();
-    expect(screen.getByText("running · 8.0s")).toBeTruthy();
+    expect(runningRow().textContent).toContain("running");
+    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+      "8.0s",
+    );
+  });
+
+  test("keeps run and queue times in shared columns when some rows omit them", () => {
+    const run = runningValidation();
+    Object.assign(run.results[0]!, {
+      status: "passed",
+      exitCode: 0,
+      durationMs: 46_200,
+      queuedMs: 1_200,
+    });
+    Object.assign(run.results[1]!, {
+      status: "passed",
+      exitCode: 0,
+      durationMs: 2_300,
+      limitation: null,
+    });
+    render(<ReviewValidationStatus environmentId="env-1" run={run} />);
+
+    const list = screen.getByRole("list", { name: "Validation commands" });
+    expect(list.className).toContain("grid");
+    const check = screen.getByRole("button", { name: "View terminal output for bun run check" });
+    const build = screen.getByRole("button", { name: "View terminal output for bun run build" });
+    expect(check.className).toContain("grid-cols-subgrid");
+    expect(check.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("46.2s");
+    expect(check.querySelector("[data-slot='validation-queued']")?.textContent).toBe("1.2s");
+    expect(build.querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("2.3s");
+    expect(build.querySelector("[data-slot='validation-queued']")?.textContent).toBe("");
+    expect(build.textContent?.includes("queued")).toBe(false);
   });
 
   test("keeps per-command limitations attributed and plan limitations in Notes", () => {
@@ -130,12 +181,16 @@ describe("ReviewValidationStatus", () => {
       />,
     );
 
-    expect(screen.getByText("bun run check").closest("li")?.textContent).toContain(
-      "A prerequisite did not pass.",
-    );
-    expect(screen.getByText("bun run build").closest("li")?.textContent).toContain(
-      "A prerequisite did not pass.",
-    );
+    const checkRow = screen.getByText("bun run check").closest("li")!;
+    const buildRow = screen.getByText("bun run build").closest("li")!;
+    expect(checkRow.textContent).toContain("A prerequisite did not pass.");
+    expect(buildRow.textContent).toContain("A prerequisite did not pass.");
+    for (const row of [checkRow, buildRow]) {
+      const limitation = row.querySelector("[data-slot='validation-limitation']");
+      expect(limitation?.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["col-span-full", "mt-1"]),
+      );
+    }
     expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
     expect(notes.hasAttribute("open")).toBe(false);
@@ -168,6 +223,18 @@ describe("ReviewValidationStatus", () => {
 
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByText("Terminal output")).toBeTruthy();
+    const header = screen.getByRole("dialog").querySelector("[data-slot='dialog-header']");
+    expect(header?.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "m-0",
+        "sm:m-0",
+        "px-14",
+        "sm:px-14",
+        "text-center",
+        "sm:text-center",
+      ]),
+    );
+    expect(screen.getByText("Terminal output").className).toContain("justify-center");
     await waitFor(() => expect(screen.getByText(/1 pass/)).toBeTruthy());
     expect(screen.getByText(/warning/)).toBeTruthy();
     expect(loadOutput).toHaveBeenCalledWith("env-1", "validation-1", "check");

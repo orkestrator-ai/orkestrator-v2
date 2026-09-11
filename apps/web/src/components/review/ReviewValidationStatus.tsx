@@ -55,6 +55,10 @@ function decodeOutput(stream: ReviewValidationOutputStream | null): string {
   return stripAnsi(new TextDecoder().decode(bytes));
 }
 
+function formatSeconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function byteCount(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -162,41 +166,37 @@ function ValidationOutputModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[min(44rem,calc(100dvh-2rem))] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl sm:p-0">
-        <DialogHeader className="shrink-0 border-b border-divider px-5 py-4 pr-14 sm:px-6 sm:pr-14">
-          <div className="flex min-w-0 items-start justify-between gap-4">
-            <div className="min-w-0">
-              <DialogTitle className="flex items-center gap-2 text-base">
-                <SquareTerminal className="size-4 shrink-0" />
-                Terminal output
-              </DialogTitle>
-              <DialogDescription className="mt-2 break-all font-mono text-xs text-foreground/80">
-                {result?.command ?? "Validation command"}
-              </DialogDescription>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label="Refresh terminal output"
-                disabled={!hasArtifacts || loading}
-                onClick={() => void refresh()}
-              >
-                <RefreshCw className={loading ? "animate-spin" : undefined} />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label="Copy terminal output"
-                disabled={!combinedOutput}
-                onClick={() => void copyOutput()}
-              >
-                <Copy />
-              </Button>
-            </div>
+        <DialogHeader className="m-0 shrink-0 gap-3 border-b border-divider px-14 py-4 text-center sm:m-0 sm:px-14 sm:text-center">
+          <DialogTitle className="flex items-center justify-center gap-2 text-base">
+            <SquareTerminal className="size-4 shrink-0" />
+            Terminal output
+          </DialogTitle>
+          <DialogDescription className="break-words font-mono text-xs text-foreground/80">
+            {result?.command ?? "Validation command"}
+          </DialogDescription>
+          <div className="flex items-center justify-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label="Refresh terminal output"
+              disabled={!hasArtifacts || loading}
+              onClick={() => void refresh()}
+            >
+              <RefreshCw className={loading ? "animate-spin" : undefined} />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              aria-label="Copy terminal output"
+              disabled={!combinedOutput}
+              onClick={() => void copyOutput()}
+            >
+              <Copy />
+            </Button>
           </div>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto bg-zinc-950 p-4 font-mono text-xs leading-5 text-zinc-200 sm:p-5">
@@ -290,30 +290,49 @@ export function ReviewValidationStatus({
           {run.queueReason}
         </p>
       )}
-      <ul className="space-y-2">
+      <ul
+        aria-label="Validation commands"
+        className="grid grid-cols-[minmax(0,1fr)_max-content_max-content_max-content_max-content_auto] gap-x-3 gap-y-2"
+      >
         {run.results.map((result) => {
           const resultElapsedMs = reviewValidationResultElapsedMs(result, now);
+          const queuedMs = result.queuedMs ?? 0;
           return (
-            <li key={result.id} className="min-w-0">
+            <li key={result.id} className="col-span-full grid grid-cols-subgrid">
               <button
                 type="button"
-                className="w-full cursor-pointer rounded-md px-1.5 py-1 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="col-span-full grid grid-cols-subgrid items-center rounded-md px-1.5 py-1 text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                 aria-label={`View terminal output for ${result.command}`}
                 onClick={() => setSelectedResultId(result.id)}
               >
-                <span className="flex items-start justify-between gap-3">
-                  <code className="min-w-0 break-all">{result.command}</code>
-                  <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-                    {result.status === "queued" ? "waiting for capacity" : result.status}
-                    {resultElapsedMs !== null ? ` · ${(resultElapsedMs / 1000).toFixed(1)}s` : ""}
-                    {(result.queuedMs ?? 0) > 0
-                      ? ` · queued ${((result.queuedMs ?? 0) / 1000).toFixed(1)}s`
-                      : ""}
-                    <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
-                  </span>
+                <code className="min-w-0 break-all">{result.command}</code>
+                <span
+                  data-slot="validation-status"
+                  className="whitespace-nowrap text-muted-foreground"
+                >
+                  {result.status === "queued" ? "waiting for capacity" : result.status}
                 </span>
+                <span
+                  data-slot="validation-elapsed"
+                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
+                >
+                  {resultElapsedMs !== null ? formatSeconds(resultElapsedMs) : ""}
+                </span>
+                <span className="whitespace-nowrap text-muted-foreground">
+                  {queuedMs > 0 ? "queued" : ""}
+                </span>
+                <span
+                  data-slot="validation-queued"
+                  className="whitespace-nowrap text-right tabular-nums text-muted-foreground"
+                >
+                  {queuedMs > 0 ? formatSeconds(queuedMs) : ""}
+                </span>
+                <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
                 {result.limitation && (
-                  <span className="mt-1 block text-muted-foreground">
+                  <span
+                    data-slot="validation-limitation"
+                    className="col-span-full mt-1 text-muted-foreground"
+                  >
                     <span className="sr-only">{result.command}: </span>
                     {result.limitation}
                   </span>

@@ -29,6 +29,7 @@ import {
 } from "../../apps/web/src/components/review/ReviewLaunchDialog";
 import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
 import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReviewTab";
+import { ReviewValidationStatus } from "../../apps/web/src/components/review/ReviewValidationStatus";
 import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
 import {
   useBuildPipelineStore,
@@ -37,6 +38,7 @@ import {
 import { useMultiReviewStore } from "../../apps/web/src/stores/multiReviewStore";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 
 declare global {
   interface Window {
@@ -776,6 +778,100 @@ function DiffViewerFixture() {
   );
 }
 
+function validationCommand(id: string, command: string) {
+  return {
+    id,
+    command,
+    cwd: ".",
+    dependsOn: [] as string[],
+    resources: [id],
+    weight: 1 as const,
+    timeoutMs: 1_200_000,
+  };
+}
+
+function validationResult(
+  id: string,
+  command: string,
+  durationMs: number,
+  queuedMs?: number,
+  overrides: Partial<ReviewValidationRun["results"][number]> = {},
+): ReviewValidationRun["results"][number] {
+  return {
+    id,
+    command,
+    status: "passed",
+    exitCode: 0,
+    stdoutPath: `.orkestrator/${id}.stdout`,
+    stderrPath: `.orkestrator/${id}.stderr`,
+    stdoutBytes: 12,
+    stderrBytes: 0,
+    startedAt: "2026-09-08T20:00:02.000Z",
+    durationMs,
+    queuedMs,
+    limitation: null,
+    ...overrides,
+  };
+}
+
+const longValidationCommand =
+  "mise run test:logged -- --name review-validation-output -- bun test ./apps/web/src/components/review/ReviewValidationStatus.test.tsx --parallel=1 --only-failures";
+
+const reviewValidationOutputRun: ReviewValidationRun = {
+  id: "validation-1",
+  status: "completed",
+  startedAt: "2026-09-08T20:00:00.000Z",
+  completedAt: "2026-09-08T20:00:12.000Z",
+  discoveryDurationMs: 1_000,
+  sealingDurationMs: 200,
+  plan: {
+    headRef: "a".repeat(40),
+    commands: [
+      validationCommand("test", "mise run test"),
+      validationCommand("cargo", longValidationCommand),
+      validationCommand("typecheck", "mise run typecheck"),
+      validationCommand("lint", "mise run lintfix"),
+      validationCommand("format", "mise run formatcheck"),
+      validationCommand("build", "mise run buildworld"),
+    ],
+    limitations: [],
+  },
+  results: [
+    validationResult("test", "mise run test", 2_300),
+    validationResult("cargo", longValidationCommand, 8_000, 2_000),
+    validationResult("typecheck", "mise run typecheck", 4_100, 4_000, {
+      status: "queued",
+      exitCode: null,
+    }),
+    validationResult("lint", "mise run lintfix", 1_000),
+    validationResult("format", "mise run formatcheck", 900),
+    validationResult("build", "mise run buildworld", 46_200, 1_200, {
+      limitation: "Build runner was unavailable.",
+    }),
+  ],
+};
+
+function ReviewValidationOutputFixture() {
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={reviewValidationOutputRun}
+        loadOutput={async () => ({
+          resultId: "test",
+          status: "passed",
+          stdout: {
+            contentBase64: btoa("ok\n"),
+            totalBytes: 3,
+            startOffset: 0,
+          },
+          stderr: null,
+        })}
+      />
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
@@ -793,6 +889,9 @@ function fixtureForPath() {
     return <MultiReviewOverviewFixture />;
   }
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
+  if (window.location.pathname === "/review-validation-output") {
+    return <ReviewValidationOutputFixture />;
+  }
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;
 }

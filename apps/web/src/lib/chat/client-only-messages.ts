@@ -200,6 +200,47 @@ export function createOptimisticNativeMessage(
   };
 }
 
+/**
+ * Insert a provisional prompt where it belongs in a transcript.
+ *
+ * `priorDisplayIds` are the raw ids of the rows on screen when the prompt was
+ * submitted. The bubble goes immediately after the last of them, so rows the
+ * turn produces afterwards — the authoritative echo and the assistant's
+ * response — stream in below it. Appending instead put the response above the
+ * prompt and left the prompt pinned to the bottom of the transcript whenever
+ * the provider's echo lagged the first streamed frame (OpenCode does this).
+ *
+ * With no anchor the bubble is appended, preserving the behavior of callers
+ * that never captured a boundary. An *empty* anchor set means the transcript
+ * was empty at submit, so the bubble legitimately leads every row on screen.
+ *
+ * A non-empty anchor set whose ids have all vanished is a different case: the
+ * transcript the boundary was captured against is gone — a resume, a
+ * history-epoch rotation, or retention collapsed past the window — so there is
+ * no longer a row it belongs after. Index 0 there would place the bubble above
+ * history that genuinely predates it, a worse inversion than appending, so it
+ * appends.
+ */
+export function positionOptimisticNativeMessage(
+  base: readonly NativeMessage[],
+  optimistic: NativeMessage,
+  priorDisplayIds: readonly string[] | undefined,
+): NativeMessage[] {
+  if (!priorDisplayIds) return [...base, optimistic];
+  if (priorDisplayIds.length === 0) return [optimistic, ...base];
+  const prior = new Set(priorDisplayIds);
+  let insertAt = -1;
+  for (let index = base.length - 1; index >= 0; index -= 1) {
+    const candidate = base[index];
+    if (candidate && prior.has(candidate.id)) {
+      insertAt = index + 1;
+      break;
+    }
+  }
+  if (insertAt === -1) return [...base, optimistic];
+  return [...base.slice(0, insertAt), optimistic, ...base.slice(insertAt)];
+}
+
 export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): boolean {
   return (
     message.id.startsWith(ERROR_MESSAGE_PREFIX) ||
@@ -208,7 +249,6 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
     message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX)
   );
 }
-
 type PeerMailDisplayMessage = Pick<
   AgentMailMessage,
   "id" | "from" | "trust" | "subject" | "body" | "createdAt"

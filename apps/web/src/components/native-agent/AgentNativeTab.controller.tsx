@@ -69,6 +69,7 @@ import {
   createPeerMailNativeMessageFromCarrier,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
+  positionOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
@@ -261,7 +262,28 @@ export function SharedNativeAgentController({
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
     createdAt: string;
     requestId?: string;
+    /**
+     * The provider session this prompt was submitted to.
+     *
+     * Captured at submit, before any confirmation is attached, so the
+     * provisional bubble can be refused on a transcript that belongs to a
+     * different session. A resume replaces the transcript without clearing this
+     * state, and the captured anchor ids no longer exist in the new one, so
+     * without this the bubble would be spliced in at the top of an unrelated
+     * conversation.
+     */
+    sessionId?: string;
     confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
+    /**
+     * Raw ids of the transcript rows on screen when this prompt was submitted.
+     *
+     * The provisional bubble has to sit where the prompt belongs — after the
+     * rows that predate it and ahead of the assistant turn it starts — not at
+     * the tail of whatever the projection has delivered since. Without this
+     * anchor a slow authoritative echo renders the response above the prompt and
+     * pins the prompt to the bottom of the transcript for the whole turn.
+     */
+    priorDisplayIds?: readonly string[];
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -600,19 +622,38 @@ export function SharedNativeAgentController({
           ]
         : handoff.displayMessages;
     const base = providerBase;
-    const withOptimistic =
-      !optimisticPrompt || transcriptEchoedOptimistic
-        ? base
-        : [
-            ...base,
-            createOptimisticNativeMessage(
-              `optimistic-native:${sessionKey}`,
-              optimisticPrompt.text,
-              optimisticPrompt.attachments,
-              optimisticPrompt.createdAt,
-            ),
-          ];
-    return withOptimistic;
+    if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
+    /*
+     * A resume (or any other session replacement) rewrites the transcript while
+     * this state is still mounted. The bubble belongs to the session it was
+     * sent to; on a different session its captured anchor ids are gone, and
+     * splicing it in would make the previous conversation's pending prompt the
+     * first row of the resumed one.
+     */
+    if (optimisticPrompt.sessionId !== undefined && projection?.sessionId !== undefined) {
+      if (optimisticPrompt.sessionId !== projection.sessionId) return base;
+    }
+
+    const optimistic = createOptimisticNativeMessage(
+      `optimistic-native:${sessionKey}`,
+      optimisticPrompt.text,
+      optimisticPrompt.attachments,
+      optimisticPrompt.createdAt,
+    );
+    /*
+     * Insert the provisional prompt after the last row that was on screen when
+     * it was submitted, rather than appending it.
+     *
+     * The provider's authoritative user row can lag the first streamed
+     * assistant frame, and until it lands the optimistic bubble is the only
+     * representation of the prompt. Appending put the response *above* it and
+     * left the prompt pinned to the bottom of the transcript for the turn —
+     * exactly the inversion a slow echo produces. Anchoring on the pre-submit
+     * rows keeps the prompt ahead of every row the turn has produced since; when
+     * the real echo arrives the bubble is retired in place, with no jump.
+     */
+    const priorDisplayIds = optimisticPrompt.priorDisplayIds;
+    return positionOptimisticNativeMessage(base, optimistic, priorDisplayIds);
   }, [
     handoff.displayMessages,
     optimisticPrompt,
@@ -621,6 +662,20 @@ export function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
+  /**
+   * Raw ids of the rows on screen, captured so an optimistic prompt can be
+   * placed where it belongs.
+   *
+   * Distinct from {@link visibleAuthoritativeMessageIds}, which is normalized
+   * (assistant turns split into blocks, adjacent tool rows coalesced) and is
+   * matched against `normalizedMessages` for echo detection. The transcript is
+   * rendered from the raw rows — turn-stop markers included — so the insertion
+   * boundary for a provisional prompt is expressed in the same raw ids.
+   */
+  const visibleDisplayMessageIds = useMemo(
+    () => displayMessages.map((message) => message.id),
+    [displayMessages],
+  );
   /*
    * Tasks the transcript cannot show: the launch fell outside the loaded
    * window, or the tab resumed a session whose earlier turns were trimmed. The
@@ -879,6 +934,26 @@ export function SharedNativeAgentController({
     transcriptEchoedOptimistic,
   ]);
 
+  /*
+   * A resume, fork adoption or any other session replacement means the
+   * provisional bubble no longer belongs to the transcript on screen. Drop it
+   * rather than letting a stale prompt linger against an unrelated conversation.
+   * Only a definite move between two real ids counts: an undefined/undefined or
+   * undefined/new pairing is a brand-new session this prompt created, not a
+   * replacement of the one it was sent to.
+   */
+  useEffect(() => {
+    const submittedSessionId = optimisticPrompt?.sessionId;
+    if (
+      submittedSessionId === undefined ||
+      projection?.sessionId === undefined ||
+      submittedSessionId === projection.sessionId
+    ) {
+      return;
+    }
+    setOptimisticPrompt(null);
+  }, [optimisticPrompt?.sessionId, projection?.sessionId]);
+
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
    * Fall back to the built-in pair when the live agent listing has not arrived
@@ -1045,6 +1120,8 @@ export function SharedNativeAgentController({
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
+        sessionId: projection?.sessionId,
+        priorDisplayIds: visibleDisplayMessageIds,
       });
       const options = {
         requestId: dispatchRequestId,
@@ -1167,6 +1244,7 @@ export function SharedNativeAgentController({
       tabId,
       updateDraft,
       visibleAuthoritativeMessageIds,
+      visibleDisplayMessageIds,
     ],
   );
 

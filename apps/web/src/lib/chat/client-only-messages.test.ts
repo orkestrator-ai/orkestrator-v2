@@ -993,14 +993,17 @@ describe("positionOptimisticNativeMessage", () => {
     ]);
   });
 
-  test("puts the prompt first when every prior row was trimmed from the window", () => {
+  test("appends the prompt when every prior row was trimmed from the window", () => {
+    // A non-empty boundary whose ids no longer survive means the transcript
+    // changed underneath the prompt. Index 0 would put it above history that
+    // predates it, so it appends instead.
     const base = [createServerMessage("assistant-1", "Response", "2026-08-26T14:02:00.000Z")];
 
     const positioned = positionOptimisticNativeMessage(base, optimistic, ["trimmed-user"]);
 
     expect(positioned.map((message) => message.id)).toEqual([
-      "optimistic-native:session",
       "assistant-1",
+      "optimistic-native:session",
     ]);
   });
 
@@ -1012,6 +1015,58 @@ describe("positionOptimisticNativeMessage", () => {
     expect(positioned.map((message) => message.id)).toEqual([
       "assistant-1",
       "optimistic-native:session",
+    ]);
+  });
+
+  test("retires an anchored bubble in place when its echo arrives after the response", () => {
+    // Placement keys off the raw display ids and retirement keys off the
+    // normalized authoritative fingerprint. A slow echo arrives after the
+    // assistant rows have streamed; the bubble must be replaced by the
+    // authoritative row at the same position rather than jump to the tail.
+    const history = createServerMessage(
+      "history-1",
+      "Earlier question",
+      "2026-08-26T14:00:00.000Z",
+    );
+    const assistantRows: NativeMessage[] = [
+      {
+        ...createServerMessage("assistant-1", "Streaming", "2026-08-26T14:02:01.000Z"),
+        role: "assistant",
+      },
+      {
+        ...createServerMessage("assistant-2", "Still streaming", "2026-08-26T14:02:02.000Z"),
+        role: "assistant",
+      },
+    ];
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-native:session",
+      "New prompt",
+      [],
+      "2026-08-26T14:02:00.000Z",
+    );
+    const echo = createServerMessage("server-echo", "New prompt", "2026-08-26T14:02:00.000Z");
+
+    const positioned = positionOptimisticNativeMessage([history, ...assistantRows], optimistic, [
+      "history-1",
+    ]);
+    expect(positioned.map((message) => message.id)).toEqual([
+      "history-1",
+      "optimistic-native:session",
+      "assistant-1",
+      "assistant-2",
+    ]);
+
+    const merged = mergeNativeMessagesPreservingClientOnly(positioned, [
+      history,
+      echo,
+      ...assistantRows,
+    ]);
+
+    expect(merged.map((message) => message.id)).toEqual([
+      "history-1",
+      "server-echo",
+      "assistant-1",
+      "assistant-2",
     ]);
   });
 });

@@ -262,6 +262,17 @@ export function SharedNativeAgentController({
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
     createdAt: string;
     requestId?: string;
+    /**
+     * The provider session this prompt was submitted to.
+     *
+     * Captured at submit, before any confirmation is attached, so the
+     * provisional bubble can be refused on a transcript that belongs to a
+     * different session. A resume replaces the transcript without clearing this
+     * state, and the captured anchor ids no longer exist in the new one, so
+     * without this the bubble would be spliced in at the top of an unrelated
+     * conversation.
+     */
+    sessionId?: string;
     confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
     /**
      * Raw ids of the transcript rows on screen when this prompt was submitted.
@@ -612,6 +623,16 @@ export function SharedNativeAgentController({
         : handoff.displayMessages;
     const base = providerBase;
     if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
+    /*
+     * A resume (or any other session replacement) rewrites the transcript while
+     * this state is still mounted. The bubble belongs to the session it was
+     * sent to; on a different session its captured anchor ids are gone, and
+     * splicing it in would make the previous conversation's pending prompt the
+     * first row of the resumed one.
+     */
+    if (optimisticPrompt.sessionId !== undefined && projection?.sessionId !== undefined) {
+      if (optimisticPrompt.sessionId !== projection.sessionId) return base;
+    }
 
     const optimistic = createOptimisticNativeMessage(
       `optimistic-native:${sessionKey}`,
@@ -913,6 +934,26 @@ export function SharedNativeAgentController({
     transcriptEchoedOptimistic,
   ]);
 
+  /*
+   * A resume, fork adoption or any other session replacement means the
+   * provisional bubble no longer belongs to the transcript on screen. Drop it
+   * rather than letting a stale prompt linger against an unrelated conversation.
+   * Only a definite move between two real ids counts: an undefined/undefined or
+   * undefined/new pairing is a brand-new session this prompt created, not a
+   * replacement of the one it was sent to.
+   */
+  useEffect(() => {
+    const submittedSessionId = optimisticPrompt?.sessionId;
+    if (
+      submittedSessionId === undefined ||
+      projection?.sessionId === undefined ||
+      submittedSessionId === projection.sessionId
+    ) {
+      return;
+    }
+    setOptimisticPrompt(null);
+  }, [optimisticPrompt?.sessionId, projection?.sessionId]);
+
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
    * Fall back to the built-in pair when the live agent listing has not arrived
@@ -1079,6 +1120,7 @@ export function SharedNativeAgentController({
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
+        sessionId: projection?.sessionId,
         priorDisplayIds: visibleDisplayMessageIds,
       });
       const options = {

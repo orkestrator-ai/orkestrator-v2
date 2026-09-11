@@ -2607,6 +2607,127 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("places an unconfirmed prompt after captured history and before the streamed response", async () => {
+    // The anchor set is the raw ids on screen at submit, so with history
+    // present the bubble must land after that history and ahead of the rows the
+    // turn produces — not at the front.
+    renderVirtualizedMessages = true;
+    const tabId = "tab-optimistic-anchor-history";
+    const earlierPrompt = {
+      id: "server-earlier-prompt",
+      role: "user" as const,
+      content: "An earlier question",
+      parts: [{ type: "text" as const, content: "An earlier question" }],
+      createdAt: "2026-08-26T14:00:00.000Z",
+    };
+    const earlierReply = {
+      id: "server-earlier-reply",
+      role: "assistant" as const,
+      content: "An earlier answer",
+      parts: [{ type: "text" as const, content: "An earlier answer" }],
+      createdAt: "2026-08-26T14:01:00.000Z",
+    };
+    const responseRow = {
+      id: "assistant-streaming",
+      role: "assistant" as const,
+      content: "Inspecting the layout",
+      parts: [{ type: "text" as const, content: "Inspecting the layout" }],
+      createdAt: "2026-08-26T14:03:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      messages: [earlierPrompt, earlierReply],
+    }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+        ...(await defaultProjection(projectionInput)),
+        turn: { phase: "running" as const },
+        messages: [earlierPrompt, earlierReply, responseRow],
+      }));
+      return {
+        outcome: "unknown" as const,
+        requestId: input.requestId,
+        error: "The response was lost",
+      };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("opencode")} isActive />);
+    await screen.findByText("An earlier answer");
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Make it narrower" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    const list = await screen.findByTestId("native-agent-transcript-test-list");
+    await waitFor(() => {
+      const rows = [...list.children].map((row) => row.textContent ?? "");
+      const priorReplyIndex = rows.findIndex((row) => row.includes("An earlier answer"));
+      const promptIndex = rows.findIndex((row) => row.includes("Make it narrower"));
+      const responseIndex = rows.findIndex((row) => row.includes("Inspecting the layout"));
+      expect(priorReplyIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeGreaterThan(priorReplyIndex);
+      expect(responseIndex).toBeGreaterThan(promptIndex);
+    });
+  });
+
+  test("does not render a previous session's pending prompt at the top of a resumed transcript", async () => {
+    renderVirtualizedMessages = true;
+    const tabId = "tab-optimistic-session-scope";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(
+      <AgentNativeTab
+        tabId={tabId}
+        data={{ ...identity("claude"), sessionId: undefined }}
+        isActive
+      />,
+    );
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "PENDING-OLD-SESSION-PROMPT" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(
+        useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+          ?.sessionId,
+      ).toBe("claude-session"),
+    );
+
+    // A resume swaps in a transcript with entirely new ids, so none of the
+    // captured anchors survive. The pending prompt belongs to the old session
+    // and must not be spliced in above the resumed conversation.
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        sessionId: "resumed-elsewhere",
+        generation: "resumed-generation",
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "resumed-session-user-row",
+            role: "user" as const,
+            content: "A prompt from the resumed session",
+            parts: [{ type: "text" as const, content: "A prompt from the resumed session" }],
+            createdAt: "2026-08-26T15:00:00.000Z",
+          },
+        ],
+      });
+    });
+
+    const list = await screen.findByTestId("native-agent-transcript-test-list");
+    await waitFor(() => {
+      const rows = [...list.children].map((row) => row.textContent ?? "");
+      expect(rows.some((row) => row.includes("A prompt from the resumed session"))).toBe(true);
+      expect(rows.some((row) => row.includes("PENDING-OLD-SESSION-PROMPT"))).toBe(false);
+    });
+  });
+
   test("clears a submitted draft after transcript confirmation lands while the environment is unmounted", async () => {
     const tabId = "tab-transcript-confirmed-while-unmounted";
     const sessionKey = createSessionKey("env-1", tabId);

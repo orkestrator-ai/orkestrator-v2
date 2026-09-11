@@ -7,7 +7,10 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
+  STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
 import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
@@ -108,21 +111,20 @@ describe("backend prompt display contract", () => {
     const source = addressPrompt(report);
     const displayed = userPromptDisplayText(source);
 
-    expect(displayed).toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText);
-    expect(displayed).toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix);
+    expect(displayed).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText);
     expect(displayed).not.toContain("Producer-owned finding");
     expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker);
+    expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION);
   });
 
   test("filters the replacement Fix-session prompt without leaking report evidence", () => {
-    const source = `${addressPrompt(report)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
+    const source = `${addressPrompt(report)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
     const presentation = userPromptPresentation(source);
 
     expect(presentation.evidencePayload).toBeNull();
-    expect(presentation.displayText).toContain(
-      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
-    );
-    expect(presentation.displayText).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(presentation.displayText).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     expect(presentation.displayText).not.toContain("Producer-owned finding");
     expect(presentation.displayText).not.toContain(
       STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker,

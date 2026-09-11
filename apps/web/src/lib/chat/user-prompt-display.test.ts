@@ -12,6 +12,7 @@ import {
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
@@ -53,7 +54,7 @@ function customFixPrompt(
   continuation = MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
 ): string {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${continuation}`;
+  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}\n\n${wrapSystemInstructions(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION)}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${wrapSystemInstructions(continuation)}`;
 }
 
 function legacyCustomFixPrompt(evidence: string): string {
@@ -248,6 +249,19 @@ describe("userPromptDisplayText", () => {
 
     expect(userPromptDisplayText(ordinary)).toBe(ordinary);
     expect(userPromptDisplayText(incomplete)).toBe(incomplete);
+  });
+
+  test("shows only the user's words after a producer-tagged system frame", () => {
+    const source = `${wrapSystemInstructions("This is an implementation turn, not a planning turn.")}\n\nAddress the failing test.`;
+
+    expect(userPromptDisplayText(source)).toBe("Address the failing test.");
+  });
+
+  test("leaves an untagged single-model review prompt fully visible", () => {
+    const review =
+      "You are performing an automated code review for this ticket. Fix the review snapshot first.";
+
+    expect(userPromptDisplayText(review)).toBe(review);
   });
 
   test("keeps a marker-shaped instruction that precedes the real frame", () => {

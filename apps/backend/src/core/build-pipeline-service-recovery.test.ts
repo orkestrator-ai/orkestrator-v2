@@ -22,6 +22,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./build-pipeline-prompts.js";
@@ -905,7 +906,9 @@ describe("BuildPipelineService addressing stage", () => {
       expect(addressSession.sdkSessionId).not.toBe(reviewSessionId);
       const addressDispatch = provider.sent.at(-1)!;
       expect(addressDispatch.sessionId).toBe(addressSession.sdkSessionId);
-      expect(addressDispatch.prompt).toStartWith('<orkestrator-handoff format="json-v2">');
+      expect(addressDispatch.prompt).toStartWith(
+        `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n<orkestrator-handoff format="json-v2">`,
+      );
       expect(addressDispatch.prompt).toContain("The range check is exclusive at the upper bound.");
       expect(addressDispatch.prompt).toContain("clamp(10) returned 9");
       expect(addressDispatch.prompt).toContain(
@@ -942,7 +945,9 @@ describe("BuildPipelineService addressing stage", () => {
       await service.advanceNow(built.id);
       const dispatched = await snapshot(storage, built.id);
       expect(dispatched.pendingPromptAttempt).toBeUndefined();
-      expect(provider.sent.at(-1)?.prompt).toStartWith('<orkestrator-handoff format="json-v2">');
+      expect(provider.sent.at(-1)?.prompt).toStartWith(
+        `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n<orkestrator-handoff format="json-v2">`,
+      );
       expect(provider.sent.at(-1)?.prompt).toContain(
         "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
       );

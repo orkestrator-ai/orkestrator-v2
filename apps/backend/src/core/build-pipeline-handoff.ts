@@ -1,4 +1,5 @@
 import type { BuildPipelineAgent, PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 
 /** Matches the prompt budget used by the interactive "Continue in…" handoff. */
 export const BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -247,5 +248,9 @@ ${TRANSCRIPT_CLOSE}
 }
 
 export function prependReviewHandoff(handoffPrompt: string, addressInstruction: string): string {
-  return `${handoffPrompt}\n\nThe handoff above is prior conversation history. Treat the address-issues instruction below as the latest user message in that continued conversation:\n\n${addressInstruction}`;
+  // The handoff is backend-injected context, not something the user wrote, so
+  // the transcript hides it and shows the address instruction on its own.
+  return `${wrapSystemInstructions(
+    `${handoffPrompt}\n\nThe handoff above is prior conversation history. Treat the address-issues instruction below as the latest user message in that continued conversation:`,
+  )}\n\n${addressInstruction}`;
 }

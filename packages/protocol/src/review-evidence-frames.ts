@@ -11,6 +11,49 @@ export interface ReviewEvidenceFrameDisplayContract {
   omissionText: string;
 }
 
+/**
+ * Marks provider-only guidance that the backend prepends or appends to a
+ * user's own instruction.
+ *
+ * The provider must receive this text — it carries mode, validation and
+ * result-contract requirements — but it is not something the user wrote. A
+ * transcript is a record of the conversation, so presentation strips every
+ * complete frame and shows only the user's own words. A frame that is opened
+ * and never closed is untrusted, incomplete content and is left untouched.
+ */
+export const SYSTEM_INSTRUCTIONS_FRAME_OPEN = "<orkestrator-system-instructions>";
+export const SYSTEM_INSTRUCTIONS_FRAME_CLOSE = "</orkestrator-system-instructions>";
+
+/** Wrap backend-owned prompt guidance in one complete system-instructions frame. */
+export function wrapSystemInstructions(...parts: readonly string[]): string {
+  const content = parts.filter((part) => part.trim().length > 0).join("\n\n");
+  return `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n${content}\n${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}`;
+}
+
+/**
+ * Remove every complete system-instructions frame from a prompt.
+ *
+ * Returns the source unchanged when it holds no complete frame, so prompts that
+ * were never tagged keep their exact whitespace. When a frame is removed the
+ * surrounding blank lines are collapsed and the result trimmed.
+ */
+export function stripSystemInstructions(source: string): string {
+  if (!source.includes(SYSTEM_INSTRUCTIONS_FRAME_OPEN)) return source;
+  let result = source;
+  for (;;) {
+    const open = result.indexOf(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
+    if (open < 0) break;
+    const close = result.indexOf(
+      SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
+      open + SYSTEM_INSTRUCTIONS_FRAME_OPEN.length,
+    );
+    if (close < 0) break;
+    result = `${result.slice(0, open)}${result.slice(close + SYSTEM_INSTRUCTIONS_FRAME_CLOSE.length)}`;
+  }
+  if (result === source) return source;
+  return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export const COORDINATOR_DELEGATION_FRAME_OPEN = "<orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_CLOSE = "</orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_SEPARATOR = "\n\n";

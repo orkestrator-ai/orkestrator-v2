@@ -8,6 +8,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "./build-pipeline-prompts.js";
 import { NativeAgentProviderSessionMissingError } from "./native-agent-service.js";
 import {
@@ -383,12 +384,12 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
-      prompt: `${addressPrompt(recoverable.consolidatedReport!)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
+      prompt: `${addressPrompt(recoverable.consolidatedReport!)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
       mode: "build",
     }),
   );
-  expect(dispatchIntent.mock.calls[0]?.[0].prompt).toEndWith(
-    MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  expect(dispatchIntent.mock.calls[0]?.[0].prompt).toContain(
+    wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
   );
   expect(ensureSession).not.toHaveBeenCalled();
   expect(result).toMatchObject({

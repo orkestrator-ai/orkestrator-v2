@@ -12,7 +12,9 @@ import {
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   parseCoordinatorDelegatedPrompt,
+  stripSystemInstructions,
   type ReviewEvidenceFrameDisplayContract,
   type UserPromptPresentationKind,
 } from "@orkestrator/protocol/review-evidence-frames";
@@ -81,10 +83,14 @@ function customFixPresentation(source: string): UserPromptPresentation | null {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
   const close = source.lastIndexOf(contract.closeMarker);
   if (close < instructionPrefix.length) return null;
-  const afterFrame = source.slice(close + contract.closeMarker.length).trim();
-  // The scope-deferring continuation is current; the generic one is retained so
-  // transcripts produced before it was introduced still render.
+  // Current producers wrap the trailing continuation in a system-instructions
+  // frame, so it is already gone once the frame is removed. The unwrapped
+  // continuations are retained so transcripts produced before that still read.
+  const afterFrame = stripSystemInstructions(
+    source.slice(close + contract.closeMarker.length),
+  ).trim();
   if (
+    afterFrame !== "" &&
     afterFrame !== MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION &&
     afterFrame !== contract.continuationPrefix
   ) {
@@ -93,15 +99,21 @@ function customFixPresentation(source: string): UserPromptPresentation | null {
 
   const open = source.lastIndexOf(contract.openMarker, close);
   if (open < instructionPrefix.length) return null;
-  const hiddenContextSuffix = `\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n`;
   const beforeFrame = source.slice(0, open);
-  if (!beforeFrame.endsWith(hiddenContextSuffix)) return null;
+  const hiddenContextSuffix = `\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n`;
+  // The context between the user's instruction and the framed report is
+  // entirely backend-owned: either a closed system-instructions frame (current)
+  // or the shared prose (legacy). Requiring one of them keeps a user who typed
+  // a marker-shaped instruction from being mistaken for a produced frame.
+  const wrappedContext = beforeFrame.trimEnd().endsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE);
+  if (!wrappedContext && !beforeFrame.endsWith(hiddenContextSuffix)) return null;
 
-  const instruction = beforeFrame.slice(
-    instructionPrefix.length,
-    beforeFrame.length - hiddenContextSuffix.length,
-  );
-  if (!instruction.trim()) return null;
+  const instruction = (
+    wrappedContext
+      ? stripSystemInstructions(beforeFrame.slice(instructionPrefix.length))
+      : beforeFrame.slice(instructionPrefix.length).slice(0, -hiddenContextSuffix.length)
+  ).trim();
+  if (!instruction) return null;
 
   const evidenceSource = source.slice(open + contract.openMarker.length, close).trim();
   const parsedEvidence = parseJsonPayload(evidenceSource);
@@ -192,6 +204,14 @@ export function userPromptPresentation(
     return delegation
       ? withCoordinatorDelegationNotice(generatedReviewInstruction)
       : generatedReviewInstruction;
+  }
+  // Backend producers wrap their provider-only guidance in a
+  // system-instructions frame. Once it is removed, whatever remains is exactly
+  // what the user wrote, so it is shown without any structural reconstruction.
+  const strippedSystemInstructions = stripSystemInstructions(displaySource);
+  if (strippedSystemInstructions !== displaySource) {
+    const presentation = boundedPromptDisplay(strippedSystemInstructions);
+    return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
   }
   for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
     const presentation = presentationForContract(displaySource, contract);

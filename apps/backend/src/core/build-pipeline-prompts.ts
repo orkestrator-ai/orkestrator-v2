@@ -18,6 +18,7 @@ import {
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
@@ -496,20 +497,19 @@ ${promptCarrierJson(shown)}
 }
 
 export function addressPrompt(report: StructuredReviewReport): string {
-  return `${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}
-
-${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
+  return `${wrapSystemInstructions(
+    STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+    `${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
 ${promptCarrierJson({
   issues: report.issues,
   testCoverageGaps: report.testCoverageGaps,
 })}
-${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
+${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}`,
+  )}
 
 ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 
-${ADDRESS_REVIEW_FINDINGS_TAIL}
-
-${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
+${wrapSystemInstructions(ADDRESS_REVIEW_FINDINGS_TAIL, MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 }
 
 export const VERIFICATION_OUTPUT_CONTRACT =

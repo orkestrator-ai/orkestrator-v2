@@ -3,10 +3,11 @@ import {
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   multiReviewCustomFixPrompt as multiReviewCustomFixPromptFromProtocol,
 } from "@orkestrator/protocol/multi-review";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 /** Generic review tabs do not inherit Multi Review's automated prompt contracts. */
-export const ADDRESS_ALL_REVIEW_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`;
+export const ADDRESS_ALL_REVIEW_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION)}`;
 
 /**
  * Gives a fresh custom-fix session the report context that a resumed

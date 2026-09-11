@@ -369,6 +369,14 @@ export interface NativeAgentRecoverableDispatch {
   createdAt: string;
   /** Omitted by older backends, where every recoverable dispatch was a prompt. */
   kind?: "prompt" | "steer";
+  /**
+   * `reconciling` while the backend may still confirm the dispatch against the
+   * provider's own journal, so the record is not yet a choice the user has to
+   * make. `action-required` once that reconciliation window has elapsed, when
+   * only retry or discard can resolve it. Absent means the backend predates
+   * this field, where every recoverable dispatch expected a decision.
+   */
+  status?: "reconciling" | "action-required";
 }
 
 export type NativeAgentTurnPhase =

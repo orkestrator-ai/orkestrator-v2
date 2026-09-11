@@ -2426,7 +2426,9 @@ describe("AgentNativeTab", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
-    expect(screen.queryByText(/did not confirm your last message/i) === null).toBe(true);
+    expect(screen.queryByText(/could not confirm delivery of your last message/i) === null).toBe(
+      true,
+    );
 
     releaseDispatch();
     await waitFor(() =>
@@ -2480,7 +2482,45 @@ describe("AgentNativeTab", () => {
     releaseDispatch();
     expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
-    expect(screen.getByText(/did not confirm your last message/i)).toBeTruthy();
+    expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
+  });
+
+  test("holds the recovery card while a parked dispatch is still reconciling", async () => {
+    const tabId = "tab-reconciling-dispatch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const reconciling = {
+      requestId: "reconciling-1",
+      createdAt: "2026-09-09T19:12:51.000Z",
+      status: "reconciling" as const,
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      recoverableDispatch: reconciling,
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+
+    // The record exists and locks the composer the moment it is persisted, but
+    // the backend may still confirm it against the provider, so no decision is
+    // required yet. The amber card must not appear; a neutral status explains
+    // the lock. This is what stops the banner-flash the user complained about.
+    expect(await screen.findByText(/Confirming delivery with Codex/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    expect(screen.queryByText(/could not confirm delivery/i) === null).toBe(true);
+
+    // Once the grace window elapses the same record becomes the actionable
+    // final failure, and only then does the retry/discard card arrive.
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        recoverableDispatch: { ...reconciling, status: "action-required" },
+      });
+    });
+    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+    expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
+    expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
   });
 
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {
@@ -2509,7 +2549,7 @@ describe("AgentNativeTab", () => {
     // because a parked record also hides the send button.
     await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
     expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText(/did not confirm your last message/i)).toBeTruthy();
+    expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     fireEvent.click(retry);
 
     releaseRetry();
@@ -2561,9 +2601,6 @@ describe("AgentNativeTab", () => {
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
     );
     expect(input.textContent).toBe("");
-    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
-      true,
-    );
   });
 
   test("keeps an unconfirmed prompt ahead of the streamed response", async () => {
@@ -2915,7 +2952,6 @@ describe("AgentNativeTab", () => {
       useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
         ?.requestId,
     ).toMatch(/\S/);
-    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
   });
 
   test("honours a transcript confirmation that lands while the dispatch is still in flight", async () => {
@@ -2971,9 +3007,6 @@ describe("AgentNativeTab", () => {
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
     );
-    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
-      true,
-    );
   });
 
   test("keeps a prompt typed after an unconfirmed send when the echo finally arrives", async () => {
@@ -3025,7 +3058,6 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
       "A different question",
     );
-    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
   });
 
   test("does not use a resumed session's user row to confirm the previous session's dispatch", async () => {
@@ -3074,7 +3106,6 @@ describe("AgentNativeTab", () => {
       useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
         ?.requestId,
     ).toMatch(/\S/);
-    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
   });
 
   test("retries a failed resume provider-lock save before opening the provider dialog", async () => {
@@ -5278,7 +5309,9 @@ describe("AgentNativeTab", () => {
             expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
           );
         } else {
-          await screen.findByText(/connection dropped before dispatch was confirmed/i);
+          // An unconfirmed dispatch leaves the submitted annotations untouched
+          // and releases the capture lock once the send has settled.
+          await waitFor(() => expect(latestTranscriptAnnotationProps?.enabled).toBe(true));
           expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.annotations).toEqual(
             submittedAnnotations,
           );
@@ -6549,7 +6582,15 @@ describe("AgentNativeTab", () => {
 
       await steer();
       await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
-      await screen.findByText(/Use the recovery card above/);
+      // An unconfirmed steer keeps the text in the composer for manual recovery
+      // and raises no transient error; the parked record, if any, is surfaced by
+      // the backend projection instead.
+      await waitFor(() =>
+        expect(
+          useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-steer-retry"))
+            ?.text,
+        ).toBe("/steer narrow the scope"),
+      );
       const action = performNativeAgentSessionActionMock.mock.calls[0]![0].action;
       expect(action).toEqual({ kind: "steer", text: "narrow the scope" });
       expect(action).not.toHaveProperty("requestId");
@@ -6606,7 +6647,7 @@ describe("AgentNativeTab", () => {
       });
       expect(screen.queryByRole("button", { name: "Retry steer" }) === null).toBe(true);
       expect(
-        screen.queryByText(/has not confirmed delivery of the steering instruction/i) === null,
+        screen.queryByText(/could not confirm delivery of the steering instruction/i) === null,
       ).toBe(true);
 
       releaseSteer();

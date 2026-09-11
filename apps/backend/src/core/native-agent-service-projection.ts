@@ -398,6 +398,19 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   >();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
+  /**
+   * Whether a parked dispatch is still reconciling or has become a final
+   * failure. An unparseable timestamp is treated as final: a decision the user
+   * can make beats a record that can never leave the reconciling state.
+   */
+  protected recoverableDispatchStatus(createdAt: string): "reconciling" | "action-required" {
+    const created = Date.parse(createdAt);
+    if (!Number.isFinite(created)) return "action-required";
+    return this.now() - created >= shared.PARKED_DISPATCH_RECONCILE_GRACE_MS
+      ? "action-required"
+      : "reconciling";
+  }
+
   protected async settleAndClearProgressiveReads(): Promise<void> {
     for (const timer of this.displayTailWriteTimers.values()) clearTimeout(timer);
     this.displayTailWriteTimers.clear();
@@ -1703,6 +1716,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 resolved.session.pendingDispatch?.createdAt ??
                 resolved.session.pendingSteer!.createdAt,
               kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
+              status: this.recoverableDispatchStatus(
+                resolved.session.pendingDispatch?.createdAt ??
+                  resolved.session.pendingSteer!.createdAt,
+              ),
             },
           }
         : {}),
@@ -3168,6 +3185,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                   resolved.session.pendingDispatch?.createdAt ??
                   resolved.session.pendingSteer!.createdAt,
                 kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
+                status: this.recoverableDispatchStatus(
+                  resolved.session.pendingDispatch?.createdAt ??
+                    resolved.session.pendingSteer!.createdAt,
+                ),
               },
             }
           : {}),

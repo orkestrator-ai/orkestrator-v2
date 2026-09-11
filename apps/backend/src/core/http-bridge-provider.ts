@@ -208,12 +208,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Best-effort bridge cold-start outside the at-most-once dispatch window. */
-  async prepareDispatch(sessionId: string): Promise<void> {
+  async prepareDispatch(
+    sessionId: string,
+    options: { agentMcp?: { url: string; token: string } } = {},
+  ): Promise<void> {
     if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") return;
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/attach`,
-      { method: "POST", body: "{}" },
+      { method: "POST", body: JSON.stringify({ agentMcp: options.agentMcp }) },
       this.fetchImpl,
       "attach",
     );

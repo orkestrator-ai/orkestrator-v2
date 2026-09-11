@@ -64,9 +64,9 @@ describe("Pi MCP config", () => {
   });
 
   test("rejects a bearer longer than 1KiB", () => {
-    expect(parseAgentMcpConnection({ url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) })).toBe(
-      undefined,
-    );
+    expect(
+      parseAgentMcpConnection({ url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) }),
+    ).toBe(undefined);
   });
 
   test("loads user and project files, gates project scope, and reserves orkestrator", async () => {
@@ -126,5 +126,31 @@ describe("Pi MCP config", () => {
       "user:docs",
     ]);
     expect(container.find((server) => server.id === "local")?.command).toBe("from-project");
+  });
+
+  test("keeps the reserved Orkestrator server when the cap is full", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-mcp-cap-"));
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir, { recursive: true });
+    const servers: Record<string, unknown> = {};
+    for (let index = 0; index < 64; index += 1) {
+      servers[`srv_${index}`] = { command: "run" };
+    }
+    await writeFile(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: servers }));
+
+    const resolved = await resolvePiMcpServers({
+      agentDir,
+      cwd: root,
+      projectResources: false,
+      env: {
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "env-token",
+      },
+    });
+
+    // The Orkestrator scope is reserved: it wins a collision and survives the
+    // truncation that the agent-mail and delegation tools depend on.
+    expect(resolved).toHaveLength(64);
+    expect(resolved.at(-1)?.id).toBe("orkestrator");
   });
 });

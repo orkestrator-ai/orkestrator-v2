@@ -120,8 +120,14 @@ export async function resolvePiMcpServers(input: {
   for (const server of user) merged.set(server.id, server);
   for (const server of project) merged.set(server.id, server);
   const orkestrator = orkestratorMcpServer(input.agentMcp, input.env);
-  if (orkestrator) merged.set(orkestrator.id, orkestrator);
-  return [...merged.values()].slice(0, MAX_MCP_SERVERS);
+  // The Orkestrator entry is reserved: it is inserted last so it wins a name
+  // collision, but the file scopes are truncated first so it is never the entry
+  // `slice` discards. Without this, 64 user servers silently disabled agent mail
+  // and coordinator delegation.
+  const limit = orkestrator ? MAX_MCP_SERVERS - 1 : MAX_MCP_SERVERS;
+  const resolved = [...merged.values()].slice(0, limit);
+  if (orkestrator) resolved.push(orkestrator);
+  return resolved;
 }
 
 export function sanitizeMcpName(value: string): string | undefined {

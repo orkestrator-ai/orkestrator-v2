@@ -354,6 +354,101 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("accepts attach without a credential but preserves the stored one", async () => {
+    setAgentSessionTestHooks({
+      createAgentSession: async () => fakeAgentSession({ bindExtensions: async () => undefined }),
+      hydrateComposer: async (composer) => composer,
+    });
+    const state = seedSession();
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "token-a" };
+    try {
+      const response = await call(`/session/${state.id}/attach`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      expect(response.status).toBe(200);
+      expect(state.agentMcp).toEqual({ url: "http://127.0.0.1:4567/mcp", token: "token-a" });
+    } finally {
+      await state.session?.dispose();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
+  test("ignores a malformed agentMcp instead of failing creation", async () => {
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "tab-malformed-mcp",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) },
+        }),
+      });
+      expect(created.status).toBe(201);
+      const body = (await created.json()) as { sessionId: string };
+      expect(sessions.get(body.sessionId)?.agentMcp).toBeUndefined();
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("rebuilds an attached session when a prompt rotates the agent MCP credential", async () => {
+    const { preparePiMcp, setPiMcpTransportForTests: setTransport } = await import("./mcp.js");
+    installRuntime();
+    setTransport({
+      async connect() {
+        return {
+          tools: [],
+          async call() {
+            return {};
+          },
+          async close() {},
+        };
+      },
+    });
+    let disposed = 0;
+    setAgentSessionTestHooks({
+      createAgentSession: async () => fakeAgentSession({ bindExtensions: async () => undefined }),
+      hydrateComposer: async (composer) => composer,
+    });
+    const state = seedSession();
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "token-a" };
+    await preparePiMcp(state, {
+      agentDir: await mkdtemp(join(tmpdir(), "pi-http-rotate-")),
+      cwd: process.cwd(),
+      env: {},
+    });
+    state.session = fakeAgentSession({
+      dispose: () => {
+        disposed += 1;
+      },
+    });
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "rotate",
+          requestId: "rotate-1",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(202);
+      // The old SDK session, bound to token A's MCP connection, was released
+      // and a fresh one attached from the current credential.
+      expect(disposed).toBe(1);
+      expect(state.agentMcp?.token).toBe("token-b");
+    } finally {
+      await state.session?.dispose();
+      const { closePiMcp, setPiMcpTransportForTests: reset } = await import("./mcp.js");
+      await closePiMcp(state);
+      reset();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("validates and symmetrically updates readOnly on idempotent creation", async () => {
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     try {
@@ -639,6 +734,45 @@ describe("successful lifecycle routes", () => {
       clientSessionKeys.clear();
       await rm(sessionDir, { recursive: true, force: true });
       await rm(stateDir, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("resume adopts the tab-scoped agent MCP credential", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-resume-mcp-sessions-"));
+    const sessionFile = join(sessionDir, "resumable-mcp.jsonl");
+    await writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "resumed-mcp-session",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: process.cwd(),
+      })}\n`,
+      "utf8",
+    );
+    process.env.PI_SESSION_DIR = sessionDir;
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call("/session/resume", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: sessionFile,
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "resume-token" },
+        }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { sessionId: string };
+      expect(sessions.get(body.sessionId)?.agentMcp).toEqual({
+        url: "http://127.0.0.1:4567/mcp",
+        token: "resume-token",
+      });
+    } finally {
+      delete process.env.PI_SESSION_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(sessionDir, { recursive: true, force: true });
       resetTestDependencies();
     }
   });

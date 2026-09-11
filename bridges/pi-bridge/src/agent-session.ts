@@ -37,7 +37,7 @@ import {
 } from "./config.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
-import { closePiMcp, piMcpExtension, preparePiMcp } from "./mcp.js";
+import { closePiMcp, mcpConnectionNeedsRefresh, piMcpExtension, preparePiMcp } from "./mcp.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -324,6 +324,22 @@ async function attach(state: SessionState): Promise<AgentSession> {
     await closePiMcp(state);
     throw error;
   }
+}
+
+/**
+ * Rebuild an attached session when its tab-scoped MCP credential changed.
+ *
+ * Prompt, create, resume and attach all store a possibly rotated `agentMcp`,
+ * but a live Pi session's MCP extension keeps whatever connection it was built
+ * with. Pi fixes tool registrations at `createAgentSession`, so the only
+ * reliable way to move the connection is to detach and let the next
+ * `ensureSession` prepare from the new credential. A session with no live
+ * runtime is left alone: the next attach prepares it.
+ */
+export async function reconcileAgentMcp(state: SessionState): Promise<void> {
+  if (!state.session) return;
+  if (!mcpConnectionNeedsRefresh(state)) return;
+  await detachSession(state);
 }
 
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {

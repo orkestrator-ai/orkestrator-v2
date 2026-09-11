@@ -70,7 +70,7 @@ describe("extension discovery parsers", () => {
       "Checking MCP server health…",
       "docs: npx docs-mcp --token hidden - ✔ Connected",
       "plugin:github:github: https://example.test/mcp (HTTP) - ✘ Failed",
-      "review: command - ❸ Pending approval",
+      "review: command - ⏸ Pending approval",
     ].join("\n");
 
     expect(parseClaudeMcpList(output)).toEqual([

@@ -67,6 +67,7 @@ import {
   listResumableSessions,
   navigateSessionHistory,
   parseComposerPatch,
+  reconcileAgentMcp,
   resumeSession,
   setSessionReadOnly,
   setSessionTitle,
@@ -234,6 +235,9 @@ async function routeGlobal(
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     );
     storeAgentMcp(state, body.agentMcp);
+    // An idempotent create can return an already-attached session; a rotated
+    // credential has to move the live MCP connection, not just memory.
+    await reconcileAgentMcp(state);
     if (typeof body.readOnly === "boolean") {
       if (
         (state.readOnly === true) !== body.readOnly &&
@@ -442,6 +446,15 @@ async function routeSession(
     // Never dispatches. Attach exists to move the SDK's cold start *outside*
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
+    //
+    // The tab-scoped connection is accepted here too. The backend's warm-up
+    // attach runs before it resolves the prompt's credential, and a restarted
+    // bridge has no persisted one, so without this the warm-up would connect
+    // the process-env identity and the prompt would have to rebuild the session
+    // to correct it.
+    const body = await readJson(request);
+    storeAgentMcp(state, body.agentMcp);
+    await reconcileAgentMcp(state);
     // Truthiness, not `!== undefined`: an unattached session carries `null`,
     // which is exactly the check `ensureSession` itself makes.
     const wasAttached = Boolean(state.session);
@@ -861,6 +874,10 @@ async function handlePrompt(
     files = await resolvePromptFiles(attachments, workingDirectory);
     if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
     applyComposerPatch(state, parseComposerPatch(body));
+    // A rotated tab credential has to rebuild the SDK session before the turn
+    // is dispatched, or the model reaches the mailbox under the previous
+    // identity while `/mcp` already reports the new one.
+    await reconcileAgentMcp(state);
     session = await ensureSession(state);
     await applyComposerToSession(state);
     // The prepared record must be on disk before Pi can possibly accept the

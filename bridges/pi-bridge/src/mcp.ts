@@ -20,11 +20,47 @@ import {
 } from "./mcp-config.js";
 import { getAgentDir } from "./pi-sdk.js";
 import { isObject, type JsonObject, type SessionState } from "./state.js";
+import { withTimeout } from "./timeout.js";
 
 const CONNECT_TIMEOUT_MS = 3_000;
+const TOOL_CALL_TIMEOUT_MS = 120_000;
 const MAX_MCP_TOOLS = 128;
 const MAX_MCP_RESULT_BYTES = 50_000;
+const MAX_MCP_DESCRIPTION_BYTES = 4_000;
+const MAX_MCP_SCHEMA_BYTES = 20_000;
 const STDIO_SECRET_ENV = new Set(["ORKESTRATOR_AGENT_MCP_TOKEN", "PI_BRIDGE_TOKEN"]);
+
+/**
+ * The Orkestrator MCP tools the coordinator read-only gate may exempt.
+ *
+ * Keyed on the *name the tool is registered under*, which a server chooses.
+ * Exempting the whole Orkestrator scope let a server that advertised a tool
+ * named after a Pi built-in place that name in the exempt set and unblock it
+ * under `coordinator-read-only`. Namespacing is not an option here: the model
+ * is told these tools by name, so the allowlist is the boundary.
+ */
+const COORDINATOR_MAIL_TOOLS = new Set([
+  "check_inbox",
+  "read_message",
+  "send_message",
+  "reply_message",
+  "ack_message",
+  "get_message_status",
+  "list_mailboxes",
+  "launch_environment",
+]);
+
+/** Per-process timing budgets, overridable so a test need not wait them out. */
+let connectTimeoutMs = CONNECT_TIMEOUT_MS;
+let toolCallTimeoutMs = TOOL_CALL_TIMEOUT_MS;
+
+export function setPiMcpTimeoutsForTests(options?: {
+  connectMs?: number;
+  toolCallMs?: number;
+}): void {
+  connectTimeoutMs = options?.connectMs ?? CONNECT_TIMEOUT_MS;
+  toolCallTimeoutMs = options?.toolCallMs ?? TOOL_CALL_TIMEOUT_MS;
+}
 
 export interface PiMcpListedTool {
   name: string;
@@ -57,6 +93,10 @@ interface PiMcpRuntime {
   orkestratorToolNames: Set<string>;
   tools: RegisteredMcpTool[];
   connections: PiMcpConnection[];
+  /** The tab credential these connections were prepared with; "" for the env. */
+  connectionKey: string;
+  /** Set once `closePiMcp` runs, so an in-flight connect closes on arrival. */
+  closed: boolean;
 }
 
 const runtimes = new WeakMap<SessionState, PiMcpRuntime>();
@@ -71,14 +111,53 @@ export function publicPiMcpServers(state: SessionState): NativeAgentMcpServer[] 
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {
-  return runtimes.get(state)?.orkestratorToolNames.has(toolName) === true;
+  const runtime = runtimes.get(state);
+  return (
+    runtime?.orkestratorToolNames.has(toolName) === true && COORDINATOR_MAIL_TOOLS.has(toolName)
+  );
+}
+
+/**
+ * Whether the live connections were prepared with a different tab credential
+ * than the one currently on the session.
+ *
+ * A rotated token updates `state.agentMcp` but leaves the attached Pi session's
+ * MCP extension pointed at the old connection, so the caller has to rebuild the
+ * session. A session with no live runtime needs no refresh: the next attach
+ * prepares from whatever `state.agentMcp` holds.
+ */
+export function mcpConnectionNeedsRefresh(state: SessionState): boolean {
+  const runtime = runtimes.get(state);
+  return runtime !== undefined && runtime.connectionKey !== mcpConnectionKey(state);
+}
+
+function mcpConnectionKey(state: SessionState): string {
+  return state.agentMcp ? `${state.agentMcp.url}\u0000${state.agentMcp.token}` : "";
 }
 
 export async function preparePiMcp(
   state: SessionState,
   options: { agentDir?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
-  await closePiMcp(state);
+  const previous = runtimes.get(state);
+  if (previous) previous.closed = true;
+  const runtime: PiMcpRuntime = {
+    inventory: [],
+    orkestratorToolNames: new Set(),
+    tools: [],
+    connections: [],
+    connectionKey: mcpConnectionKey(state),
+    closed: false,
+  };
+  // Registered synchronously, before the first await. A detach that races this
+  // call then finds the new runtime and can mark it closed, so a connection
+  // that lands afterwards closes rather than leaking. Closing the previous
+  // generation here, rather than through `closePiMcp`, is what keeps that from
+  // closing the runtime this call just installed.
+  runtimes.set(state, runtime);
+  if (previous) {
+    await Promise.allSettled(previous.connections.map((connection) => connection.close()));
+  }
   const servers = await resolvePiMcpServers({
     agentDir: options.agentDir ?? agentDirectory() ?? getAgentDir(),
     cwd: options.cwd ?? workingDirectory,
@@ -86,17 +165,10 @@ export async function preparePiMcp(
     agentMcp: state.agentMcp,
     env: options.env,
   });
-  const runtime: PiMcpRuntime = {
-    inventory: [],
-    orkestratorToolNames: new Set(),
-    tools: [],
-    connections: [],
-  };
   const connected = await Promise.all(
     servers.map((server) => connectAndRegister(state, runtime, server)),
   );
-  runtime.inventory = connected;
-  runtimes.set(state, runtime);
+  if (!runtime.closed) runtime.inventory = connected;
 }
 
 export function piMcpExtension(state: SessionState): (pi: ExtensionAPI) => void {
@@ -108,7 +180,14 @@ export function piMcpExtension(state: SessionState): (pi: ExtensionAPI) => void 
         description: tool.description,
         parameters: tool.parameters,
         execute: async (_toolCallId, params) => {
-          const result = await tool.call(isObject(params) ? params : {});
+          // A hung Orkestrator or user MCP tool must not stall the whole turn
+          // behind it. The real transport also aborts its own request; this
+          // bounds every transport, including a test double.
+          const result = await withTimeout(
+            tool.call(isObject(params) ? params : {}),
+            toolCallTimeoutMs,
+            `MCP tool ${tool.name} timed out`,
+          );
           const text = formatMcpContent(result);
           if (result.isError) throw new Error(text);
           return { content: [{ type: "text" as const, text }], details: {} };
@@ -120,6 +199,7 @@ export function piMcpExtension(state: SessionState): (pi: ExtensionAPI) => void 
 
 export async function closePiMcp(state: SessionState): Promise<void> {
   const runtime = runtimes.get(state);
+  if (runtime) runtime.closed = true;
   runtimes.delete(state);
   if (!runtime) return;
   await Promise.allSettled(runtime.connections.map((connection) => connection.close()));
@@ -130,49 +210,105 @@ async function connectAndRegister(
   runtime: PiMcpRuntime,
   server: ResolvedMcpServer,
 ): Promise<NativeAgentMcpServer> {
+  let connection: PiMcpConnection | undefined;
   try {
-    const connection = await withTimeout(
-      (testTransport ?? defaultTransport).connect(server),
-      CONNECT_TIMEOUT_MS,
-      `MCP server ${server.id} timed out`,
-    );
-    runtime.connections.push(connection);
-    const tools = connection.tools.slice(0, MAX_MCP_TOOLS);
-    const names: string[] = [];
-    for (const listed of tools) {
-      const registered = registerListedTool(server, listed, connection);
-      if (!registered) continue;
-      runtime.tools.push(registered);
-      names.push(registered.name);
-      if (server.scope === "orkestrator") runtime.orkestratorToolNames.add(registered.name);
-    }
-    return {
-      id: server.id,
-      name: server.id,
-      status: "connected",
-      scope: server.scope,
-      transport: server.transport,
-      toolCount: names.length,
-      tools: names,
-      actions: [],
-    };
+    connection = await connectWithTimeout(testTransport ?? defaultTransport, server);
   } catch (error) {
-    state.health.recordNotice({
-      message: `MCP server ${server.id} failed to connect; the session will continue without it`,
-      method: "mcp/connect",
-      severity: "warning",
-      source: "bridge",
-      detail: publicMcpError(error),
-    });
+    return recordConnectFailure(state, server, error);
+  }
+  // Detached while connecting. Closing here is what keeps a slow first launch
+  // from leaking a child process that nothing owns any more.
+  if (runtime.closed) {
+    await connection.close().catch(() => undefined);
     return {
       id: server.id,
       name: server.id,
       status: "failed",
       scope: server.scope,
       transport: server.transport,
-      error: publicMcpError(error),
+      error: "MCP connection was detached before it completed",
       actions: [],
     };
+  }
+  runtime.connections.push(connection);
+  const tools = connection.tools.slice(0, MAX_MCP_TOOLS);
+  const names: string[] = [];
+  for (const listed of tools) {
+    const registered = registerListedTool(server, listed, connection);
+    if (!registered) continue;
+    runtime.tools.push(registered);
+    names.push(registered.name);
+    if (server.scope === "orkestrator") runtime.orkestratorToolNames.add(registered.name);
+  }
+  return {
+    id: server.id,
+    name: server.id,
+    status: "connected",
+    scope: server.scope,
+    transport: server.transport,
+    toolCount: names.length,
+    tools: names,
+    actions: [],
+  };
+}
+
+function recordConnectFailure(
+  state: SessionState,
+  server: ResolvedMcpServer,
+  error: unknown,
+): NativeAgentMcpServer {
+  state.health.recordNotice({
+    message: `MCP server ${server.id} failed to connect; the session will continue without it`,
+    method: "mcp/connect",
+    severity: "warning",
+    source: "bridge",
+    detail: publicMcpError(error),
+  });
+  return {
+    id: server.id,
+    name: server.id,
+    status: "failed",
+    scope: server.scope,
+    transport: server.transport,
+    error: publicMcpError(error),
+    actions: [],
+  };
+}
+
+/**
+ * Connect one server, and close the connection if it arrives after the
+ * deadline.
+ *
+ * `withTimeout` alone discards a late success, which leaves an unowned child
+ * process and an open transport. Racing a rejecting deadline and closing the
+ * loser on arrival is what makes the fail-open path leak nothing.
+ */
+async function connectWithTimeout(
+  transport: PiMcpTransport,
+  server: ResolvedMcpServer,
+): Promise<PiMcpConnection> {
+  const attempt = transport.connect(server);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new Error(`MCP server ${server.id} timed out`));
+    }, connectTimeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([attempt, deadline]);
+  } catch (error) {
+    if (timedOut) {
+      void attempt.then(
+        (late) => late.close().catch(() => undefined),
+        () => undefined,
+      );
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -191,7 +327,7 @@ function registerListedTool(
   return {
     name,
     label: listed.title?.trim() || remoteName,
-    description: listed.description?.trim() || `MCP tool ${remoteName} from ${server.id}`,
+    description: boundedDescription(listed.description, `MCP tool ${remoteName} from ${server.id}`),
     parameters: toolParameters(listed.inputSchema),
     scope: server.scope,
     call: (args) => connection.call(remoteName, args),
@@ -203,8 +339,27 @@ function prefixedToolName(serverId: string, toolName: string): string | undefine
   return tool ? `mcp_${serverId}_${tool}` : undefined;
 }
 
+/**
+ * A description a remote server sends goes straight into every model request,
+ * so it is bounded like every other untrusted field in this module.
+ */
+function boundedDescription(value: string | undefined, fallback: string): string {
+  const text = value?.trim() || fallback;
+  return text.length > MAX_MCP_DESCRIPTION_BYTES ? text.slice(0, MAX_MCP_DESCRIPTION_BYTES) : text;
+}
+
 function toolParameters(schema: unknown): JsonObject {
-  return isObject(schema) && schema.type === "object" ? schema : { type: "object", properties: {} };
+  if (!isObject(schema) || schema.type !== "object") {
+    return { type: "object", properties: {} };
+  }
+  try {
+    if (Buffer.byteLength(JSON.stringify(schema), "utf8") > MAX_MCP_SCHEMA_BYTES) {
+      return { type: "object", properties: {} };
+    }
+  } catch {
+    return { type: "object", properties: {} };
+  }
+  return schema;
 }
 
 const defaultTransport: PiMcpTransport = {
@@ -236,11 +391,24 @@ const defaultTransport: PiMcpTransport = {
           ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
         })),
         call: async (name, args) => {
-          const result = await client.callTool({ name, arguments: args });
-          return {
-            content: result.content,
-            ...(result.isError === true ? { isError: true } : {}),
-          };
+          // Abort the wire request if it outlives the tool budget; the extension
+          // wrapper bounds every transport, but only the real client can cancel
+          // the in-flight request itself.
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), toolCallTimeoutMs);
+          timer.unref();
+          try {
+            const result = await client.callTool(
+              { name, arguments: args },
+              { signal: controller.signal },
+            );
+            return {
+              content: result.content,
+              ...(result.isError === true ? { isError: true } : {}),
+            };
+          } finally {
+            clearTimeout(timer);
+          }
         },
         close: () => client.close(),
       };
@@ -251,7 +419,7 @@ const defaultTransport: PiMcpTransport = {
   },
 };
 
-function stdioEnvironment(overlay?: Record<string, string>): Record<string, string> {
+export function stdioEnvironment(overlay?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined || STDIO_SECRET_ENV.has(key)) continue;
@@ -277,21 +445,4 @@ function formatMcpContent(result: { content?: unknown }): string {
 function publicMcpError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(0, 500);
-}
-
-function withTimeout<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    timer.unref();
-    work.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }

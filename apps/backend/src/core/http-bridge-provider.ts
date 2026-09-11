@@ -55,13 +55,13 @@ import {
   isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
   nonEmptyString,
-  normalizeProviderContextUsage,
   normalizeProviderRateLimits,
   normalizeProviderRuntimeSummary,
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
 import {
   readHttpBridgeAuthoritativeSessionState,
@@ -507,7 +507,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     if (response.status === 404 || response.status === 405) return undefined;
     assertOk(response, `${this.agent} usage read`);
     const body = asRecord(await boundedJson(response, `${this.agent} usage read`));
-    return normalizeProviderContextUsage(body?.contextUsage);
+    return contextUsageWithPlanUsage(this.agent, body?.contextUsage);
   }
 
   async observeSession(sessionId: string): Promise<ProviderSessionObservation> {
@@ -530,7 +530,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       body.status === "running" || body.status === "idle" || body.status === "error"
         ? body.status
         : "error";
-    const contextUsage = normalizeProviderContextUsage(body.contextUsage);
+    const contextUsage = contextUsageWithPlanUsage(this.agent, body.contextUsage);
     return {
       status,
       // sessionTokens has explicit cumulative semantics. Do not expose an
@@ -717,7 +717,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           `${this.agent} returned a malformed interactive snapshot`,
         );
       }
-      const contextUsage = normalizeProviderContextUsage(payload?.contextUsage);
+      const contextUsage = contextUsageWithPlanUsage(this.agent, payload?.contextUsage);
       const statusRuntime = normalizeProviderRuntimeSummary(payload?.runtime);
       const healthRuntime =
         health && Object.keys(health.summary).length > 0 ? health.summary : undefined;
@@ -855,6 +855,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           MAX_TRACKED_INTERACTION_SESSIONS,
         );
       }
+      const codexContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
       const codexNotices = snapshotNotices({
         transcriptTruncated: transcript.truncated,
         ...(runtime ? { runtime } : {}),
@@ -897,9 +898,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ...(Number.isSafeInteger(payload.engineGeneration)
           ? { providerGeneration: payload.engineGeneration as number }
           : {}),
-        ...(normalizeProviderContextUsage(payload.contextUsage)
-          ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
-          : {}),
+        ...(codexContextUsage ? { contextUsage: codexContextUsage } : {}),
         ...(isNativeAgentExecutionPolicy(config?.policy) ? { policy: config.policy } : {}),
         ...(runtime ? { runtime } : {}),
         ...(runtimeResponse
@@ -971,6 +970,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         );
       }
     }
+    const claudeContextUsage = contextUsageWithPlanUsage(this.agent, payload.contextUsage);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
@@ -991,9 +991,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(typeof payload.turnStartedAt === "number" && Number.isFinite(payload.turnStartedAt)
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
-      ...(normalizeProviderContextUsage(payload.contextUsage)
-        ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
-        : {}),
+      ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),
       ...(isNativeAgentExecutionPolicy(payload.policy) ? { policy: payload.policy } : {}),
       ...(normalizeProviderRateLimits(payload.rateLimits).length > 0
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }

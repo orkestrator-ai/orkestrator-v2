@@ -17,11 +17,11 @@ import {
   INTERACTIVE_RUNTIME_METADATA_RETRY_MS,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   MAX_TRACKED_INTERACTION_SESSIONS,
-  normalizeProviderContextUsage,
   normalizeProviderRuntimeSummary,
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
+import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import { normalizeClaudeBackgroundTasks } from "./http-bridge-claude-runtime.js";
 import type { HttpBridgeRuntimeMetadata } from "./http-bridge-runtime-metadata.js";
 import { snapshotNotices } from "./http-bridge-runtime-health.js";
@@ -218,7 +218,7 @@ export async function readHttpBridgeSessionState(input: {
     ? asRecord(await boundedJson(queueResponse, "Pi queue state", { remaining: 256 * 1024 }))
     : undefined;
   const readiness = normalizeProviderReadiness(payload.readiness);
-  const contextUsage = normalizeProviderContextUsage(payload.contextUsage);
+  const contextUsage = contextUsageWithPlanUsage(input.agent, payload.contextUsage);
   const runtime = normalizeProviderRuntimeSummary(payload.runtime);
   const policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;

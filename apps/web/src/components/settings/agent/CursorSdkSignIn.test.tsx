@@ -48,10 +48,18 @@ const { CursorSdkSignIn } = await import("./CursorSdkSignIn");
  * The component fetches on mount, so rendering bare leaves a pending setState
  * that React reports as an unwrapped act() update.
  */
-async function mount(credentialRevision = "false:none"): Promise<ReturnType<typeof render>> {
+async function mount(
+  credentialRevision = "false:none",
+  onCredentialChange?: () => void,
+): Promise<ReturnType<typeof render>> {
   let view!: ReturnType<typeof render>;
   await act(async () => {
-    view = render(<CursorSdkSignIn credentialRevision={credentialRevision} />);
+    view = render(
+      <CursorSdkSignIn
+        credentialRevision={credentialRevision}
+        onCredentialChange={onCredentialChange}
+      />,
+    );
   });
   return view;
 }
@@ -234,5 +242,44 @@ describe("reporting which credential is in play", () => {
     view.rerender(<CursorSdkSignIn credentialRevision="false:cleared" />);
 
     await waitFor(() => expect(screen.queryByText("backend restarting") === null).toBe(true));
+  });
+});
+
+describe("credential-change notifications", () => {
+  test("does not notify while the resolved credential is unchanged", async () => {
+    const onChange = mock(() => {});
+    progress = { state: "idle", auth: { authenticated: false, source: "none" } };
+    await mount("false:none", onChange);
+
+    await waitFor(() => expect(screen.getByText("Not signed in")).toBeDefined());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("notifies once a completed login changes the credential", async () => {
+    const onChange = mock(() => {});
+    progress = pendingProgress;
+    await mount("false:none", onChange);
+
+    progress = {
+      state: "authenticated",
+      auth: { authenticated: true, source: "stored-login", email: "user@example.com" },
+    };
+    await waitFor(() => expect(onChange).toHaveBeenCalled(), { timeout: 2_500 });
+  });
+
+  test("notifies when signing out clears the stored login", async () => {
+    const onChange = mock(() => {});
+    progress = {
+      state: "idle",
+      auth: { authenticated: true, source: "stored-login", email: "user@example.com" },
+    };
+    await mount("true:stored", onChange);
+    await waitFor(() => expect(screen.getByText(/Signed in as user@example.com/)).toBeDefined());
+    expect(onChange).not.toHaveBeenCalled();
+
+    progress = { state: "idle", auth: { authenticated: false, source: "none" } };
+    fireEvent.click(screen.getByRole("button", { name: /Sign out/ }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
   });
 });

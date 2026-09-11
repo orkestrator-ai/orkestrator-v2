@@ -9,15 +9,21 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 /**
  * Provider plan/quota shown at the top of a platform's settings pane.
  *
- * OpenCode's read is a cheap HTTPS request, so it loads on mount. Claude, Codex
- * and Cursor reads each spawn a short-lived bridge — and Claude's in turn spawns
- * a whole Claude CLI — so those are read on demand, keeping a process spawn off
- * the pane-switch path and behind the refresh control.
+ * Every platform here answers over HTTPS from a credential this machine already
+ * holds, so the card reads when the pane opens. The backend serves that read
+ * from a two-minute cache that running sessions also refresh, so flipping
+ * between panes does not re-ask the provider.
  */
-export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
-  const autoLoad = platform === "opencode";
+export function PlanUsageSection({
+  platform,
+  reloadToken = 0,
+}: {
+  platform: AgentPlatform;
+  /** Bumped by a credential save, which must re-read past the cache. */
+  reloadToken?: number;
+}) {
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
-  const [loading, setLoading] = useState(autoLoad);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
 
@@ -40,12 +46,18 @@ export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
     [platform],
   );
 
+  const seenReloadTokenRef = useRef(reloadToken);
   useEffect(() => {
-    if (autoLoad) void load();
+    // A credential save is the one case that must skip the cache: it was
+    // populated under the credential the user just replaced. An ordinary mount
+    // takes the cached snapshot, which is the point of reading on open.
+    const forced = reloadToken !== seenReloadTokenRef.current;
+    seenReloadTokenRef.current = reloadToken;
+    void load(forced);
     return () => {
       requestRef.current += 1;
     };
-  }, [autoLoad, load]);
+  }, [load, reloadToken]);
 
   const windows = snapshot?.windows ?? [];
   const message = error ?? (snapshot?.status === "error" ? snapshot.message : null);
@@ -102,11 +114,6 @@ export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
               </p>
             ) : null}
           </>
-        ) : !snapshot && !autoLoad ? (
-          <p className="text-xs text-muted-foreground">
-            Plan usage is read on demand so this pane does not start an agent process. Use refresh
-            to check it.
-          </p>
         ) : (
           <p className="text-xs text-muted-foreground">
             This account does not report any metered plan limits.

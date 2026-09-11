@@ -17,6 +17,15 @@ function windowItem(
   return windowMenu && submenu(windowMenu).find((item) => item.label === label);
 }
 
+function windowRadioItems(template: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
+  const windowMenu = template.find((item) => item.label === "Window");
+  return windowMenu ? submenu(windowMenu).filter((item) => item.type === "radio") : [];
+}
+
+function windowRadioLabels(template: MenuItemConstructorOptions[]): string[] {
+  return windowRadioItems(template).map((item) => item.label ?? "");
+}
+
 describe("desktop application menu", () => {
   test("owns Command+W and forwards it as an application tab action", () => {
     const newWindow = mock(() => {});
@@ -116,5 +125,65 @@ describe("desktop application menu", () => {
 
     const placeholder = windowItem(template, "No Open Windows");
     expect(placeholder?.enabled).toBe(false);
+  });
+
+  test("numbers duplicates without touching a unique title", () => {
+    const template = createApplicationMenuTemplate({
+      productName: "Orkestrator AI",
+      windows: [
+        { id: 1, title: "Orkestrator AI — Local", focused: true },
+        { id: 2, title: "Orkestrator AI — Local", focused: false },
+        { id: 3, title: "Orkestrator AI — Staging", focused: false },
+      ],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom: () => {},
+    });
+
+    expect(windowRadioLabels(template)).toEqual([
+      "Orkestrator AI — Local (1)",
+      "Orkestrator AI — Local (2)",
+      "Orkestrator AI — Staging",
+    ]);
+  });
+
+  test("keeps every label distinct when a title already looks like a suffix", () => {
+    const template = createApplicationMenuTemplate({
+      productName: "Orkestrator AI",
+      windows: [
+        { id: 1, title: "A", focused: true },
+        { id: 2, title: "A (1)", focused: false },
+        { id: 3, title: "A", focused: false },
+      ],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom: () => {},
+    });
+
+    const labels = windowRadioLabels(template);
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(labels.length);
+    // Every radio remains individually addressable by its distinct label.
+    for (const label of labels) {
+      expect(windowItem(template, label)).toBeDefined();
+    }
+  });
+
+  test("leaves no radio checked when no window is focused", () => {
+    const template = createApplicationMenuTemplate({
+      productName: "Orkestrator AI",
+      windows: [
+        { id: 1, title: "Orkestrator AI — Local", focused: false },
+        { id: 2, title: "Orkestrator AI — Staging", focused: false },
+      ],
+      newWindow: () => {},
+      closeTab: () => {},
+      selectWindow: () => {},
+      zoom: () => {},
+    });
+
+    expect(windowRadioItems(template).every((item) => item.checked === false)).toBe(true);
   });
 });

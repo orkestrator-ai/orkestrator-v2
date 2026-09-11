@@ -262,6 +262,14 @@ test("real Electron main process shares one backend across independent windows",
     await expect
       .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
       .toBe(1);
+    // Closing the other window must remove its entry and drop the now-unneeded
+    // numeric suffix, leaving the survivor as the sole selected radio.
+    await expect
+      .poll(async () => (await readWindowMenu()).labels)
+      .toEqual([`${profile.electronTitle} — Local`]);
+    await expect
+      .poll(async () => (await readWindowMenu()).selected)
+      .toEqual([`${profile.electronTitle} — Local`]);
     expect(backendChildPid(electronPid!)).toBe(backendPid);
     await secondWindow
       .evaluate(async () => {

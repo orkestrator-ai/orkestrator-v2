@@ -19,18 +19,34 @@ export type ApplicationMenuActions = {
  * Give each open window a distinct label. Two windows can share a connection
  * and therefore the same title, which would make the menu ambiguous to pick
  * from.
+ *
+ * Titles are numbered only when they are duplicated, but a unique title can
+ * still look like a generated suffix (a connection literally named `Local (1)`
+ * beside two `Local` windows). Every emitted label is therefore tracked, and a
+ * title that would repeat an earlier label is numbered until it is unique.
  */
 function windowMenuLabels(windows: ApplicationMenuWindow[]): string[] {
   const totals = new Map<string, number>();
   for (const window of windows) {
     totals.set(window.title, (totals.get(window.title) ?? 0) + 1);
   }
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
+  const nextOrdinal = new Map<string, number>();
   return windows.map((window) => {
-    if ((totals.get(window.title) ?? 0) <= 1) return window.title;
-    const index = (seen.get(window.title) ?? 0) + 1;
-    seen.set(window.title, index);
-    return `${window.title} (${index})`;
+    const duplicated = (totals.get(window.title) ?? 0) > 1;
+    if (!duplicated && !used.has(window.title)) {
+      used.add(window.title);
+      return window.title;
+    }
+    let ordinal = nextOrdinal.get(window.title) ?? 1;
+    let label = `${window.title} (${ordinal})`;
+    while (used.has(label)) {
+      ordinal += 1;
+      label = `${window.title} (${ordinal})`;
+    }
+    nextOrdinal.set(window.title, ordinal + 1);
+    used.add(label);
+    return label;
   });
 }
 

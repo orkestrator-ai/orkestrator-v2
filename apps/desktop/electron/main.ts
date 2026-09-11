@@ -50,7 +50,8 @@ import {
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { registerWindowAllClosedQuit } from "./quit-policy.js";
-import { createApplicationMenuTemplate, type ApplicationMenuWindow } from "./application-menu.js";
+import { createApplicationMenuTemplate } from "./application-menu.js";
+import { applyWindowTitle, focusWindowById, projectMenuWindows } from "./window-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
@@ -152,30 +153,15 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
   const list = connectionManager?.getList(scope);
   const active = list?.connections.find((connection) => connection.active);
-  window.setTitle(`${productName} — ${active?.name ?? "Local"}`);
-  createMenu();
+  applyWindowTitle(window, productName, active?.name, createMenu);
 }
 
-function menuWindowList(): ApplicationMenuWindow[] {
-  const focusedWindow = BrowserWindow.getFocusedWindow();
-  const windows: ApplicationMenuWindow[] = [];
-  for (const context of windowContexts.values()) {
-    if (context.window.isDestroyed()) continue;
-    windows.push({
-      id: context.window.webContents.id,
-      title: context.window.getTitle(),
-      focused: context.window === focusedWindow,
-    });
-  }
-  return windows;
+function menuWindowList() {
+  return projectMenuWindows(windowContexts, BrowserWindow.getFocusedWindow());
 }
 
 function focusDesktopWindow(id: number): void {
-  const context = windowContexts.get(id);
-  if (!context || context.window.isDestroyed()) return;
-  if (context.window.isMinimized()) context.window.restore();
-  context.window.show();
-  context.window.focus();
+  focusWindowById(windowContexts, id);
 }
 
 function createWindowBrowserPreviews(

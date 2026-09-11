@@ -245,3 +245,24 @@ test("container sessions skip the nested sandbox without consuming a later host 
   await bootstrap(platform, hostOptions, "none");
   expect(calls).toBe(1);
 });
+
+test("a sandboxed host session skips the probe its own preparation would repeat", async () => {
+  let calls = 0;
+  const platform = {
+    async prewarmLocalWorkspace() {
+      calls += 1;
+      return async () => {};
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap();
+
+  // The session's own preparation is sandbox-enabled, so it constructs the
+  // sandbox-enabled executor that registers the helper. Probing first would
+  // pay the workspace scan twice on the first attach, which is the dominant
+  // cost on a large checkout. The barrier stays unset, so an unsandboxed run
+  // later still primes before its own preparation can cache a verdict.
+  await bootstrap(platform, hostOptions, "provider");
+  expect(calls).toBe(0);
+  await bootstrap(platform, hostOptions, "none");
+  expect(calls).toBe(1);
+});

@@ -50,7 +50,7 @@ import {
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { registerWindowAllClosedQuit } from "./quit-policy.js";
-import { createApplicationMenuTemplate } from "./application-menu.js";
+import { createApplicationMenuTemplate, type ApplicationMenuWindow } from "./application-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
@@ -153,6 +153,29 @@ function setConnectionTitle(window: BrowserWindow, scope: string): void {
   const list = connectionManager?.getList(scope);
   const active = list?.connections.find((connection) => connection.active);
   window.setTitle(`${productName} — ${active?.name ?? "Local"}`);
+  createMenu();
+}
+
+function menuWindowList(): ApplicationMenuWindow[] {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  const windows: ApplicationMenuWindow[] = [];
+  for (const context of windowContexts.values()) {
+    if (context.window.isDestroyed()) continue;
+    windows.push({
+      id: context.window.webContents.id,
+      title: context.window.getTitle(),
+      focused: context.window === focusedWindow,
+    });
+  }
+  return windows;
+}
+
+function focusDesktopWindow(id: number): void {
+  const context = windowContexts.get(id);
+  if (!context || context.window.isDestroyed()) return;
+  if (context.window.isMinimized()) context.window.restore();
+  context.window.show();
+  context.window.focus();
 }
 
 function createWindowBrowserPreviews(
@@ -187,12 +210,14 @@ function createWindowBrowserPreviews(
 function createMenu(): void {
   const template = createApplicationMenuTemplate({
     productName,
+    windows: menuWindowList(),
     newWindow: () => {
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a new window:", error),
       );
     },
     closeTab: () => emitToFocusedWindow("menu-close-tab", undefined),
+    selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -255,6 +280,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
+        createMenu();
         createdWindow.on("page-title-updated", (event) => {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
@@ -267,6 +293,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         });
         createdWindow.on("focus", () => {
           lastFocusedWindowId = webContentsId;
+          createMenu();
         });
         createdWindow.once("closed", () => {
           windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll();
@@ -276,6 +303,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           if (lastFocusedWindowId === webContentsId) {
             lastFocusedWindowId = windowContexts.keys().next().value ?? null;
           }
+          createMenu();
         });
       },
     });

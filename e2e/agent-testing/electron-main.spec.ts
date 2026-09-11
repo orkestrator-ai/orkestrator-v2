@@ -201,6 +201,42 @@ test("real Electron main process shares one backend across independent windows",
         ),
       )
       .toEqual([`${profile.electronTitle} — Local`, `${profile.electronTitle} — Local`]);
+
+    const readWindowMenu = () =>
+      app.evaluate(({ Menu }) => {
+        const windowMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "Window");
+        const radios = (windowMenu?.submenu?.items ?? []).filter((item) => item.type === "radio");
+        return {
+          present: Boolean(windowMenu),
+          labels: radios.map((item) => item.label),
+          selected: radios.filter((item) => item.checked).map((item) => item.label),
+        };
+      });
+    const windowMenu = await readWindowMenu();
+    expect(windowMenu.present).toBe(true);
+    // Two windows share one connection title, so the entries must be distinct.
+    expect(windowMenu.labels).toEqual([
+      `${profile.electronTitle} — Local (1)`,
+      `${profile.electronTitle} — Local (2)`,
+    ]);
+    expect(windowMenu.selected).toHaveLength(1);
+
+    // Selecting the other entry must move focus to that window.
+    const targetLabel = windowMenu.labels.find((label) => !windowMenu.selected.includes(label));
+    if (!targetLabel) throw new Error("Window menu has no inactive entry to switch to");
+    await app.evaluate(({ BrowserWindow, Menu }, label) => {
+      const windowMenu = Menu.getApplicationMenu()?.items.find((item) => item.label === "Window");
+      const target = windowMenu?.submenu?.items.find(
+        (item) => item.type === "radio" && item.label === label,
+      );
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+      if (!target?.click || !focusedWindow) {
+        throw new Error("Window menu switch target is unavailable");
+      }
+      target.click(undefined, focusedWindow, focusedWindow.webContents);
+    }, targetLabel);
+    await expect.poll(async () => (await readWindowMenu()).selected).toEqual([targetLabel]);
+
     await secondWindow
       .evaluate(async () => {
         const api = (

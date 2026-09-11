@@ -51,6 +51,7 @@ import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapter
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { registerWindowAllClosedQuit } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import { applyWindowTitle, focusWindowById, projectMenuWindows } from "./window-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
@@ -152,7 +153,15 @@ function emitToFocusedWindow(event: string, payload: unknown): void {
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
   const list = connectionManager?.getList(scope);
   const active = list?.connections.find((connection) => connection.active);
-  window.setTitle(`${productName} — ${active?.name ?? "Local"}`);
+  applyWindowTitle(window, productName, active?.name, createMenu);
+}
+
+function menuWindowList() {
+  return projectMenuWindows(windowContexts, BrowserWindow.getFocusedWindow());
+}
+
+function focusDesktopWindow(id: number): void {
+  focusWindowById(windowContexts, id);
 }
 
 function createWindowBrowserPreviews(
@@ -187,12 +196,14 @@ function createWindowBrowserPreviews(
 function createMenu(): void {
   const template = createApplicationMenuTemplate({
     productName,
+    windows: menuWindowList(),
     newWindow: () => {
       void createWindow().catch((error) =>
         console.error("[Desktop] Failed to create a new window:", error),
       );
     },
     closeTab: () => emitToFocusedWindow("menu-close-tab", undefined),
+    selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -255,6 +266,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         });
         lastFocusedWindowId = webContentsId;
         registered = true;
+        createMenu();
         createdWindow.on("page-title-updated", (event) => {
           event.preventDefault();
           setConnectionTitle(createdWindow, scope);
@@ -267,6 +279,7 @@ async function createWindow(connectionId?: string): Promise<void> {
         });
         createdWindow.on("focus", () => {
           lastFocusedWindowId = webContentsId;
+          createMenu();
         });
         createdWindow.once("closed", () => {
           windowContexts.get(webContentsId)?.browserPreviewManager.destroyAll();
@@ -276,6 +289,7 @@ async function createWindow(connectionId?: string): Promise<void> {
           if (lastFocusedWindowId === webContentsId) {
             lastFocusedWindowId = windowContexts.keys().next().value ?? null;
           }
+          createMenu();
         });
       },
     });

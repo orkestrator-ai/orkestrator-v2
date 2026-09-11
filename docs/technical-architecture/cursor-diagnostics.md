@@ -34,12 +34,12 @@ review or consolidation therefore fails despite the helper being available.
 workspace prewarm API before the first *unsandboxed* host attach. Concurrent
 attaches await the same initialization. The temporary executor has no settings
 sources or MCP servers, dispatches no turn, and releases its lease. Container
-sessions skip it; their outer sandbox remains the boundary. A `provider`
-(sandbox-enabled) host session skips it too: its own preparation already
-constructs the sandbox-enabled executor that registers `cursorsandbox`, so the
-probe would only repeat the workspace scan that is the dominant cost of the
-first attach on a large checkout. Only `none` has to be primed, because that is
-the preparation whose sandbox-support read can cache the negative verdict.
+sessions skip it; their outer sandbox remains the boundary. A sandbox-enabled
+host preparation skips it too: its own options construct the executor that
+registers `cursorsandbox`, so the probe would only repeat the workspace scan
+that is the dominant cost of the first attach on a large checkout. The options,
+not the policy label, control this exemption; any unsandboxed host preparation
+is primed because its sandbox-support read can cache the negative verdict.
 Unsupported hosts still admit normal unsandboxed sessions, while read-only
 sessions retain their sandbox requirement and closed tool allowlist.
 

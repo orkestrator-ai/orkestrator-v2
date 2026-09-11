@@ -332,6 +332,9 @@ describe("ensureAgent", () => {
     expect(prewarmOptions).toHaveLength(1);
     const { name: _name, ...createdOptions } = created[0]!;
     expect(prewarmOptions[0]).toEqual(createdOptions);
+    expect(prewarmOptions[0]).toMatchObject({
+      local: { sandboxOptions: { enabled: true } },
+    });
     expect(state.workspaceWarmRelease).toBeFunction();
     // The session's own warm-up is sandbox-enabled and registers the helper,
     // so no probe precedes it. Probing anyway would repeat the workspace scan,
@@ -366,6 +369,36 @@ describe("ensureAgent", () => {
       },
     ]);
     expect(prewarmOptions).toHaveLength(1);
+
+    await detachAgent(state);
+    expect(warmWorkspaceReleases).toBe(1);
+    expect(state.workspaceWarmRelease).toBeUndefined();
+  });
+
+  test("a provider attach leaves the barrier available for a later unsandboxed attach", async () => {
+    const providerState = newSessionState();
+    const unsandboxedState = newSessionState(undefined, {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: false,
+      networkAccess: "full",
+    });
+
+    await ensureAgent(providerState);
+    expect(prewarmOptions[0]).toMatchObject({
+      local: { sandboxOptions: { enabled: true } },
+    });
+    expect(sandboxBootstrapOptions).toEqual([]);
+
+    await ensureAgent(unsandboxedState);
+    expect(prewarmOptions[1]).toMatchObject({
+      local: { sandboxOptions: { enabled: false } },
+    });
+    expect(sandboxBootstrapOptions).toHaveLength(1);
+
+    await Promise.all([detachAgent(providerState), detachAgent(unsandboxedState)]);
+    expect(warmWorkspaceReleases).toBe(2);
   });
 
   test("continues attaching when the optional workspace warm-up fails", async () => {

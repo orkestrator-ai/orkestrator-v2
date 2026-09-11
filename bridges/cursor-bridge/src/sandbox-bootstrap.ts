@@ -69,13 +69,14 @@ export function createCursorSandboxBootstrap(
     sandboxBoundary: "none" | "provider" | "container",
   ): Promise<void> => {
     // Containers already have a boundary; probing a nested sandbox is wrong.
-    // A sandbox-enabled preparation constructs the sandbox-enabled executor
-    // that registers `cursorsandbox`, so a `provider` session needs no probe
-    // either: probing first would only repeat the workspace scan immediately
-    // before the session's own warm-up repeats it. Only an unsandboxed
-    // preparation can ask for sandbox support before the helper is registered
-    // and cache the negative verdict, so only `none` has to be primed.
-    if (sandboxBoundary !== "none") return Promise.resolve();
+    // Any sandbox-enabled preparation constructs the executor that registers
+    // `cursorsandbox`, so probing first would only repeat its workspace scan.
+    // Trust the options that the SDK will actually receive rather than the
+    // policy label: a contradictory `provider` label with sandboxing disabled
+    // must still prime before that unsandboxed preparation can cache `false`.
+    if (sandboxBoundary === "container" || options.local?.sandboxOptions?.enabled === true) {
+      return Promise.resolve();
+    }
     // The SDK skips sandbox initialization entirely without an API key.
     if (!options.apiKey) return Promise.resolve();
     if (initialized) return initialized;

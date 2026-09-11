@@ -10,6 +10,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
+import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
 import {
@@ -111,6 +112,21 @@ describe("backend prompt display contract", () => {
     expect(displayed).toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix);
     expect(displayed).not.toContain("Producer-owned finding");
     expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker);
+  });
+
+  test("filters the replacement Fix-session prompt without leaking report evidence", () => {
+    const source = `${addressPrompt(report)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
+    const presentation = userPromptPresentation(source);
+
+    expect(presentation.evidencePayload).toBeNull();
+    expect(presentation.displayText).toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
+    );
+    expect(presentation.displayText).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+    expect(presentation.displayText).not.toContain("Producer-owned finding");
+    expect(presentation.displayText).not.toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker,
+    );
   });
 
   test("renders evidence from the exact custom-fix prompt producer", () => {

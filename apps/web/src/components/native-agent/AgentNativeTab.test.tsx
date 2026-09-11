@@ -1245,32 +1245,6 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByTestId("unassigned-native-compose-bar") === null).toBe(true);
   });
 
-  test("a coordinator platform caveat is shown beside the picker", async () => {
-    seedUnassignedDefaultCatalog();
-    useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
-      agentSettings: { defaultAgent: "claude" },
-    });
-    useEnvironmentStore.setState({ environments: [] });
-
-    render(
-      <AgentNativeTab
-        tabId="coordinator-tab-note"
-        data={{ environmentId: "coordinator:workspace-1:conversation-4", isLocal: true }}
-        isActive
-        executionPolicy="coordinator-read-only"
-        coordinatorProjectId="project-1"
-        onAssignPlatform={mock(async () => undefined)}
-        availablePlatforms={["claude", "codex"]}
-        platformNotes={{ claude: "Claude's command sandbox is unavailable on this host." }}
-      />,
-    );
-
-    expect((await screen.findByTestId("unassigned-platform-note")).textContent).toContain(
-      "command sandbox is unavailable",
-    );
-  });
-
   test("unassigned composer adopts the environment default agent and model", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({

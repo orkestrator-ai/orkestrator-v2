@@ -45,8 +45,6 @@ export interface AgentNativeTabProps {
   ) => Promise<void>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */
   availablePlatforms?: readonly AgentPlatform[];
-  /** Per-platform caveats shown beside the unassigned composer's picker. */
-  platformNotes?: Partial<Record<AgentPlatform, string>>;
   unassignedPlaceholder?: string;
   emptyPlatformsMessage?: string;
   /** Open the shared resume dialog as soon as the controller mounts. */

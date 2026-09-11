@@ -3909,6 +3909,236 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
   });
 
+  test("keeps the authentication banner reachable when an empty created tab re-enters connecting", async () => {
+    // The establishment overlay replaces the whole pane, including the pinned
+    // accessory row, so a background refresh over an empty transcript must not
+    // swallow the one control that recovers the tab. The banner has no message
+    // to protect, but it is actionable content and so counts as establishment.
+    render(
+      <AgentNativeTab tabId="tab-new-cursor-auth-reconnect" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      readiness: {
+        state: "authentication-required" as const,
+        message:
+          "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
+      },
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    expect(await screen.findByText(/Cursor is not signed in/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Cursor Agent settings" })).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("keeps a pending question reachable when an empty created tab re-enters connecting", async () => {
+    // A question with no transcript row is still a blocking prompt. Hiding it
+    // behind the connecting logo would make the turn unreachable while the
+    // background refresh completes.
+    renderVirtualizedMessages = true;
+    render(
+      <AgentNativeTab
+        tabId="tab-new-cursor-question-reconnect"
+        data={freshTab("cursor")}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      interactions: [pendingInteraction("question", "question-1")],
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    expect(await screen.findByTestId("agent-question-card")).toBeTruthy();
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("returns to the composer when an empty created tab reconnects", async () => {
+    // Establishment is derived from live content, not a latch, so the wait it
+    // shows must be escapable: a connect that settles has to hand the composer
+    // back rather than leaving the tab stuck on the logo.
+    render(
+      <AgentNativeTab tabId="tab-new-cursor-empty-recover" data={freshTab("cursor")} isActive />,
+    );
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
+
+    getNativeAgentProjectionMock.mockImplementation(defaultProjection);
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 2,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("falls back to the establishment wait once a created tab's transcript is cleared", async () => {
+    // A new provider identity clears the projection along with the transcript
+    // it described, so the next connect is establishment again. hasEstablished
+    // Session is deliberately not monotonic for a created tab: keeping the
+    // refresh layout here would shimmer over an empty pane that has no session
+    // behind it yet.
+    renderVirtualizedMessages = true;
+    render(<AgentNativeTab tabId="tab-new-cursor-cleared" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    const existingRow = {
+      id: "cursor-assistant-cleared",
+      role: "assistant" as const,
+      content: "Cleared later",
+      parts: [{ type: "text" as const, content: "Cleared later" }],
+      createdAt: "2026-09-09T00:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      messages: [existingRow],
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+    await waitFor(() => expect(screen.getByText("Cleared later")).toBeTruthy());
+
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      sessionId: "cursor-session-2",
+      connection: "connecting" as const,
+      messages: [],
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 2,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
+  });
+
+  test("treats a client-synthesised turn-stop row as content on an empty created tab", async () => {
+    // `messages` carries rows this tab synthesised, not only provider echoes.
+    // A tab whose sole row is the stop marker is still showing something the
+    // user acted on, so a background connect must not replace it with the
+    // establishment logo.
+    renderVirtualizedMessages = true;
+    const tabId = "tab-new-cursor-synthetic";
+    render(<AgentNativeTab tabId={tabId} data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    act(() => {
+      useNativeAgentProjectionStore
+        .getState()
+        .markTurnStopped(createSessionKey("env-1", tabId), "cursor-session");
+    });
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("Query stopped by user.")).toBeTruthy());
+    expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
+  });
+
+  test("stays on the connecting logo after retrying a failed empty read on a fresh created tab", async () => {
+    // A fresh created tab has no session id to resume, so its retry is
+    // establishment rather than refresh. It must not fall back to session
+    // refresh copy that names a session which does not exist yet.
+    getNativeAgentProjectionMock.mockImplementation(async () => null as never);
+    render(<AgentNativeTab tabId="tab-new-cursor-retry" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+
+    let settleRead: ((value: unknown) => void) | undefined;
+    getNativeAgentProjectionMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settleRead = resolve;
+        }) as never,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
+
+    await act(async () => {
+      settleRead!(await defaultProjection({ agent: "cursor", environmentId: "env-1" }));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    });
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+  });
+
   test("keeps refresh copy on a created tab that has connected once with a transcript", async () => {
     // Once the created tab has produced conversation there is a transcript to
     // protect, so a subsequent connect is a refresh and keeps it reachable.

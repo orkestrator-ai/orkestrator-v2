@@ -31,12 +31,17 @@ before the helper is registered and never invalidates it. A subsequent read-only
 review or consolidation therefore fails despite the helper being available.
 
 `sandbox-bootstrap.ts` initializes sandbox discovery through the SDK's public
-workspace prewarm API before the first host attach. Concurrent attaches await
-the same initialization. The temporary executor has no settings sources or MCP
-servers, dispatches no turn, and releases its lease. Container sessions skip it;
-their outer sandbox remains the boundary. Unsupported hosts still admit normal
-unsandboxed sessions, while read-only sessions retain their sandbox requirement
-and closed tool allowlist.
+workspace prewarm API before the first *unsandboxed* host attach. Concurrent
+attaches await the same initialization. The temporary executor has no settings
+sources or MCP servers, dispatches no turn, and releases its lease. Container
+sessions skip it; their outer sandbox remains the boundary. A sandbox-enabled
+host preparation skips it too: its own options construct the executor that
+registers `cursorsandbox`, so the probe would only repeat the workspace scan
+that is the dominant cost of the first attach on a large checkout. The options,
+not the policy label, control this exemption; any unsandboxed host preparation
+is primed because its sandbox-support read can cache the negative verdict.
+Unsupported hosts still admit normal unsandboxed sessions, while read-only
+sessions retain their sandbox requirement and closed tool allowlist.
 
 The barrier is settled by a probe that reached a lease, or by the SDK's
 "sandboxing is not supported in this environment" verdict, which is final. Any

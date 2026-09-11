@@ -23,6 +23,11 @@ const probeOptions = {
   },
 };
 
+const sandboxedHostOptions: AgentOptions = {
+  ...hostOptions,
+  local: { ...hostOptions.local, sandboxOptions: { enabled: true } },
+};
+
 /** The SDK's wording; the classifier keys on it, so the fake must use it too. */
 const unsupported = () =>
   new Error(
@@ -143,11 +148,11 @@ test("an unsupported host is settled by one probe and keeps its sessions unchang
   };
   const bootstrap = createCursorSandboxBootstrap((error) => reported.push(error));
   const readOnly: AgentOptions = {
-    ...hostOptions,
-    local: { ...hostOptions.local, sandboxOptions: { enabled: true } },
+    ...sandboxedHostOptions,
     tools: ["read"],
   };
 
+  await bootstrap(platform, hostOptions, "none");
   await bootstrap(platform, hostOptions, "none");
   await bootstrap(platform, readOnly, "provider");
 
@@ -244,4 +249,59 @@ test("container sessions skip the nested sandbox without consuming a later host 
   expect(calls).toBe(0);
   await bootstrap(platform, hostOptions, "none");
   expect(calls).toBe(1);
+});
+
+test("a sandbox-enabled host preparation skips the probe it would repeat", async () => {
+  let calls = 0;
+  const platform = {
+    async prewarmLocalWorkspace() {
+      calls += 1;
+      return async () => {};
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap();
+
+  // The session's own preparation is sandbox-enabled, so it constructs the
+  // sandbox-enabled executor that registers the helper. Probing first would
+  // pay the workspace scan twice on the first attach, which is the dominant
+  // cost on a large checkout. The barrier stays unset, so an unsandboxed run
+  // later still primes before its own preparation can cache a verdict.
+  await bootstrap(platform, sandboxedHostOptions, "provider");
+  expect(calls).toBe(0);
+  await bootstrap(platform, hostOptions, "none");
+  expect(calls).toBe(1);
+});
+
+test("a provider label with sandboxing disabled still primes discovery", async () => {
+  let calls = 0;
+  const platform = {
+    async prewarmLocalWorkspace(options: AgentOptions) {
+      calls += 1;
+      expect(options).toEqual(probeOptions);
+      return async () => {};
+    },
+  };
+  const bootstrap = createCursorSandboxBootstrap();
+
+  await bootstrap(platform, hostOptions, "provider");
+  expect(calls).toBe(1);
+});
+
+test("a provider preparation registers the helper before later unsandboxed work", async () => {
+  const { platform, calls, askSupported, releases } = poisonablePlatform();
+  const bootstrap = createCursorSandboxBootstrap();
+
+  await bootstrap(platform, sandboxedHostOptions, "provider");
+  expect(calls).toEqual([]);
+
+  const providerPreparation = await platform.prewarmLocalWorkspace(sandboxedHostOptions);
+  await providerPreparation();
+  const unsandboxedPreparation = await platform.prewarmLocalWorkspace(hostOptions);
+  await unsandboxedPreparation();
+  const reviewPreparation = await platform.prewarmLocalWorkspace(sandboxedHostOptions);
+  await reviewPreparation();
+
+  expect(askSupported()).toBe(true);
+  expect(calls).toEqual([sandboxedHostOptions, hostOptions, sandboxedHostOptions]);
+  expect(releases()).toBe(3);
 });

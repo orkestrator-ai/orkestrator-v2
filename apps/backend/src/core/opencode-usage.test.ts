@@ -62,4 +62,42 @@ describe("openCodeContextUsage", () => {
       modelId: "openai/gpt-5",
     });
   });
+
+  test("derives updatedAt from the transcript so unchanged reads are byte-stable", () => {
+    const messages = [
+      {
+        info: {
+          id: "assistant-1",
+          role: "assistant",
+          providerID: "anthropic",
+          modelID: "claude-sonnet",
+          tokens: { input: 7, output: 3, cache: { read: 1, write: 0 } },
+          time: { created: 1_000, completed: 1_500 },
+        },
+        parts: [],
+      },
+    ];
+
+    const first = openCodeContextUsage(messages);
+    const second = openCodeContextUsage(messages);
+
+    expect(first?.updatedAt).toBe(new Date(1_500).toISOString());
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  test("omits updatedAt when the transcript carries no usable timestamp", () => {
+    const usage = openCodeContextUsage([
+      {
+        info: {
+          id: "assistant-1",
+          role: "assistant",
+          tokens: { input: 7, output: 3 },
+        },
+        parts: [],
+      },
+    ]);
+
+    expect(usage).toMatchObject({ usedTokens: 10, source: "opencode" });
+    expect(usage?.updatedAt).toBeUndefined();
+  });
 });

@@ -18,6 +18,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
+import { openCodeContextUsage } from "./opencode-usage.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
 // room to observe that the provider returned an extra entry.
@@ -68,8 +69,18 @@ export function openCodeSessionStateSnapshot(input: {
   policy?: NativeAgentExecutionPolicy;
   runtime: NativeAgentRuntimeSummary;
   notices: NativeAgentNotice[];
+  /**
+   * The provider's cached transcript.
+   *
+   * Usage is derived from it here because the progressive state read is what
+   * the renderer applies on every turn boundary: usage omitted from it would
+   * drop the panel's counters even though the full projection reported them.
+   * Every HTTP bridge reports usage on its state read for the same reason.
+   */
+  messages?: readonly unknown[];
 }): ProviderSessionStateSnapshot {
   const streamedError = input.notices.find((notice) => notice.kind === "error");
+  const contextUsage = openCodeContextUsage(input.messages ?? []);
   return {
     status: streamedError ? "error" : input.status,
     providerRevision: input.revision,
@@ -77,6 +88,7 @@ export function openCodeSessionStateSnapshot(input: {
     ...(input.policy ? { policy: input.policy } : {}),
     ...(Object.keys(input.runtime).length > 0 ? { runtime: input.runtime } : {}),
     ...(input.notices.length > 0 ? { notices: input.notices } : {}),
+    ...(contextUsage ? { contextUsage } : {}),
     ...(streamedError
       ? { phase: "error", error: streamedError.message }
       : {

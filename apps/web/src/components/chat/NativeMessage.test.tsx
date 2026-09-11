@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -21,6 +21,10 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../../../../tests/mocks/sonner";
 
+import {
+  restoreMessageShellLongPressDelayForTests,
+  setMessageShellLongPressDelayForTests,
+} from "./MessageShell";
 import { NativeMessage } from "./NativeMessage";
 import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
 
@@ -622,7 +626,12 @@ describe("NativeMessage Claude authentication recovery", () => {
 });
 
 describe("NativeMessage task list rendering", () => {
+  beforeEach(() => {
+    setMessageShellLongPressDelayForTests(15);
+  });
+
   afterEach(() => {
+    restoreMessageShellLongPressDelayForTests();
     cleanup();
     // Thinking expansion outlives unmount by design, so clear it between tests.
     useMessagePartExpansionStore.getState().reset();
@@ -829,7 +838,7 @@ describe("NativeMessage task list rendering", () => {
       clientX: 20,
       clientY: 20,
     });
-    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
     fireEvent.pointerUp(prompt, {
       pointerType: "touch",
       isPrimary: true,
@@ -878,7 +887,7 @@ describe("NativeMessage task list rendering", () => {
       clientX: 20,
       clientY: 20,
     });
-    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
     fireEvent.pointerUp(prompt, {
       pointerType: "touch",
       isPrimary: true,
@@ -909,7 +918,7 @@ describe("NativeMessage task list rendering", () => {
       clientX: 20,
       clientY: 20,
     });
-    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    await new Promise((resolve) => window.setTimeout(resolve, 30));
     fireEvent.pointerUp(prompt, {
       pointerType: "touch",
       isPrimary: true,
@@ -949,7 +958,7 @@ describe("NativeMessage task list rendering", () => {
         clientX: 20,
         clientY: 20,
       });
-      await new Promise((resolve) => window.setTimeout(resolve, 550));
+      await new Promise((resolve) => window.setTimeout(resolve, 30));
       fireEvent.pointerUp(prompt, {
         pointerType: "touch",
         isPrimary: true,

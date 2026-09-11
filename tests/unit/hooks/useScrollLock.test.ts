@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, jest } from "bun:test";
 import { renderHook, act } from "@testing-library/react";
 import { useScrollLock, clearPersistedScrollState } from "@/hooks/useScrollLock";
 import { createRef, type RefObject } from "react";
@@ -424,37 +424,41 @@ describe("useScrollLock", () => {
     });
 
     test("safety timeout clears stale guard after 2 seconds", async () => {
-      const { ref, viewport } = createMockScrollContainer();
-      setScrollPosition(viewport, 500, 1000, 500);
+      jest.useFakeTimers();
+      try {
+        const { ref, viewport } = createMockScrollContainer();
+        setScrollPosition(viewport, 500, 1000, 500);
 
-      const { result } = renderHook(() => useScrollLock(ref));
+        const { result } = renderHook(() => useScrollLock(ref));
 
-      act(() => {
-        result.current.scrollToBottom();
-      });
+        act(() => {
+          result.current.scrollToBottom();
+        });
 
-      // Simulate intermediate scroll that never reaches bottom
-      act(() => {
-        setScrollPosition(viewport, 300, 1000, 500);
-        fireScroll(viewport);
-      });
+        // Simulate intermediate scroll that never reaches bottom
+        act(() => {
+          setScrollPosition(viewport, 300, 1000, 500);
+          fireScroll(viewport);
+        });
 
-      // Guard is still active, scroll lock is not reset
-      expect(result.current.isScrollLocked).toBe(true);
+        // Guard is still active, scroll lock is not reset
+        expect(result.current.isScrollLocked).toBe(true);
 
-      // Wait for the safety timeout (2 seconds)
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 2100));
-      });
+        act(() => {
+          jest.advanceTimersByTime(2100);
+        });
 
-      // Now a scroll event should be handled normally
-      act(() => {
-        setScrollPosition(viewport, 100, 1000, 500);
-        fireScroll(viewport);
-      });
+        // Now a scroll event should be handled normally
+        act(() => {
+          setScrollPosition(viewport, 100, 1000, 500);
+          fireScroll(viewport);
+        });
 
-      expect(result.current.isScrollLocked).toBe(false);
-      expect(result.current.isAtBottom).toBe(false);
+        expect(result.current.isScrollLocked).toBe(false);
+        expect(result.current.isAtBottom).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     test("repeated scrollToBottom resets the safety timer", () => {

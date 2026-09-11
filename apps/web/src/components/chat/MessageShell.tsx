@@ -30,6 +30,15 @@ interface MessageShellProps {
 
 const LONG_PRESS_DELAY_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+let longPressDelayMs = LONG_PRESS_DELAY_MS;
+
+export function setMessageShellLongPressDelayForTests(delayMs: number): void {
+  longPressDelayMs = delayMs;
+}
+
+export function restoreMessageShellLongPressDelayForTests(): void {
+  longPressDelayMs = LONG_PRESS_DELAY_MS;
+}
 
 export function MessageShell({
   isUser,
@@ -82,7 +91,7 @@ export function MessageShell({
       longPressTimerRef.current = window.setTimeout(() => {
         longPressTimerRef.current = null;
         longPressReadyRef.current = true;
-      }, LONG_PRESS_DELAY_MS);
+      }, longPressDelayMs);
     },
     [cancelLongPress, onUserLongPress],
   );

@@ -10,7 +10,6 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MANUAL_REFRESH_TIMEOUT_MS,
   MultiReviewReviewerTab,
-  REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
 } from "./MultiReviewReviewerTab";
 
@@ -603,6 +602,7 @@ describe("MultiReviewReviewerTab", () => {
         }}
         isActive
         loadTranscript={loadTranscript}
+        refreshIntervalMs={40}
       />,
     );
 
@@ -612,7 +612,7 @@ describe("MultiReviewReviewerTab", () => {
 
     // A gone workflow must tear the poll down: no transcript request may fire
     // during a full interval period after the error is shown.
-    await new Promise((resolve) => setTimeout(resolve, REFRESH_INTERVAL_MS + 500));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     expect(calls).toBe(callsAtSettlement);
   });
 });

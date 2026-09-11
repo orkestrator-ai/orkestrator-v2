@@ -255,6 +255,7 @@ async function withService(
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     abortGraceMs?: number;
+    launchReconcileIntervalMs?: number;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -300,6 +301,9 @@ async function withService(
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
+    ...(setup.launchReconcileIntervalMs === undefined
+      ? {}
+      : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
   });
   try {
     await run({ storage, service });
@@ -1245,6 +1249,7 @@ describe("NativeAgentService", () => {
     await withService(
       {
         prefix: "orkestrator-native-launch-timer-body-",
+        launchReconcileIntervalMs: 40,
       },
       async ({ service }) => {
         const internal = service as unknown as {
@@ -1256,7 +1261,7 @@ describe("NativeAgentService", () => {
         internal.reconcilePendingLaunches = launches;
         internal.drainPromptQueues = drains;
         await service.init();
-        await Bun.sleep(2_100);
+        await Bun.sleep(120);
         expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(drains.mock.calls.length).toBeGreaterThanOrEqual(2);
       },

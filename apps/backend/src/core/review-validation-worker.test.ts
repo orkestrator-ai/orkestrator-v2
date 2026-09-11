@@ -97,6 +97,16 @@ async function completed(root: string, run: ReviewValidationRun) {
   expect(["planned", "running"]).not.toContain(next.status);
   return next;
 }
+async function waitUntilQueued(root: string, run: ReviewValidationRun) {
+  const deadline = Date.now() + 3000;
+  let next = await control(root, run, "status");
+  while (next.results[0]!.status !== "queued" && Date.now() < deadline) {
+    await Bun.sleep(20);
+    next = await control(root, run, "status");
+  }
+  expect(next.results[0]!.status).toBe("queued");
+  return next;
+}
 async function waitFor(
   root: string,
   run: ReviewValidationRun,
@@ -194,7 +204,7 @@ test("changed source before or during validation invalidates the snapshot", asyn
 });
 
 test("cancellation terminates children and a cancelled launch cannot start commands", async () => {
-  const { root, run } = await fixture([command("slow", "sleep 10; touch .orkestrator/unexpected")]);
+  const { root, run } = await fixture([command("slow", "sleep 2; touch .orkestrator/unexpected")]);
   await control(root, run);
   const cancelled = await control(root, run, "cancel");
   expect(cancelled.status).toBe("cancelled");
@@ -206,7 +216,7 @@ test("cancellation terminates children and a cancelled launch cannot start comma
 
 test("timeout and output overflow become incomplete evidence, never assertion failures", async () => {
   const { root, run } = await fixture([
-    command("timeout", "sleep 20", { timeoutMs: 1000 }),
+    command("timeout", "sleep 2", { timeoutMs: 1000 }),
     command("overflow", "head -c 34000000 /dev/zero"),
   ]);
   const result = await completed(root, run);
@@ -260,7 +270,8 @@ test("host queue survives reconnect, excludes wait from timeout, and cancels wit
   });
   try {
     await control(root, run);
-    await Bun.sleep(1300);
+    await waitUntilQueued(root, run);
+    await Bun.sleep(1050);
     const waiting = await control(root, run, "status");
     expect(waiting.results[0]!.status).toBe("queued");
     expect(waiting.results[0]!.startedAt).toBeUndefined();
@@ -408,7 +419,8 @@ admission.close(); process.exitCode = result.status ?? 1;
   });
   try {
     await control(root, run);
-    await Bun.sleep(1500);
+    await waitUntilQueued(root, run);
+    await Bun.sleep(1050);
     const waiting = await control(root, run, "status");
     expect(waiting.results[0]!.status).toBe("queued");
     scheduler.release(ticket);
@@ -540,7 +552,7 @@ process.exit(0);
 
 test("review validation queues across worktrees and rehydrates hashed artifacts", async () => {
   const first = await fixture([
-    command("first", "sleep 8; printf first-output", { timeoutMs: 20000 }),
+    command("first", "sleep 2; printf first-output", { timeoutMs: 20000 }),
   ]);
   const second = await fixture([command("second", "printf second-output")]);
   const schedulerDirectory = await mkdtemp(path.join(tmpdir(), "review-shared-scheduler-"));
@@ -595,24 +607,24 @@ test("review validation queues across worktrees and rehydrates hashed artifacts"
   }
 }, 30000);
 
-test("a cooperative startup slower than ten seconds is not mistaken for a stalled runner", async () => {
+test("a cooperative startup slower than the stall threshold is not mistaken for a stalled runner", async () => {
   const { root, run } = await cooperativeFixture(
     [
       command("slow-start", "bun slow-cooperative.ts", {
         weight: 1,
-        timeoutMs: 30000,
+        timeoutMs: 8000,
         resources: ["slow-startup"],
       }),
     ],
     {
       "slow-cooperative.ts": `import { createTestAdmission } from __MODULE__;
-await Bun.sleep(11000);
+await Bun.sleep(1200);
 const admission = createTestAdmission(import.meta.dir, process.env, console.log);
 const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1 }, async () => ({ status: 0 }));
 admission.close(); process.exitCode = result.status ?? 1;
 `,
     },
   );
-  const done = await waitFor(root, run, 25000, { ORKESTRATOR_COOPERATIVE_STARTUP_MS: "30000" });
+  const done = await waitFor(root, run, 8000, { ORKESTRATOR_COOPERATIVE_STARTUP_MS: "3000" });
   expect(done.results[0]!.status).toBe("passed");
-}, 30000);
+}, 15000);

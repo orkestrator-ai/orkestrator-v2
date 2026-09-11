@@ -211,7 +211,7 @@ test("separate runners queue without starting children and cancellation removes 
     duplicateStarted = true;
     return { status: 0 };
   });
-  await Bun.sleep(150);
+  await Bun.sleep(20);
   expect(duplicateStarted).toBe(false);
   b.cancel();
   expect(await pending).toMatchObject({ status: 75, infrastructureError: true });
@@ -324,9 +324,9 @@ test("admission queue time excludes runner setup and idle gaps", async () => {
     () => {},
   );
   const group = { name: "timing", command: "unused", args: [], exclusive: true };
-  await Bun.sleep(350); // setup before the first group
+  await Bun.sleep(40); // setup before the first group
   await admission.run(group, async () => ({ status: 0 }));
-  await Bun.sleep(350); // idle gap between groups
+  await Bun.sleep(40); // idle gap between groups
   await admission.run(group, async () => ({ status: 0 }));
   admission.close();
   const value = JSON.parse(readFileSync(channel, "utf8")) as { queuedMs: number };

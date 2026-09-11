@@ -3878,13 +3878,15 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
 
-  test("keeps refresh copy on a created tab that has already connected once", async () => {
-    // A tab that was created rather than resumed carries no session id in its
-    // pane data, so nothing in the props tells its second connect apart from
-    // its first. Having reached `connected` is the only evidence that there is
-    // a conversation behind this one; without it a background refresh would
-    // render as the establishment wait and hide the transcript it already has.
-    render(<AgentNativeTab tabId="tab-new-cursor-reconnect" data={freshTab("cursor")} isActive />);
+  test("shows the connecting logo on a created tab that connected once but is still empty", async () => {
+    // A brand-new tab passes through `connected` before its first prompt. A
+    // background refresh in that window reads as connecting, and with no
+    // transcript the tab has nothing to protect: shimmering over a composer
+    // that invites a message the session cannot accept is the wrong answer, so
+    // it waits on the pulsing logo instead.
+    render(
+      <AgentNativeTab tabId="tab-new-cursor-empty-reconnect" data={freshTab("cursor")} isActive />,
+    );
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
 
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
@@ -3902,9 +3904,45 @@ describe("AgentNativeTab", () => {
       });
     });
 
+    await waitFor(() => expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy());
+    expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    expect(screen.queryByTestId("shared-native-compose-bar") === null).toBe(true);
+  });
+
+  test("keeps refresh copy on a created tab that has connected once with a transcript", async () => {
+    // Once the created tab has produced conversation there is a transcript to
+    // protect, so a subsequent connect is a refresh and keeps it reachable.
+    // Nothing in the props tells this reconnect apart from the first one, which
+    // is why the loaded transcript is what carries the distinction.
+    renderVirtualizedMessages = true;
+    render(<AgentNativeTab tabId="tab-new-cursor-reconnect" data={freshTab("cursor")} isActive />);
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+
+    const existingRow = {
+      id: "cursor-assistant-1",
+      role: "assistant" as const,
+      content: "Already answered",
+      parts: [{ type: "text" as const, content: "Already answered" }],
+      createdAt: "2026-09-09T00:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      messages: [existingRow],
+    }));
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "native-agent-session",
+        id: "env-1",
+        revision: 1,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
+    });
+
     await waitFor(() => expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy());
-    // A refresh keeps the conversation reachable. Falling back to the
-    // connecting screen here would take the composer away mid-session.
+    expect(screen.getByText("Already answered")).toBeTruthy();
     expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });

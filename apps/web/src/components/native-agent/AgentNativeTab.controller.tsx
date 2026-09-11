@@ -1688,13 +1688,16 @@ export function SharedNativeAgentController({
   }, [connectionState]);
   /*
    * A tab has a session behind it once it was asked to resume one, or once it
-   * has connected at least once — the created id lands in `data.sessionId`
-   * only after the fact, so the ref is what covers a tab for the rest of its
-   * mount. Anything before that is first-time creation, which is a wait to
-   * show rather than a conversation to refresh.
+   * has connected and actually produced conversation. The created id lands in
+   * `data.sessionId` only after the fact, so the ref is what covers a tab for
+   * the rest of its mount — but a tab that connected and is still empty has
+   * nothing to refresh, and its next connect must stay an establishment wait.
+   * A resumed tab is different: its transcript may simply not have loaded yet,
+   * so it is treated as established before any message arrives.
    */
   const hasEstablishedSession =
-    Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current;
+    Boolean(requestedResumeSessionIdRef.current) ||
+    (hasConnectedSessionRef.current && messages.length > 0);
   if (setupPending) {
     return (
       <SetupPendingOverlay

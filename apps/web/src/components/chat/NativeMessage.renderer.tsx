@@ -1,6 +1,6 @@
-import { useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { isEditTool } from "@/lib/tool-names";
-import { imageReadFromToolPart } from "@/lib/chat/image-read";
+import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
@@ -133,6 +133,48 @@ export function DeferredToolMessagePart({
       eagerImagePreview={eagerImagePreview}
       suppressImageReadPreview={suppressImageReadPreview}
     />
+  );
+}
+
+/**
+ * A recovered image preview that removes itself when the bytes cannot be read.
+ *
+ * `canLoadImagePreview` rejects what is knowably unreadable before anything
+ * mounts, but on the host it cannot be exact: the renderer does not know the
+ * worktree root the backend confines reads to, and it cannot know that a path
+ * component is a symbolic link or that the file has since been deleted. This
+ * preview was synthesized from a path argument rather than reported by the
+ * transcript, so the honest answer to a failed load is to show nothing and
+ * leave the tool row to speak for the call.
+ */
+function ImageReadPreview({
+  imageRead,
+  containerId,
+  children,
+}: {
+  imageRead: ImageRead;
+  containerId?: string;
+  children: ReactNode;
+}) {
+  const [unavailable, setUnavailable] = useState(false);
+  const handleUnavailable = useCallback(() => setUnavailable(true), []);
+
+  if (unavailable) return <>{children}</>;
+  return (
+    <div className="space-y-1">
+      {children}
+      <ImagePart
+        part={{
+          type: "image",
+          content: imageRead.path,
+          fileUrl: imageRead.fileUrl,
+          filename: imageRead.filename,
+          imageSource: "viewed",
+        }}
+        containerId={containerId}
+        onUnavailable={handleUnavailable}
+      />
+    </div>
   );
 }
 
@@ -279,19 +321,9 @@ export function MessagePart({
         return toolCard;
       }
       return (
-        <div className="space-y-1">
+        <ImageReadPreview imageRead={imageRead} containerId={containerId} key={imageRead.path}>
           {toolCard}
-          <ImagePart
-            part={{
-              type: "image",
-              content: imageRead.path,
-              fileUrl: imageRead.fileUrl,
-              filename: imageRead.filename,
-              imageSource: "viewed",
-            }}
-            containerId={containerId}
-          />
-        </div>
+        </ImageReadPreview>
       );
     case "tool-result":
       // Tool results are typically shown inline with tool invocations

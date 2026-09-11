@@ -21,6 +21,8 @@ import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import {
   imagePreviewCacheKey,
+  isImagePreviewUnavailable,
+  markImagePreviewUnavailable,
   readImagePreviewCache,
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
@@ -159,11 +161,15 @@ function getSafeContainerRelativePath(path: string): string | null {
 }
 
 /**
- * Whether `FilePart` can resolve an image reference in the current execution
- * environment without falling immediately into its unavailable state.
+ * Whether a reference is worth mounting a synthesized preview for at all.
  *
- * Keep synthesized Read previews behind this check: unlike a first-class file
- * row, they add no useful surface when the path cannot be opened.
+ * A cheap pre-filter, not a guarantee. Inside a container it is exact, because
+ * it runs the same containment the loader will. On the host it can only see
+ * that the path is absolute: the renderer does not know the worktree root, and
+ * the backend confines `read_file_base64` to it and refuses to traverse a
+ * symbolic link, so an absolute path can still turn out to be unreadable. The
+ * authoritative answer arrives with the load, which is why the caller also
+ * passes `onLoadUnavailable` and drops the preview when it fires.
  */
 export function canLoadImagePreview(
   path: string,
@@ -189,6 +195,7 @@ export function FilePart({
   eagerPreview = false,
   detailRef,
   alwaysImage = false,
+  onLoadUnavailable,
 }: {
   path: string;
   fileUrl?: string;
@@ -208,6 +215,16 @@ export function FilePart({
    * the filename-extension heuristic must not decide for it.
    */
   alwaysImage?: boolean;
+  /**
+   * The bytes could not be resolved, so the owner should stop showing this row.
+   *
+   * Supplied only by a preview the renderer synthesized rather than one the
+   * transcript reported. A first-class file row still names a real reference
+   * when its bytes are out of reach and keeps its "preview unavailable" badge;
+   * a recovered one has nothing left to say, so the badge is suppressed and the
+   * owner unmounts the row instead.
+   */
+  onLoadUnavailable?: () => void;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl, detailRef);
@@ -216,6 +233,17 @@ export function FilePart({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
+  // Held in a ref rather than closed over: putting the callback in `loadImage`'s
+  // dependencies would rebuild it whenever the owner re-rendered, and the eager
+  // effect keyed on that identity would then retry a read that has already
+  // failed, on every render.
+  const onLoadUnavailableRef = useRef(onLoadUnavailable);
+  useEffect(() => {
+    onLoadUnavailableRef.current = onLoadUnavailable;
+  }, [onLoadUnavailable]);
+  // A primitive so the eager effect's dependencies stay stable even when the
+  // owner hands over a fresh callback.
+  const ownerDropsUnreadable = Boolean(onLoadUnavailable);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
   const isImage = alwaysImage || isImageReference(fileUrl) || isImageReference(path);
@@ -289,6 +317,13 @@ export function FilePart({
           fileUrl,
         });
         setLoadError(true);
+        if (onLoadUnavailableRef.current) {
+          // Remembered only for an owner that drops the row. A first-class file
+          // row keeps its badge and stays retryable, which is the behaviour a
+          // user clicking it again expects.
+          markImagePreviewUnavailable(cacheKey);
+          onLoadUnavailableRef.current();
+        }
         return null;
       }
     })();
@@ -304,6 +339,12 @@ export function FilePart({
 
   useEffect(() => {
     if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;
+    // This exact reference already failed while the transcript was scrolled
+    // past. Report it straight back rather than re-issuing the read.
+    if (ownerDropsUnreadable && isImagePreviewUnavailable(cacheKey)) {
+      onLoadUnavailableRef.current?.();
+      return;
+    }
     let cancelled = false;
 
     void loadImage().then((source) => {
@@ -313,7 +354,7 @@ export function FilePart({
     return () => {
       cancelled = true;
     };
-  }, [eagerPreview, fileUrl, imageSrc, isImage, loadImage]);
+  }, [cacheKey, eagerPreview, fileUrl, imageSrc, isImage, loadImage, ownerDropsUnreadable]);
 
   const handleClick = useCallback(async () => {
     if (!isImage) return;
@@ -377,7 +418,7 @@ export function FilePart({
           {displayName}
         </span>
         {loading && !isImage && <span className="text-muted-foreground">(loading...)</span>}
-        {loadError && (
+        {loadError && !onLoadUnavailable && (
           <span
             className={cn(
               "text-destructive text-[10px]",

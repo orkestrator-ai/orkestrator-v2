@@ -609,6 +609,142 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).not.toHaveBeenCalled();
   });
 
+  test("drops a recovered preview whose host read the backend refuses", async () => {
+    // `read_file_base64` is confined to the worktree base directory and will
+    // not traverse a symbolic link, so an absolute path is not proof of a
+    // readable file. The tool row must be what survives, not a red badge.
+    mockReadFileBase64.mockImplementation(async () => {
+      throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
+    });
+    const message: NativeMessageType = {
+      id: "msg-host-image-read-outside-worktree",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/tmp/outside.png" },
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    await waitFor(() => {
+      expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/outside.png");
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Image read") === null).toBe(true);
+    });
+    expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
+    expect(screen.queryByLabelText(/Open full image/) === null).toBe(true);
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    // The call itself is still reported; only the picture went away.
+    expect(screen.getAllByText("Read").length > 0).toBe(true);
+  });
+
+  test("does not re-read a recovered preview that already failed once", async () => {
+    // The transcript is virtualized, so this row remounts every time the user
+    // scrolls past it. Repeating a refused read on each pass is pure waste.
+    mockReadFileBase64.mockImplementation(async () => {
+      throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
+    });
+    const message: NativeMessageType = {
+      id: "msg-host-image-read-retry",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/tmp/outside-twice.png" },
+        },
+      ],
+    };
+
+    const first = render(<NativeMessage message={message} />);
+    await waitFor(() => {
+      expect(screen.queryByText("Image read") === null).toBe(true);
+    });
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    render(<NativeMessage message={message} />);
+    await waitFor(() => {
+      expect(screen.queryByText("Image read") === null).toBe(true);
+    });
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a first-class image row visible when its bytes cannot be read", async () => {
+    // The counterpart to the case above: a transcript that reported the image
+    // still names a real reference, so it keeps its row and its badge.
+    mockReadFileBase64.mockImplementation(async () => {
+      throw new Error("Invalid file path: file is outside Orkestrator workspace storage");
+    });
+    const message: NativeMessageType = {
+      id: "msg-first-class-image-unreadable",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "image",
+          content: "/tmp/reported.png",
+          filename: "reported.png",
+          fileUrl: "file:///tmp/reported.png",
+          imageSource: "viewed",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(await screen.findByText("preview unavailable")).toBeTruthy();
+    expect(screen.getByText("Image read")).toBeTruthy();
+  });
+
+  test("does not fetch a remote image read until the user opens it", async () => {
+    const remote = "https://example.test/screens/remote.png";
+    const message: NativeMessageType = {
+      id: "msg-remote-image-read",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: remote },
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const tile = await screen.findByLabelText("Open full image: remote.png");
+    // A model-supplied URL is a request to a host the user did not choose, so
+    // nothing is fetched while the row merely sits in the transcript.
+    expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+
+    fireEvent.click(tile);
+
+    const overlay = await screen.findByRole("dialog");
+    expect(overlay.getAttribute("aria-label")).toBe("Image preview: remote.png");
+    expect(screen.getByAltText("remote.png").getAttribute("src")).toBe(remote);
+  });
+
   test("opens local image previews and closes the overlay with Escape", async () => {
     const message: NativeMessageType = {
       id: "msg-local-file-preview",

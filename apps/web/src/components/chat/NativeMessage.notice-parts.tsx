@@ -173,9 +173,17 @@ const IMAGE_SOURCE_LABELS = {
 export function ImagePart({
   part,
   containerId,
+  onUnavailable,
 }: {
   part: Extract<NativeMessagePart, { type: "image" }>;
   containerId?: string;
+  /**
+   * The bytes turned out to be unreadable, so the owner should drop this row.
+   *
+   * Only a synthesized preview passes this. A transcript that reported the
+   * image keeps its caption and provenance label either way.
+   */
+  onUnavailable?: () => void;
 }) {
   const source = part.imageSource ?? "attachment";
   const caption = part.content.trim();
@@ -197,6 +205,7 @@ export function ImagePart({
         filename={part.filename}
         containerId={containerId}
         alwaysImage={hasBytes}
+        onLoadUnavailable={onUnavailable}
         // Provenance is the reason to show it at all, so it loads without a
         // click — unlike a generic file row, which may be one of many.
         eagerPreview

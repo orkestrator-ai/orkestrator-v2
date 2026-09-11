@@ -17,6 +17,7 @@ import {
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
 import { PEER_MAIL_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
+import { toolUseIdFromImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import {
   AgentPlatformContext,
   AsyncQuestionResponseContext,
@@ -337,8 +338,8 @@ function firstClassImageToolUseIds(parts: readonly NativeMessagePart[]): Readonl
   const result = new Set<string>();
   for (const part of parts) {
     if (part.type !== "image" || part.imageSource !== "viewed") continue;
-    const match = part.sourcePartId?.match(/^image:(.+):\d+$/);
-    if (match?.[1]) result.add(match[1]);
+    const toolUseId = toolUseIdFromImagePartId(part.sourcePartId);
+    if (toolUseId) result.add(toolUseId);
   }
   return result;
 }

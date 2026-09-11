@@ -45,7 +45,10 @@ export function imageReadFromToolPart(part: {
   toolTitle?: string;
   toolState?: string;
 }): ImageRead | null {
-  if (!isReadTool(part.toolName) || part.toolState === "pending" || part.toolState === "failure") {
+  // An allowlist, not a denylist: a transcript whose stored state could not be
+  // recognised arrives here as `undefined`, and a read whose outcome is unknown
+  // must not open the file behind the user's back.
+  if (!isReadTool(part.toolName) || part.toolState !== "success") {
     return null;
   }
 

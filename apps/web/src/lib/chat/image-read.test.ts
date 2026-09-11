@@ -40,12 +40,14 @@ describe("imageReadFromToolPart", () => {
     expect(
       imageReadFromToolPart({
         toolName: "ReadFile",
+        toolState: "success",
         toolArgs: { filePath: "assets/c.webp" },
       }),
     ).toEqual({ path: "assets/c.webp", filename: "c.webp", fileUrl: "assets/c.webp" });
     expect(
       imageReadFromToolPart({
         toolName: "cursor_read",
+        toolState: "success",
         toolTitle: "/workspace/d.gif",
       }),
     ).toEqual({ path: "/workspace/d.gif", filename: "d.gif", fileUrl: "/workspace/d.gif" });
@@ -55,6 +57,7 @@ describe("imageReadFromToolPart", () => {
     expect(
       imageReadFromToolPart({
         toolName: "Read",
+        toolState: "success",
         toolTitle: "Read screenshot.png",
       }),
     ).toBeNull();
@@ -105,6 +108,25 @@ describe("imageReadFromToolPart", () => {
     ).toBeNull();
   });
 
+  test("treats an unknown tool state as unsettled rather than as success", () => {
+    // `asToolState` in the build-pipeline transcript and the OpenCode mapper
+    // both yield `undefined` when the stored state is absent or unrecognised.
+    // Reading the file anyway would preview a call whose outcome nobody knows.
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolArgs: { file_path: "/workspace/a.png" },
+      }),
+    ).toBeNull();
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolState: "cancelled",
+        toolArgs: { file_path: "/workspace/a.png" },
+      }),
+    ).toBeNull();
+  });
+
   test("ignores writes, searches, failed reads and non-image files", () => {
     expect(
       imageReadFromToolPart({
@@ -116,12 +138,14 @@ describe("imageReadFromToolPart", () => {
     expect(
       imageReadFromToolPart({
         toolName: "Grep",
+        toolState: "success",
         toolArgs: { path: "/workspace/a.png", pattern: "x" },
       }),
     ).toBeNull();
     expect(
       imageReadFromToolPart({
         toolName: "readLints",
+        toolState: "success",
         toolArgs: { paths: ["/workspace/a.png"] },
       }),
     ).toBeNull();
@@ -135,6 +159,7 @@ describe("imageReadFromToolPart", () => {
     expect(
       imageReadFromToolPart({
         toolName: "Read",
+        toolState: "success",
         toolArgs: { file_path: "/workspace/a.ts" },
       }),
     ).toBeNull();

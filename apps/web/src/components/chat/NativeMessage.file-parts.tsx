@@ -184,7 +184,7 @@ export function FilePart({
   alwaysImage?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
-  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl);
+  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl, detailRef);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);

@@ -679,6 +679,15 @@ describe("NativeAgentService", () => {
             imageSource: "attachment",
             fileUrl: `data:image/png;base64,${"b".repeat(5_000_000)}`,
           },
+          {
+            // OpenCode's normalizer falls back to `part.url` for `content` when
+            // there is no filename, so a data-URL attachment can carry the whole
+            // payload twice. The display name must not be a multi-megabyte URL.
+            type: "image",
+            content: "data:image/png;base64,url-only-caption",
+            imageSource: "attachment",
+            fileUrl: "data:image/png;base64,url-only-caption",
+          },
         ],
         createdAt: "2026-08-15T10:00:00.000Z",
       },
@@ -746,6 +755,25 @@ describe("NativeAgentService", () => {
         });
         expect(projected[0]?.parts[3]?.fileUrl).toBeUndefined();
         expect(projected[0]?.parts[3]?.detailRef).toBeString();
+        // The 5 MB image is above the 4 MiB tool cap but below the image cap, so
+        // it must still resolve to its bytes rather than a cache-limit error.
+        const hugeImageDetails = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: projected[0]?.parts[3]?.detailRef as string,
+        });
+        expect(hugeImageDetails.fileDataUrl).toStartWith("data:image/png;base64,bbbb");
+        // A `content` that is itself the data URL is replaced with a short label;
+        // otherwise the renderer's display name is the payload.
+        expect(projected[0]?.parts[4]?.fileUrl).toBeUndefined();
+        expect(projected[0]?.parts[4]?.content).toBe("image");
+        expect(projected[0]?.parts[4]?.detailRef).toBeString();
+        const urlOnlyDetails = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: projected[0]?.parts[4]?.detailRef as string,
+        });
+        expect(urlOnlyDetails).toMatchObject({
+          fileDataUrl: "data:image/png;base64,url-only-caption",
+        });
         const tool = projected[1]?.parts[0];
         expect(tool?.toolOutput).toBeUndefined();
         expect(tool?.toolDiff).toEqual({

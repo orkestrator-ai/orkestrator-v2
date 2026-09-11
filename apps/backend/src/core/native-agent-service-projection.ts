@@ -506,6 +506,18 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           NATIVE_FILE_DETAIL_MAX_BYTES,
         );
       }
+      /*
+       * OpenCode falls back to the part's `url` for `content` when it has no
+       * filename, so a data-URL attachment arrives with its bytes duplicated in
+       * both `content` and `fileUrl`. Moving `fileUrl` behind a reference is not
+       * enough: the live copy would still carry the whole payload and the
+       * renderer's display name would be a multi-megabyte string. Substitute a
+       * short label whenever `content` is itself the data URL.
+       */
+      if (content.startsWith("data:")) {
+        const filename = typeof part.filename === "string" ? part.filename.trim() : "";
+        projected.content = filename || (part.type === "image" ? "image" : "Attached file");
+      }
     }
 
     const rawDiff =

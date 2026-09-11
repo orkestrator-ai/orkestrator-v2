@@ -2906,6 +2906,106 @@ describe("NativeMessage task list rendering", () => {
     expect(thumbnail.src).toBe("data:image/png;base64,iVBORw0KGgo=");
   });
 
+  test("reports a deferred image as unavailable when its loader rejects", async () => {
+    const loadToolDetails = mock(async () => {
+      throw new Error("Native agent tool details are no longer available");
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "image",
+            content: "clipboard.png",
+            filename: "clipboard.png",
+            imageSource: "attachment",
+            detailRef: "detail-image-missing",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-image-missing"));
+    expect(await screen.findByText("preview unavailable")).toBeTruthy();
+  });
+
+  test("reports a deferred image as unavailable when the resolved detail has no bytes", async () => {
+    // The backend stores an error stub when a payload exceeds the detail cache,
+    // so a resolved reference can legitimately carry no `fileDataUrl`.
+    const loadToolDetails = mock(async (detailRef: string) => ({ detailRef }));
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "image",
+            content: "clipboard.png",
+            filename: "clipboard.png",
+            imageSource: "attachment",
+            detailRef: "detail-image-empty",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    expect(await screen.findByText("preview unavailable")).toBeTruthy();
+  });
+
+  test("reports a deferred image as unavailable without a detail loader", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "image",
+            content: "clipboard.png",
+            filename: "clipboard.png",
+            imageSource: "attachment",
+            detailRef: "detail-image-no-loader",
+          },
+        ])}
+      />,
+    );
+
+    return waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
+  });
+
+  test("renders a caption-only image as a quiet row rather than a broken thumbnail", () => {
+    // Codex reports an image with no path when the item carries no bytes.
+    // Forcing the image treatment would immediately fail its eager load.
+    render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "image", content: "a generated cat", imageSource: "generated" },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("a generated cat")).toBeTruthy();
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
+  });
+
+  test("does not treat a deferred file reference as an image", () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({ detailRef }));
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "file",
+            content: "report.txt",
+            filename: "report.txt",
+            detailRef: "detail-file-1",
+          },
+        ])}
+        loadToolDetails={loadToolDetails}
+      />,
+    );
+
+    expect(screen.getByText("report.txt")).toBeTruthy();
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(loadToolDetails).not.toHaveBeenCalled();
+  });
+
   test("renders only the user text and image when an initial prompt includes path boilerplate", async () => {
     const rawContent =
       "Make the profile match\n\n" +

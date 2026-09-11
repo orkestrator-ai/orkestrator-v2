@@ -7,6 +7,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { nativeAsyncQuestionRequestId } from "@orkestrator/protocol/native-agent";
 
 import {
+  NATIVE_FILE_DETAIL_MAX_BYTES,
   NATIVE_PROJECTION_MAX_BYTES,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
@@ -731,6 +732,104 @@ describe("NativeAgentService transcript projection", () => {
           await service.getProjectionToolDetails({ ...identity, detailRef: detailRef! }),
         ).toMatchObject({ toolOutput: "recovered after eviction" });
         expect(snapshots).toBeGreaterThan(snapshotsBefore);
+      },
+    );
+  });
+
+  test("re-reads the provider when a deferred image detail was evicted", async () => {
+    // A pasted attachment has no readable path, so its bytes live only behind
+    // the detail reference. If the bounded cache drops that entry, opening the
+    // image again must rebuild it from the provider rather than report the
+    // picture as lost.
+    const messages = [
+      {
+        id: "assistant-image",
+        role: "assistant" as const,
+        content: "done",
+        parts: [
+          {
+            type: "image",
+            content: "clipboard.png",
+            filename: "clipboard.png",
+            imageSource: "attachment" as const,
+            fileUrl: "data:image/png;base64,deferred-image-bytes",
+          },
+        ],
+        createdAt: "2026-08-15T10:00:00.000Z",
+      },
+    ];
+    let snapshots = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => {
+        snapshots += 1;
+        return { status: "idle", messages };
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-image-detail-eviction-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-image-eviction",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        const detailRef = (projection!.messages[0] as { parts: Array<{ detailRef?: string }> })
+          .parts[0]?.detailRef;
+        expect(detailRef).toBeString();
+
+        // Simulate capacity eviction of exactly this entry.
+        (
+          service as unknown as {
+            toolDetailCache: Map<string, unknown>;
+            toolDetailCacheBytes: number;
+          }
+        ).toolDetailCache.clear();
+        (service as unknown as { toolDetailCacheBytes: number }).toolDetailCacheBytes = 0;
+        const snapshotsBefore = snapshots;
+
+        expect(
+          await service.getProjectionToolDetails({ ...identity, detailRef: detailRef! }),
+        ).toMatchObject({ fileDataUrl: "data:image/png;base64,deferred-image-bytes" });
+        expect(snapshots).toBeGreaterThan(snapshotsBefore);
+      },
+    );
+  });
+
+  test("keeps an image inline when it is too large to defer", async () => {
+    // Above the detail ceiling there is nowhere to move the bytes, so the inline
+    // copy is kept rather than deferring to a cache-limit error stub.
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-image-over-ceiling-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const inlineFileUrl = `data:image/png;base64,${"c".repeat(NATIVE_FILE_DETAIL_MAX_BYTES)}`;
+        const projected = (
+          service as unknown as {
+            projectionPart(
+              sessionKey: string,
+              messageId: string,
+              raw: unknown,
+              partPath: string,
+            ): Record<string, unknown>;
+          }
+        ).projectionPart(
+          "session",
+          "message",
+          { type: "image", content: "enormous.png", fileUrl: inlineFileUrl },
+          "0",
+        );
+        expect(projected.fileUrl).toBe(inlineFileUrl);
+        expect(projected.detailRef).toBeUndefined();
       },
     );
   });

@@ -70,6 +70,15 @@ export const ToolDetailLoaderContext = createContext<
 >(undefined);
 const TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES = 256;
 const TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+/**
+ * A single detail larger than this is served to the caller but never retained.
+ *
+ * The backend admits an image detail up to `NATIVE_FILE_DETAIL_MAX_BYTES` (16
+ * MiB), so two of them would fill the whole 32 MiB budget and evict every cached
+ * tool output, forcing a refetch of each on the next expand. Refusing to hold
+ * one oversized payload keeps the small entries that share the cache.
+ */
+const TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
 const toolDetailBrowserCache = new Map<
   string,
   {
@@ -90,8 +99,14 @@ export function cachedToolDetails(detailRef: string): NativeAgentToolDetails | u
 export function cacheToolDetails(details: NativeAgentToolDetails): void {
   const bytes = new TextEncoder().encode(JSON.stringify(details)).byteLength;
   const previous = toolDetailBrowserCache.get(details.detailRef);
-  if (previous) toolDetailBrowserCacheBytes -= previous.bytes;
-  toolDetailBrowserCache.delete(details.detailRef);
+  if (previous) {
+    toolDetailBrowserCacheBytes -= previous.bytes;
+    toolDetailBrowserCache.delete(details.detailRef);
+  }
+  // An oversized payload is not retained: holding it would evict every other
+  // cached detail to make room, and the caller already has the value it just
+  // read, so only the next expand pays for a refetch.
+  if (bytes > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRY_BYTES) return;
   toolDetailBrowserCache.set(details.detailRef, { details, bytes });
   toolDetailBrowserCacheBytes += bytes;
   while (

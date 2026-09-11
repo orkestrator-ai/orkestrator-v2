@@ -1245,10 +1245,10 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByTestId("unassigned-native-compose-bar") === null).toBe(true);
   });
 
-  test("a coordinator platform caveat is shown beside the picker", async () => {
+  test("a coordinator platform caveat is shown inside the picker", async () => {
     seedUnassignedDefaultCatalog();
     useConfigStore.getState().updateGlobalConfig({
-      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      enabledAgentPlatforms: ["claude", "codex"],
       agentSettings: { defaultAgent: "claude" },
     });
     useEnvironmentStore.setState({ environments: [] });
@@ -1266,9 +1266,13 @@ describe("AgentNativeTab", () => {
       />,
     );
 
-    expect((await screen.findByTestId("unassigned-platform-note")).textContent).toContain(
+    fireEvent.pointerDown(await screen.findByTitle(/Choose model/));
+    expect(document.querySelector("[data-native-platform-caveat='claude']")?.textContent).toContain(
       "command sandbox is unavailable",
     );
+    // The caveat moved into the picker; the old paragraph beside the composer
+    // must not return.
+    expect(screen.queryByTestId("unassigned-platform-note") === null).toBe(true);
   });
 
   test("unassigned composer adopts the environment default agent and model", async () => {

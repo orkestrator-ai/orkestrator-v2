@@ -306,7 +306,7 @@ describe("CoordinatorPanel", () => {
     );
   });
 
-  test("a caveat on an available platform reaches the composer, an unavailable one does not", async () => {
+  test("a caveat on an available platform reaches the picker, an unavailable one does not", async () => {
     ensuredSnapshot = {
       ...snapshot,
       workspace: {

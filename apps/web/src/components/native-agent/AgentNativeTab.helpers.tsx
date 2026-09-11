@@ -367,7 +367,10 @@ export function UnassignedNativeAgentComposer({
   projectId?: string;
   /** Narrows the offered platforms further, e.g. to those a coordinator qualifies. */
   platformFilter?: readonly AgentPlatform[];
-  /** Per-platform caveat shown beside the picker, such as a weaker sandbox. */
+  /**
+   * Per-platform caveat shown inside the picker, such as a weaker read-only
+   * boundary or a mailbox that cannot deliver a worker's reply.
+   */
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
@@ -428,7 +431,6 @@ export function UnassignedNativeAgentComposer({
     platform,
   );
   const selectedAdapter = findNativeAgentAdapter(platform);
-  const platformNote = platformNotes?.[platform];
   // A draft with no explicit choice follows the stored platform default, then
   // Normal. OpenCode has no toggle, so this stays false there.
   const effectiveFastMode = hasDraft ? draft.fastMode : (configured.fastMode ?? false);
@@ -798,6 +800,7 @@ export function UnassignedNativeAgentComposer({
                 models={models}
                 favorites={favorites}
                 enabledPlatforms={enabledPlatforms}
+                platformNotes={platformNotes}
                 selectedPlatform={platform}
                 onPlatformChange={(next) => {
                   // The picker announces the platform on every model choice, not
@@ -936,17 +939,6 @@ export function UnassignedNativeAgentComposer({
           sendTitle="Start agent"
           onSend={send}
         />
-        {platformNote ? (
-          // Beside the picker rather than in a dialog: this is the difference
-          // between a boundary the platform enforces and one it merely applies,
-          // and it has to be readable at the moment the platform is chosen.
-          <p
-            data-testid="unassigned-platform-note"
-            className="mx-auto mt-2 max-w-xl text-center text-xs text-amber-300/90"
-          >
-            {platformNote}
-          </p>
-        ) : null}
       </NativeComposeDock>
       {onResume ? (
         <NativeAgentResumePlatformDialog

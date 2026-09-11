@@ -163,7 +163,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   );
   // Only the caveats that come with an *available* platform. A reason attached
   // to one the user cannot pick is an explanation of an absence, and belongs
-  // nowhere near the picker.
+  // nowhere near the picker. These are shown inside the model picker, so the
+  // limitation is readable at the moment the platform is chosen — including a
+  // mailbox that cannot deliver a worker's reply, and a read-only boundary
+  // nothing outside the agent verifies.
   const platformNotes = useMemo(() => {
     const notes: Partial<Record<AgentPlatform, string>> = {};
     for (const platform of availablePlatforms) {

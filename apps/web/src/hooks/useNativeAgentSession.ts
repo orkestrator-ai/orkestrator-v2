@@ -2040,6 +2040,11 @@ export function useNativeAgentSession<TMessage = unknown>({
         return {
           outcome: "unknown",
           requestId,
+          // The RPC itself failed, so the backend never opened its at-most-once
+          // window and no recoverable record can exist for this request id.
+          // Marking it lets the renderer surface the failure instead of leaving
+          // the optimistic prompt looking delivered with no feedback at all.
+          origin: "transport",
           error: error instanceof Error ? error.message : String(error),
         };
       } finally {

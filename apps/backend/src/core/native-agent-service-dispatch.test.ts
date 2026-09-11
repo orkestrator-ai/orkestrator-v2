@@ -511,6 +511,56 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("only turns a parked dispatch into a recovery choice after the reconcile grace", async () => {
+    let now = Date.parse("2026-09-11T10:00:00.000Z");
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      // The provider cannot prove the prompt landed, so the record stays parked.
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-grace-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service }) => {
+        const base = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-grace",
+          prompt: "Do the work",
+        };
+        await expect(service.dispatchIntent({ ...base, requestId: "grace-1" })).resolves.toEqual({
+          outcome: "unknown",
+          requestId: "grace-1",
+          error: "Response was lost",
+        });
+
+        // The user just submitted, so the card must not be actionable yet: the
+        // backend may still confirm this against the provider on a later read.
+        await expect(service.getProjection(base)).resolves.toMatchObject({
+          recoverableDispatch: {
+            requestId: "grace-1",
+            status: "reconciling",
+          },
+        });
+
+        // Once the window elapses the same parked record is a final failure and
+        // the only remaining ways out are retry or discard.
+        now += 15_000;
+        await expect(service.getProjection(base)).resolves.toMatchObject({
+          recoverableDispatch: {
+            requestId: "grace-1",
+            status: "action-required",
+          },
+        });
+      },
+    );
+  });
+
   test("owns steer identity, run pinning, parking, and exact recovery in the backend", async () => {
     let steerOutcome: "unknown" | "applied" = "unknown";
     const stub = createProviderStub("codex", {
@@ -562,6 +612,9 @@ describe("NativeAgentService", () => {
           recoverableDispatch: {
             requestId: pending!.requestId,
             kind: "steer",
+            // A steer never waits out the prompt reconcile grace, so the
+            // retry/discard choice is available on the first read.
+            status: "action-required",
           },
         });
         expect(stub.performSessionAction).toHaveBeenCalledTimes(1);

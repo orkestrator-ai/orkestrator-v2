@@ -1,6 +1,6 @@
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, LogIn, X } from "lucide-react";
+import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   nativeAsyncQuestionRequestId,
@@ -834,6 +834,22 @@ export function SharedNativeAgentController({
    * offers both ways out — instead of an error the user cannot act on.
    */
   const recoverableDispatch = projection?.recoverableDispatch;
+  /*
+   * A parked dispatch whose acknowledgement was lost is usually resolved by the
+   * backend confirming it against the provider's own journal moments later.
+   * Until that window elapses the record only keeps the composer locked; it is
+   * not yet a choice, and showing the retry/discard card here produced a banner
+   * that flashed and then vanished. `status` is absent on a backend that
+   * predates the field, where every record was already a decision.
+   */
+  const actionableDispatch =
+    recoverableDispatch && recoverableDispatch.status !== "reconciling"
+      ? recoverableDispatch
+      : undefined;
+  const reconcilingDispatch =
+    recoverableDispatch && recoverableDispatch.status === "reconciling"
+      ? recoverableDispatch
+      : undefined;
   const sendLocked =
     !projection ||
     !sessionStateAuthoritative ||
@@ -1067,13 +1083,16 @@ export function SharedNativeAgentController({
             toast.success(`Sent to the active ${label} turn`);
             return true;
           }
-          setSendError(
-            outcome.outcome === "unknown"
-              ? `Could not confirm whether ${label} received the steering text. Use the recovery card above to retry or discard it.`
-              : outcome.outcome === "mismatch"
+          // An unconfirmed steer is a parked dispatch like any other: the
+          // recovery card owns that message, so a transient red error here
+          // would duplicate it and flash before the card settles.
+          if (outcome.outcome !== "unknown") {
+            setSendError(
+              outcome.outcome === "mismatch"
                 ? "The turn moved on before the steering text was delivered."
                 : `${label} is no longer running a turn to steer.`,
-          );
+            );
+          }
         } catch (error) {
           setSendError(error instanceof Error ? error.message : String(error));
         } finally {
@@ -1091,7 +1110,9 @@ export function SharedNativeAgentController({
       // leave the user pressing Enter at a composer that never responds.
       if (recoverableDispatch) {
         setSendError(
-          "Resolve the unconfirmed message above — retry or discard it — before sending another.",
+          actionableDispatch
+            ? "Resolve the unconfirmed message above — retry or discard it — before sending another."
+            : `Waiting for ${label} to confirm your last message before sending another.`,
         );
         return false;
       }
@@ -1181,11 +1202,23 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         keepTranscriptConfirmation = outcome.outcome === "unknown";
-        setSendError(
-          outcome.outcome === "unknown"
-            ? "The connection dropped before dispatch was confirmed. The session is being reconciled; retrying uses the same request id."
-            : outcome.error,
-        );
+        /*
+         * A backend-reported unknown is a parked dispatch: the
+         * reconciling/action-required card is its single source of feedback, so
+         * a red error here would flash alongside it. A transport failure is
+         * different — the RPC failed before the backend persisted anything, so
+         * no card can arrive and the optimistic bubble must not stay looking
+         * delivered with no feedback.
+         */
+        const transportFailure = outcome.outcome === "unknown" && outcome.origin === "transport";
+        if (transportFailure) setOptimisticPrompt(null);
+        if (transportFailure) {
+          setSendError(
+            `The connection dropped before ${label} confirmed your last message. Retrying uses the same request id, so it cannot run twice.`,
+          );
+        } else if (outcome.outcome === "rejected") {
+          setSendError(outcome.error);
+        }
       } catch (error) {
         setOptimisticPrompt(null);
         setSendError(error instanceof Error ? error.message : String(error));
@@ -1236,6 +1269,7 @@ export function SharedNativeAgentController({
       projection?.sessionId,
       projection?.slashCommands,
       recoverableDispatch,
+      actionableDispatch,
       send,
       sendLocked,
       serializeForLLM,
@@ -1792,16 +1826,16 @@ export function SharedNativeAgentController({
     // premature and unactionable. Resolving the record is the exception: retry
     // and discard raise the dispatch flag themselves, and the card has to stay
     // on screen to show that the choice the user just made is running.
-    recoverableDispatch && (isResolvingDispatch || (!isDispatching && !isSubmitting)) ? (
+    actionableDispatch && (isResolvingDispatch || (!isDispatching && !isSubmitting)) ? (
       <div
         key="recoverable-dispatch"
         role="alert"
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
         <span>
-          {recoverableDispatch.kind === "steer"
-            ? `${label} has not confirmed delivery of the steering instruction. The backend is retaining its original identity and will not silently send a second copy. Until you choose, this session will not accept another instruction or message.`
-            : `${label} did not confirm your last message, so it may or may not have been received. Retrying sends it under the same request id, so it cannot run twice. Until you choose, this session will not accept a new message.`}
+          {actionableDispatch.kind === "steer"
+            ? `${label} could not confirm delivery of the steering instruction. Retry to resend it under the same request id, or discard it if it already ran.`
+            : `${label} could not confirm delivery of your last message. Retry to resend it under the same request id, or discard it if it already ran.`}
         </span>
         <div className="flex shrink-0 items-center gap-2">
           <Button
@@ -1815,8 +1849,8 @@ export function SharedNativeAgentController({
               void retryRecoverableDispatch()
                 .then((outcome) => {
                   if (outcome.outcome === "accepted") {
-                    if (recoverableDispatch.kind !== "steer") {
-                      clearConfirmedDraft(recoverableDispatch.requestId);
+                    if (actionableDispatch.kind !== "steer") {
+                      clearConfirmedDraft(actionableDispatch.requestId);
                     }
                     setSendError(null);
                     setOptimisticPrompt(null);
@@ -1832,7 +1866,7 @@ export function SharedNativeAgentController({
                 .finally(() => setIsResolvingDispatch(false));
             }}
           >
-            {recoverableDispatch.kind === "steer" ? "Retry steer" : "Retry send"}
+            {actionableDispatch.kind === "steer" ? "Retry steer" : "Retry send"}
           </Button>
           <Button
             type="button"
@@ -1856,6 +1890,15 @@ export function SharedNativeAgentController({
             Discard
           </Button>
         </div>
+      </div>
+    ) : reconcilingDispatch && !isDispatching && !isSubmitting ? (
+      <div
+        key="recoverable-dispatch-reconciling"
+        role="status"
+        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" />
+        <span>Confirming delivery with {label}…</span>
       </div>
     ) : null,
     sendError && !authenticationRequired ? (

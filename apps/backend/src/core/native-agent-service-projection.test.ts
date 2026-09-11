@@ -30,7 +30,10 @@ import {
   NATIVE_PROJECTION_CACHE_LIMIT,
   nativeAgentSessionStorageKey,
 } from "./native-agent-service.js";
-import { mergeContextUsageTurns } from "./native-agent-service-projection.js";
+import {
+  mergeContextUsageTurns,
+  withProviderContextWindow,
+} from "./native-agent-service-projection.js";
 
 describe("usage projection history", () => {
   test("merges sparse turn updates by id and retains only the newest twenty", () => {
@@ -62,6 +65,62 @@ describe("usage projection history", () => {
         { usedTokens: 12 },
       ),
     ).toEqual({ usedTokens: 12, turns: [{ turnId: "turn-1", outputTokens: 2 }] });
+  });
+
+  test("fills the context window a provider omitted", () => {
+    expect(withProviderContextWindow({ usedTokens: 50_000 }, 200_000)).toEqual({
+      usedTokens: 50_000,
+      maximumTokens: 200_000,
+      percentage: 25,
+    });
+  });
+
+  test("prefers a provider-reported maximum and percentage", () => {
+    expect(
+      withProviderContextWindow(
+        { usedTokens: 50_000, maximumTokens: 100_000, percentage: 12.5 },
+        200_000,
+      ),
+    ).toEqual({ usedTokens: 50_000, maximumTokens: 100_000, percentage: 12.5 });
+  });
+
+  test("leaves usage untouched without a model window", () => {
+    expect(withProviderContextWindow({ usedTokens: 50_000 }, undefined)).toEqual({
+      usedTokens: 50_000,
+    });
+    expect(withProviderContextWindow(undefined, 200_000)).toBeUndefined();
+  });
+
+  test("computes the percentage from a provider-reported maximum", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 50_000, maximumTokens: 100_000 }, 200_000),
+    ).toEqual({ usedTokens: 50_000, maximumTokens: 100_000, percentage: 50 });
+  });
+
+  test("does not divide by a provider-reported zero maximum", () => {
+    expect(withProviderContextWindow({ usedTokens: 50_000, maximumTokens: 0 }, undefined)).toEqual({
+      usedTokens: 50_000,
+      maximumTokens: 0,
+    });
+  });
+
+  test("falls back to the prior projection's window when the catalogue is cold", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 60_000 }, undefined, {
+        usedTokens: 50_000,
+        maximumTokens: 200_000,
+        percentage: 25,
+      }),
+    ).toEqual({ usedTokens: 60_000, maximumTokens: 200_000, percentage: 30 });
+  });
+
+  test("prefers a resolved window over the prior projection's", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 60_000 }, 300_000, {
+        usedTokens: 50_000,
+        maximumTokens: 200_000,
+      }),
+    ).toEqual({ usedTokens: 60_000, maximumTokens: 300_000, percentage: 20 });
   });
 
   test("projects fresh account usage without discarding transcript usage", async () => {

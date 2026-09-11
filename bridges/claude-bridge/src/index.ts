@@ -11,7 +11,11 @@ import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
 import { createRequestLogger } from "./services/logger.js";
-import { readClaudeAuthStatus, refreshClaudeCatalogs } from "./services/session-manager.js";
+import {
+  readClaudeAuthStatus,
+  readClaudePlanUsage,
+  refreshClaudeCatalogs,
+} from "./services/session-manager.js";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -159,6 +163,8 @@ app.use("/session/:id/transcript", compress({ encoding: "gzip" }));
  */
 app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
 app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
+/** Plan-allocation windows for the global settings pane; no session required. */
+app.get("/global/usage", async (c) => c.json({ account: await readClaudePlanUsage() }));
 app.post("/global/auth/login", (c) =>
   c.json({ error: "Open a Claude terminal tab and run /login." }, 405),
 );

@@ -14,6 +14,20 @@ describe("tool name helpers", () => {
     expect(isEditTool("Write")).toBe(true);
     expect(isEditTool("MultiEdit")).toBe(true);
     expect(isEditTool("STR_REPLACE_EDITOR")).toBe(true);
+    // The full shared set is pinned here so a later edit to FILE_EDIT_TOOL_NAMES
+    // cannot silently strip edit treatment from one of these tools.
+    for (const name of [
+      "file_edit",
+      "replace",
+      "create_file",
+      "patch",
+      "apply_patch",
+      "notebookedit",
+      "insert",
+    ]) {
+      expect(isEditTool(name)).toBe(true);
+      expect(isEditTool(name.toUpperCase())).toBe(true);
+    }
     expect(isEditTool("bash")).toBe(false);
     expect(isEditTool()).toBe(false);
   });

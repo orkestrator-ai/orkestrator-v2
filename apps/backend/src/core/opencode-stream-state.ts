@@ -97,6 +97,32 @@ export class OpenCodeStreamState {
     return state?.messagesCurrent && state.messages ? [...state.messages] : undefined;
   }
 
+  /**
+   * The last transcript known for a session, even after an SSE gap.
+   *
+   * `currentMessages` is deliberately undefined once a snapshot is stale so the
+   * transcript read cannot present an incomplete turn as authoritative. Usage,
+   * however, is derived from the tail and is better kept at its last known
+   * value than blanked: the panel losing its counters while a reconnect
+   * completes is a visible regression, while an under-reported total is
+   * corrected by the next authoritative read.
+   */
+  retainedMessages(sessionId: string): unknown[] | undefined {
+    const state = this.sessions.get(sessionId);
+    return state?.messages ? [...state.messages] : undefined;
+  }
+
+  /**
+   * The newest transcript tail a usage read can derive from.
+   *
+   * Current when the cache is authoritative, otherwise the last transcript seen
+   * before an SSE gap. A stale total is corrected by the next authoritative
+   * read, while a dropped one blanks the panel's counters until then.
+   */
+  usageMessages(sessionId: string): unknown[] {
+    return this.currentMessages(sessionId) ?? this.retainedMessages(sessionId) ?? [];
+  }
+
   revision(sessionId: string): number {
     return this.sessions.get(sessionId)?.revision ?? 0;
   }

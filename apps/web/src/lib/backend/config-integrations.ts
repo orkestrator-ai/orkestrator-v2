@@ -29,6 +29,8 @@ import type {
 } from "@/types/github";
 import type { CodexModel } from "@/lib/codex-client";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import type { PrDetectionResult } from "./projects-environments";
@@ -165,6 +167,21 @@ export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig>
 
 export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
   return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+}
+
+/** Read one platform's plan/quota windows from the backend. */
+export async function getPlanUsage(
+  platform: AgentPlatform,
+  options: { force?: boolean } = {},
+): Promise<PlanUsageSnapshot> {
+  return invoke<PlanUsageSnapshot>("get_plan_usage", {
+    platform,
+    ...(options.force ? { force: true } : {}),
+  });
+}
+
+export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
+  return invoke<AppConfig>("set_opencode_zen_api_key", { apiKey });
 }
 
 /**

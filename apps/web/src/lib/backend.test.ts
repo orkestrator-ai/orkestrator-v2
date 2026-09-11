@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "@/types";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -63,6 +64,8 @@ const {
   setGitHubToken,
   setAnthropicApiKey,
   setCursorApiKey,
+  setOpenCodeZenApiKey,
+  getPlanUsage,
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
@@ -1286,6 +1289,46 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_anthropic_api_key", { apiKey: "anthropic_replacement" }],
       ["set_anthropic_api_key", { apiKey: null }],
+    ]);
+  });
+
+  test("uses the write-only OpenCode Zen API key command for replacement and clearing", async () => {
+    const configured = {
+      version: "1.0",
+      global: { openCodeZenApiKeyConfigured: true },
+      repositories: {},
+    } as AppConfig;
+    const cleared = {
+      version: "1.0",
+      global: { openCodeZenApiKeyConfigured: false },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValueOnce(configured).mockResolvedValueOnce(cleared);
+
+    await expect(setOpenCodeZenApiKey("zen_replacement")).resolves.toBe(configured);
+    await expect(setOpenCodeZenApiKey(null)).resolves.toBe(cleared);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_opencode_zen_api_key", { apiKey: "zen_replacement" }],
+      ["set_opencode_zen_api_key", { apiKey: null }],
+    ]);
+  });
+
+  test("reads plan usage and forwards an explicit force flag only when refreshed", async () => {
+    const snapshot: PlanUsageSnapshot = {
+      platform: "opencode",
+      status: "ok",
+      windows: [],
+      fetchedAt: "2026-09-11T18:32:00.000Z",
+    };
+    invokeMock.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot);
+
+    await expect(getPlanUsage("opencode")).resolves.toBe(snapshot);
+    await expect(getPlanUsage("opencode", { force: true })).resolves.toBe(snapshot);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_plan_usage", { platform: "opencode" }],
+      ["get_plan_usage", { platform: "opencode", force: true }],
     ]);
   });
 

@@ -35,6 +35,7 @@ export function openCodeContextUsage(
         cacheWriteTokens,
         costUsd: number(info?.cost),
         durationMs: completed >= created ? completed - created : 0,
+        timestamp: completed > 0 ? completed : created > 0 ? created : undefined,
         ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
       },
     ];
@@ -117,7 +118,15 @@ export function openCodeContextUsage(
       ...(latestTurn.modelId ? { modelId: latestTurn.modelId } : {}),
       estimated: false,
       source: "opencode",
-      updatedAt: new Date().toISOString(),
+      // Derived from the transcript, never from the wall clock. A fresh
+      // timestamp on every read would give this object a new identity on each
+      // call, so the progressive state token — a hash of the whole state view —
+      // would keep changing for an unchanged session and force the renderer to
+      // apply a full snapshot on every poll. The latest turn's completion time
+      // is stable while the transcript is.
+      ...(latestTurn.timestamp === undefined
+        ? {}
+        : { updatedAt: new Date(latestTurn.timestamp).toISOString() }),
       ...(turns.length > 0 ? { turns } : {}),
     },
   );

@@ -992,6 +992,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       revision: this.streamState.revision(sessionId),
       ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       title: this.streamState.title(sessionId),
+      messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       policy: this.sessionPolicies.get(sessionId),
       runtime: this.streamState.runtime(sessionId),
       notices,
@@ -1000,10 +1001,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   private async projectedMessages(sessionId: string, limit: number): Promise<unknown[]> {
     const current = this.streamState.currentMessages(sessionId);
-    if (current) return [...boundedOpenCodeMessageHistory(current, { count: limit })];
+    if (current) return [...boundedOpenCodeMessageHistory(current.slice(-limit), { count: limit })];
     const messages = await this.readMessagesSnapshot(sessionId, limit);
     this.streamState.replaceMessages(sessionId, messages);
-    return [...boundedOpenCodeMessageHistory(messages, { count: limit })];
+    return [...boundedOpenCodeMessageHistory(messages.slice(-limit), { count: limit })];
   }
 
   private async projectedStatus(sessionId: string): Promise<ProviderStatus> {

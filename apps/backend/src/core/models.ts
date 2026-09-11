@@ -721,6 +721,8 @@ export interface AppConfig {
     anthropicApiKey?: string;
     /** Cursor API key forwarded to containerized Cursor Agent processes. */
     cursorApiKey?: string;
+    /** OpenCode Zen (Go) plan key, used to read plan usage in Settings. */
+    openCodeZenApiKey?: string;
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;

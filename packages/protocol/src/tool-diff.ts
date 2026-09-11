@@ -19,6 +19,15 @@ export interface ToolDiffSides {
 }
 
 /**
+ * OpenCode's completed edit/write payload: Claude-shaped input plus the
+ * provider's own `filediff` / `diff` metadata and, as a last resort, a
+ * path-like tool title.
+ */
+export interface OpenCodeToolDiff extends ToolDiffSides {
+  diff?: string;
+}
+
+/**
  * Count logical lines without allocating an array proportional to the payload.
  * A trailing newline terminates the final line; it does not create another one.
  */
@@ -65,6 +74,27 @@ const EDIT_LIKE_TOOLS = new Set(["edit", "file_edit", "str_replace_editor", "rep
 
 /** Tool names whose input carries whole-file content with no prior state. */
 const WRITE_LIKE_TOOLS = new Set(["write", "create_file"]);
+
+/**
+ * Every file-mutating tool name the OpenCode / Claude / Codex adapters render
+ * as an edit row. Kept here so the backend projection and the live renderer
+ * cannot disagree about which calls get a `toolDiff`.
+ */
+const FILE_EDIT_TOOL_NAMES = new Set([
+  ...EDIT_LIKE_TOOLS,
+  ...WRITE_LIKE_TOOLS,
+  "patch",
+  "apply_patch",
+  "multiedit",
+  "notebookedit",
+  "insert",
+]);
+
+/** True when `toolName` is a file-mutating tool after case folding. */
+export function isFileEditToolName(toolName?: string): boolean {
+  if (!toolName) return false;
+  return FILE_EDIT_TOOL_NAMES.has(toolName.toLowerCase());
+}
 
 function stringField(input: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
@@ -178,4 +208,206 @@ export function toolDiffFromToolInput(
   }
 
   return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function numberField(
+  record: Record<string, unknown> | undefined,
+  ...keys: string[]
+): number | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function nonEmptyStringField(
+  record: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/**
+ * OpenCode's `ctx.metadata({ metadata: { diff, filediff } })` can nest one
+ * extra `metadata` layer. Unwrap only when the outer object itself has none
+ * of the edit fields, so a real `{ metadata: { retries } }` sibling is left
+ * alone.
+ */
+function unwrapOpenCodeMetadata(value: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const nested = asRecord(record.metadata);
+  if (
+    nested &&
+    record.filediff === undefined &&
+    record.diff === undefined &&
+    record.filepath === undefined &&
+    record.file === undefined &&
+    record.filePath === undefined &&
+    record.path === undefined &&
+    record.additions === undefined &&
+    record.deletions === undefined &&
+    (nested.filediff !== undefined ||
+      nested.diff !== undefined ||
+      nested.filepath !== undefined ||
+      nested.file !== undefined ||
+      nested.patch !== undefined)
+  ) {
+    return nested;
+  }
+  return record;
+}
+
+/**
+ * OpenCode's edit/write title is `path.relative(worktree, filePath)`, so a
+ * real title is a path and contains no whitespace.
+ *
+ * A generic status string ("Edit applied successfully.") and a descriptive
+ * title ("Edit file.ts") both contain whitespace, and neither may become a
+ * file row. A trailing period is a sentence terminator rather than a filename.
+ *
+ * A relative path need not carry an extension: a root `Makefile`, `Dockerfile`
+ * or `LICENSE` has neither a separator nor a dotted suffix, so a bare
+ * filename-shaped token is accepted once the title is known not to be prose.
+ */
+function pathLikeTitle(title: string | undefined): string | undefined {
+  const trimmed = title?.trim();
+  if (!trimmed) return undefined;
+  if (/\s/.test(trimmed)) return undefined;
+  if (trimmed.endsWith(".")) return undefined;
+  if (/[\\/]/.test(trimmed)) return trimmed;
+  if (/\.[A-Za-z0-9]+$/.test(trimmed)) return trimmed;
+  if (/^[A-Za-z0-9_.-]+$/.test(trimmed)) return trimmed;
+  return undefined;
+}
+
+function countUnifiedDiffLines(diff: string): ToolLineChangeStats {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function outputLooksLikeUnifiedDiff(output: string): boolean {
+  return output.includes("@@") && (output.includes("\n+") || output.includes("\n-"));
+}
+
+/**
+ * Build the edit-row payload from an OpenCode tool part's input, metadata,
+ * title, and output.
+ *
+ * OpenCode 1.18+ stores the real change on `state.metadata.filediff`
+ * (`file` / `patch` / `additions` / `deletions`) and a one-line success
+ * string in `output`. The model input may still have `filePath` /
+ * `oldString` / `newString`; when it does not, the title is the relative
+ * path. Both the live renderer and the backend projection have to read
+ * this the same way, or the card shows "Unknown file".
+ */
+export function toolDiffFromOpenCodeToolState(args: {
+  toolName?: string;
+  input?: unknown;
+  metadata?: unknown;
+  title?: string;
+  output?: string;
+}): OpenCodeToolDiff | undefined {
+  if (!isFileEditToolName(args.toolName)) return undefined;
+
+  const input = asRecord(args.input) ?? {};
+  const meta = unwrapOpenCodeMetadata(args.metadata) ?? {};
+  const filediff = asRecord(meta.filediff);
+  const mappedSides = toolDiffFromToolInput(args.toolName, input);
+
+  const filePath =
+    nonEmptyStringField(input, "filePath", "file_path", "path", "file", "filepath") ??
+    nonEmptyStringField(meta, "file", "filePath", "filepath", "path") ??
+    nonEmptyStringField(filediff, "file", "filePath", "filepath", "path") ??
+    mappedSides?.filePath ??
+    pathLikeTitle(args.title);
+
+  const oldString = stringField(input, "oldString", "old_string");
+  const newString = stringField(input, "newString", "new_string", "content");
+  const metaBefore = stringField(filediff ?? {}, "before") ?? stringField(meta, "before");
+  const metaAfter = stringField(filediff ?? {}, "after") ?? stringField(meta, "after");
+  const unifiedDiff =
+    stringField(meta, "diff") ??
+    stringField(filediff ?? {}, "patch", "diff") ??
+    stringField(input, "patch", "diff");
+
+  // OpenCode-native sides win when present. Mapped Claude-shaped input
+  // (MultiEdit `edits[]`, Write `content`) fills the gap so those tools
+  // still get a before/after body and per-chunk counts.
+  const nativeBefore = oldString ?? metaBefore;
+  const nativeAfter = newString ?? metaAfter;
+  const usingMappedSides = nativeBefore === undefined && nativeAfter === undefined;
+  const before = usingMappedSides ? mappedSides?.before : nativeBefore;
+  const after = usingMappedSides ? mappedSides?.after : nativeAfter;
+
+  let additions: number | undefined;
+  let deletions: number | undefined;
+  const metaAdditions = numberField(meta, "additions");
+  const metaDeletions = numberField(meta, "deletions");
+  const filediffAdditions = numberField(filediff, "additions");
+  const filediffDeletions = numberField(filediff, "deletions");
+
+  if (metaAdditions !== undefined && metaDeletions !== undefined) {
+    additions = metaAdditions;
+    deletions = metaDeletions;
+  } else if (filediffAdditions !== undefined && filediffDeletions !== undefined) {
+    additions = filediffAdditions;
+    deletions = filediffDeletions;
+  } else if (unifiedDiff) {
+    ({ additions, deletions } = countUnifiedDiffLines(unifiedDiff));
+  } else if (args.output && outputLooksLikeUnifiedDiff(args.output)) {
+    const counted = countUnifiedDiffLines(args.output);
+    if (counted.additions > 0 || counted.deletions > 0) {
+      additions = counted.additions;
+      deletions = counted.deletions;
+    }
+  } else if (
+    usingMappedSides &&
+    (mappedSides?.additions !== undefined || mappedSides?.deletions !== undefined)
+  ) {
+    additions = mappedSides.additions;
+    deletions = mappedSides.deletions;
+  } else if (before !== undefined || after !== undefined) {
+    const stats = lineChangeStatsFromSides(before, after);
+    if (before && after) {
+      deletions = stats?.deletions;
+      additions = stats?.additions;
+    } else if (after) {
+      additions = stats?.additions ?? 0;
+      deletions = 0;
+    } else if (before) {
+      additions = 0;
+      deletions = stats?.deletions ?? 0;
+    }
+  }
+
+  if (
+    filePath === undefined &&
+    before === undefined &&
+    after === undefined &&
+    unifiedDiff === undefined &&
+    additions === undefined &&
+    deletions === undefined
+  ) {
+    return undefined;
+  }
+
+  return { filePath, before, after, diff: unifiedDiff, additions, deletions };
 }

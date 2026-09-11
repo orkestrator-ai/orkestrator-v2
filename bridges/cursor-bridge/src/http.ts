@@ -142,6 +142,15 @@ async function routeGlobal(
     json(response, 200, { models: await listModels() });
     return true;
   }
+  if (url.pathname === "/global/usage" && request.method === "GET") {
+    // Plan-quota read only needs the stored credential, not a session. A `null`
+    // account means no credential, a failed token exchange or an unreachable
+    // dashboard; the backend reports that as unavailable rather than as a plan
+    // with no metered limits.
+    const account = await refreshPlanAccountWindows();
+    json(response, 200, { account: account ?? null });
+    return true;
+  }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
     refreshModels();
     json(response, 200, { ok: true });

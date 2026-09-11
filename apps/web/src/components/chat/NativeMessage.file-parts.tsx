@@ -134,6 +134,9 @@ function getSafeContainerRelativePath(path: string): string | null {
   if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
     return null;
   }
+  if (path.startsWith("~")) {
+    return null;
+  }
   if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\")) {
     return null;
   }
@@ -153,6 +156,29 @@ function getSafeContainerRelativePath(path: string): string | null {
     return null;
   }
   return path;
+}
+
+/**
+ * Whether `FilePart` can resolve an image reference in the current execution
+ * environment without falling immediately into its unavailable state.
+ *
+ * Keep synthesized Read previews behind this check: unlike a first-class file
+ * row, they add no useful surface when the path cannot be opened.
+ */
+export function canLoadImagePreview(
+  path: string,
+  fileUrl: string | undefined,
+  containerId: string | undefined,
+): boolean {
+  if (fileUrl?.startsWith("data:image/") || isRemoteImageUrl(fileUrl)) return true;
+
+  const localFilePath = fileUrl?.startsWith("file://") ? parseLocalFilePathFromUrl(fileUrl) : null;
+
+  if (containerId) {
+    return getSafeContainerRelativePath(localFilePath ?? path) !== null;
+  }
+
+  return Boolean(localFilePath ?? (path.startsWith("/") ? path : null));
 }
 
 export function FilePart({

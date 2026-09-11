@@ -3032,6 +3032,84 @@ describe("NativeMessage task list rendering", () => {
     expect(await screen.findByAltText("Thumbnail: opencode.webp")).toBeTruthy();
   });
 
+  test("keeps a relative host image read as a plain tool row", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "screens/shot.png" },
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByText("Image read") === null).toBe(true);
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
+  });
+
+  test("mounts an image-read preview only after the tool settles", async () => {
+    const pending = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "Read",
+        toolName: "Read",
+        toolUseId: "read-pending-1",
+        toolState: "pending",
+        toolArgs: { file_path: "/workspace/screens/shot.png" },
+      },
+    ]);
+    const { rerender } = render(<NativeMessage message={pending} />);
+
+    expect(screen.queryByText("Image read") === null).toBe(true);
+    expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([
+          {
+            ...pending.parts[0]!,
+            toolState: "success",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Image read")).toBeTruthy();
+    expect(await screen.findByAltText("Thumbnail: shot.png")).toBeTruthy();
+  });
+
+  test("prefers a first-class image returned by the same tool call", async () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolUseId: "read-with-image-1",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/screens/shot.png" },
+          },
+          {
+            type: "image",
+            content: "shot.png",
+            sourcePartId: "image:read-with-image-1:0",
+            imageSource: "viewed",
+            fileUrl: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getAllByText("Image read")).toHaveLength(1);
+    expect(await screen.findByAltText("Thumbnail: shot.png")).toBeTruthy();
+  });
+
   test("does not preview a failed image read or a read of a non-image", () => {
     render(
       <NativeMessage

@@ -50,6 +50,10 @@ export const NativeMessage = memo(function NativeMessage({
   );
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
+  const toolIdsWithFirstClassImages = useMemo(
+    () => firstClassImageToolUseIds(message.parts),
+    [message.parts],
+  );
 
   // A container id can legitimately appear after this row mounts (notably in
   // build-pipeline tabs) or change when a container is recreated. Freeze the
@@ -202,7 +206,19 @@ export const NativeMessage = memo(function NativeMessage({
           <AgentPlatformContext.Provider value={platform}>
             <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
               <NativeMessagePartRendererContext.Provider
-                value={(props) => <MessagePart {...props} />}
+                value={(props) => (
+                  <MessagePart
+                    {...props}
+                    suppressImageReadPreview={
+                      props.suppressImageReadPreview ??
+                      (props.part.type === "tool-invocation" &&
+                        Boolean(
+                          props.part.toolUseId &&
+                          toolIdsWithFirstClassImages.has(props.part.toolUseId),
+                        ))
+                    }
+                  />
+                )}
               >
                 <MessageShell
                   isUser={isUser}
@@ -227,7 +243,11 @@ export const NativeMessage = memo(function NativeMessage({
                     ) : undefined
                   }
                 >
-                  {renderMessageParts(message, { showTextCopy: false, containerId })}
+                  {renderMessageParts(message, {
+                    showTextCopy: false,
+                    containerId,
+                    toolIdsWithFirstClassImages,
+                  })}
 
                   {!hasTextParts && message.content && (
                     <TextPart
@@ -251,7 +271,11 @@ export const NativeMessage = memo(function NativeMessage({
 
 function renderMessageParts(
   message: NativeMessageType,
-  options: { showTextCopy?: boolean; containerId?: string } = {},
+  options: {
+    showTextCopy?: boolean;
+    containerId?: string;
+    toolIdsWithFirstClassImages?: ReadonlySet<string>;
+  } = {},
 ) {
   const promptPresentationPartIndex = message.promptPresentation
     ? message.parts.findIndex((part) => part.type === "text")
@@ -268,6 +292,10 @@ function renderMessageParts(
       renderJsonPayload={message.role !== "user"}
       containerId={options.containerId}
       eagerImagePreview={message.role === "user"}
+      suppressImageReadPreview={
+        part.type === "tool-invocation" &&
+        Boolean(part.toolUseId && options.toolIdsWithFirstClassImages?.has(part.toolUseId))
+      }
       partKey={`${message.id}-part-${index}`}
     />
   );
@@ -303,6 +331,16 @@ function renderMessageParts(
   }
 
   return renderedParts;
+}
+
+function firstClassImageToolUseIds(parts: readonly NativeMessagePart[]): ReadonlySet<string> {
+  const result = new Set<string>();
+  for (const part of parts) {
+    if (part.type !== "image" || part.imageSource !== "viewed") continue;
+    const match = part.sourcePartId?.match(/^image:(.+):\d+$/);
+    if (match?.[1]) result.add(match[1]);
+  }
+  return result;
 }
 
 function formatTime(isoString: string): string {

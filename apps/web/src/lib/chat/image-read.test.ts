@@ -60,6 +60,51 @@ describe("imageReadFromToolPart", () => {
     ).toBeNull();
   });
 
+  test("accepts a bare image basename from a stripped tool title", () => {
+    expect(
+      imageReadFromToolPart({
+        toolName: "cursor_read",
+        toolState: "success",
+        toolTitle: "shot.png",
+      }),
+    ).toEqual({ path: "shot.png", filename: "shot.png", fileUrl: "shot.png" });
+  });
+
+  test("preserves file and remote image URLs", () => {
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolState: "success",
+        toolArgs: { file_path: "file:///workspace/screens/shot.png" },
+      }),
+    ).toEqual({
+      path: "file:///workspace/screens/shot.png",
+      filename: "shot.png",
+      fileUrl: "file:///workspace/screens/shot.png",
+    });
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolState: "success",
+        toolArgs: { path: "https://example.test/screens/shot.webp?rev=2" },
+      }),
+    ).toEqual({
+      path: "https://example.test/screens/shot.webp?rev=2",
+      filename: "shot.webp",
+      fileUrl: "https://example.test/screens/shot.webp?rev=2",
+    });
+  });
+
+  test("waits for a pending image read to settle", () => {
+    expect(
+      imageReadFromToolPart({
+        toolName: "Read",
+        toolState: "pending",
+        toolArgs: { file_path: "/workspace/a.png" },
+      }),
+    ).toBeNull();
+  });
+
   test("ignores writes, searches, failed reads and non-image files", () => {
     expect(
       imageReadFromToolPart({

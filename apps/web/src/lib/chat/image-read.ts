@@ -45,12 +45,14 @@ export function imageReadFromToolPart(part: {
   toolTitle?: string;
   toolState?: string;
 }): ImageRead | null {
-  if (!isReadTool(part.toolName) || part.toolState === "failure") return null;
+  if (!isReadTool(part.toolName) || part.toolState === "pending" || part.toolState === "failure") {
+    return null;
+  }
 
   const path = readToolImagePath(part.toolArgs) ?? imagePathFromTitle(part.toolTitle);
   if (!path) return null;
 
-  const filename = path.split(/[\\/]/).pop() || path;
+  const filename = path.split(/[?#]/)[0]?.split(/[\\/]/).pop() || path;
   return { path, filename, fileUrl: path };
 }
 

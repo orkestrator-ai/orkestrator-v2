@@ -552,6 +552,63 @@ describe("NativeMessage", () => {
     expect(thumbnail.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
   });
 
+  test("keeps an unreadable absolute image path as a plain container tool row", () => {
+    const message: NativeMessageType = {
+      id: "msg-container-image-read-outside-workspace",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/tmp/shot.png" },
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    expect(screen.queryByText("Image read") === null).toBe(true);
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("does not synthesize container previews for tilde or Windows image paths", () => {
+    const message: NativeMessageType = {
+      id: "msg-container-image-read-unsupported-paths",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "~/shot.png" },
+        },
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "C:\\Users\\Ada\\shot.png" },
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    expect(screen.queryByText("Image read") === null).toBe(true);
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
   test("opens local image previews and closes the overlay with Escape", async () => {
     const message: NativeMessageType = {
       id: "msg-local-file-preview",

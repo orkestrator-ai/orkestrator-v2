@@ -21,7 +21,12 @@ import {
   ToolPart,
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
-import { FilePart, TextPart, TranscriptReferencePart } from "./NativeMessage.file-parts";
+import {
+  FilePart,
+  TextPart,
+  TranscriptReferencePart,
+  canLoadImagePreview,
+} from "./NativeMessage.file-parts";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import {
   AgentGroupPart,
@@ -39,6 +44,7 @@ export function DeferredToolMessagePart({
   renderJsonPayload,
   containerId,
   eagerImagePreview,
+  suppressImageReadPreview,
 }: {
   part: Extract<NativeMessagePart, { type: "tool-invocation" }>;
   partKey: string;
@@ -47,6 +53,7 @@ export function DeferredToolMessagePart({
   renderJsonPayload: boolean;
   containerId?: string;
   eagerImagePreview: boolean;
+  suppressImageReadPreview?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
@@ -124,6 +131,7 @@ export function DeferredToolMessagePart({
       renderJsonPayload={renderJsonPayload}
       containerId={containerId}
       eagerImagePreview={eagerImagePreview}
+      suppressImageReadPreview={suppressImageReadPreview}
     />
   );
 }
@@ -140,6 +148,7 @@ export function MessagePart({
   partKey,
   deferredDetails = false,
   embedded = false,
+  suppressImageReadPreview = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -148,6 +157,8 @@ export function MessagePart({
   renderJsonPayload?: boolean;
   containerId?: string;
   eagerImagePreview?: boolean;
+  /** A bridge already supplied the image bytes for this tool call. */
+  suppressImageReadPreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
   /**
@@ -171,6 +182,7 @@ export function MessagePart({
         renderJsonPayload={renderJsonPayload}
         containerId={containerId}
         eagerImagePreview={eagerImagePreview}
+        suppressImageReadPreview={suppressImageReadPreview}
       />
     );
   }
@@ -248,7 +260,7 @@ export function MessagePart({
       // Codex already emits a first-class `image` part for viewed files. Every
       // other platform reports the same action as a Read with a path, so the
       // preview is recovered here — one place, every transcript.
-      const imageRead = imageReadFromToolPart(part);
+      const imageRead = suppressImageReadPreview ? null : imageReadFromToolPart(part);
       const toolCard = (
         <ToolPart
           expansionKey={toolExpansionKey}
@@ -263,7 +275,9 @@ export function MessagePart({
           deferredDetails={deferredDetails}
         />
       );
-      if (!imageRead) return toolCard;
+      if (!imageRead || !canLoadImagePreview(imageRead.path, imageRead.fileUrl, containerId)) {
+        return toolCard;
+      }
       return (
         <div className="space-y-1">
           {toolCard}

@@ -526,6 +526,32 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Worker")).toBeTruthy();
   });
 
+  test("eagerly loads a workspace image the agent read through a generic Read tool", async () => {
+    const message: NativeMessageType = {
+      id: "msg-image-read-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/workspace/assets/layout.png" },
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    expect(screen.getByText("Image read")).toBeTruthy();
+    const thumbnail = await screen.findByAltText("Thumbnail: layout.png");
+    expect(mockReadContainerFileBase64).toHaveBeenCalledWith("container-1", "assets/layout.png");
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(thumbnail.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
+  });
+
   test("opens local image previews and closes the overlay with Escape", async () => {
     const message: NativeMessageType = {
       id: "msg-local-file-preview",

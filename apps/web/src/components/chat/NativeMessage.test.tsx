@@ -2985,6 +2985,80 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByAltText(/Thumbnail:/) === null).toBe(true);
   });
 
+  test("previews a Claude image read the same way Codex imageView is shown", async () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/assets/shot.png" },
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Image read")).toBeTruthy();
+    expect(await screen.findByAltText("Thumbnail: shot.png")).toBeTruthy();
+  });
+
+  test("previews Cursor and OpenCode image reads from their path argument names", async () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "read",
+            toolName: "read",
+            toolState: "success",
+            toolTitle: "/tmp/cursor-shot.png",
+            toolArgs: { path: "/tmp/cursor-shot.png" },
+          },
+          {
+            type: "tool-invocation",
+            content: "read",
+            toolName: "read",
+            toolState: "success",
+            toolArgs: { filePath: "/workspace/docs/opencode.webp" },
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getAllByText("Image read")).toHaveLength(2);
+    expect(await screen.findByAltText("Thumbnail: cursor-shot.png")).toBeTruthy();
+    expect(await screen.findByAltText("Thumbnail: opencode.webp")).toBeTruthy();
+  });
+
+  test("does not preview a failed image read or a read of a non-image", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolState: "failure",
+            toolArgs: { file_path: "/workspace/missing.png" },
+            toolError: "File not found",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/notes.ts" },
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByText("Image read") === null).toBe(true);
+    expect(screen.getByText("failure")).toBeTruthy();
+  });
+
   test("does not treat a deferred file reference as an image", () => {
     const loadToolDetails = mock(async (detailRef: string) => ({ detailRef }));
     render(

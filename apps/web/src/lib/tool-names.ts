@@ -13,6 +13,15 @@ export const EDIT_TOOL_NAMES = new Set([
   "replace",
 ]);
 
+/**
+ * File-read tools, after separators are stripped.
+ *
+ * Kept as an explicit set so `readLints` / `readTodos` cannot collapse into
+ * `read` the way a suffix match would. `view` is Claude Code's older name for
+ * the same call.
+ */
+const READ_TOOL_KEYS = new Set(["read", "readfile", "cursorread", "view", "viewfile"]);
+
 const TOOL_DISPLAY_NAMES = new Map<string, string>([
   ["bash", "run_command"],
   ["todowrite", "todo_write"],
@@ -46,6 +55,12 @@ function formatToolDisplayLabel(label: string): string {
 export function isEditTool(toolName?: string): boolean {
   if (!toolName) return false;
   return EDIT_TOOL_NAMES.has(toolName.toLowerCase());
+}
+
+/** Check if a tool name is a file-read tool. */
+export function isReadTool(toolName?: string): boolean {
+  if (!toolName) return false;
+  return READ_TOOL_KEYS.has(toolName.trim().toLowerCase().replace(/[_-]+/g, ""));
 }
 
 /** Return the user-facing label for a tool while preserving raw names internally. */

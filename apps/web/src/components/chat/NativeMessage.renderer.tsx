@@ -1,5 +1,6 @@
 import { useContext, useEffect, useState } from "react";
 import { isEditTool } from "@/lib/tool-names";
+import { imageReadFromToolPart } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
@@ -244,8 +245,11 @@ export function MessagePart({
           />
         );
       }
-      // Use generic ToolPart for other tools
-      return (
+      // Codex already emits a first-class `image` part for viewed files. Every
+      // other platform reports the same action as a Read with a path, so the
+      // preview is recovered here — one place, every transcript.
+      const imageRead = imageReadFromToolPart(part);
+      const toolCard = (
         <ToolPart
           expansionKey={toolExpansionKey}
           toolName={part.toolName}
@@ -258,6 +262,22 @@ export function MessagePart({
           progress={part.progress}
           deferredDetails={deferredDetails}
         />
+      );
+      if (!imageRead) return toolCard;
+      return (
+        <div className="space-y-1">
+          {toolCard}
+          <ImagePart
+            part={{
+              type: "image",
+              content: imageRead.path,
+              fileUrl: imageRead.fileUrl,
+              filename: imageRead.filename,
+              imageSource: "viewed",
+            }}
+            containerId={containerId}
+          />
+        </div>
       );
     case "tool-result":
       // Tool results are typically shown inline with tool invocations

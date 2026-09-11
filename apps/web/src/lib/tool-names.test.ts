@@ -4,6 +4,7 @@ import {
   getToolDisplayName,
   getToolTitleDisplayName,
   isEditTool,
+  isReadTool,
   normalizeToolLabelKey,
 } from "./tool-names";
 
@@ -15,6 +16,18 @@ describe("tool name helpers", () => {
     expect(isEditTool("STR_REPLACE_EDITOR")).toBe(true);
     expect(isEditTool("bash")).toBe(false);
     expect(isEditTool()).toBe(false);
+  });
+
+  test("detects file-read tools without collapsing nearby names into read", () => {
+    expect(isReadTool("Read")).toBe(true);
+    expect(isReadTool("read_file")).toBe(true);
+    expect(isReadTool("ReadFile")).toBe(true);
+    expect(isReadTool("cursor_read")).toBe(true);
+    expect(isReadTool("View")).toBe(true);
+    expect(isReadTool("readLints")).toBe(false);
+    expect(isReadTool("readTodos")).toBe(false);
+    expect(isReadTool("Grep")).toBe(false);
+    expect(isReadTool()).toBe(false);
   });
 
   test("maps display-only tool names case-insensitively", () => {

@@ -446,6 +446,7 @@ export function accountUsageFromLimits(
     label: accountRateLimitLabel(limit),
     ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
     ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
+    ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
   }));
   if (credits?.balance !== undefined && credits.balance.trim().length > 0) {
     windows.push({ window: "credits", label: "Credits", creditBalance: credits.balance });

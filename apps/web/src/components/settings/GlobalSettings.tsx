@@ -141,6 +141,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [clearAnthropicApiKey, setClearAnthropicApiKey] = useState(false);
   const [cursorApiKey, setCursorApiKey] = useState("");
   const [clearCursorApiKey, setClearCursorApiKey] = useState(false);
+  const [openCodeZenApiKey, setOpenCodeZenApiKey] = useState("");
+  const [clearOpenCodeZenApiKey, setClearOpenCodeZenApiKey] = useState(false);
+  // Bumped after a credential save so the plan-usage card on that platform
+  // remounts and re-reads immediately instead of waiting for the cache TTL.
+  const [planUsageRefreshToken, setPlanUsageRefreshToken] = useState(0);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true,
   );
@@ -226,6 +231,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isCleaningLogs, setIsCleaningLogs] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCursorApiKey, setShowCursorApiKey] = useState(false);
+  const [showOpenCodeZenApiKey, setShowOpenCodeZenApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [showGatewayToken, setShowGatewayToken] = useState(false);
   const { copied: gatewayTokenCopied, copy: copyGatewayToken } = useTimedCopyFeedback();
@@ -253,6 +259,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     apiKey: string;
     clear: boolean;
   } | null>(null);
+  const pendingOpenCodeZenCredentialEditRef = useRef<{
+    apiKey: string;
+    clear: boolean;
+  } | null>(null);
   const pendingAnthropicCredentialEditRef = useRef<{
     apiKey: string;
     clear: boolean;
@@ -274,6 +284,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClearAnthropicApiKey(pendingAnthropicCredentialEditRef.current?.clear ?? false);
     setCursorApiKey(pendingCursorCredentialEditRef.current?.apiKey ?? "");
     setClearCursorApiKey(pendingCursorCredentialEditRef.current?.clear ?? false);
+    setOpenCodeZenApiKey(pendingOpenCodeZenCredentialEditRef.current?.apiKey ?? "");
+    setClearOpenCodeZenApiKey(pendingOpenCodeZenCredentialEditRef.current?.clear ?? false);
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
@@ -430,6 +442,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       clearAnthropicApiKey ||
       cursorApiKey.trim().length > 0 ||
       clearCursorApiKey ||
+      openCodeZenApiKey.trim().length > 0 ||
+      clearOpenCodeZenApiKey ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
       sshAgentSocketPath !== (global.sshAgentSocketPath ?? "") ||
       useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true) ||
@@ -479,6 +493,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     clearAnthropicApiKey,
     cursorApiKey,
     clearCursorApiKey,
+    openCodeZenApiKey,
+    clearOpenCodeZenApiKey,
     useHostGitHubCredentials,
     sshAgentSocketPath,
     useHostClaudeCredentials,
@@ -654,6 +670,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const anthropicApiKeyChanged = clearAnthropicApiKey || nextAnthropicApiKey.length > 0;
       const nextCursorApiKey = cursorApiKey.trim();
       const cursorApiKeyChanged = clearCursorApiKey || nextCursorApiKey.length > 0;
+      const nextOpenCodeZenApiKey = openCodeZenApiKey.trim();
+      const openCodeZenApiKeyChanged = clearOpenCodeZenApiKey || nextOpenCodeZenApiKey.length > 0;
       const nextGitHubToken = githubToken.trim();
       const githubCredentialSourceChanged =
         useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
@@ -669,6 +687,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         pendingCursorCredentialEditRef.current = {
           apiKey: cursorApiKey,
           clear: clearCursorApiKey,
+        };
+      }
+      if (openCodeZenApiKeyChanged) {
+        pendingOpenCodeZenCredentialEditRef.current = {
+          apiKey: openCodeZenApiKey,
+          clear: clearOpenCodeZenApiKey,
         };
       }
       if (githubTokenChanged) {
@@ -687,11 +711,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         );
         pendingAnthropicCredentialEditRef.current = null;
         setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
       }
       if (cursorApiKeyChanged) {
         newConfig = await backend.setCursorApiKey(clearCursorApiKey ? null : nextCursorApiKey);
         pendingCursorCredentialEditRef.current = null;
         setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
+      }
+      if (openCodeZenApiKeyChanged) {
+        newConfig = await backend.setOpenCodeZenApiKey(
+          clearOpenCodeZenApiKey ? null : nextOpenCodeZenApiKey,
+        );
+        pendingOpenCodeZenCredentialEditRef.current = null;
+        setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
       }
       if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(clearGithubToken ? null : nextGitHubToken);
@@ -775,6 +809,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       setCursorApiKey("");
       setClearCursorApiKey(false);
       pendingCursorCredentialEditRef.current = null;
+      setOpenCodeZenApiKey("");
+      setClearOpenCodeZenApiKey(false);
+      pendingOpenCodeZenCredentialEditRef.current = null;
       setGithubToken("");
       setClearGithubToken(false);
       pendingGitHubCredentialEditRef.current = null;
@@ -805,6 +842,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCursorApiKey("");
     setClearCursorApiKey(false);
     pendingCursorCredentialEditRef.current = null;
+    setOpenCodeZenApiKey("");
+    setClearOpenCodeZenApiKey(false);
+    pendingOpenCodeZenCredentialEditRef.current = null;
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
@@ -876,6 +916,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCursorApiKey,
     clearCursorApiKey,
     setClearCursorApiKey,
+    openCodeZenApiKey,
+    setOpenCodeZenApiKey,
+    clearOpenCodeZenApiKey,
+    setClearOpenCodeZenApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
     sshAgentSocketPath,
@@ -899,6 +943,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCoordinatorProviderTiers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
+    planUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,
@@ -956,6 +1001,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setShowApiKey,
     showCursorApiKey,
     setShowCursorApiKey,
+    showOpenCodeZenApiKey,
+    setShowOpenCodeZenApiKey,
     showGithubToken,
     setShowGithubToken,
     showGatewayToken,

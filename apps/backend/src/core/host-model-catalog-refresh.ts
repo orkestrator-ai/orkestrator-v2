@@ -59,7 +59,7 @@ export type HostCatalog =
   | { agent: "opencode"; models: AgentModel[] }
   | { agent: "cursor" | "grok" | "pi"; models: AgentModel[] };
 
-type BridgeProbe = {
+export type BridgeProbe = {
   kind: LocalServerKind;
   command: string;
   args: string[] | ((port: number) => string[]);
@@ -89,7 +89,7 @@ const defaultDependencies: HostRefreshDependencies = {
   runCommand,
 };
 
-async function withShortLivedBridge<T>(
+export async function withShortLivedBridge<T>(
   probe: BridgeProbe,
   read: (port: number, token: string) => Promise<T>,
 ): Promise<T> {
@@ -121,7 +121,10 @@ async function withShortLivedBridge<T>(
   }
 }
 
-function bridgeEntrypoint(context: CommandContext, name: Parameters<typeof getBridgePath>[1]) {
+export function bridgeEntrypoint(
+  context: CommandContext,
+  name: Parameters<typeof getBridgePath>[1],
+) {
   const cwd = getBridgePath(context, name);
   const entrypoint = `${cwd}/dist/index.js`;
   if (!existsSync(cwd)) throw new Error(`${name} directory not found: ${cwd}`);
@@ -129,7 +132,7 @@ function bridgeEntrypoint(context: CommandContext, name: Parameters<typeof getBr
   return { cwd, entrypoint };
 }
 
-async function probeWorkingDirectory(context: CommandContext): Promise<string> {
+export async function probeWorkingDirectory(context: CommandContext): Promise<string> {
   const directory = path.join(context.storage.getDataDir(), "model-catalog-probe");
   await fs.mkdir(directory, { recursive: true });
   return directory;

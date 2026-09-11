@@ -1080,7 +1080,7 @@ function AccountRowView({ row, nowMs }: { row: AccountRow; nowMs: number }) {
  * percentages deliberately stay out of the effect key so a fresh reading does
  * not restart the interval.
  */
-function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyTokenPoint[] }) {
+function useAccountNow(rows: AccountRow[]): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const timedKey = JSON.stringify(
     rows
@@ -1096,6 +1096,11 @@ function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyToken
     const interval = window.setInterval(updateClock, MINUTE_MS);
     return () => window.clearInterval(interval);
   }, [timedKey]);
+  return nowMs;
+}
+
+function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyTokenPoint[] }) {
+  const nowMs = useAccountNow(rows);
 
   if (rows.length === 0 && daily.length === 0) return null;
 
@@ -1111,6 +1116,35 @@ function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyToken
           ))}
         </section>
       ) : null}
+      {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Account/quota rows without the session-shaped context and turn sections.
+ *
+ * The global settings panes read plan quota without a session, so they cannot
+ * host `UsagePanel`. This keeps the exact row rendering — label, percentage,
+ * reset time and period marker — that the information panel already uses.
+ */
+export function AccountQuotaList({
+  account,
+  rateLimits,
+  credits,
+}: {
+  account?: NativeAgentAccountUsageWindow[];
+  rateLimits?: AgentRateLimitWindow[];
+  credits?: ContextUsageSnapshot["credits"];
+}) {
+  const { rows, daily } = buildAccountRows({ account, rateLimits, credits });
+  const nowMs = useAccountNow(rows);
+  if (rows.length === 0 && daily.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {rows.map((row) => (
+        <AccountRowView key={row.key} row={row} nowMs={nowMs} />
+      ))}
       {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
     </div>
   );

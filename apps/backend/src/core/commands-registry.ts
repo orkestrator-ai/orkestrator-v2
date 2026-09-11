@@ -46,6 +46,7 @@ import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
 import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
+import { readPlanUsage } from "./plan-usage.js";
 
 export type { CommandRegistryOptions } from "./commands-registry-types.js";
 
@@ -226,6 +227,7 @@ export function createCommandRegistry(
     extensionDiscoveryCache,
     runProjectCreationCommand,
     refreshHostModelCatalog: options.modelCatalogRefresh ?? refreshHostModelCatalog,
+    planUsageReader: options.planUsageReader ?? readPlanUsage,
     conditionalManifestSnapshot,
     schedulePendingEnvironmentRename,
     prepareEnvironmentFirstPrompt,

@@ -12,6 +12,7 @@ import {
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
+import type { PlanUsageReader } from "./plan-usage.js";
 
 export type CommandRegistrar = (name: string, handler: CommandHandler) => void;
 
@@ -21,6 +22,7 @@ export type CommandRegistryOptions = {
     runCommand?: typeof runCommand;
   };
   modelCatalogRefresh?: typeof refreshHostModelCatalog;
+  planUsageReader?: PlanUsageReader;
   tabTeardown?: {
     peekBridge?: (
       environment: Environment,
@@ -48,6 +50,7 @@ export type RegistryDependencies = {
   extensionDiscoveryCache: ReturnType<typeof createExtensionDiscoveryCache>;
   runProjectCreationCommand: typeof runCommand;
   refreshHostModelCatalog: typeof refreshHostModelCatalog;
+  planUsageReader: PlanUsageReader;
   conditionalManifestSnapshot: <T>(
     args: Record<string, unknown>,
     storage: StorageService,

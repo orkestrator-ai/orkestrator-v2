@@ -8,16 +8,19 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAuthStatus,
+  NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
 import {
   claudeExecutableOptions,
+  getStructuredUsageWithTimeout,
+  rateLimitsFromStructuredUsage,
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
-import type { PermissionMode, SessionState } from "../types/index.js";
+import type { ClaudeQueryControl, PermissionMode, SessionState } from "../types/index.js";
 
 const CATALOG_LIMIT = 512;
 const AUTH_CACHE_TTL_MS = 30_000;
@@ -333,6 +336,51 @@ export async function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
     };
     authCache = { expiresAt: Date.now() + 5_000, value };
     return value;
+  } finally {
+    await Promise.resolve(probe?.close()).catch(() => undefined);
+  }
+}
+
+function claudeWindowId(label: string): string {
+  const slug = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "window";
+}
+
+/**
+ * Read Claude's plan-allocation windows without a session.
+ *
+ * The settings pane is global, so there is no live turn to borrow a control
+ * from. `createProbe()` spawns a whole Claude CLI, exactly as the auth and
+ * slash-command reads do, and `refreshStructuredRateLimits`' parser turns the
+ * experimental `/usage` payload into the same windows a session would report.
+ */
+export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWindow[]> {
+  let probe: Query | undefined;
+  try {
+    probe = createProbe();
+    const control = probe as unknown as ClaudeQueryControl;
+    const getStructuredUsage = control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (!getStructuredUsage) {
+      // A missing experimental accessor is not evidence that the account is
+      // unmetered. Throw so the backend reports unavailable rather than an
+      // authoritative empty plan.
+      throw new Error("Claude's plan usage API is unavailable in this CLI version");
+    }
+    const structuredUsage = await getStructuredUsageWithTimeout(getStructuredUsage, control);
+    const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
+    if (rateLimits === undefined) {
+      throw new Error("Claude did not report plan usage");
+    }
+    return rateLimits.map((window) => ({
+      window: claudeWindowId(window.label),
+      label: window.label,
+      ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
+      ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
+    }));
   } finally {
     await Promise.resolve(probe?.close()).catch(() => undefined);
   }

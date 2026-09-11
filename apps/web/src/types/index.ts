@@ -500,6 +500,10 @@ export interface GlobalConfig {
    * this pane can change.
    */
   cursorApiKeySource?: "config" | "host-env" | "none";
+  /** Whether a write-only OpenCode Zen API key is stored by the backend. */
+  openCodeZenApiKeyConfigured?: boolean;
+  /** Effective OpenCode Zen key source; the key value is never returned. */
+  openCodeZenApiKeySource?: "config" | "host-env" | "none";
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
   /** Reuse the host's active `gh auth login` token for container GitHub access. */

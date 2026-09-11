@@ -14,6 +14,7 @@ import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
 import { applyInteractionUpdate } from "./translate.js";
 import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, credentialStore } from "./credentials.js";
+import { resetPlanAccountWindowsForTests, seedPlanAccountWindowsForTests } from "./plan-usage.js";
 
 let server: Server;
 let baseUrl: string;
@@ -850,6 +851,37 @@ describe("response encoding", () => {
       headers: { "accept-encoding": "gzip;q=0, *" },
     });
     expect(response.headers.get("content-encoding")).toBeNull();
+  });
+});
+
+describe("global usage", () => {
+  beforeEach(() => {
+    resetPlanAccountWindowsForTests();
+  });
+
+  test("answers null rather than an empty plan when no credential resolves", async () => {
+    const payload = (await (await call("/global/usage")).json()) as { account: unknown };
+    // The backend reads `null` as unavailable; `[]` would render as "no metered
+    // plan limits" for an account that was never read.
+    expect(payload.account).toBeNull();
+  });
+
+  test("returns an authoritative empty list when the account genuinely reports none", async () => {
+    seedPlanAccountWindowsForTests([]);
+    const payload = (await (await call("/global/usage")).json()) as { account: unknown };
+    expect(payload.account).toEqual([]);
+  });
+
+  test("returns the cached plan windows", async () => {
+    seedPlanAccountWindowsForTests([
+      { window: "billing_cycle", label: "Cursor quota", usedPercent: 42 },
+    ]);
+    const payload = (await (await call("/global/usage")).json()) as {
+      account: Array<Record<string, unknown>>;
+    };
+    expect(payload.account).toEqual([
+      { window: "billing_cycle", label: "Cursor quota", usedPercent: 42 },
+    ]);
   });
 });
 

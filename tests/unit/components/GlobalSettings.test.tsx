@@ -43,6 +43,21 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
   },
   repositories: {},
 }));
+const mockSetOpenCodeZenApiKey = mock(async (apiKey: string | null) => ({
+  version: "1.0",
+  global: {
+    ...useConfigStore.getState().config.global,
+    openCodeZenApiKeyConfigured: apiKey !== null,
+  },
+  repositories: {},
+}));
+const mockGetPlanUsage = mock(async (platform: string) => ({
+  platform,
+  status: "unavailable" as const,
+  windows: [],
+  message: "Add an OpenCode Zen API key below to see your plan usage.",
+  fetchedAt: "2026-09-11T18:32:00.000Z",
+}));
 const mockGetLogDirectory = mock(async () => null);
 const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
 const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
@@ -101,6 +116,8 @@ mock.module("@/lib/backend", () => ({
   setGitHubToken: mockSetGitHubToken,
   setCursorApiKey: mockSetCursorApiKey,
   setAnthropicApiKey: mockSetAnthropicApiKey,
+  setOpenCodeZenApiKey: mockSetOpenCodeZenApiKey,
+  getPlanUsage: mockGetPlanUsage,
   getLogDirectory: mockGetLogDirectory,
   getLogStorageStats: mockGetLogStorageStats,
   cleanupLogs: mockCleanupLogs,
@@ -151,6 +168,8 @@ describe("GlobalSettings", () => {
     mockSetGitHubToken.mockClear();
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
+    mockSetOpenCodeZenApiKey.mockClear();
+    mockGetPlanUsage.mockClear();
     mockGetAppVersion.mockClear();
     mockGetAppVersion.mockImplementation(async () => "2.15.1");
     mockGetLogDirectory.mockClear();
@@ -278,6 +297,21 @@ describe("GlobalSettings", () => {
         }),
       );
     });
+  });
+
+  test("refetches plan usage after saving an OpenCode Zen API key", async () => {
+    render(<GlobalSettings activeSection="opencode" />);
+    await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("OpenCode Zen API key"), {
+      target: { value: "zen-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockSetOpenCodeZenApiKey).toHaveBeenCalledWith("zen-key"));
+    // The card must remount and re-read rather than keep the pre-save snapshot
+    // for the rest of the backend's cache TTL.
+    await waitFor(() => expect(mockGetPlanUsage).toHaveBeenCalledTimes(2));
   });
 
   test("shows the default Codex subagent limit and saves changes", async () => {

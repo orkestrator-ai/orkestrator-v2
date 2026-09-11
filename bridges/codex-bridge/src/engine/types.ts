@@ -219,6 +219,8 @@ export interface EngineAccountUsageWindow {
   label?: string;
   usedPercent?: number;
   resetsAt?: string;
+  /** Length of the quota period, carried through for the period marker. */
+  windowMinutes?: number;
   creditsRemaining?: number;
   /** Preserve the exact decimal representation reported by app-server. */
   creditBalance?: string;

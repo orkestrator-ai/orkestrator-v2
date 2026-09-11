@@ -227,6 +227,34 @@ export function mergeContextUsageTurns(
   };
 }
 
+/**
+ * Fill the context-window denominator a provider omitted.
+ *
+ * Several providers report occupancy (`usedTokens`) without the model's context
+ * size, which leaves the panel unable to show used-versus-total or a
+ * percentage. The selected model knows the window, so the projection supplies
+ * it and derives the percentage. An explicitly reported maximum or percentage
+ * always wins; this only fills what the provider left absent.
+ */
+export function withProviderContextWindow(
+  usage: NativeAgentContextUsage | undefined,
+  contextWindow: number | undefined,
+): NativeAgentContextUsage | undefined {
+  if (!usage) return usage;
+  const maximumTokens =
+    usage.maximumTokens ??
+    (contextWindow !== undefined && contextWindow > 0 ? contextWindow : undefined);
+  return {
+    ...usage,
+    ...(usage.maximumTokens === undefined && maximumTokens !== undefined ? { maximumTokens } : {}),
+    ...(usage.percentage === undefined && maximumTokens !== undefined
+      ? {
+          percentage: Math.max(0, Math.min(100, (usage.usedTokens / maximumTokens) * 100)),
+        }
+      : {}),
+  };
+}
+
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
 /**
@@ -1502,6 +1530,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       stateSnapshot.controls,
       true,
     );
+    const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
+    const contextUsage = withProviderContextWindow(
+      stateSnapshot.contextUsage,
+      selectedModel?.contextWindow,
+    );
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
     const providerGeneration =
       this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
@@ -1623,7 +1656,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : stateSnapshot.providerQueue
           ? { queue: stateSnapshot.providerQueue }
           : {}),
-      ...(stateSnapshot.contextUsage ? { contextUsage: stateSnapshot.contextUsage } : {}),
+      ...(contextUsage ? { contextUsage } : {}),
       ...(asyncQuestionResponses.size > 0
         ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
         : {}),
@@ -2818,28 +2851,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         previousContextUsage,
         mergeContextUsageTurns(snapshot.contextUsage, refreshedUsage),
       );
-      const contextUsage = mergedContextUsage
-        ? {
-            ...mergedContextUsage,
-            ...(mergedContextUsage.maximumTokens === undefined && selectedModel?.contextWindow
-              ? { maximumTokens: selectedModel.contextWindow }
-              : {}),
-            ...(mergedContextUsage.percentage === undefined &&
-            (mergedContextUsage.maximumTokens ?? selectedModel?.contextWindow)
-              ? {
-                  percentage: Math.max(
-                    0,
-                    Math.min(
-                      100,
-                      (mergedContextUsage.usedTokens /
-                        (mergedContextUsage.maximumTokens ?? selectedModel!.contextWindow!)) *
-                        100,
-                    ),
-                  ),
-                }
-              : {}),
-          }
-        : undefined;
+      const contextUsage = withProviderContextWindow(
+        mergedContextUsage,
+        selectedModel?.contextWindow,
+      );
       const sessionKey = nativeAgentSessionStorageKey(
         input.environmentId,
         input.agent,

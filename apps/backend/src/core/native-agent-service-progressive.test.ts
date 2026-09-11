@@ -359,6 +359,48 @@ describe("native agent progressive remainder", () => {
       },
     );
   });
+  test("fills a provider-omitted context window in the progressive state view", async () => {
+    const stub = createProviderStub("cursor", {
+      sessionStateSnapshot: async () => ({
+        status: "idle" as const,
+        phase: "idle" as const,
+        contextUsage: { usedTokens: 50_000, source: "cursor" as const },
+        composer: {
+          models: [
+            {
+              platform: "cursor" as const,
+              id: "cursor/default",
+              label: "Default",
+              contextWindow: 200_000,
+            },
+          ],
+          selectedModelId: "cursor/default",
+          fastModeEnabled: false,
+          fastModeAvailable: true,
+          modes: [{ id: "build", label: "Build" }],
+        },
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-context-window-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-context-window",
+        };
+        await service.ensureSession(identity);
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(update.status).toBe("snapshot");
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        expect(update.value.contextUsage).toMatchObject({
+          usedTokens: 50_000,
+          maximumTokens: 200_000,
+          percentage: 25,
+        });
+      },
+    );
+  });
 });
 
 describe("native agent progressive failure and lifecycle", () => {

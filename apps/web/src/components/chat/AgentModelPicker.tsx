@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from "react";
 import {
@@ -59,6 +60,16 @@ interface AgentModelPickerProps {
   onPlatformChange?: (platform: AgentPlatform) => void;
   onToggleFavorite?: (model: AgentModel) => void;
   onReorderFavorites?: (favorites: AgentModelRef[]) => void;
+  /**
+   * Per-platform caveats shown inside the picker for the platform in view.
+   *
+   * A coordinator platform's read-only boundary and its ability to deliver
+   * worker replies differ per platform, so the limitation has to stay legible
+   * while the platform is being chosen. Rendering it here rather than as a
+   * paragraph beside the composer ties the disclosure to the control it
+   * qualifies: it is visible in the menu where the choice is made.
+   */
+  platformNotes?: Partial<Record<AgentPlatform, string>>;
   /**
    * Applies a chosen model and its platform in one update.
    *
@@ -167,6 +178,55 @@ const PLATFORM_LABELS: Record<AgentPlatform, string> = {
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {
   return <AgentPlatformIcon platform={platform} className="size-4" />;
+}
+
+/**
+ * One platform in the picker's rail.
+ *
+ * A platform with a caveat carries a visible amber marker and the caveat itself
+ * as its accessible name and tooltip, so the limitation is discoverable on the
+ * row for that platform as well as in the note the picker shows for the
+ * catalogue currently in view.
+ */
+function PlatformRailButton({
+  platform,
+  active,
+  disabled,
+  caveat,
+  className,
+  onSelect,
+}: {
+  platform: AgentPlatform;
+  active: boolean;
+  disabled: boolean;
+  caveat?: string;
+  className?: string;
+  onSelect: (event: ReactMouseEvent) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={caveat ? `${platform} models, ${caveat}` : `${platform} models`}
+      aria-pressed={active}
+      disabled={disabled}
+      title={caveat}
+      data-platform-caveat={caveat ? "true" : undefined}
+      onClick={onSelect}
+      className={cn(
+        "relative grid size-8 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
+        active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60",
+        className,
+      )}
+    >
+      <PlatformIcon platform={platform} />
+      {caveat ? (
+        <span
+          aria-hidden="true"
+          className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-400"
+        />
+      ) : null}
+    </button>
+  );
 }
 
 function ModelListLabel({ reorderMode }: { reorderMode?: FavoriteReorderMode }) {
@@ -603,6 +663,7 @@ export function AgentModelPicker({
   onPlatformChange,
   onToggleFavorite,
   onReorderFavorites,
+  platformNotes,
   onModelSelect,
   selectedModelId,
   selectedModelLabel,
@@ -717,6 +778,12 @@ export function AgentModelPicker({
     selectedPlatform ??
     models.find((model) => model.id === selectedModelId)?.platform ??
     models[0]?.platform;
+  // The caveat belongs to whichever platform's catalogue is on screen. On the
+  // favourites view that is the selected provider, so a limitation is still
+  // readable when the user opens the picker on a favourite rather than a
+  // platform.
+  const caveatPlatform = catalogView === "favorites" ? selectedPlatform : catalogView;
+  const platformCaveat = caveatPlatform ? platformNotes?.[caveatPlatform] : undefined;
   const showSpeedControls = Boolean(onFastModeChange);
   // `fastModeEnabled === null` is an unknown snapshot only on a platform that
   // owns speed at all. OpenCode has no speed surface — it encodes speed in the
@@ -881,6 +948,16 @@ export function AgentModelPicker({
           </div>
         ) : null}
 
+        {(!isMobile || mobileSubmenu === null) && platformCaveat ? (
+          <p
+            data-native-platform-caveat={caveatPlatform}
+            role="note"
+            className="mx-2 mb-2 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-200"
+          >
+            {platformCaveat}
+          </p>
+        ) : null}
+
         {/* Mobile uses touch-friendly pop-out choices. Desktop keeps all three
             choices visible while the model list fills the fixed-height menu. */}
         {isMobile && mobileSubmenu === "reasoning" ? (
@@ -989,27 +1066,22 @@ export function AgentModelPicker({
                 <Star className="size-4" />
               </button>
               {availablePlatforms.map((availablePlatform) => (
-                <button
+                <PlatformRailButton
                   key={availablePlatform}
-                  type="button"
-                  aria-label={`${availablePlatform} models`}
-                  aria-pressed={catalogView === availablePlatform}
+                  platform={availablePlatform}
+                  active={catalogView === availablePlatform}
                   disabled={platformSelectionLocked && availablePlatform !== selectedPlatform}
-                  onClick={(event) => {
+                  {...(platformNotes?.[availablePlatform]
+                    ? { caveat: platformNotes[availablePlatform] }
+                    : {})}
+                  className="shrink-0"
+                  onSelect={(event) => {
                     event.preventDefault();
                     setSearch("");
                     setCatalogView(availablePlatform);
                     onPlatformChange?.(availablePlatform);
                   }}
-                  className={cn(
-                    "grid size-8 shrink-0 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
-                    catalogView === availablePlatform
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:bg-muted/60",
-                  )}
-                >
-                  <PlatformIcon platform={availablePlatform} />
-                </button>
+                />
               ))}
             </div>
             <ModelListLabel reorderMode={favoriteReorderMode} />
@@ -1157,26 +1229,18 @@ export function AgentModelPicker({
               </button>
               <div className="my-1 h-px w-6 bg-border" />
               {availablePlatforms.map((platform) => (
-                <button
+                <PlatformRailButton
                   key={platform}
-                  type="button"
-                  aria-label={`${platform} models`}
-                  aria-pressed={catalogView === platform}
+                  platform={platform}
+                  active={catalogView === platform}
                   disabled={platformSelectionLocked && platform !== selectedPlatform}
-                  onClick={(event) => {
+                  {...(platformNotes?.[platform] ? { caveat: platformNotes[platform] } : {})}
+                  onSelect={(event) => {
                     event.preventDefault();
                     setCatalogView(platform);
                     onPlatformChange?.(platform);
                   }}
-                  className={cn(
-                    "grid size-8 place-items-center rounded disabled:cursor-not-allowed disabled:opacity-30",
-                    catalogView === platform
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:bg-muted/60",
-                  )}
-                >
-                  <PlatformIcon platform={platform} />
-                </button>
+                />
               ))}
             </div>
             <div className="flex min-h-0 min-w-0 flex-col pr-1" role="group" aria-label="Models">

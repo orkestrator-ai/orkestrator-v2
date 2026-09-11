@@ -45,6 +45,15 @@ export interface AgentNativeTabProps {
   ) => Promise<void>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */
   availablePlatforms?: readonly AgentPlatform[];
+  /**
+   * Per-platform caveats shown inside the unassigned composer's picker.
+   *
+   * A coordinator platform's read-only boundary and its ability to deliver
+   * worker replies differ per platform, so the qualification reason travels
+   * with the platform and is shown while the platform is being chosen rather
+   * than discovered when a delegated worker never reports back.
+   */
+  platformNotes?: Partial<Record<AgentPlatform, string>>;
   unassignedPlaceholder?: string;
   emptyPlatformsMessage?: string;
   /** Open the shared resume dialog as soon as the controller mounts. */

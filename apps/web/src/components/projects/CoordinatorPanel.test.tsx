@@ -126,6 +126,7 @@ const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
     data-available-platforms={(props.availablePlatforms as string[] | undefined)?.join(",") ?? ""}
     data-initial-prompt={String(props.initialPrompt ?? "")}
     data-initial-model={String(props.initialAgentModel ?? "")}
+    data-platform-notes={JSON.stringify(props.platformNotes ?? {})}
   >
     {props.onAssignPlatform ? (
       <button
@@ -303,6 +304,46 @@ describe("CoordinatorPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(""),
     );
+  });
+
+  test("a caveat on an available platform reaches the picker, an unavailable one does not", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+      providerAvailability: {
+        codex: { tier: "enforced", available: true, delegation: true },
+        pi: {
+          tier: "enforced",
+          available: true,
+          reason: "Pi has no MCP client.",
+          delegation: false,
+        },
+        cursor: {
+          tier: "provider-configured",
+          available: true,
+          reason: "Cursor applies the restriction.",
+          delegation: true,
+        },
+        grok: {
+          tier: "advisory",
+          available: false,
+          reason: "Grok is only asked to comply.",
+          delegation: true,
+        },
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    const agent = await screen.findByTestId("native-agent");
+    const notes = JSON.parse(agent.getAttribute("data-platform-notes") ?? "{}");
+    expect(notes.pi).toBe("Pi has no MCP client.");
+    // A weaker tier says so explicitly; an enforced one does not need the
+    // disclaimer and must not carry it.
+    expect(notes.cursor).toContain("cannot verify this boundary independently");
+    expect(notes.codex).toBeUndefined();
+    expect(notes.grok).toBeUndefined();
   });
 
   test("explains an assigned conversation whose platform became unavailable", async () => {

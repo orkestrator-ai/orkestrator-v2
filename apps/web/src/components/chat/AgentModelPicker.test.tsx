@@ -684,6 +684,56 @@ describe("AgentModelPicker", () => {
     expect(onPlatformChange).toHaveBeenLastCalledWith("codex");
   });
 
+  test("shows the platform caveat inside the picker and marks the rail row that carries it", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "pi", id: "pi-model", label: "Pi model" },
+      ],
+      enabledPlatforms: ["codex", "pi"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformNotes: { pi: "Pi has no MCP client, so worker delegation is unavailable." },
+    });
+
+    openPicker();
+    // The selected platform carries no caveat, so none is shown for it.
+    expect(document.querySelector("[data-native-platform-caveat]") === null).toBe(true);
+    expect(document.querySelector("[data-platform-caveat='codex']") === null).toBe(true);
+
+    // The rail marks the platform that carries one and names the caveat for
+    // assistive technology, not only the amber dot.
+    const piButton = screen.getByRole("button", {
+      name: "pi models, Pi has no MCP client, so worker delegation is unavailable.",
+    });
+    expect(piButton.getAttribute("data-platform-caveat")).toBe("true");
+    expect(piButton.getAttribute("title")).toContain("no MCP client");
+
+    fireEvent.click(piButton);
+    expect(document.querySelector("[data-native-platform-caveat='pi']")?.textContent).toContain(
+      "worker delegation is unavailable",
+    );
+  });
+
+  test("renders no caveat when no platform notes are supplied", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        { platform: "pi", id: "pi-model", label: "Pi model" },
+      ],
+      enabledPlatforms: ["codex", "pi"],
+      selectedPlatform: "pi",
+      selectedModelId: "pi-model",
+    });
+
+    openPicker();
+    expect(document.querySelector("[data-native-platform-caveat]") === null).toBe(true);
+    expect(screen.getByRole("button", { name: "pi models" })).toBeTruthy();
+    expect(document.querySelector("[data-platform-caveat]") === null).toBe(true);
+  });
+
   test("does not re-notify the selected platform after a favourites glance", () => {
     setMobileViewport(false);
     const onPlatformChange = mock(() => {});

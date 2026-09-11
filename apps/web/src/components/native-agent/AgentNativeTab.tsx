@@ -217,6 +217,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
                 }
               : {})}
             {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}
+            {...(props.platformNotes ? { platformNotes: props.platformNotes } : {})}
             {...(props.unassignedPlaceholder ? { placeholder: props.unassignedPlaceholder } : {})}
             {...(props.emptyPlatformsMessage
               ? { emptyPlatformsMessage: props.emptyPlatformsMessage }

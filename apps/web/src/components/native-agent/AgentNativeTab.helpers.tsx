@@ -329,6 +329,7 @@ export function UnassignedNativeAgentComposer({
   onResume,
   projectId,
   platformFilter,
+  platformNotes,
   placeholder,
   emptyPlatformsMessage,
   workspacePath,
@@ -366,6 +367,11 @@ export function UnassignedNativeAgentComposer({
   projectId?: string;
   /** Narrows the offered platforms further, e.g. to those a coordinator qualifies. */
   platformFilter?: readonly AgentPlatform[];
+  /**
+   * Per-platform caveat shown inside the picker, such as a weaker read-only
+   * boundary or a mailbox that cannot deliver a worker's reply.
+   */
+  platformNotes?: Partial<Record<AgentPlatform, string>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
   /**
@@ -794,6 +800,7 @@ export function UnassignedNativeAgentComposer({
                 models={models}
                 favorites={favorites}
                 enabledPlatforms={enabledPlatforms}
+                platformNotes={platformNotes}
                 selectedPlatform={platform}
                 onPlatformChange={(next) => {
                   // The picker announces the platform on every model choice, not

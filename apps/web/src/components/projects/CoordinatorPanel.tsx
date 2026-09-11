@@ -161,6 +161,24 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       ),
     [snapshot],
   );
+  // Only the caveats that come with an *available* platform. A reason attached
+  // to one the user cannot pick is an explanation of an absence, and belongs
+  // nowhere near the picker. These are shown inside the model picker, so the
+  // limitation is readable at the moment the platform is chosen — including a
+  // mailbox that cannot deliver a worker's reply, and a read-only boundary
+  // nothing outside the agent verifies.
+  const platformNotes = useMemo(() => {
+    const notes: Partial<Record<AgentPlatform, string>> = {};
+    for (const platform of availablePlatforms) {
+      const qualification = snapshot?.providerAvailability[platform];
+      if (!qualification?.reason) continue;
+      notes[platform] =
+        qualification.tier === "enforced"
+          ? qualification.reason
+          : `${qualification.reason} Orkestrator cannot verify this boundary independently.`;
+    }
+    return notes;
+  }, [availablePlatforms, snapshot]);
   const assignAgent = useCallback(
     async (
       conversationId: string,
@@ -691,6 +709,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             coordinatorProjectId={projectId}
             coordinatorWorkspacePath={snapshot.projectPath}
             availablePlatforms={availablePlatforms}
+            platformNotes={platformNotes}
             unassignedPlaceholder="Ask the coordinator to inspect or plan…"
             emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
             onAssignPlatform={

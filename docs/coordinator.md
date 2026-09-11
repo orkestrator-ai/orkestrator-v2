@@ -38,7 +38,7 @@ controls are unavailable.
 Coordinator runs against the project's real checkout, so how strongly a
 platform holds the read-only boundary is a property worth naming rather than
 flattening to available/unavailable. Each platform is offered at one of three
-tiers, shown beside the picker when it carries a caveat:
+tiers, shown in the picker when it carries a caveat:
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
@@ -104,9 +104,9 @@ delivered. On those platforms the coordinator prompt says worker controls are
 unavailable rather than offering a tool whose answer never arrives; inspection
 and planning work normally.
 
-A platform's caveat is carried on its qualification `reason` and shown beside
-the picker, so the limitation is readable when the platform is chosen rather
-than discovered when a worker never reports back.
+A platform's caveat is carried on its qualification `reason` and shown in the
+picker, so the limitation is readable when the platform is chosen rather than
+discovered when a worker never reports back.
 
 Worker delegation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker. A container worker

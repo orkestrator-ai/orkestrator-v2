@@ -666,8 +666,8 @@ New open observations from the later aggregate runs:
 
 ## `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
 
-- **Status:** resolved — see the 2026-09-06 resolution sweep above
-- **Date observed:** 2026-08-28
+- **Status:** open — recurred 2026-09-11 alongside a sibling timer case
+- **Date observed:** 2026-08-28; recurred 2026-09-11
 - **Original command:** `bun run --cwd apps/web test`
 - **Worker configuration:** the web package ran `bun test src --parallel` with
   Bun's default parallel worker pool.
@@ -686,6 +686,34 @@ New open observations from the later aggregate runs:
   timeout or expectation.
 - **Follow-up:** an immediate rerun of `bun run --cwd apps/web test` passed all
   5,569 active tests with 1 skipped across the same 244 files in 23.54 s.
+- **Recurrence (2026-09-11):** `bun --cwd=apps/web test src --parallel
+  --only-failures` reported 6,341 passed, 11 skipped, 2 failed across 6,354
+  tests in 282 files (52.06 s). Both failures were timer sensitive and in this
+  file: this case (273.25 ms) and `clears the copied confirmation when its timer
+  expires` (383.79 ms, entry below). The owning file rerun alone passed (45
+  cases). The change in flight touches the coordinator caveat's placement in
+  `AgentModelPicker` and cannot reach `SkillsSettings`, so this is recorded as a
+  recurrence of the aggregate/parallel timing flake rather than a regression.
+
+## `SkillsSettings > clears the copied confirmation when its timer expires` (`apps/web/src/components/settings/SkillsSettings.test.tsx:759`)
+
+- **Status:** open — observed once in an aggregate parallel run, not reproduced since
+- **Date observed:** 2026-09-11
+- **Original command:** `bun --cwd=apps/web test src --parallel --only-failures`
+- **Worker configuration:** the web package ran `bun test src --parallel` with
+  Bun's default parallel worker pool (282 files, 6,354 tests).
+- **Failure:** the case was reported failed after 383.79 ms in the same run that
+  failed the sibling clipboard case above. Raw console output was retained but no
+  assertion detail was, because the aggregate output exceeded the capture budget.
+- **Suite counts:** 6,341 passed, 11 skipped, 2 failed.
+- **Isolated rerun:** `bun --cwd=apps/web test
+  src/components/settings/SkillsSettings.test.tsx` -> 45 passed, 0 failed, 2.8 s.
+- **Attribution:** the change in flight touches coordinator caveat rendering in
+  `AgentModelPicker`/`CoordinatorPanel` and cannot reach `SkillsSettings`.
+- **Hypothesis:** like the sibling case, this waits on the component's real
+  copy-confirmation timeout; the web suite is dominated by real-timer waits, so
+  a slow worker starves the deadline. A recurrence should retain the assertion
+  detail before changing the timeout or expectation.
 
 ## `startup completes a persisted environment rename without renderer hydration` (`apps/backend/src/core/index.test.ts:1435`)
 

@@ -64,7 +64,6 @@ import {
 import {
   normalizeOpenCodeComposerCatalog,
   openCodeCatalogCacheKey,
-  openCodeModelDispatchability,
   selectOpenCodeComposerCatalog,
 } from "./opencode-model-catalog.js";
 import {
@@ -107,6 +106,7 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
+  preflightOpenCodeModel,
   OPENCODE_READ_ONLY_TURN_TOOLS,
   openCodePromptParts,
   openCodeReasoningVariant,
@@ -337,43 +337,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    * `readComposerCatalog` tolerates the same call failing for the same reason.
    */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
-    if (!model || !model.includes("/")) return;
-    const provider = asRecord(asRecord(this.client)?.provider);
-    if (typeof provider?.list !== "function") return;
-
-    let response: unknown;
-    try {
-      response = await (
-        provider.list as (parameters: Record<string, unknown>, options: unknown) => Promise<unknown>
-      ).call(provider, {}, this.requestOptions());
-    } catch {
-      return;
-    }
-    const envelope = asRecord(response);
-    if (envelope?.error) return;
-    const allowedProviders = await this.allowedModelProviders();
-    const catalog = normalizeOpenCodeComposerCatalog(envelope?.data ?? {}, allowedProviders, {
-      requireConnected: true,
+    await preflightOpenCodeModel({
+      client: this.client,
+      model,
+      requestOptions: this.requestOptions(),
+      allowedProviders: () => this.allowedModelProviders(),
+      publishCatalog: (catalog, allowedProviders) => {
+        this.catalogMetadata = {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          providersKey: openCodeCatalogCacheKey(allowedProviders, true),
+          catalog,
+        };
+        this.invalidateInteractiveMetadata();
+      },
     });
-    // The preflight is fresher than the composer cache, so publish it into both
-    // cache layers: a rejected send immediately removes the stale choice.
-    // Publishing a degenerate read would instead suppress the `config.providers`
-    // fallback for a whole TTL, so it is held to the same bar
-    // `readComposerCatalog` applies before it accepts a live catalogue.
-    if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
-      this.catalogMetadata = {
-        expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-        providersKey: openCodeCatalogCacheKey(allowedProviders, true),
-        catalog,
-      };
-      this.invalidateInteractiveMetadata();
-    }
-    // Judged unfiltered: the allowlist governs what the picker offers, not what
-    // OpenCode can serve, and an unreported connectivity set still dispatches.
-    if (openCodeModelDispatchability(envelope?.data ?? {}, model) !== "unavailable") return;
-    throw new PromptRejectedError(
-      "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
-    );
   }
 
   async modelCatalog(): Promise<AgentModel[]> {
@@ -490,7 +467,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       event.type === "server.instance.disposed" ||
       event.type === "global.disposed";
     if (globalEvent || (rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId))) {
-      const effect = this.streamState.apply(event as OpenCodeEvent);
+      const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
       if (effect.status && effect.sessionId) {
         this.lifecycle.observeEvent(effect.sessionId, effect.status);
       }
@@ -733,6 +710,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
       const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
+      const dispatchStartedAt = this.now();
+      this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
       try {
         response = command
@@ -779,6 +758,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         });
       }
       if ("error" in response && response.error) {
+        this.streamState.rejectTurn(sessionId, dispatchStartedAt);
         const status = response.response?.status;
         if (
           status === 404 ||
@@ -971,10 +951,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
+    const eventVersion = this.streamState.eventVersion(sessionId);
     const status = await this.projectedStatus(sessionId);
+    const turnStartedAt =
+      status === "running"
+        ? this.streamState.ensureTurnStarted(sessionId, this.now(), eventVersion)
+        : undefined;
     return openCodeSessionStateSnapshot({
       status,
       revision: this.streamState.revision(sessionId),
+      ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       title: this.streamState.title(sessionId),
       policy: this.sessionPolicies.get(sessionId),
       runtime: this.streamState.runtime(sessionId),
@@ -1014,6 +1000,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
+    const eventVersion = this.streamState.eventVersion(sessionId);
     const [status, rawMessages, metadata] = await Promise.all([
       this.projectedStatus(sessionId),
       this.projectedMessages(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
@@ -1039,10 +1026,15 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const streamNotices = this.streamState.notices(sessionId);
     const streamedError = streamNotices.find((notice) => notice.kind === "error");
     const latestUsage = openCodeContextUsage(rawMessages);
+    const turnStartedAt =
+      status === "running" && !terminal && !streamedError
+        ? this.streamState.ensureTurnStarted(sessionId, this.now(), eventVersion)
+        : undefined;
     return {
       status: terminal?.kind === "error" || streamedError ? "error" : status,
       messages,
       messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
       composer: {
@@ -1472,6 +1464,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode session delete");
+      this.streamState.endTurn(sessionId);
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode session delete is unavailable", {
         cause: error,

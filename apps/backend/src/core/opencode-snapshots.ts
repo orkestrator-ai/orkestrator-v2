@@ -64,6 +64,7 @@ export async function openCodeTranscriptSnapshot(input: {
 export function openCodeSessionStateSnapshot(input: {
   status: ProviderStatus;
   revision: number;
+  turnStartedAt?: number;
   title?: string;
   policy?: NativeAgentExecutionPolicy;
   runtime: NativeAgentRuntimeSummary;
@@ -73,6 +74,9 @@ export function openCodeSessionStateSnapshot(input: {
   return {
     status: streamedError ? "error" : input.status,
     providerRevision: input.revision,
+    ...(input.status === "running" && input.turnStartedAt !== undefined
+      ? { turnStartedAt: input.turnStartedAt }
+      : {}),
     ...(input.title ? { title: input.title } : {}),
     ...(input.policy ? { policy: input.policy } : {}),
     ...(Object.keys(input.runtime).length > 0 ? { runtime: input.runtime } : {}),

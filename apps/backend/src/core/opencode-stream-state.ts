@@ -27,6 +27,7 @@ type OpenCodeStreamSession = {
   title?: string;
   permission?: unknown;
   runtime?: Pick<NativeAgentRuntimeSummary, "todos" | "files">;
+  turnStartedAt?: number;
 };
 
 export type OpenCodeStreamEffect = {
@@ -114,6 +115,36 @@ export class OpenCodeStreamState {
     return [...(this.sessions.get(sessionId)?.notices ?? [])];
   }
 
+  /** Record dispatch before a renderer has to observe the turn. */
+  beginTurn(sessionId: string, startedAt: number): void {
+    this.session(sessionId).turnStartedAt = startedAt;
+  }
+
+  /** Supply a backend observation clock for turns that started externally. */
+  ensureTurnStarted(
+    sessionId: string,
+    observedAt: number,
+    expectedEventVersion?: number,
+  ): number | undefined {
+    const state = this.session(sessionId);
+    if (expectedEventVersion !== undefined && state.eventVersion !== expectedEventVersion) {
+      return state.turnStartedAt;
+    }
+    state.turnStartedAt ??= observedAt;
+    return state.turnStartedAt;
+  }
+
+  /** Remove only the dispatch clock belonging to this rejected request. */
+  rejectTurn(sessionId: string, startedAt: number): void {
+    const state = this.sessions.get(sessionId);
+    if (state?.turnStartedAt === startedAt) delete state.turnStartedAt;
+  }
+
+  endTurn(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) delete state.turnStartedAt;
+  }
+
   markGap(): void {
     for (const state of this.sessions.values()) {
       state.messagesCurrent = false;
@@ -125,7 +156,7 @@ export class OpenCodeStreamState {
     this.sessions.clear();
   }
 
-  apply(event: OpenCodeEvent): OpenCodeStreamEffect {
+  apply(event: OpenCodeEvent, observedAt = Date.now()): OpenCodeStreamEffect {
     if (event.type === "mcp.tools.changed") return { refreshMcp: true };
     if (event.type === "server.connected") return {};
     if (event.type === "server.instance.disposed" || event.type === "global.disposed") {
@@ -143,12 +174,21 @@ export class OpenCodeStreamState {
       const status = asRecord(properties?.status)?.type;
       if (status === "busy" || status === "retry") {
         state.notices = [];
+        this.ensureTurnStarted(sessionId, observedAt);
         return { sessionId, status: "running" };
       }
-      return status === "idle" ? { sessionId, status: "idle" } : { sessionId };
+      if (status === "idle") {
+        this.endTurn(sessionId);
+        return { sessionId, status: "idle" };
+      }
+      return { sessionId };
     }
-    if (event.type === "session.idle") return { sessionId, status: "idle" };
+    if (event.type === "session.idle") {
+      this.endTurn(sessionId);
+      return { sessionId, status: "idle" };
+    }
     if (event.type === "session.deleted") {
+      this.endTurn(sessionId);
       state.messagesCurrent = false;
       return { sessionId, status: "missing" };
     }
@@ -183,6 +223,7 @@ export class OpenCodeStreamState {
       return { sessionId };
     }
     if (event.type === "session.error") {
+      this.endTurn(sessionId);
       const error = asRecord(properties?.error);
       const data = asRecord(error?.data);
       const message =

@@ -4,11 +4,15 @@ import {
   openCodeFake,
   waitUntil,
 } from "./agent-provider-test-support.js";
-import type { ProviderInteractiveSnapshot } from "./agent-provider-contract.js";
+import type {
+  ProviderInteractiveSnapshot,
+  ProviderSessionStateSnapshot,
+} from "./agent-provider-contract.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 
 type SnapshotProvider = {
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
+  sessionStateSnapshot?(sessionId: string): Promise<ProviderSessionStateSnapshot>;
 };
 
 async function waitForSnapshot(
@@ -24,6 +28,19 @@ async function waitForSnapshot(
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error("Timed out waiting for OpenCode projection");
+}
+
+async function waitForSessionState(
+  provider: SnapshotProvider,
+  predicate: (snapshot: ProviderSessionStateSnapshot) => boolean,
+) {
+  let latest;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    latest = await provider.sessionStateSnapshot?.("owned-session");
+    if (latest && predicate(latest)) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("Timed out waiting for OpenCode session state");
 }
 
 function textMessage(text: string) {
@@ -58,6 +75,64 @@ function indexedTextMessage(index: number) {
 }
 
 describe("OpenCode provider v1 SSE projection", () => {
+  test("publishes one stable backend clock for each running turn", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(
+        () =>
+          fake.subscriptions.length === 1 &&
+          fake.statusCallCount > 0 &&
+          fake.messageCalls.length > 0,
+      );
+      const initial = await provider.sessionStateSnapshot?.("owned-session");
+      expect(initial?.status).toBe("idle");
+
+      // No renderer state read happens while the prompt starts. The provider
+      // clock still begins at dispatch and survives until the tab returns.
+      now = 1_000;
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      now = 9_000;
+      const first = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running",
+      );
+      expect(first).toMatchObject({ status: "running", turnStartedAt: 1_000 });
+
+      now = 10_000;
+      const later = await provider.sessionStateSnapshot?.("owned-session");
+      expect(later).toMatchObject({ status: "running", turnStartedAt: 1_000 });
+
+      stream.push({
+        type: "session.idle",
+        properties: { sessionID: "owned-session" },
+      });
+      const idle = await waitForSessionState(provider, (snapshot) => snapshot.status === "idle");
+      expect(idle.turnStartedAt).toBeUndefined();
+
+      now = 12_000;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const next = await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+      expect(next.turnStartedAt).toBe(12_000);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("merges transcript, lifecycle, metadata, runtime, interaction and MCP events", async () => {
     const fake = openCodeFake();
     fake.setMessagesResponse({ data: [textMessage("Before")] });

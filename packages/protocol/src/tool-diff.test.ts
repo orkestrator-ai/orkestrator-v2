@@ -252,9 +252,24 @@ describe("toolDiffFromToolInput", () => {
 
 describe("toolDiffFromOpenCodeToolState", () => {
   test("recognizes the same file-mutating names the edit row uses", () => {
-    expect(isFileEditToolName("edit")).toBe(true);
-    expect(isFileEditToolName("Write")).toBe(true);
-    expect(isFileEditToolName("apply_patch")).toBe(true);
+    // Every entry in FILE_EDIT_TOOL_NAMES is pinned, so a later edit that drops
+    // one from the shared set cannot leave those tools without edit treatment.
+    for (const name of [
+      "edit",
+      "file_edit",
+      "str_replace_editor",
+      "replace",
+      "write",
+      "create_file",
+      "patch",
+      "apply_patch",
+      "multiedit",
+      "notebookedit",
+      "insert",
+    ]) {
+      expect(isFileEditToolName(name)).toBe(true);
+      expect(isFileEditToolName(name.toUpperCase())).toBe(true);
+    }
     expect(isFileEditToolName("bash")).toBe(false);
     expect(isFileEditToolName()).toBe(false);
   });
@@ -296,6 +311,135 @@ describe("toolDiffFromOpenCodeToolState", () => {
     ).toMatchObject({
       filePath: "apps/web/src/app/about/you/decks/actions.test.ts",
     });
+  });
+
+  test("resolves an extension-less root relative title such as Makefile", () => {
+    // OpenCode's title is `path.relative(worktree, filePath)`. A root Makefile
+    // has neither a separator nor a dotted suffix and must still resolve.
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "Makefile",
+        output: "Edit applied successfully.",
+      }),
+    ).toMatchObject({ filePath: "Makefile" });
+
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "write",
+        input: {},
+        title: "Dockerfile",
+        output: "File written successfully.",
+      }),
+    ).toMatchObject({ filePath: "Dockerfile" });
+  });
+
+  test("accepts a Windows backslash title as a path", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "src\\nested\\a.ts",
+        output: "Edit applied successfully.",
+      }),
+    ).toMatchObject({ filePath: "src\\nested\\a.ts" });
+  });
+
+  test("does not treat a descriptive or prose title as a file path", () => {
+    // "Edit file.ts" is a description that merely ends in an extension, and
+    // "Update package.json" is a sentence. Neither is a path.
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "Edit file.ts",
+        output: "Edit applied successfully.",
+      }),
+    ).toBeUndefined();
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "Update package.json",
+        output: "Edit applied successfully.",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("returns undefined when an edit tool exposes no location or change at all", () => {
+    expect(toolDiffFromOpenCodeToolState({ toolName: "edit", input: {} })).toBeUndefined();
+    expect(
+      toolDiffFromOpenCodeToolState({ toolName: "edit", input: {}, metadata: {}, output: "" }),
+    ).toBeUndefined();
+  });
+
+  test("recognizes patch, apply_patch, multiedit and insert tool states", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "apply_patch",
+        input: { file_path: "a.ts", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+      }),
+    ).toMatchObject({
+      filePath: "a.ts",
+      diff: "@@ -1 +1 @@\n-old\n+new\n",
+      additions: 1,
+      deletions: 1,
+    });
+
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "patch",
+        input: { file_path: "p.ts", patch: "@@ -1 +1,2 @@\n-old\n+new\n+more" },
+      }),
+    ).toMatchObject({ filePath: "p.ts", additions: 2, deletions: 1 });
+
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "multiedit",
+        input: {
+          file_path: "m.ts",
+          edits: [
+            { old_string: "one", new_string: "two\nthree" },
+            { old_string: "four\n", new_string: "five" },
+          ],
+        },
+      }),
+    ).toMatchObject({ filePath: "m.ts", additions: 3, deletions: 2 });
+
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "insert",
+        input: { file_path: "i.ts" },
+      }),
+    ).toMatchObject({ filePath: "i.ts" });
+  });
+
+  test("counts an OpenCode output that is itself a unified diff", () => {
+    // The output fallback is the only branch that reads tool output for counts,
+    // and it only applies when no metadata or diff already supplied them.
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "a.ts",
+        output: "@@ -1 +1 @@\n-old\n+new",
+      }),
+    ).toMatchObject({ filePath: "a.ts", additions: 1, deletions: 1 });
+  });
+
+  test("leaves a metadata object whose own fields name the edit alone", () => {
+    // An outer object that already carries an edit field must not be unwrapped,
+    // even when its nested `metadata` looks like the real carrier.
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        metadata: {
+          file: "outer.ts",
+          metadata: { diff: "@@ -1 +1 @@\n-nested\n+nested" },
+        },
+      }),
+    ).toMatchObject({ filePath: "outer.ts", diff: undefined });
   });
 
   test("does not treat a success string as a file path", () => {

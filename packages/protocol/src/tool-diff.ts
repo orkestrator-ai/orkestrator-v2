@@ -271,14 +271,25 @@ function unwrapOpenCodeMetadata(value: unknown): Record<string, unknown> | undef
 }
 
 /**
- * OpenCode's edit/write title is `path.relative(worktree, filePath)`. A
- * generic status string must not become a file row.
+ * OpenCode's edit/write title is `path.relative(worktree, filePath)`, so a
+ * real title is a path and contains no whitespace.
+ *
+ * A generic status string ("Edit applied successfully.") and a descriptive
+ * title ("Edit file.ts") both contain whitespace, and neither may become a
+ * file row. A trailing period is a sentence terminator rather than a filename.
+ *
+ * A relative path need not carry an extension: a root `Makefile`, `Dockerfile`
+ * or `LICENSE` has neither a separator nor a dotted suffix, so a bare
+ * filename-shaped token is accepted once the title is known not to be prose.
  */
 function pathLikeTitle(title: string | undefined): string | undefined {
   const trimmed = title?.trim();
   if (!trimmed) return undefined;
+  if (/\s/.test(trimmed)) return undefined;
+  if (trimmed.endsWith(".")) return undefined;
   if (/[\\/]/.test(trimmed)) return trimmed;
   if (/\.[A-Za-z0-9]+$/.test(trimmed)) return trimmed;
+  if (/^[A-Za-z0-9_.-]+$/.test(trimmed)) return trimmed;
   return undefined;
 }
 

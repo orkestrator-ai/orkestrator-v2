@@ -975,7 +975,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       status: await this.projectedStatus(sessionId),
       revision: this.streamState.revision(sessionId),
       title: this.streamState.title(sessionId),
-      messages: this.streamState.currentMessages(sessionId) ?? [],
+      messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       policy: this.sessionPolicies.get(sessionId),
       runtime: this.streamState.runtime(sessionId),
       notices: this.streamState.notices(sessionId),

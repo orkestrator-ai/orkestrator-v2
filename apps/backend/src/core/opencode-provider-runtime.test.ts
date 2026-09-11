@@ -448,6 +448,67 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("keeps an unchanged progressive state snapshot byte-stable", async () => {
+    const fake = openCodeFake();
+    fake.setMessagesResponse({
+      data: [
+        {
+          info: {
+            id: "assistant-1",
+            role: "assistant",
+            providerID: "anthropic",
+            modelID: "claude-sonnet",
+            tokens: { input: 7, output: 3, reasoning: 1, cache: { read: 1, write: 0 } },
+            time: { created: 1, completed: 2 },
+          },
+          parts: [],
+        },
+      ],
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await provider.interactiveSnapshot?.("owned-session");
+      const first = await provider.sessionStateSnapshot?.("owned-session");
+      const second = await provider.sessionStateSnapshot?.("owned-session");
+      expect(second?.contextUsage).toEqual(first?.contextUsage);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps the last cached usage when the dirty stream cache outgrew its bound", async () => {
+    const fake = openCodeFake();
+    const messageCount = 1_026;
+    const outsideWindow = messageCount - OPEN_CODE_MESSAGE_HISTORY_LIMIT;
+    const messages = Array.from({ length: messageCount }, (_, index) => ({
+      info: {
+        id: `message-${index}`,
+        role: "assistant",
+        providerID: "anthropic",
+        modelID: "claude-sonnet",
+        tokens: { input: index < outsideWindow ? 10 : 1, output: 0, cache: { read: 0, write: 0 } },
+        time: { created: index + 1, completed: index + 2 },
+      },
+      parts: [],
+    }));
+    fake.setMessagesResponse({ data: messages });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const interactive = await provider.interactiveSnapshot?.("owned-session");
+      // The newest-64 window only sees the final messages.
+      expect(interactive?.contextUsage).toMatchObject({ usedTokens: 1, source: "opencode" });
+      // 1026 messages exceed MAX_STREAM_MESSAGES, so the stream cache is dirty
+      // and `currentMessages` is undefined; the state read must still report the
+      // last known usage and derive it from the same newest-64 window.
+      const state = await provider.sessionStateSnapshot?.("owned-session");
+      expect(state?.contextUsage).toMatchObject({ usedTokens: 1, source: "opencode" });
+      expect(state?.contextUsage?.sessionTokens).toBe(interactive?.contextUsage?.sessionTokens);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("projects and caches the live OpenCode model catalog with session metadata", async () => {
     const fake = openCodeFake();
     const providerList = mock(async () => ({

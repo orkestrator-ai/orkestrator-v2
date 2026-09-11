@@ -91,6 +91,38 @@ describe("usage projection history", () => {
     expect(withProviderContextWindow(undefined, 200_000)).toBeUndefined();
   });
 
+  test("computes the percentage from a provider-reported maximum", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 50_000, maximumTokens: 100_000 }, 200_000),
+    ).toEqual({ usedTokens: 50_000, maximumTokens: 100_000, percentage: 50 });
+  });
+
+  test("does not divide by a provider-reported zero maximum", () => {
+    expect(withProviderContextWindow({ usedTokens: 50_000, maximumTokens: 0 }, undefined)).toEqual({
+      usedTokens: 50_000,
+      maximumTokens: 0,
+    });
+  });
+
+  test("falls back to the prior projection's window when the catalogue is cold", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 60_000 }, undefined, {
+        usedTokens: 50_000,
+        maximumTokens: 200_000,
+        percentage: 25,
+      }),
+    ).toEqual({ usedTokens: 60_000, maximumTokens: 200_000, percentage: 30 });
+  });
+
+  test("prefers a resolved window over the prior projection's", () => {
+    expect(
+      withProviderContextWindow({ usedTokens: 60_000 }, 300_000, {
+        usedTokens: 50_000,
+        maximumTokens: 200_000,
+      }),
+    ).toEqual({ usedTokens: 60_000, maximumTokens: 300_000, percentage: 20 });
+  });
+
   test("projects fresh account usage without discarding transcript usage", async () => {
     const stub = createProviderStub("cursor", {
       interactiveSnapshot: async () => ({

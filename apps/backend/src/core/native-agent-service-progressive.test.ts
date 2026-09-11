@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { openCodeContextUsage } from "./opencode-usage.js";
 import {
   createProviderStub,
   internals,
@@ -390,6 +391,155 @@ describe("native agent progressive remainder", () => {
           logicalSessionKey: "env-env-1:progressive-context-window",
         };
         await service.ensureSession(identity);
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(update.status).toBe("snapshot");
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        expect(update.value.contextUsage).toMatchObject({
+          usedTokens: 50_000,
+          maximumTokens: 200_000,
+          percentage: 25,
+        });
+      },
+    );
+  });
+
+  test("returns unchanged for an OpenCode state read whose transcript is stable", async () => {
+    const messages = [
+      {
+        info: {
+          id: "assistant-1",
+          role: "assistant",
+          providerID: "anthropic",
+          modelID: "claude-sonnet",
+          tokens: { input: 7, output: 3, cache: { read: 1, write: 0 } },
+          time: { created: 1, completed: 2 },
+        },
+        parts: [],
+      },
+    ];
+    const stub = createProviderStub("opencode", {
+      sessionStateSnapshot: async () => ({
+        status: "idle" as const,
+        phase: "idle" as const,
+        contextUsage: openCodeContextUsage(messages),
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-stable-token-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:progressive-stable-token",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(first.status).toBe("snapshot");
+        if (first.status !== "snapshot") throw new Error("expected snapshot");
+        // A per-read timestamp would change the hashed state view and force a
+        // redundant snapshot on every poll.
+        const second = await service.getSessionStateUpdate({
+          ...identity,
+          viewVersion: 1,
+          knownToken: first.token,
+        });
+        expect(second.status).toBe("unchanged");
+      },
+    );
+  });
+
+  test("keeps the projected context window when OpenCode reports usage without a composer", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle" as const,
+        messages: [],
+        contextUsage: { usedTokens: 50_000, source: "opencode" as const },
+        composer: {
+          models: [
+            {
+              platform: "opencode" as const,
+              id: "opencode/claude-sonnet",
+              label: "Claude Sonnet",
+              contextWindow: 200_000,
+            },
+          ],
+          selectedModelId: "opencode/claude-sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+        },
+      }),
+      sessionStateSnapshot: async () => ({
+        status: "idle" as const,
+        phase: "idle" as const,
+        contextUsage: { usedTokens: 60_000, source: "opencode" as const },
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-cold-catalogue-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:progressive-cold-catalogue",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.contextUsage).toMatchObject({
+          usedTokens: 50_000,
+          maximumTokens: 200_000,
+          percentage: 25,
+        });
+        // The state read carries no composer and the catalogue is still cold, so
+        // the window has to come from the projection rather than dropping out.
+        const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(update.status).toBe("snapshot");
+        if (update.status !== "snapshot") throw new Error("expected snapshot");
+        expect(update.value.contextUsage).toMatchObject({
+          usedTokens: 60_000,
+          maximumTokens: 200_000,
+          percentage: 30,
+        });
+      },
+    );
+  });
+
+  test("keeps the projected usage when a state read races ahead of the provider cache", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle" as const,
+        messages: [],
+        contextUsage: { usedTokens: 50_000, source: "opencode" as const },
+        composer: {
+          models: [
+            {
+              platform: "opencode" as const,
+              id: "opencode/claude-sonnet",
+              label: "Claude Sonnet",
+              contextWindow: 200_000,
+            },
+          ],
+          selectedModelId: "opencode/claude-sonnet",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+        },
+      }),
+      sessionStateSnapshot: async () => ({ status: "idle" as const, phase: "idle" as const }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-race-usage-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:progressive-race-usage",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.contextUsage).toMatchObject({ usedTokens: 50_000 });
+        // The provider answered before its transcript cache was ready, so the
+        // state read omits usage; the projection's counters must survive.
         const update = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
         expect(update.status).toBe("snapshot");
         if (update.status !== "snapshot") throw new Error("expected snapshot");

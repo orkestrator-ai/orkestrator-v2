@@ -117,13 +117,15 @@ export async function requireGitHubProject(
 
 export type RendererGlobalConfig = Omit<
   AppConfig["global"],
-  "githubToken" | "anthropicApiKey" | "cursorApiKey"
+  "githubToken" | "anthropicApiKey" | "cursorApiKey" | "openCodeZenApiKey"
 > & {
   githubTokenConfigured: boolean;
   anthropicApiKeyConfigured: boolean;
   anthropicApiKeySource: ApiKeySource;
   cursorApiKeyConfigured: boolean;
   cursorApiKeySource: ApiKeySource;
+  openCodeZenApiKeyConfigured: boolean;
+  openCodeZenApiKeySource: ApiKeySource;
 };
 
 export type RendererAppConfig = Omit<AppConfig, "global"> & {
@@ -167,6 +169,20 @@ export function resolveCursorApiKey(global: AppConfig["global"]): {
   return resolveStoredOrInheritedApiKey(global.cursorApiKey, process.env.CURSOR_API_KEY);
 }
 
+/**
+ * The OpenCode Zen plan key, used to read plan usage in Settings.
+ *
+ * A stored key wins over `OPENCODE_GO_API_KEY` inherited from the backend
+ * process, matching the Cursor/Anthropic resolution order so the settings pane
+ * can report which one is actually in play.
+ */
+export function resolveOpenCodeZenApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: ApiKeySource;
+} {
+  return resolveStoredOrInheritedApiKey(global.openCodeZenApiKey, process.env.OPENCODE_GO_API_KEY);
+}
+
 export function cursorApiKeyFingerprint(apiKey: string | undefined): string {
   return createHash("sha256")
     .update(apiKey ?? "")
@@ -176,7 +192,8 @@ export function cursorApiKeyFingerprint(apiKey: string | undefined): string {
 export function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
   const { source: anthropicApiKeySource } = resolveAnthropicApiKey(global);
   const { source: cursorApiKeySource } = resolveCursorApiKey(global);
-  const { githubToken, anthropicApiKey, cursorApiKey, ...safeGlobal } = global;
+  const { source: openCodeZenApiKeySource } = resolveOpenCodeZenApiKey(global);
+  const { githubToken, anthropicApiKey, cursorApiKey, openCodeZenApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
     githubTokenConfigured: Boolean(githubToken?.trim()),
@@ -184,6 +201,8 @@ export function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalC
     anthropicApiKeySource,
     cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
     cursorApiKeySource,
+    openCodeZenApiKeyConfigured: Boolean(openCodeZenApiKey?.trim()),
+    openCodeZenApiKeySource,
   };
 }
 
@@ -204,6 +223,9 @@ export function stripRendererCredentials(global: Record<string, unknown>): AppCo
     cursorApiKey: _ignoredCursorApiKey,
     cursorApiKeyConfigured: _ignoredCursorConfigured,
     cursorApiKeySource: _ignoredCursorSource,
+    openCodeZenApiKey: _ignoredOpenCodeZenApiKey,
+    openCodeZenApiKeyConfigured: _ignoredOpenCodeZenConfigured,
+    openCodeZenApiKeySource: _ignoredOpenCodeZenSource,
     ...safeGlobal
   } = global;
   return safeGlobal as AppConfig["global"];

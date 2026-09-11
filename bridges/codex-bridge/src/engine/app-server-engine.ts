@@ -63,6 +63,7 @@ import {
   type EngineGeneration,
   type EngineInfo,
   type EngineModel,
+  type EngineRateLimitWindow,
   type EngineThread,
   type EngineThreadTurn,
   type EngineTurn,
@@ -279,6 +280,42 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
     rateLimits,
     ...(Object.keys(rateLimitsByLimitId).length > 0 ? { rateLimitsByLimitId } : {}),
   };
+}
+
+/**
+ * Map an `account/rateLimits/read` response onto the engine's window shape.
+ *
+ * The on-demand read answers the same snapshot an `account/rateLimits/updated`
+ * notification carries, but without a thread to attribute it to. Reusing the
+ * allowlist here keeps the on-demand path from being a second, narrower
+ * interpretation of the provider's payload.
+ */
+export function rateLimitWindowsFromRead(value: unknown): EngineRateLimitWindow[] {
+  const response = objectRecord(value);
+  const snapshot = allowlistRateLimitSnapshot(response.rateLimits);
+  const planLabel = optionalPublicString(snapshot.limitName);
+  const windows: EngineRateLimitWindow[] = [];
+  for (const slot of ["primary", "secondary"] as const) {
+    if (!Object.hasOwn(snapshot, slot)) continue;
+    const window = objectRecord(snapshot[slot]);
+    if (!window) continue;
+    const usedPercent = typeof window.usedPercent === "number" ? window.usedPercent : undefined;
+    const windowMinutes =
+      typeof window.windowDurationMins === "number" ? window.windowDurationMins : undefined;
+    const resetsAtMs = typeof window.resetsAt === "number" ? window.resetsAt * 1_000 : undefined;
+    const resetsAt =
+      resetsAtMs !== undefined && Number.isFinite(resetsAtMs)
+        ? new Date(resetsAtMs).toISOString()
+        : undefined;
+    windows.push({
+      slot,
+      label: slot === "primary" ? (planLabel ?? "Primary") : "Secondary",
+      ...(usedPercent !== undefined ? { usedPercent } : {}),
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
+      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+    });
+  }
+  return windows;
 }
 
 function safeUsageCount(value: unknown): number | undefined {
@@ -1243,6 +1280,17 @@ export class AppServerEngine implements CodexEngine {
   async readAccountUsage(): Promise<EngineAccountUsageWindow[]> {
     const response = await this.supervisor.request("account/usage/read", undefined);
     return accountUsageWindows(response);
+  }
+
+  /**
+   * Read the account's plan-limit windows without a thread.
+   *
+   * `account/rateLimits/read` is thread-free, so the settings page can ask the
+   * app-server for quota whenever it opens rather than borrowing a session.
+   */
+  async readRateLimitWindows(): Promise<EngineRateLimitWindow[]> {
+    const response = await this.supervisor.request("account/rateLimits/read", undefined);
+    return rateLimitWindowsFromRead(response);
   }
 
   async beginAccountLogin(): Promise<unknown> {

@@ -200,6 +200,8 @@ exit 1
             anthropicApiKeySource: "none",
             cursorApiKeyConfigured: true,
             cursorApiKeySource: "config",
+            openCodeZenApiKeyConfigured: false,
+            openCodeZenApiKeySource: "none",
           },
           repositories: {},
         },

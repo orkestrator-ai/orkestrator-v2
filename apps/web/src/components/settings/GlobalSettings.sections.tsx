@@ -83,6 +83,7 @@ import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
+import { PlanUsageSection } from "./PlanUsageSection";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useProjectStore, useUIStore } from "@/stores";
 import {
@@ -122,6 +123,9 @@ function formatLogBytes(bytes: number): string {
 }
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
+
+/** Platforms whose plan quota the backend can read without an active session. */
+const PLAN_USAGE_PLATFORMS: readonly AgentPlatform[] = ["claude", "codex", "cursor", "opencode"];
 
 /**
  * Ordered strongest first, and worded in terms of what the user gets rather
@@ -189,6 +193,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCursorApiKey,
     clearCursorApiKey,
     setClearCursorApiKey,
+    openCodeZenApiKey,
+    setOpenCodeZenApiKey,
+    clearOpenCodeZenApiKey,
+    setClearOpenCodeZenApiKey,
+    showOpenCodeZenApiKey,
+    setShowOpenCodeZenApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
     sshAgentSocketPath,
@@ -502,23 +512,26 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   );
 
   const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
-    <AgentPlatformPane
-      platform={platform}
-      tier={agentSettings}
-      onChange={setAgentSettings}
-      tiers={agentTiers}
-      canInherit={false}
-      catalog={catalog}
-      disabled={isSaving}
-      onRefreshModels={() => void refreshModelCatalog(platform)}
-      refreshingModels={refreshingModelCatalog === platform}
-      refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
-      modelCatalogScopeDescription={
-        platform === "opencode" ? openCodeCatalogScopeDescription : undefined
-      }
-    >
-      {extras}
-    </AgentPlatformPane>
+    <div className="max-w-2xl space-y-5">
+      {PLAN_USAGE_PLATFORMS.includes(platform) ? <PlanUsageSection platform={platform} /> : null}
+      <AgentPlatformPane
+        platform={platform}
+        tier={agentSettings}
+        onChange={setAgentSettings}
+        tiers={agentTiers}
+        canInherit={false}
+        catalog={catalog}
+        disabled={isSaving}
+        onRefreshModels={() => void refreshModelCatalog(platform)}
+        refreshingModels={refreshingModelCatalog === platform}
+        refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
+        modelCatalogScopeDescription={
+          platform === "opencode" ? openCodeCatalogScopeDescription : undefined
+        }
+      >
+        {extras}
+      </AgentPlatformPane>
+    </div>
   );
 
   const renderGeneral = () => (
@@ -1006,6 +1019,73 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       "opencode",
       <>
         <div className="space-y-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Key className="h-4 w-4" />
+              OpenCode Zen API Key
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Used to read your OpenCode Zen (Go) plan usage. Stored by Orkestrator and never sent
+              to an agent environment.
+            </p>
+          </div>
+          <div className="relative">
+            <Input
+              aria-label="OpenCode Zen API key"
+              type={showOpenCodeZenApiKey ? "text" : "password"}
+              value={openCodeZenApiKey}
+              onChange={(event) => {
+                setOpenCodeZenApiKey(event.target.value);
+                if (event.target.value) setClearOpenCodeZenApiKey(false);
+              }}
+              placeholder={
+                global.openCodeZenApiKeyConfigured && !clearOpenCodeZenApiKey
+                  ? "API key configured — enter a replacement"
+                  : "OpenCode Zen API key"
+              }
+              className="pr-10 font-mono"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+              onClick={() => setShowOpenCodeZenApiKey(!showOpenCodeZenApiKey)}
+              aria-label={
+                showOpenCodeZenApiKey ? "Hide OpenCode Zen API key" : "Show OpenCode Zen API key"
+              }
+            >
+              {showOpenCodeZenApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
+          </div>
+          {global.openCodeZenApiKeyConfigured && !clearOpenCodeZenApiKey && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setOpenCodeZenApiKey("");
+                setClearOpenCodeZenApiKey(true);
+              }}
+            >
+              Clear stored OpenCode Zen API key
+            </Button>
+          )}
+          {clearOpenCodeZenApiKey && (
+            <p className="text-xs text-amber-500">
+              The stored OpenCode Zen API key will be cleared when you save.
+            </p>
+          )}
+          {global.openCodeZenApiKeySource === "host-env" && (
+            <p className="text-xs text-amber-500">
+              No key is stored, but Orkestrator inherited OPENCODE_GO_API_KEY from its own
+              environment. Unset the variable and restart Orkestrator to stop using it; a stored key
+              overrides it.
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-3 border-t border-border/60 pt-5">
           <div>
             <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
               <Boxes className="h-4 w-4" />

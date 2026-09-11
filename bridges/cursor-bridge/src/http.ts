@@ -142,6 +142,14 @@ async function routeGlobal(
     json(response, 200, { models: await listModels() });
     return true;
   }
+  if (url.pathname === "/global/usage" && request.method === "GET") {
+    // Plan-quota read only needs the stored credential, not a session. The
+    // refresh never rejects, so an unreachable dashboard answers with an empty
+    // list that the backend reports as "unavailable".
+    const account = (await refreshPlanAccountWindows()) ?? [];
+    json(response, 200, { account });
+    return true;
+  }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
     refreshModels();
     json(response, 200, { ok: true });

@@ -231,6 +231,9 @@ export abstract class StorageConfig extends StorageProjects {
                 ? { anthropicApiKey: current.global.anthropicApiKey }
                 : {}),
               ...(current.global.cursorApiKey ? { cursorApiKey: current.global.cursorApiKey } : {}),
+              ...(current.global.openCodeZenApiKey
+                ? { openCodeZenApiKey: current.global.openCodeZenApiKey }
+                : {}),
             },
           }
         : validated;
@@ -531,6 +534,9 @@ export abstract class StorageConfig extends StorageProjects {
               ? { anthropicApiKey: config.global.anthropicApiKey }
               : {}),
             ...(config.global.cursorApiKey ? { cursorApiKey: config.global.cursorApiKey } : {}),
+            ...(config.global.openCodeZenApiKey
+              ? { openCodeZenApiKey: config.global.openCodeZenApiKey }
+              : {}),
           }
         : validated;
       await this.saveJson(this.configFile(), config);
@@ -566,6 +572,17 @@ export abstract class StorageConfig extends StorageProjects {
       const config = await this.loadConfig();
       if (apiKey === null) delete config.global.anthropicApiKey;
       else config.global.anthropicApiKey = apiKey;
+      await this.saveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  async setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (apiKey === null) delete config.global.openCodeZenApiKey;
+      else config.global.openCodeZenApiKey = apiKey;
       await this.saveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

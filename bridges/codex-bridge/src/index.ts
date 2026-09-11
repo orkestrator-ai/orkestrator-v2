@@ -1168,6 +1168,12 @@ app.get("/global/models", async (c) => {
   return c.json({ models, source });
 });
 
+/** Account plan limits for the global settings pane; no session required. */
+app.get("/global/usage", async (c) => {
+  const account = await appServerRuntime.readPlanUsage();
+  return c.json({ account });
+});
+
 app.get("/global/slash-commands", async (c) => {
   const cwd = getWorkingDirectory();
   const commands = await getAvailableSlashCommandDefinitions(cwd);

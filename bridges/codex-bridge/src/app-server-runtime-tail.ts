@@ -38,6 +38,7 @@ import {
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
   AppServerRuntimeBase,
+  accountUsageFromLimits,
 } from "./app-server-runtime-base.js";
 import { AppServerRuntimePrompt } from "./app-server-runtime-prompt.js";
 import { createHash } from "node:crypto";
@@ -55,6 +56,7 @@ import {
 } from "./app-server/interactions.js";
 import type {
   EngineEvent,
+  EngineAccountUsageWindow,
   EngineGeneration,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
@@ -231,6 +233,17 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
       );
     }
     return this.options.loadCachedModels();
+  }
+
+  /**
+   * Account plan limits, read fresh from app-server without a thread.
+   *
+   * Distinct from `getUsage`, which is session-scoped. The settings page has no
+   * session, and the app-server answers `account/rateLimits/read` globally.
+   */
+  async readPlanUsage(): Promise<EngineAccountUsageWindow[]> {
+    const limits = await this.options.engine.readRateLimitWindows();
+    return accountUsageFromLimits(limits, this.accountCredits);
   }
 
   // ----------------------------------------------------------------- history

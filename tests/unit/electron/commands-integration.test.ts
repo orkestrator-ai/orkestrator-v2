@@ -118,6 +118,7 @@ describe("storage-backed command delegation", () => {
         githubToken: "github_secret_token",
         anthropicApiKey: "anthropic_secret_key",
         cursorApiKey: "cursor_secret_key",
+        openCodeZenApiKey: "opencode_zen_secret_key",
       },
       repositories: {} as Record<string, RepositoryConfig>,
     };
@@ -141,6 +142,7 @@ describe("storage-backed command delegation", () => {
                   githubToken: config.global.githubToken,
                   anthropicApiKey: config.global.anthropicApiKey,
                   cursorApiKey: config.global.cursorApiKey,
+                  openCodeZenApiKey: config.global.openCodeZenApiKey,
                 },
               }
             : value;
@@ -156,6 +158,7 @@ describe("storage-backed command delegation", () => {
                   githubToken: config.global.githubToken,
                   anthropicApiKey: config.global.anthropicApiKey,
                   cursorApiKey: config.global.cursorApiKey,
+                  openCodeZenApiKey: config.global.openCodeZenApiKey,
                 }
               : value,
           };
@@ -183,6 +186,14 @@ describe("storage-backed command delegation", () => {
         config = {
           ...config,
           global: apiKey === null ? global : { ...global, anthropicApiKey: apiKey },
+        };
+        return config;
+      }),
+      setOpenCodeZenApiKey: mock(async (apiKey: string | null) => {
+        const { openCodeZenApiKey: _removed, ...global } = config.global;
+        config = {
+          ...config,
+          global: apiKey === null ? global : { ...global, openCodeZenApiKey: apiKey },
         };
         return config;
       }),
@@ -247,6 +258,8 @@ describe("storage-backed command delegation", () => {
         anthropicApiKeySource: "config",
         cursorApiKeyConfigured: true,
         cursorApiKeySource: "config",
+        openCodeZenApiKeyConfigured: true,
+        openCodeZenApiKeySource: "config",
       },
       repositories: {},
     });
@@ -257,6 +270,8 @@ describe("storage-backed command delegation", () => {
       anthropicApiKeySource: "config",
       cursorApiKeyConfigured: true,
       cursorApiKeySource: "config",
+      openCodeZenApiKeyConfigured: true,
+      openCodeZenApiKeySource: "config",
     });
 
     await expect(
@@ -318,6 +333,8 @@ describe("storage-backed command delegation", () => {
         anthropicApiKeySource: "config",
         cursorApiKeyConfigured: true,
         cursorApiKeySource: "config",
+        openCodeZenApiKeyConfigured: true,
+        openCodeZenApiKeySource: "config",
       },
       repositories: {},
     });

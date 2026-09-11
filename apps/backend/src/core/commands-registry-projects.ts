@@ -203,6 +203,7 @@ export function registerProjectCommands(
     conditionalManifestSnapshot,
     runProjectCreationCommand,
     refreshHostModelCatalog,
+    planUsageReader,
   } = dependencies;
   register(
     "greet",
@@ -860,6 +861,12 @@ export function registerProjectCommands(
   register("get_global_config", async (_args, { storage }) =>
     redactGlobalConfig((await storage.loadConfig()).global),
   );
+  register("get_plan_usage", async (args, context) => {
+    assertOnlyKeys(args, ["platform"], "arguments");
+    const platform = asNonBlankString(args.platform, "platform");
+    if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
+    return planUsageReader(context, platform);
+  });
   register("update_global_config", async ({ global }, { storage }) => {
     const updated = await storage.updateGlobalConfig(
       stripRendererCredentials(asRecord(global, "global")),
@@ -934,6 +941,13 @@ export function registerProjectCommands(
       throw new Error("Anthropic API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
+  });
+  register("set_opencode_zen_api_key", async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("OpenCode Zen API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setOpenCodeZenApiKey(nextApiKey));
   });
   register("get_repository_config", ({ projectId }, { storage }) =>
     storage.getRepositoryConfig(asString(projectId, "projectId")),

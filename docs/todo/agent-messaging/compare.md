@@ -1,5 +1,12 @@
 # Agent messaging proposal comparison
 
+> Historical note (2026-09-11): the Cursor/Grok "wiring audit" and "Pi cannot
+> call Agent MCP in v1" statements below described the 2026-08 design freeze.
+> Cursor and Grok bridges now inject the Orkestrator HTTP MCP server from
+> process env. `agentMailCapabilities()` still reports those native mailboxes
+> as human-inbox-only. Native Pi now has a bridge-owned MCP client; see
+> `agent-messaging-plan.md` §5.2.
+
 This document compares:
 
 - `agent-messaging-grok.md`
@@ -101,8 +108,9 @@ resolving several architectural and product decisions.
   override.
 - The default `wakePolicy` is not frozen, even though it determines whether a
   message can start billable work in an unstarted tab.
-- It claims every platform already receives the Agent MCP. Pi has no MCP client,
-  while Cursor and Grok wiring still needs confirmation.
+- It claims every platform already receives the Agent MCP. At freeze time Pi
+  had no MCP client and Cursor/Grok wiring was unconfirmed. Pi still has no
+  MCP client; Cursor/Grok launch wiring now exists (see the note at the top).
 
 ## Repository facts that constrain the decision
 
@@ -123,9 +131,11 @@ resolving several architectural and product decisions.
 - The resource manifest is currently intended for collection snapshots used by
   the broad renderer safety sweep. Record-scoped resources normally reconcile
   through their own revision-aware APIs.
-- Pi cannot call Agent MCP tools in v1. Cursor and Grok require a wiring audit.
-  Receive/injection support and agent-originated send/reply support therefore
-  need separate capability flags.
+- Pi cannot call Agent MCP tools (vendor has no MCP client). Cursor and Grok
+  required a wiring audit at freeze time; that launch wiring now exists, and
+  the remaining gate is `agentMailCapabilities()`. Receive/injection support
+  and agent-originated send/reply support still need separate capability
+  flags.
 
 ## Further investigation
 

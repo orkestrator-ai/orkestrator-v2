@@ -11,6 +11,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { approvalsEnabled, PROVIDER } from "./config.js";
+import { publicPiMcpServers } from "./mcp.js";
 import {
   piRunId,
   sessionIsBlocked,
@@ -215,9 +216,11 @@ export function publicInteractionKinds(state?: SessionState): string[] {
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {
   const drift = state.health.drift();
   const notices = state.health.listNotices();
+  const mcp = publicPiMcpServers(state);
   return {
     ...(state.todos.length > 0 ? { todos: state.todos.length } : {}),
     ...(state.slashCommands.length > 0 ? { commands: state.slashCommands.length } : {}),
+    ...(mcp.length > 0 ? { mcpServers: mcp.length, mcp } : {}),
     state: state.session ? "attached" : "detached",
     ...(drift ? { drift } : {}),
     ...(notices.length > 0 ? { notices } : {}),

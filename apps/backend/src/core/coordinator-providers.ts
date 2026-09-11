@@ -115,14 +115,9 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
           };
     case "pi":
       // Pi's gate runs inside the bridge on every tool call and cannot be
-      // switched off by the workspace. It ships no MCP client, so the
-      // coordinator's delegation tools are not reachable there.
-      return {
-        tier: "enforced",
-        reason:
-          "Pi has no MCP client, so worker delegation is unavailable. Inspection and planning work normally.",
-        mcpClient: false,
-      };
+      // switched off by the workspace. The bridge-owned MCP client registers
+      // Agent MCP tools on that same gate, so coordinator mail is reachable.
+      return { tier: "enforced", mcpClient: true };
     case "opencode":
       return {
         tier: "provider-configured",

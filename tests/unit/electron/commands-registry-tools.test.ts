@@ -717,7 +717,7 @@ describe("agent extension discovery commands", () => {
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
-      // Pi has no MCP client; Cursor gets MCP inventory from its live bridge.
+      // Pi's settings-pane fallback has no CLI MCP list; Cursor gets MCP inventory from its live bridge.
       if (catalog.agent === "pi" || catalog.agent === "cursor") {
         expect(catalog.mcpError).toBeUndefined();
       } else expect(catalog.mcpError).toBeTruthy();

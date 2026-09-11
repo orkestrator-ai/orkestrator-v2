@@ -329,7 +329,19 @@ export interface AgentSessionProvider {
    * a failure must never block the dispatch that follows, because the prompt
    * request performs the same work itself.
    */
-  prepareDispatch?(sessionId: string): Promise<void>;
+  prepareDispatch?(
+    sessionId: string,
+    options?: {
+      /**
+       * The tab-scoped Orkestrator MCP credential this turn will use.
+       *
+       * Supplied so a warm-up attach can connect the right identity instead of
+       * the process-env one, which would force the prompt to rebuild the
+       * session. Best-effort, like the attach itself.
+       */
+      agentMcp?: { url: string; token: string };
+    },
+  ): Promise<void>;
   /**
    * Ask whether the provider already holds this request id.
    *

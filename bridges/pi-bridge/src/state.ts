@@ -222,6 +222,12 @@ export interface SessionState {
   diagnostics?: BridgeRunDiagnostics;
   /** Workflow-owned tool restriction, independent of Pi thinking/composer modes. */
   readOnly?: boolean;
+  /**
+   * Per-tab Agent MCP credentials from create/prompt/resume. Runtime-only:
+   * persisting them would write the bearer into `state.json`. Attach falls
+   * back to the process env when this is absent after a restart.
+   */
+  agentMcp?: { url: string; token: string };
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;

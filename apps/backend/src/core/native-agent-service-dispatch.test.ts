@@ -1202,7 +1202,9 @@ describe("NativeAgentService", () => {
         // The cold start has to happen before the at-most-once window opens, or
         // it is spent inside the window it was moved out of.
         expect(order).toEqual(["prepare", "send"]);
-        expect(stub.prepareDispatch).toHaveBeenCalledWith("provider-session");
+        expect(stub.prepareDispatch).toHaveBeenCalledWith("provider-session", {
+          agentMcp: undefined,
+        });
         const key = nativeAgentSessionStorageKey(
           base.environmentId,
           base.agent,

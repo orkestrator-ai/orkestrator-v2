@@ -615,7 +615,8 @@ describe("discoverAgentExtensions", () => {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
       expect(catalog.pluginError).toBeTruthy();
-      // Pi has no MCP client, while Cursor's live session bridge owns its MCP
+      // Pi's settings-pane fallback has no CLI MCP list; the live session bridge
+      // owns inventory. Cursor's live session bridge owns its MCP
       // inventory. Neither pre-session fallback has a CLI probe to fail.
       if (catalog.agent === "pi" || catalog.agent === "cursor") {
         expect(catalog.mcpError).toBeUndefined();

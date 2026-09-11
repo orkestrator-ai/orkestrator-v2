@@ -37,6 +37,7 @@ import {
 } from "./config.js";
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
+import { closePiMcp, mcpConnectionNeedsRefresh, piMcpExtension, preparePiMcp } from "./mcp.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
@@ -308,15 +309,37 @@ export async function ensureSession(state: SessionState): Promise<AgentSession> 
 }
 
 async function attach(state: SessionState): Promise<AgentSession> {
-  const session = agentSessionTestHooks.createAgentSession
-    ? await agentSessionTestHooks.createAgentSession(state)
-    : await createPiAgentSession(state);
+  try {
+    const session = agentSessionTestHooks.createAgentSession
+      ? await agentSessionTestHooks.createAgentSession(state)
+      : await createPiAgentSession(state);
 
-  // Before `publishAttachedSession`, which is where the command list is read:
-  // binding is what runs `resources_discover`, so an extension-contributed
-  // prompt template only exists on the session afterwards.
-  await bindSessionExtensions(state, session);
-  return publishAttachedSession(state, session);
+    // Before `publishAttachedSession`, which is where the command list is read:
+    // binding is what runs `resources_discover`, so an extension-contributed
+    // prompt template only exists on the session afterwards.
+    await bindSessionExtensions(state, session);
+    applyPiToolPolicy(session, state.policy);
+    return publishAttachedSession(state, session);
+  } catch (error) {
+    await closePiMcp(state);
+    throw error;
+  }
+}
+
+/**
+ * Rebuild an attached session when its tab-scoped MCP credential changed.
+ *
+ * Prompt, create, resume and attach all store a possibly rotated `agentMcp`,
+ * but a live Pi session's MCP extension keeps whatever connection it was built
+ * with. Pi fixes tool registrations at `createAgentSession`, so the only
+ * reliable way to move the connection is to detach and let the next
+ * `ensureSession` prepare from the new credential. A session with no live
+ * runtime is left alone: the next attach prepares it.
+ */
+export async function reconcileAgentMcp(state: SessionState): Promise<void> {
+  if (!state.session) return;
+  if (!mcpConnectionNeedsRefresh(state)) return;
+  await detachSession(state);
 }
 
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
@@ -325,8 +348,10 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
   // paid to start.
   await assertAuthenticated();
 
+  await closePiMcp(state);
   const runtime = await modelRuntime();
   const agentDir = agentDirectory() ?? getAgentDir();
+  await preparePiMcp(state, { agentDir });
   const createRuntime = async ({
     cwd,
     agentDir: runtimeAgentDir,
@@ -350,7 +375,10 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
         // sessions also exclude project instructions and registrations because
         // an extension can replace an otherwise allow-listed built-in tool.
         ...projectResourceDiscoveryOptions(state.policy?.projectResources, state.readOnly === true),
-        extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
+        extensionFactories: [
+          { name: "orkestrator", factory: approvalExtension(state) },
+          { name: "orkestrator-mcp", factory: piMcpExtension(state) },
+        ],
       },
     });
     await services.resourceLoader.reload({
@@ -684,6 +712,7 @@ export async function detachSession(state: SessionState): Promise<void> {
   state.runtime = undefined;
   state.unsubscribe = undefined;
   unsubscribe?.();
+  await closePiMcp(state);
   if (runtime) {
     await runtime.dispose().catch(() => undefined);
     return;

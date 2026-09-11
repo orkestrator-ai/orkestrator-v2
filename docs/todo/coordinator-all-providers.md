@@ -2,6 +2,10 @@
 
 Status: proposal, 2026-09-07. Branch `change-conversation-model-4302c7d2eb93-r1`.
 
+> Later note (2026-09-11): native Pi now has a bridge-owned MCP client and
+> `{canPull,canSend,canInject}=true`, so coordinator delegation is available
+> there. The Pi-bridge row below described the earlier vendor-client gap.
+
 ## Goal
 
 A coordinator conversation can be started on any enabled agent platform, the
@@ -42,7 +46,7 @@ Per-bridge enforcement today (from a survey of each bridge on this commit):
 | --- | --- | --- |
 | codex-bridge | OS permission profile, `sandbox: "read-only"`, `approvalPolicy: "never"`, private `CODEX_HOME`, network off, features off, re-stamped on every create/resume/fork/turn, fails closed if the profile is not echoed back | Enforced |
 | claude-bridge | `permissionMode: "dontAsk"`, `allowedTools`/`disallowedTools`, `sandbox.enabled`, `settingSources` trimming. No `PreToolUse` hook. Deny list uses Codex tool names, so it is a no-op here | Achievable, not built |
-| pi-bridge | In-process `tool_call` gate with `READ_ONLY_TOOLS` whitelist plus `setActiveToolsByName`; project resources off | Enforced at dispatch; no MCP client at all |
+| pi-bridge | In-process `tool_call` gate with `READ_ONLY_TOOLS` whitelist plus `setActiveToolsByName`; project resources off | Enforced at dispatch; no MCP client at all (mail/delegation would be `pi.registerTool`, not MCP) |
 | OpenCode | `session.create/update({ permission })` from `openCodePermissionRules`; `effectiveOpenCodePolicy` **throws** for coordinator because project config cannot be disabled | SDK-enforced, currently refused |
 | cursor-bridge | `sandboxOptions.enabled`, `disallowedTools`; `approvals: "deny"` **refuses attach** because the SDK has no approval callback | Provider-configured only |
 | acp-bridge (Grok) | Strips `--always-approve`; answers every permission request `cancelled`; no tool policy applied | Advisory only |

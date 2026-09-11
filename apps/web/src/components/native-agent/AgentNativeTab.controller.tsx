@@ -1686,25 +1686,6 @@ export function SharedNativeAgentController({
   useEffect(() => {
     if (connectionState === "connected") hasConnectedSessionRef.current = true;
   }, [connectionState]);
-  /*
-   * A tab has a session behind it once it was asked to resume one, or once it
-   * has connected at least once — the created id lands in `data.sessionId`
-   * only after the fact, so the ref is what covers a tab for the rest of its
-   * mount. Anything before that is first-time creation, which is a wait to
-   * show rather than a conversation to refresh.
-   */
-  const hasEstablishedSession =
-    Boolean(requestedResumeSessionIdRef.current) || hasConnectedSessionRef.current;
-  if (setupPending) {
-    return (
-      <SetupPendingOverlay
-        environmentId={data.environmentId}
-        setupPhase={environment?.setupPhase}
-        subtext={`${label} will connect automatically once setup finishes`}
-      />
-    );
-  }
-
   /**
    * Questions and plan reviews are conversational content, so they render as
    * the last transcript row. Command/file/permission approvals stay pinned
@@ -1717,6 +1698,36 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  /*
+   * A tab has a session behind it once it was asked to resume one, or once it
+   * has connected and actually produced something a user can act on or see:
+   * conversation, a pending interaction, or an authentication-required banner.
+   * The created id lands in `data.sessionId` only after the fact, so the ref is
+   * what covers a tab for the rest of its mount — but a tab that connected and
+   * is still completely empty has nothing to protect, and its next connect must
+   * stay an establishment wait. A resumed tab is different: its transcript may
+   * simply not have loaded yet, so it is treated as established before any
+   * message arrives.
+   *
+   * Actionable content counts even with no transcript because the establishment
+   * overlay replaces the whole pane, including the pinned row that carries the
+   * recovery controls. A tab that connected, revealed an authentication prompt
+   * or a blocking interaction, and then re-entered `connecting` must not lose
+   * the only control the user can act on while it waits.
+   */
+  const hasEstablishedSession =
+    Boolean(requestedResumeSessionIdRef.current) ||
+    (hasConnectedSessionRef.current &&
+      (messages.length > 0 || authenticationRequired || allInteractions.length > 0));
+  if (setupPending) {
+    return (
+      <SetupPendingOverlay
+        environmentId={data.environmentId}
+        setupPhase={environment?.setupPhase}
+        subtext={`${label} will connect automatically once setup finishes`}
+      />
+    );
+  }
   // An optimistic first prompt is not yet a conversation. Keeping the empty
   // layout centered until the provider accepts it prevents a fast terminal
   // rejection (authentication in particular) from sending the dock to the

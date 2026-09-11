@@ -9,38 +9,43 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 /**
  * Provider plan/quota shown at the top of a platform's settings pane.
  *
- * The read is global — it does not need an environment or session — so it is
- * fetched on mount and refreshed only on demand, keeping a bridge spawn off
- * the pane-switch path.
+ * OpenCode's read is a cheap HTTPS request, so it loads on mount. Claude, Codex
+ * and Cursor reads each spawn a short-lived bridge — and Claude's in turn spawns
+ * a whole Claude CLI — so those are read on demand, keeping a process spawn off
+ * the pane-switch path and behind the refresh control.
  */
 export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
+  const autoLoad = platform === "opencode";
   const [snapshot, setSnapshot] = useState<PlanUsageSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(autoLoad);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
 
-  const load = useCallback(async () => {
-    const requestId = ++requestRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await getPlanUsage(platform);
-      if (requestId !== requestRef.current) return;
-      setSnapshot(next);
-    } catch (err) {
-      if (requestId !== requestRef.current) return;
-      setError(err instanceof Error ? err.message : "Could not load plan usage");
-    } finally {
-      if (requestId === requestRef.current) setLoading(false);
-    }
-  }, [platform]);
+  const load = useCallback(
+    async (force = false) => {
+      const requestId = ++requestRef.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const next = await getPlanUsage(platform, { force });
+        if (requestId !== requestRef.current) return;
+        setSnapshot(next);
+      } catch (err) {
+        if (requestId !== requestRef.current) return;
+        setError(err instanceof Error ? err.message : "Could not load plan usage");
+      } finally {
+        if (requestId === requestRef.current) setLoading(false);
+      }
+    },
+    [platform],
+  );
 
   useEffect(() => {
-    void load();
+    if (autoLoad) void load();
     return () => {
       requestRef.current += 1;
     };
-  }, [load]);
+  }, [autoLoad, load]);
 
   const windows = snapshot?.windows ?? [];
   const message = error ?? (snapshot?.status === "error" ? snapshot.message : null);
@@ -63,7 +68,7 @@ export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
           variant="ghost"
           size="icon"
           className="h-7 w-7 shrink-0 text-muted-foreground"
-          onClick={() => void load()}
+          onClick={() => void load(true)}
           disabled={loading}
           aria-label="Refresh plan usage"
         >
@@ -97,6 +102,11 @@ export function PlanUsageSection({ platform }: { platform: AgentPlatform }) {
               </p>
             ) : null}
           </>
+        ) : !snapshot && !autoLoad ? (
+          <p className="text-xs text-muted-foreground">
+            Plan usage is read on demand so this pane does not start an agent process. Use refresh
+            to check it.
+          </p>
         ) : (
           <p className="text-xs text-muted-foreground">
             This account does not report any metered plan limits.

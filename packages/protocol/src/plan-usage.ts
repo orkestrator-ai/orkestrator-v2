@@ -11,6 +11,21 @@ import type { NativeAgentAccountUsageWindow } from "./native-agent.js";
  */
 export type PlanUsageStatus = "ok" | "unavailable" | "error";
 
+/**
+ * Platforms whose plan quota Orkestrator can read outside an agent session.
+ *
+ * Grok and Pi are deliberately absent: neither exposes an account quota read,
+ * and inventing one from session spend is exactly the fake meter the account
+ * panel was rewritten to avoid. This list is the single source of truth for
+ * both the backend reader and the settings section that offers the card.
+ */
+export const PLAN_USAGE_PLATFORMS = ["claude", "codex", "cursor", "opencode"] as const;
+export type PlanUsagePlatform = (typeof PLAN_USAGE_PLATFORMS)[number];
+
+export function isPlanUsagePlatform(value: unknown): value is PlanUsagePlatform {
+  return typeof value === "string" && (PLAN_USAGE_PLATFORMS as readonly string[]).includes(value);
+}
+
 export interface PlanUsageSnapshot {
   platform: AgentPlatform;
   status: PlanUsageStatus;

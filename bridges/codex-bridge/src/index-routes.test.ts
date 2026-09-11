@@ -87,6 +87,32 @@ describe("global route outcomes", () => {
       cwd: expect.any(String),
     });
   });
+
+  test("reports a soft-empty plan read as a null account, not an unmetered plan", async () => {
+    await withRuntimeMethod(
+      "readPlanUsage",
+      async () => undefined,
+      async () => {
+        const response = await app.request("/global/usage");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ account: null });
+      },
+    );
+  });
+
+  test("returns authoritative plan windows as an account array", async () => {
+    await withRuntimeMethod(
+      "readPlanUsage",
+      async () => [{ window: "primary", label: "Weekly limit", usedPercent: 10 }],
+      async () => {
+        const response = await app.request("/global/usage");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+          account: [{ window: "primary", label: "Weekly limit", usedPercent: 10 }],
+        });
+      },
+    );
+  });
 });
 
 describe("bridge authentication and origin policy", () => {

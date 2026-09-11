@@ -1171,7 +1171,9 @@ app.get("/global/models", async (c) => {
 /** Account plan limits for the global settings pane; no session required. */
 app.get("/global/usage", async (c) => {
   const account = await appServerRuntime.readPlanUsage();
-  return c.json({ account });
+  // `null` means the read produced no authoritative snapshot; the backend maps
+  // it to unavailable instead of "no metered limits".
+  return c.json({ account: account ?? null });
 });
 
 app.get("/global/slash-commands", async (c) => {

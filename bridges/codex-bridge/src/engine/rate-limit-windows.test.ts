@@ -37,4 +37,19 @@ describe("rateLimitWindowsFromRead", () => {
     expect(rateLimitWindowsFromRead({ error: "Unavailable" })).toEqual([]);
     expect(rateLimitWindowsFromRead({ rateLimits: {} })).toEqual([]);
   });
+
+  test("drops an out-of-range reset without discarding the window", () => {
+    const windows = rateLimitWindowsFromRead({
+      rateLimits: {
+        primary: { usedPercent: 40, resetsAt: 1e18, windowDurationMins: 300 },
+      },
+    });
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toEqual({
+      slot: "primary",
+      label: "Primary",
+      usedPercent: 40,
+      windowMinutes: 300,
+    });
+  });
 });

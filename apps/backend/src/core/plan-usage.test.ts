@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
 import {
+  bridgeAccountWindows,
   createPlanUsageReader,
   normalizeAccountWindows,
   OPENCODE_USAGE_URL,
@@ -59,6 +60,31 @@ describe("normalizeAccountWindows", () => {
     expect(windows[0]?.usedPercent).toBe(42);
     expect(windows[0]?.resetsAt).toBe(new Date(1_800_000_000_000).toISOString());
   });
+
+  test("drops an out-of-range reset timestamp without discarding the window", () => {
+    const windows = normalizeAccountWindows([
+      { window: "primary", label: "Weekly", usedPercent: 20, resetsAt: 1e16 },
+      { window: "secondary", label: "Rolling", usedPercent: 5, resetsAt: "not-a-date" },
+    ]);
+    expect(windows).toHaveLength(2);
+    expect(windows[0]).toEqual({ window: "primary", label: "Weekly", usedPercent: 20 });
+    expect(windows[1]).toEqual({ window: "secondary", label: "Rolling", usedPercent: 5 });
+  });
+});
+
+describe("bridgeAccountWindows", () => {
+  test("maps an authoritative account array, including an empty one", () => {
+    expect(bridgeAccountWindows({ account: [] })).toEqual([]);
+    expect(bridgeAccountWindows({ account: [{ window: "primary", usedPercent: 40 }] })).toEqual([
+      { window: "primary", usedPercent: 40 },
+    ]);
+  });
+
+  test("reports a soft-empty read as null rather than an unmetered plan", () => {
+    expect(bridgeAccountWindows({ account: null })).toBeNull();
+    expect(bridgeAccountWindows({})).toBeNull();
+    expect(bridgeAccountWindows(undefined)).toBeNull();
+  });
 });
 
 describe("createPlanUsageReader", () => {
@@ -96,6 +122,27 @@ describe("createPlanUsageReader", () => {
     expect(first.windows[0]?.usedPercent).toBe(9);
     expect(second).toBe(first);
     expect(calls).toBe(1);
+  });
+
+  test("bypasses the cache when a refresh forces a re-read", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({ usage: { rolling: { status: "ok", percent: calls } } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+    const context = contextWithGlobal({ openCodeZenApiKey: "zen-key" });
+    const first = await reader(context, "opencode");
+    const cached = await reader(context, "opencode");
+    expect(cached).toBe(first);
+    expect(calls).toBe(1);
+
+    const forced = await reader(context, "opencode", { force: true });
+    expect(forced.windows[0]?.usedPercent).toBe(2);
+    expect(calls).toBe(2);
   });
 
   test("reports an error snapshot when the upstream request fails", async () => {

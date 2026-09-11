@@ -57,6 +57,7 @@ import {
   asOptionalString,
   asStringArray,
   asNonBlankString,
+  asRequiredBoolean,
   asCachedCodexModels,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
@@ -862,10 +863,11 @@ export function registerProjectCommands(
     redactGlobalConfig((await storage.loadConfig()).global),
   );
   register("get_plan_usage", async (args, context) => {
-    assertOnlyKeys(args, ["platform"], "arguments");
+    assertOnlyKeys(args, ["platform", "force"], "arguments");
     const platform = asNonBlankString(args.platform, "platform");
     if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
-    return planUsageReader(context, platform);
+    const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
+    return planUsageReader(context, platform, { force });
   });
   register("update_global_config", async ({ global }, { storage }) => {
     const updated = await storage.updateGlobalConfig(

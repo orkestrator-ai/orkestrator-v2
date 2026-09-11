@@ -364,7 +364,12 @@ export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWind
     probe = createProbe();
     const control = probe as unknown as ClaudeQueryControl;
     const getStructuredUsage = control.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (!getStructuredUsage) return [];
+    if (!getStructuredUsage) {
+      // A missing experimental accessor is not evidence that the account is
+      // unmetered. Throw so the backend reports unavailable rather than an
+      // authoritative empty plan.
+      throw new Error("Claude's plan usage API is unavailable in this CLI version");
+    }
     const structuredUsage = await getStructuredUsageWithTimeout(getStructuredUsage, control);
     const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
     if (rateLimits === undefined) {

@@ -283,6 +283,13 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
 }
 
 /**
+ * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. A provider
+ * reset timestamp outside that range yields an Invalid Date whose
+ * `toISOString()` throws, so it is dropped rather than aborting the read.
+ */
+const MAX_DATE_MS = 8.64e15;
+
+/**
  * Map an `account/rateLimits/read` response onto the engine's window shape.
  *
  * The on-demand read answers the same snapshot an `account/rateLimits/updated`
@@ -302,11 +309,14 @@ export function rateLimitWindowsFromRead(value: unknown): EngineRateLimitWindow[
     const usedPercent = typeof window.usedPercent === "number" ? window.usedPercent : undefined;
     const windowMinutes =
       typeof window.windowDurationMins === "number" ? window.windowDurationMins : undefined;
-    const resetsAtMs = typeof window.resetsAt === "number" ? window.resetsAt * 1_000 : undefined;
-    const resetsAt =
-      resetsAtMs !== undefined && Number.isFinite(resetsAtMs)
-        ? new Date(resetsAtMs).toISOString()
+    const resetsAtSeconds = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
+    // `Date` only spans ±8.64e15 ms; a larger provider value would make
+    // `toISOString()` throw and abort the whole usage read.
+    const resetsAtMs =
+      resetsAtSeconds !== undefined && Math.abs(resetsAtSeconds * 1_000) <= MAX_DATE_MS
+        ? resetsAtSeconds * 1_000
         : undefined;
+    const resetsAt = resetsAtMs !== undefined ? new Date(resetsAtMs).toISOString() : undefined;
     windows.push({
       slot,
       label: slot === "primary" ? (planLabel ?? "Primary") : "Secondary",

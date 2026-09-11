@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -62,10 +62,34 @@ describe("PlanUsageSection", () => {
     expect(await screen.findByText(/Add an OpenCode Zen API key/)).toBeTruthy();
   });
 
+  test("shows an error message from a resolved error snapshot", async () => {
+    getPlanUsage.mockResolvedValue(
+      snapshot({ status: "error", message: "Plan usage read failed" }),
+    );
+    render(<PlanUsageSection platform="opencode" />);
+    expect(await screen.findByText("Plan usage read failed")).toBeTruthy();
+  });
+
+  test("treats an authoritative empty snapshot as no metered limits", async () => {
+    getPlanUsage.mockResolvedValue(snapshot({ status: "ok", windows: [] }));
+    render(<PlanUsageSection platform="opencode" />);
+    expect(await screen.findByText(/does not report any metered plan limits/)).toBeTruthy();
+  });
+
+  test("does not spawn a bridge for a bridge-backed platform until refresh", async () => {
+    getPlanUsage.mockResolvedValue(snapshot({ platform: "claude", status: "ok", windows: [] }));
+    render(<PlanUsageSection platform="claude" />);
+    expect(screen.getByText(/read on demand/)).toBeTruthy();
+    expect(getPlanUsage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText("Refresh plan usage"));
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: true }));
+  });
+
   test("surfaces a failed read and keeps the pane usable", async () => {
     getPlanUsage.mockRejectedValueOnce(new Error("Plan usage is unavailable"));
-    render(<PlanUsageSection platform="claude" />);
+    render(<PlanUsageSection platform="opencode" />);
     expect(await screen.findByText("Plan usage is unavailable")).toBeTruthy();
-    expect(getPlanUsage).toHaveBeenCalledWith("claude");
+    expect(getPlanUsage).toHaveBeenCalledWith("opencode", { force: false });
   });
 });

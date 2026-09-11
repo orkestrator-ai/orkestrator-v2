@@ -402,6 +402,25 @@ describe("storage-backed command delegation", () => {
     ).rejects.toThrow("Anthropic API key cannot be empty");
 
     await expect(
+      commands.get("set_opencode_zen_api_key")?.({ apiKey: " replacement_zen_key " }, context),
+    ).resolves.toMatchObject({
+      global: { openCodeZenApiKeyConfigured: true, openCodeZenApiKeySource: "config" },
+    });
+    expect(storage.setOpenCodeZenApiKey).toHaveBeenLastCalledWith("replacement_zen_key");
+    expect(JSON.stringify(await commands.get("get_config")?.({}, context))).not.toContain(
+      "replacement_zen_key",
+    );
+    await expect(
+      commands.get("set_opencode_zen_api_key")?.({ apiKey: null }, context),
+    ).resolves.toMatchObject({
+      global: { openCodeZenApiKeyConfigured: false },
+    });
+    expect(storage.setOpenCodeZenApiKey).toHaveBeenLastCalledWith(null);
+    await expect(
+      commands.get("set_opencode_zen_api_key")?.({ apiKey: "   " }, context),
+    ).rejects.toThrow("OpenCode Zen API key cannot be empty");
+
+    await expect(
       commands.get("get_repository_config")?.({ projectId: "project-1" }, context),
     ).resolves.toEqual(repositoryConfig);
     await expect(
@@ -418,6 +437,40 @@ describe("storage-backed command delegation", () => {
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
     expect(storage.updateRepositorySettings).toHaveBeenCalledWith("project-1", repositoryConfig);
     expect(storage.updateRepositoryConfig).not.toHaveBeenCalled();
+  });
+
+  test("validates plan usage reads and forwards the refresh flag", async () => {
+    const planUsageReader = mock(async (_context: unknown, platform: string) => ({
+      platform,
+      status: "ok" as const,
+      windows: [],
+      fetchedAt: "2026-09-11T18:32:00.000Z",
+    }));
+    const commands = createCommandRegistry({ planUsageReader: planUsageReader as never });
+    const context = {
+      storage: { loadConfig: async () => ({ global: {} }) },
+    } as unknown as CommandContext;
+
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "blackberry" }, context),
+    ).rejects.toThrow("Unknown agent platform");
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "opencode", extra: true }, context),
+    ).rejects.toThrow();
+    await expect(commands.get("get_plan_usage")?.({ platform: "   " }, context)).rejects.toThrow();
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "opencode", force: "yes" }, context),
+    ).rejects.toThrow("Expected force to be a boolean");
+
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "opencode" }, context),
+    ).resolves.toMatchObject({ platform: "opencode", status: "ok" });
+    expect(planUsageReader).toHaveBeenLastCalledWith(context, "opencode", { force: false });
+
+    await expect(
+      commands.get("get_plan_usage")?.({ platform: "opencode", force: true }, context),
+    ).resolves.toMatchObject({ platform: "opencode", status: "ok" });
+    expect(planUsageReader).toHaveBeenLastCalledWith(context, "opencode", { force: true });
   });
 
   test("delegates session lifecycle, synchronization, and buffer commands", async () => {

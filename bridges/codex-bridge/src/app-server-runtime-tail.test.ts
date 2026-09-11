@@ -26,7 +26,7 @@ test("account limits use descriptive duration labels and preserve credit formatt
       { balance: "12.50", hasCredits: true },
     ),
   ).toEqual([
-    { window: "primary", label: "Weekly limit", usedPercent: 10 },
+    { window: "primary", label: "Weekly limit", usedPercent: 10, windowMinutes: 10_080 },
     { window: "secondary", label: "Secondary limit", usedPercent: 20 },
     { window: "credits", label: "Credits", creditBalance: "12.50" },
   ]);

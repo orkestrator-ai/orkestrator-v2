@@ -80,6 +80,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
+import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
@@ -124,9 +125,6 @@ function formatLogBytes(bytes: number): string {
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
-/** Platforms whose plan quota the backend can read without an active session. */
-const PLAN_USAGE_PLATFORMS: readonly AgentPlatform[] = ["claude", "codex", "cursor", "opencode"];
-
 /**
  * Ordered strongest first, and worded in terms of what the user gets rather
  * than the internal tier name: the difference that matters to them is whether
@@ -164,6 +162,8 @@ export type GlobalSettingsSectionSettings = Record<string, any> & {
   setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
   openCodeModelProviders: string[];
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
+  /** Bumped after a credential save so the plan-usage card refetches at once. */
+  planUsageRefreshToken: number;
   domainErrors: string[];
   testResults: DomainTestResult[] | null;
   setWebClientStatus: Dispatch<SetStateAction<WebClientStatus | null>>;
@@ -221,6 +221,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCoordinatorProviderTiers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
+    planUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,
@@ -513,7 +514,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
 
   const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
     <div className="max-w-2xl space-y-5">
-      {PLAN_USAGE_PLATFORMS.includes(platform) ? <PlanUsageSection platform={platform} /> : null}
+      {(PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
+        <PlanUsageSection key={`${platform}:${planUsageRefreshToken}`} platform={platform} />
+      ) : null}
       <AgentPlatformPane
         platform={platform}
         tier={agentSettings}

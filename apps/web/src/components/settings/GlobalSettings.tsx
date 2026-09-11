@@ -143,6 +143,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [clearCursorApiKey, setClearCursorApiKey] = useState(false);
   const [openCodeZenApiKey, setOpenCodeZenApiKey] = useState("");
   const [clearOpenCodeZenApiKey, setClearOpenCodeZenApiKey] = useState(false);
+  // Bumped after a credential save so the plan-usage card on that platform
+  // remounts and re-reads immediately instead of waiting for the cache TTL.
+  const [planUsageRefreshToken, setPlanUsageRefreshToken] = useState(0);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true,
   );
@@ -708,11 +711,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         );
         pendingAnthropicCredentialEditRef.current = null;
         setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
       }
       if (cursorApiKeyChanged) {
         newConfig = await backend.setCursorApiKey(clearCursorApiKey ? null : nextCursorApiKey);
         pendingCursorCredentialEditRef.current = null;
         setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
       }
       if (openCodeZenApiKeyChanged) {
         newConfig = await backend.setOpenCodeZenApiKey(
@@ -720,6 +725,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         );
         pendingOpenCodeZenCredentialEditRef.current = null;
         setConfig(newConfig);
+        setPlanUsageRefreshToken((token) => token + 1);
       }
       if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(clearGithubToken ? null : nextGitHubToken);
@@ -937,6 +943,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCoordinatorProviderTiers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
+    planUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,

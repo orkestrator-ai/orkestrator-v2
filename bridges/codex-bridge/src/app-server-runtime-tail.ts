@@ -241,9 +241,13 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
    * Distinct from `getUsage`, which is session-scoped. The settings page has no
    * session, and the app-server answers `account/rateLimits/read` globally.
    */
-  async readPlanUsage(): Promise<EngineAccountUsageWindow[]> {
+  async readPlanUsage(): Promise<EngineAccountUsageWindow[] | undefined> {
     const limits = await this.options.engine.readRateLimitWindows();
-    return accountUsageFromLimits(limits, this.accountCredits);
+    const windows = accountUsageFromLimits(limits, this.accountCredits);
+    // An empty list is a soft-empty read: app-server returned no usable windows
+    // (or the payload was malformed). Signal unavailable rather than letting
+    // the settings card state the account has no metered limits.
+    return windows.length > 0 ? windows : undefined;
   }
 
   // ----------------------------------------------------------------- history

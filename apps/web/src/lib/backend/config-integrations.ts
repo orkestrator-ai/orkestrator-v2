@@ -170,8 +170,14 @@ export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConf
 }
 
 /** Read one platform's plan/quota windows from the backend. */
-export async function getPlanUsage(platform: AgentPlatform): Promise<PlanUsageSnapshot> {
-  return invoke<PlanUsageSnapshot>("get_plan_usage", { platform });
+export async function getPlanUsage(
+  platform: AgentPlatform,
+  options: { force?: boolean } = {},
+): Promise<PlanUsageSnapshot> {
+  return invoke<PlanUsageSnapshot>("get_plan_usage", {
+    platform,
+    ...(options.force ? { force: true } : {}),
+  });
 }
 
 export async function setOpenCodeZenApiKey(apiKey: string | null): Promise<AppConfig> {

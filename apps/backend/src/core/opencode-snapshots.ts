@@ -65,6 +65,7 @@ export async function openCodeTranscriptSnapshot(input: {
 export function openCodeSessionStateSnapshot(input: {
   status: ProviderStatus;
   revision: number;
+  turnStartedAt?: number;
   title?: string;
   policy?: NativeAgentExecutionPolicy;
   runtime: NativeAgentRuntimeSummary;
@@ -80,10 +81,17 @@ export function openCodeSessionStateSnapshot(input: {
   messages?: readonly unknown[];
 }): ProviderSessionStateSnapshot {
   const streamedError = input.notices.find((notice) => notice.kind === "error");
+  // A stream error overrides the lifecycle status. Gate the clock on the
+  // effective status so a running lifecycle never republishes a clock for a
+  // turn the stream already reported as failed.
+  const effectiveStatus: ProviderStatus = streamedError ? "error" : input.status;
   const contextUsage = openCodeContextUsage(input.messages ?? []);
   return {
-    status: streamedError ? "error" : input.status,
+    status: effectiveStatus,
     providerRevision: input.revision,
+    ...(effectiveStatus === "running" && input.turnStartedAt !== undefined
+      ? { turnStartedAt: input.turnStartedAt }
+      : {}),
     ...(input.title ? { title: input.title } : {}),
     ...(input.policy ? { policy: input.policy } : {}),
     ...(Object.keys(input.runtime).length > 0 ? { runtime: input.runtime } : {}),
@@ -93,9 +101,9 @@ export function openCodeSessionStateSnapshot(input: {
       ? { phase: "error", error: streamedError.message }
       : {
           phase:
-            input.status === "running"
+            effectiveStatus === "running"
               ? "running"
-              : input.status === "blocked"
+              : effectiveStatus === "blocked"
                 ? "blocked"
                 : "idle",
         }),

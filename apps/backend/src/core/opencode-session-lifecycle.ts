@@ -26,6 +26,13 @@ export class OpenCodeSessionLifecycle {
   readonly ownedSessions = new Set<string>();
   private readonly sessionExistenceCache = new Map<string, number>();
   private readonly sessionExistenceRetryAt = new Map<string, number>();
+  /**
+   * Monotonic per-session count of stream observations. An authoritative read
+   * captures this before it starts and refuses to apply its own result when a
+   * newer event arrived while it was in flight, so a slow read can never
+   * overwrite a busy event with a stale idle (or the reverse).
+   */
+  private readonly streamObservationVersion = new Map<string, number>();
   private sessionListCache: {
     snapshot: OpenCodeExistenceSnapshot;
     expiresAt: number;
@@ -55,6 +62,16 @@ export class OpenCodeSessionLifecycle {
     this.ownedSessions.add(sessionId);
   }
 
+  observeStreamEvent(sessionId: string, state: "running" | "idle" | "missing"): void {
+    setBoundedMapEntry(
+      this.streamObservationVersion,
+      sessionId,
+      (this.streamObservationVersion.get(sessionId) ?? 0) + 1,
+      MAX_TRACKED_PROVIDER_INTERACTIONS,
+    );
+    this.observeEvent(sessionId, state);
+  }
+
   observeEvent(sessionId: string, state: "running" | "idle" | "missing"): void {
     setBoundedMapEntry(this.eventLifecycle, sessionId, state, MAX_TRACKED_PROVIDER_INTERACTIONS);
     if (state === "missing") {
@@ -69,6 +86,20 @@ export class OpenCodeSessionLifecycle {
   invalidateEvents(): void {
     this.eventLifecycle.clear();
     this.lastStatusReconcileAt = 0;
+  }
+
+  private applyReadObservation(
+    sessionId: string,
+    state: "running" | "idle" | "missing",
+    readVersions: ReadonlyMap<string, number>,
+  ): OpenCodeSessionLifecycleState {
+    if (
+      (this.streamObservationVersion.get(sessionId) ?? 0) !== (readVersions.get(sessionId) ?? 0)
+    ) {
+      return this.eventLifecycle.get(sessionId) ?? state;
+    }
+    this.observeEvent(sessionId, state);
+    return state;
   }
 
   /**
@@ -106,6 +137,11 @@ export class OpenCodeSessionLifecycle {
       return lifecycle;
     }
 
+    const readVersions = new Map<string, number>();
+    for (const sessionId of uniqueSessionIds) {
+      readVersions.set(sessionId, this.streamObservationVersion.get(sessionId) ?? 0);
+    }
+
     const statusResponse = await this.client.session.status(
       { directory: this.directory },
       this.requestOptions(),
@@ -122,11 +158,9 @@ export class OpenCodeSessionLifecycle {
       if (!status) {
         omittedSessionIds.push(sessionId);
       } else if (status.type === "busy" || status.type === "retry") {
-        lifecycle.set(sessionId, "running");
-        this.observeEvent(sessionId, "running");
+        lifecycle.set(sessionId, this.applyReadObservation(sessionId, "running", readVersions));
       } else if (status.type === "idle") {
-        lifecycle.set(sessionId, "idle");
-        this.observeEvent(sessionId, "idle");
+        lifecycle.set(sessionId, this.applyReadObservation(sessionId, "idle", readVersions));
       } else {
         lifecycle.set(sessionId, "unknown");
       }
@@ -137,11 +171,9 @@ export class OpenCodeSessionLifecycle {
     for (const sessionId of omittedSessionIds) {
       const probe = existence.get(sessionId);
       if (probe?.state === "exists") {
-        lifecycle.set(sessionId, "idle");
-        this.observeEvent(sessionId, "idle");
+        lifecycle.set(sessionId, this.applyReadObservation(sessionId, "idle", readVersions));
       } else if (probe?.state === "missing") {
-        lifecycle.set(sessionId, "missing");
-        this.observeEvent(sessionId, "missing");
+        lifecycle.set(sessionId, this.applyReadObservation(sessionId, "missing", readVersions));
       } else if (tolerateExistenceFailure) {
         // An omitted status-map entry is not running. When existence cannot be
         // confirmed, retaining the durable mapping as idle is safer than
@@ -336,6 +368,7 @@ export class OpenCodeSessionLifecycle {
     this.sessionListCache = null;
     this.sessionListFailure = null;
     this.eventLifecycle.clear();
+    this.streamObservationVersion.clear();
     this.lastStatusReconcileAt = 0;
   }
 }

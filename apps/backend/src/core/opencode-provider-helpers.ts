@@ -20,7 +20,12 @@ import type {
   ProviderInteractionObservationEvent,
   ProviderSendOptions,
 } from "./agent-provider-contract.js";
+import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
+import {
+  normalizeOpenCodeComposerCatalog,
+  openCodeModelDispatchability,
+} from "./opencode-model-catalog.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
   mimeTypeForFilename,
@@ -77,6 +82,47 @@ export async function resolveAllowedOpenCodeModelProviders(
     return normalizeOpenCodeModelProviders(await resolveProviders());
   } catch {
     return DEFAULT_OPENCODE_MODEL_PROVIDERS;
+  }
+}
+
+/**
+ * Reject only when OpenCode positively reports that the selected provider is
+ * disconnected. Unreadable or missing secondary metadata cannot block a turn.
+ */
+export async function preflightOpenCodeModel(input: {
+  client: OpencodeClient;
+  model: string | undefined;
+  requestOptions: { signal: AbortSignal };
+  allowedProviders: () => Promise<readonly string[]>;
+  publishCatalog: (
+    catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>,
+    allowedProviders: readonly string[],
+  ) => void;
+}): Promise<void> {
+  if (!input.model || !input.model.includes("/")) return;
+  const provider = asRecord(asRecord(input.client)?.provider);
+  if (typeof provider?.list !== "function") return;
+  let response: unknown;
+  try {
+    response = await (
+      provider.list as (parameters: Record<string, unknown>, options: unknown) => Promise<unknown>
+    ).call(provider, {}, input.requestOptions);
+  } catch {
+    return;
+  }
+  const envelope = asRecord(response);
+  if (envelope?.error) return;
+  const allowedProviders = await input.allowedProviders();
+  const catalog = normalizeOpenCodeComposerCatalog(envelope?.data ?? {}, allowedProviders, {
+    requireConnected: true,
+  });
+  if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
+    input.publishCatalog(catalog, allowedProviders);
+  }
+  if (openCodeModelDispatchability(envelope?.data ?? {}, input.model) === "unavailable") {
+    throw new PromptRejectedError(
+      "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
+    );
   }
 }
 

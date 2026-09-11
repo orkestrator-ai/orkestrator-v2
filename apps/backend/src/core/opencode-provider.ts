@@ -64,7 +64,6 @@ import {
 import {
   normalizeOpenCodeComposerCatalog,
   openCodeCatalogCacheKey,
-  openCodeModelDispatchability,
   selectOpenCodeComposerCatalog,
 } from "./opencode-model-catalog.js";
 import {
@@ -107,6 +106,7 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
+  preflightOpenCodeModel,
   OPENCODE_READ_ONLY_TURN_TOOLS,
   openCodePromptParts,
   openCodeReasoningVariant,
@@ -337,43 +337,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
    * `readComposerCatalog` tolerates the same call failing for the same reason.
    */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
-    if (!model || !model.includes("/")) return;
-    const provider = asRecord(asRecord(this.client)?.provider);
-    if (typeof provider?.list !== "function") return;
-
-    let response: unknown;
-    try {
-      response = await (
-        provider.list as (parameters: Record<string, unknown>, options: unknown) => Promise<unknown>
-      ).call(provider, {}, this.requestOptions());
-    } catch {
-      return;
-    }
-    const envelope = asRecord(response);
-    if (envelope?.error) return;
-    const allowedProviders = await this.allowedModelProviders();
-    const catalog = normalizeOpenCodeComposerCatalog(envelope?.data ?? {}, allowedProviders, {
-      requireConnected: true,
+    await preflightOpenCodeModel({
+      client: this.client,
+      model,
+      requestOptions: this.requestOptions(),
+      allowedProviders: () => this.allowedModelProviders(),
+      publishCatalog: (catalog, allowedProviders) => {
+        this.catalogMetadata = {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          providersKey: openCodeCatalogCacheKey(allowedProviders, true),
+          catalog,
+        };
+        this.invalidateInteractiveMetadata();
+      },
     });
-    // The preflight is fresher than the composer cache, so publish it into both
-    // cache layers: a rejected send immediately removes the stale choice.
-    // Publishing a degenerate read would instead suppress the `config.providers`
-    // fallback for a whole TTL, so it is held to the same bar
-    // `readComposerCatalog` applies before it accepts a live catalogue.
-    if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
-      this.catalogMetadata = {
-        expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-        providersKey: openCodeCatalogCacheKey(allowedProviders, true),
-        catalog,
-      };
-      this.invalidateInteractiveMetadata();
-    }
-    // Judged unfiltered: the allowlist governs what the picker offers, not what
-    // OpenCode can serve, and an unreported connectivity set still dispatches.
-    if (openCodeModelDispatchability(envelope?.data ?? {}, model) !== "unavailable") return;
-    throw new PromptRejectedError(
-      "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
-    );
   }
 
   async modelCatalog(): Promise<AgentModel[]> {
@@ -490,9 +467,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       event.type === "server.instance.disposed" ||
       event.type === "global.disposed";
     if (globalEvent || (rawSessionId && this.lifecycle.ownedSessions.has(rawSessionId))) {
-      const effect = this.streamState.apply(event as OpenCodeEvent);
+      const effect = this.streamState.apply(event as OpenCodeEvent, this.now());
       if (effect.status && effect.sessionId) {
-        this.lifecycle.observeEvent(effect.sessionId, effect.status);
+        this.lifecycle.observeStreamEvent(effect.sessionId, effect.status);
       }
       if (effect.refreshMcp) {
         this.invalidateInteractiveMetadata();
@@ -624,7 +601,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     if (sessionIds.length === 0) return;
     this.streamState.markGap();
     this.invalidateInteractiveMetadata();
-    await this.lifecycle.readSessionLifecycle(sessionIds, true, true);
+    const reconcileStartedAt = this.now();
+    const lifecycle = await this.lifecycle.readSessionLifecycle(sessionIds, true, true);
+    // A reconnect is an authoritative observation, but it was taken before this
+    // loop ran. Only a clock that already existed when the read started may be
+    // ended; a dispatch that arrived while the read was in flight is live.
+    for (const sessionId of sessionIds) {
+      if (lifecycle.get(sessionId) === "running") continue;
+      const turnStartedAt = this.streamState.turnStartedAt(sessionId);
+      if (turnStartedAt !== undefined && turnStartedAt <= reconcileStartedAt) {
+        this.streamState.endTurn(sessionId);
+      }
+    }
     let cursor = 0;
     const worker = async (): Promise<void> => {
       while (!this.disposed) {
@@ -733,6 +721,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
       const messageID = this.messageIds.resolve(scope, history, options.requestId);
       const reviewShellEnabled = await this.reviewPermissions.enableForTurn(sessionId, options);
+      const dispatchStartedAt = this.now();
+      this.streamState.beginTurn(sessionId, dispatchStartedAt);
       let response;
       try {
         response = command
@@ -774,11 +764,16 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
         // The reservation keeps the same ID until transcript reconciliation.
+        // Drop the dispatch clock: if the turn did start, its busy event or the
+        // transcript supplies the time, but an abandoned stamp must not be
+        // inherited by a later turn.
+        this.streamState.rejectTurn(sessionId, dispatchStartedAt);
         throw new AmbiguousPromptDispatchError("OpenCode prompt dispatch outcome is unknown", {
           cause: error,
         });
       }
       if ("error" in response && response.error) {
+        this.streamState.rejectTurn(sessionId, dispatchStartedAt);
         const status = response.response?.status;
         if (
           status === 404 ||
@@ -971,14 +966,36 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
+    const eventVersionBefore = this.streamState.eventVersion(sessionId);
+    const status = await this.projectedStatus(sessionId);
+    const eventVersionAfter = this.streamState.eventVersion(sessionId);
+    const notices = this.streamState.notices(sessionId);
+    const streamedError = notices.some((notice) => notice.kind === "error");
+    // The clock is authoritative only when a dispatch or an observed busy/retry
+    // event set it. A read must never manufacture one, and an observation that
+    // the turn is over ends it so a finished turn cannot be inherited. An idle
+    // read is trusted only when no event arrived while it was in flight, and
+    // only once a running observation has confirmed the turn.
+    const running = status === "running" && !streamedError;
+    const settled =
+      streamedError ||
+      ((status !== "idle" || this.streamState.isTurnConfirmed(sessionId)) &&
+        eventVersionAfter === eventVersionBefore);
+    if (running) {
+      this.streamState.confirmTurn(sessionId);
+    } else if (settled) {
+      this.streamState.endTurn(sessionId);
+    }
+    const turnStartedAt = running ? this.streamState.turnStartedAt(sessionId) : undefined;
     return openCodeSessionStateSnapshot({
-      status: await this.projectedStatus(sessionId),
+      status,
       revision: this.streamState.revision(sessionId),
+      ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       title: this.streamState.title(sessionId),
       messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       policy: this.sessionPolicies.get(sessionId),
       runtime: this.streamState.runtime(sessionId),
-      notices: this.streamState.notices(sessionId),
+      notices,
     });
   }
 
@@ -1014,11 +1031,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
+    const eventVersionBefore = this.streamState.eventVersion(sessionId);
     const [status, rawMessages, metadata] = await Promise.all([
       this.projectedStatus(sessionId),
       this.projectedMessages(sessionId, OPEN_CODE_MESSAGE_HISTORY_LIMIT),
       this.readInteractiveMetadata(sessionId),
     ]);
+    const eventVersionAfter = this.streamState.eventVersion(sessionId);
     const normalizedMessages = rawMessages.flatMap((message, index) => {
       const normalized = normalizeOpenCodeInteractiveMessage(message, index, (type) =>
         this.health.recordUnknown(`part:${type}`),
@@ -1039,10 +1058,23 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const streamNotices = this.streamState.notices(sessionId);
     const streamedError = streamNotices.find((notice) => notice.kind === "error");
     const latestUsage = openCodeContextUsage(rawMessages);
+    const running = status === "running" && !terminal && !streamedError;
+    const settled =
+      Boolean(terminal) ||
+      Boolean(streamedError) ||
+      ((status !== "idle" || this.streamState.isTurnConfirmed(sessionId)) &&
+        eventVersionAfter === eventVersionBefore);
+    if (running) {
+      this.streamState.confirmTurn(sessionId);
+    } else if (settled) {
+      this.streamState.endTurn(sessionId);
+    }
+    const turnStartedAt = running ? this.streamState.turnStartedAt(sessionId) : undefined;
     return {
       status: terminal?.kind === "error" || streamedError ? "error" : status,
       messages,
       messagesComplete: rawMessages.length < OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(metadata.shareUrl === undefined ? {} : { shareUrl: metadata.shareUrl }),
       composer: {
@@ -1458,6 +1490,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode abort");
+      this.streamState.endTurn(sessionId);
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode abort is unavailable", {
         cause: error,
@@ -1472,6 +1505,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode session delete");
+      this.streamState.endTurn(sessionId);
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode session delete is unavailable", {
         cause: error,

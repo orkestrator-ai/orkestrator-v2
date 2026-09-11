@@ -1,10 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   CACHE_TTL_MS,
   contextUsageWithPlanUsage,
   createPlanUsageCache,
   sharedPlanUsageCache,
 } from "./plan-usage-cache.js";
+
+// `contextUsageWithPlanUsage` always writes the process-wide singleton, which
+// the HTTP bridge suites also read. Reset it around every test so a cached
+// window from one test cannot be observed by another.
+beforeEach(() => {
+  sharedPlanUsageCache.clear();
+});
+
+afterEach(() => {
+  sharedPlanUsageCache.clear();
+});
 
 describe("createPlanUsageCache", () => {
   test("serves a stored snapshot until its time-to-live passes", () => {
@@ -37,6 +48,30 @@ describe("createPlanUsageCache", () => {
     cache.recordSessionWindows("cursor", [{ window: "session", spendUsd: 0.4 }]);
     expect(cache.peek("cursor")).toBeUndefined();
   });
+
+  test("merges a sparse session update instead of replacing the provider snapshot", () => {
+    const cache = createPlanUsageCache(() => 1_700_000_000_000);
+    cache.store(
+      "claude",
+      {
+        platform: "claude",
+        status: "ok",
+        windows: [
+          { window: "five_hour", label: "5-hour limit", usedPercent: 10 },
+          { window: "seven_day", label: "Weekly limit", usedPercent: 60 },
+        ],
+        fetchedAt: "2026-09-11T18:00:00.000Z",
+      },
+      CACHE_TTL_MS,
+    );
+    cache.recordSessionWindows("claude", [
+      { window: "five_hour", label: "5-hour limit", usedPercent: 42 },
+    ]);
+    expect(cache.peek("claude")?.windows).toEqual([
+      { window: "five_hour", label: "5-hour limit", usedPercent: 42 },
+      { window: "seven_day", label: "Weekly limit", usedPercent: 60 },
+    ]);
+  });
 });
 
 describe("contextUsageWithPlanUsage", () => {
@@ -57,8 +92,24 @@ describe("contextUsageWithPlanUsage", () => {
       rateLimits: [{ label: "5-hour limit", usedPercent: 21, windowMinutes: 300 }],
     });
     expect(sharedPlanUsageCache.peek("claude")?.windows).toEqual([
-      { window: "5-hour-limit", label: "5-hour limit", usedPercent: 21, windowMinutes: 300 },
+      { window: "five_hour", label: "5-hour limit", usedPercent: 21, windowMinutes: 300 },
     ]);
+  });
+
+  test("maps a Claude session label onto the id the OAuth read emits", () => {
+    contextUsageWithPlanUsage("claude", {
+      usedTokens: 1,
+      rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
+    });
+    expect(sharedPlanUsageCache.peek("claude")?.windows[0]?.window).toBe("seven_day");
+  });
+
+  test("does not apply Claude's ids to another platform's rate limits", () => {
+    contextUsageWithPlanUsage("codex", {
+      usedTokens: 1,
+      rateLimits: [{ label: "Weekly limit", usedPercent: 5 }],
+    });
+    expect(sharedPlanUsageCache.peek("codex")?.windows[0]?.window).toBe("weekly-limit");
   });
 
   test("leaves the cache alone for a payload with no quota in it", () => {

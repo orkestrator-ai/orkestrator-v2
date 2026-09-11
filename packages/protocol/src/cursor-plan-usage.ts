@@ -11,10 +11,30 @@
  * limit stay out: those do not share the quota denominator and would produce a
  * meter Cursor never reported.
  */
+import { Buffer } from "node:buffer";
 import type { NativeAgentAccountUsageWindow } from "./native-agent.js";
 
 const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
 const MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2100, 0, 1);
+
+/** Cursor's REST base for the key exchange and dashboard reads. */
+export const CURSOR_API_BASE = "https://api2.cursor.sh";
+/** Refresh an exchanged token before it expires rather than racing the boundary. */
+export const CURSOR_TOKEN_EXPIRY_SKEW_MS = 30_000;
+/** Lifetime assumed when the exchange payload carries no usable expiry. */
+export const CURSOR_FALLBACK_TOKEN_LIFETIME_MS = 55 * 60_000;
+/** One-time exchange of an API key for a short-lived dashboard token. */
+export const CURSOR_EXCHANGE_PATH = "/auth/exchange_user_api_key";
+
+/**
+ * The dashboard RPC path for one method.
+ *
+ * Shared so the backend's settings read and the bridge's account read cannot
+ * drift into calling different endpoints.
+ */
+export function cursorDashboardPath(method: string): string {
+  return `/aiserver.v1.DashboardService/${method}`;
+}
 
 export const CURSOR_PLAN_WINDOW = {
   auto: "cursor-internal-auto",
@@ -125,4 +145,45 @@ export function accountWindowsFromPlanUsage(
     });
   }
   return windows;
+}
+
+function jwtExpiryMs(token: string | undefined): number | undefined {
+  const payload = token?.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    const parsed = record(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    const expirySeconds = finiteNumber(parsed?.exp);
+    return expirySeconds === undefined ? undefined : expirySeconds * 1_000;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The access token an exchange payload carries, under any of its spellings. */
+export function cursorExchangeAccessToken(payload: unknown): string | undefined {
+  const body = record(payload);
+  if (!body) return undefined;
+  return [body.accessToken, body.access_token, body.token].find(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
+}
+
+/**
+ * When an exchanged dashboard token expires, in epoch milliseconds.
+ *
+ * Reads the expiry out of the token itself, the payload's `expiresAt` /
+ * `expires_at`, or an `expiresIn` / `expires_in` delta, whichever is soonest
+ * and still in the future. A payload with nothing usable falls back to the
+ * conservative default lifetime rather than treating the token as immortal.
+ */
+export function cursorExchangeExpiryMs(payload: unknown, token: string, now: number): number {
+  const body = record(payload) ?? {};
+  const expiresIn = finiteNumber(body.expiresIn) ?? finiteNumber(body.expires_in);
+  const candidates = [
+    jwtExpiryMs(token),
+    finiteNumber(body.expiresAt),
+    finiteNumber(body.expires_at),
+    expiresIn === undefined ? undefined : now + expiresIn * 1_000,
+  ].filter((candidate): candidate is number => candidate !== undefined && candidate > now);
+  return candidates.length > 0 ? Math.min(...candidates) : now + CURSOR_FALLBACK_TOKEN_LIFETIME_MS;
 }

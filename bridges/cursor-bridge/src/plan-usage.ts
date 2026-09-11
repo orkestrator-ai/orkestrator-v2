@@ -8,35 +8,23 @@
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
 import {
   accountWindowsFromPlanUsage,
+  CURSOR_API_BASE,
+  CURSOR_EXCHANGE_PATH,
   CURSOR_PLAN_WINDOW,
+  CURSOR_TOKEN_EXPIRY_SKEW_MS,
+  cursorDashboardPath,
+  cursorExchangeAccessToken,
+  cursorExchangeExpiryMs,
   DEFAULT_PLAN_LABELS,
   isPlanQuotaWindow,
 } from "@orkestrator/protocol/cursor-plan-usage";
 import { CATALOG_TIMEOUT_MS } from "./config.js";
 import { resolveCredential } from "./credentials.js";
-import { isObject } from "./state.js";
 
 export { accountWindowsFromPlanUsage, CURSOR_PLAN_WINDOW, DEFAULT_PLAN_LABELS, isPlanQuotaWindow };
 
-const CURSOR_API_BASE = "https://api2.cursor.sh";
 const ACCOUNT_USAGE_TTL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-const TOKEN_EXPIRY_SKEW_MS = 30_000;
-const FALLBACK_TOKEN_LIFETIME_MS = 55 * 60_000;
-
-function finiteNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return isObject(value) ? value : undefined;
-}
 
 /**
  * Keep session-scoped agent totals and fold in the latest plan-quota rows.
@@ -125,52 +113,28 @@ async function loadPlanAccountWindows(options?: {
   return cachedPlan?.windows;
 }
 
-function jwtExpiryMs(token: string): number | undefined {
-  const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  try {
-    const parsed = record(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
-    const expirySeconds = finiteNumber(parsed?.exp);
-    return expirySeconds === undefined ? undefined : expirySeconds * 1_000;
-  } catch {
-    return undefined;
-  }
-}
-
-function exchangeExpiryMs(payload: Record<string, unknown>, token: string, now: number): number {
-  const expiresIn = finiteNumber(payload.expiresIn) ?? finiteNumber(payload.expires_in);
-  const candidates = [
-    jwtExpiryMs(token),
-    finiteNumber(payload.expiresAt),
-    finiteNumber(payload.expires_at),
-    expiresIn === undefined ? undefined : now + expiresIn * 1_000,
-  ].filter((candidate): candidate is number => candidate !== undefined && candidate > now);
-  return candidates.length > 0 ? Math.min(...candidates) : now + FALLBACK_TOKEN_LIFETIME_MS;
-}
-
-async function exchangeAccessToken(
+function exchangeAccessToken(
   apiKey: string,
   fetchImpl: FetchLike,
   now: () => number,
   timeoutMs: number,
 ): Promise<string | undefined> {
   const current = now();
-  if (accessToken && accessToken.expiresAt > current + TOKEN_EXPIRY_SKEW_MS) {
-    return accessToken.value;
+  if (accessToken && accessToken.expiresAt > current + CURSOR_TOKEN_EXPIRY_SKEW_MS) {
+    return Promise.resolve(accessToken.value);
   }
-  const response = await requestJson(
-    `${CURSOR_API_BASE}/auth/exchange_user_api_key`,
-    { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    fetchImpl,
-    timeoutMs,
-  );
-  const payload = record(response);
-  const value = [payload?.accessToken, payload?.access_token, payload?.token].find(
-    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
-  );
-  if (!payload || !value) return undefined;
-  accessToken = { value, expiresAt: exchangeExpiryMs(payload, value, current) };
-  return value;
+  return (async () => {
+    const response = await requestJson(
+      `${CURSOR_API_BASE}${CURSOR_EXCHANGE_PATH}`,
+      { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      fetchImpl,
+      timeoutMs,
+    );
+    const value = cursorExchangeAccessToken(response);
+    if (!value) return undefined;
+    accessToken = { value, expiresAt: cursorExchangeExpiryMs(response, value, current) };
+    return value;
+  })();
 }
 
 async function dashboardRequest(
@@ -180,7 +144,7 @@ async function dashboardRequest(
   timeoutMs: number,
 ): Promise<unknown> {
   return requestJson(
-    `${CURSOR_API_BASE}/aiserver.v1.DashboardService/${method}`,
+    `${CURSOR_API_BASE}${cursorDashboardPath(method)}`,
     {
       Authorization: `Bearer ${accessTokenValue}`,
       "Content-Type": "application/json",

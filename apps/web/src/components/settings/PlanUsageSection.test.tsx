@@ -112,4 +112,33 @@ describe("PlanUsageSection", () => {
     expect(await screen.findByText("Plan usage is unavailable")).toBeTruthy();
     expect(getPlanUsage).toHaveBeenCalledWith("opencode", { force: false });
   });
+
+  test("ignores a slow response once the platform has changed", async () => {
+    let resolveFirst!: (value: PlanUsageSnapshot) => void;
+    const firstRequest = new Promise<PlanUsageSnapshot>((resolve) => {
+      resolveFirst = resolve;
+    });
+    getPlanUsage.mockImplementation((async (platform: string) => {
+      return platform === "claude"
+        ? firstRequest
+        : snapshot({
+            platform: "codex",
+            windows: [{ window: "primary", label: "Primary limit", usedPercent: 5 }],
+          });
+    }) as unknown as () => Promise<PlanUsageSnapshot>);
+
+    const { rerender } = render(<PlanUsageSection platform="claude" />);
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }));
+
+    rerender(<PlanUsageSection platform="codex" />);
+    expect(await screen.findByText("Primary limit")).toBeTruthy();
+
+    resolveFirst(
+      snapshot({
+        platform: "claude",
+        windows: [{ window: "five_hour", label: "5-hour limit", usedPercent: 90 }],
+      }),
+    );
+    await waitFor(() => expect(screen.queryByText("5-hour limit") === null).toBe(true));
+  });
 });

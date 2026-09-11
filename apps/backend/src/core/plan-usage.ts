@@ -11,9 +11,18 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { accountWindowsFromPlanUsage } from "@orkestrator/protocol/cursor-plan-usage";
+import {
+  accountWindowsFromPlanUsage,
+  CURSOR_API_BASE,
+  CURSOR_EXCHANGE_PATH,
+  CURSOR_TOKEN_EXPIRY_SKEW_MS,
+  cursorDashboardPath,
+  cursorExchangeAccessToken,
+  cursorExchangeExpiryMs,
+} from "@orkestrator/protocol/cursor-plan-usage";
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
 import {
+  CLAUDE_PLAN_WINDOW_LABELS,
   isPlanUsagePlatform,
   PLAN_USAGE_PLATFORMS,
   type PlanUsagePlatform,
@@ -45,15 +54,14 @@ export type { PlanUsagePlatform };
 export const OPENCODE_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
-export const CURSOR_API_BASE = "https://api2.cursor.sh";
+
+/** Re-exported so callers keep one import site for the Cursor REST base. */
+export { CURSOR_API_BASE };
 
 /** Beta header Claude Code itself sends on the OAuth usage read. */
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
 
 const REQUEST_TIMEOUT_MS = 15_000;
-
-const CURSOR_TOKEN_EXPIRY_SKEW_MS = 30_000;
-const CURSOR_FALLBACK_TOKEN_LIFETIME_MS = 55 * 60_000;
 
 /**
  * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. A provider
@@ -148,12 +156,7 @@ export function openCodePlanWindows(value: unknown): NativeAgentAccountUsageWind
   return windows;
 }
 
-const CLAUDE_WINDOW_LABELS: Record<string, { label: string; windowMinutes: number }> = {
-  five_hour: { label: "5-hour limit", windowMinutes: 300 },
-  seven_day: { label: "Weekly limit", windowMinutes: 7 * 24 * 60 },
-  seven_day_opus: { label: "Weekly Opus limit", windowMinutes: 7 * 24 * 60 },
-  seven_day_oauth_apps: { label: "Weekly apps limit", windowMinutes: 7 * 24 * 60 },
-};
+const CLAUDE_WINDOW_LABELS = CLAUDE_PLAN_WINDOW_LABELS;
 
 function snakeCase(key: string): string {
   return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
@@ -356,9 +359,10 @@ async function readFileIfPresent(file: string): Promise<string | undefined> {
 /**
  * The Cursor key the bridge would itself run under.
  *
- * Configured key first, then the login Orkestrator stored, then the SDK's own
- * default file — the same order `resolveCredential` applies inside the bridge,
- * so the settings card cannot report a plan the agent would not use.
+ * Configured key first, then the login Orkestrator stored. The SDK's own
+ * `~/.cursor/sdk/auth.json` is deliberately not consulted: the bridge is always
+ * launched with `CURSOR_BRIDGE_AUTH_FILE` pinned to Orkestrator's file, so a
+ * host CLI login would report a plan no Orkestrator agent can use.
  */
 async function defaultCursorApiKey(
   context: CommandContext,
@@ -367,18 +371,14 @@ async function defaultCursorApiKey(
   if (!hostCredentialAllowed(context, "cursor")) return undefined;
   const configured = resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey;
   if (configured) return configured;
-  for (const file of [
-    cursorSdkCredentialPath(context),
-    path.join(os.homedir(), ".cursor", "sdk", "auth.json"),
-  ]) {
-    const stored = asRecord(parseJson(await readFileIfPresent(file)));
-    const apiKey = nonEmptyString(stored?.apiKey);
-    const expiresAt = stored?.apiKeyExpiresAtMs;
-    if (!apiKey) continue;
-    if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt <= now) continue;
-    return apiKey;
+  const stored = asRecord(parseJson(await readFileIfPresent(cursorSdkCredentialPath(context))));
+  const apiKey = nonEmptyString(stored?.apiKey);
+  if (!apiKey) return undefined;
+  const expiresAt = stored?.apiKeyExpiresAtMs;
+  if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt <= now) {
+    return undefined;
   }
-  return undefined;
+  return apiKey;
 }
 
 /** Claude's stored OAuth token, from the Keychain or the credentials file. */
@@ -598,7 +598,7 @@ async function cursorDashboardToken(
   }
   const { status, body } = await requestJson(
     runtime.fetchImpl,
-    `${CURSOR_API_BASE}/auth/exchange_user_api_key`,
+    `${CURSOR_API_BASE}${CURSOR_EXCHANGE_PATH}`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -606,24 +606,12 @@ async function cursorDashboardToken(
     },
   );
   if (status < 200 || status >= 300) return undefined;
-  const payload = asRecord(body);
-  const token = [payload?.accessToken, payload?.access_token, payload?.token].find(
-    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
-  );
+  const token = cursorExchangeAccessToken(body);
   if (!token) return undefined;
-  const expiresIn = payload?.expiresIn ?? payload?.expires_in;
-  const candidates = [
-    jwtExpiryMs(token),
-    typeof payload?.expiresAt === "number" ? payload.expiresAt : undefined,
-    typeof expiresIn === "number" && Number.isFinite(expiresIn)
-      ? now + expiresIn * 1_000
-      : undefined,
-  ].filter((candidate): candidate is number => candidate !== undefined && candidate > now);
   runtime.cursorTokens.entry = {
     apiKey,
     token,
-    expiresAt:
-      candidates.length > 0 ? Math.min(...candidates) : now + CURSOR_FALLBACK_TOKEN_LIFETIME_MS,
+    expiresAt: cursorExchangeExpiryMs(body, token, runtime.now()),
   };
   return token;
 }
@@ -651,7 +639,7 @@ async function readCursorPlanUsage(
   }
   const { status, body } = await requestJson(
     runtime.fetchImpl,
-    `${CURSOR_API_BASE}/aiserver.v1.DashboardService/GetCurrentPeriodUsage`,
+    `${CURSOR_API_BASE}${cursorDashboardPath("GetCurrentPeriodUsage")}`,
     {
       method: "POST",
       headers: {
@@ -690,8 +678,10 @@ async function readCursorPlanUsage(
  * session that reports the same account windows folds into that cache through
  * `recordSessionWindows` and defers the next read by a full window, which is
  * why an idle pane with a busy session never has to ask the provider at all.
- * `force` bypasses the cache for a user-triggered refresh while still
- * coalescing an in-flight read.
+ * `force` bypasses the cache for a user-triggered refresh. A forced read never
+ * joins the non-forced read that may already be running under the credential
+ * it supersedes, and it bumps a generation so that stale read cannot overwrite
+ * the fresh result when it finally lands.
  */
 export function createPlanUsageReader(
   overrides: PlanUsageReaderDependencies = {},
@@ -701,6 +691,7 @@ export function createPlanUsageReader(
   // session path writes through, so the default reader takes that.
   const cache = overrides.cache ?? createPlanUsageCache(now);
   const flights = new Map<PlanUsagePlatform, Promise<PlanUsageSnapshot>>();
+  const readGenerations = new Map<PlanUsagePlatform, number>();
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
     now,
@@ -720,12 +711,18 @@ export function createPlanUsageReader(
         ),
       );
     }
-    if (options?.force !== true) {
+    const forced = options?.force === true;
+    // Only an unforced caller may be served by, or join, an existing read. A
+    // forced refresh starts its own so it cannot inherit a result produced
+    // under the credential the user just replaced.
+    if (!forced) {
       const cached = cache.peek(platform);
       if (cached) return Promise.resolve(cached);
+      const inFlight = flights.get(platform);
+      if (inFlight) return inFlight;
     }
-    const inFlight = flights.get(platform);
-    if (inFlight) return inFlight;
+    const generation = (readGenerations.get(platform) ?? 0) + 1;
+    readGenerations.set(platform, generation);
     const read = (async (): Promise<PlanUsageSnapshot> => {
       try {
         const snapshot =
@@ -736,7 +733,15 @@ export function createPlanUsageReader(
               : platform === "codex"
                 ? await readCodexPlanUsage(context, runtime)
                 : await readCursorPlanUsage(context, runtime);
-        cache.store(platform, snapshot, CACHE_TTL_MS);
+        if (readGenerations.get(platform) === generation) {
+          // An unavailable answer is cheap to recompute and must not outlive the
+          // credential that was just fixed, so it is held only briefly.
+          cache.store(
+            platform,
+            snapshot,
+            snapshot.status === "ok" ? CACHE_TTL_MS : ERROR_CACHE_TTL_MS,
+          );
+        }
         return snapshot;
       } catch (error) {
         const snapshot: PlanUsageSnapshot = {
@@ -746,7 +751,9 @@ export function createPlanUsageReader(
           message: error instanceof Error ? error.message : "Plan usage is unavailable",
           fetchedAt: new Date(now()).toISOString(),
         };
-        cache.store(platform, snapshot, ERROR_CACHE_TTL_MS);
+        if (readGenerations.get(platform) === generation) {
+          cache.store(platform, snapshot, ERROR_CACHE_TTL_MS);
+        }
         return snapshot;
       }
     })().finally(() => {

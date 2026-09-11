@@ -164,6 +164,7 @@ export type GlobalSettingsSectionSettings = Record<string, any> & {
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
   /** Bumped after a credential save so the plan-usage card refetches at once. */
   planUsageRefreshToken: number;
+  setPlanUsageRefreshToken: Dispatch<SetStateAction<number>>;
   domainErrors: string[];
   testResults: DomainTestResult[] | null;
   setWebClientStatus: Dispatch<SetStateAction<WebClientStatus | null>>;
@@ -222,6 +223,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     openCodeModelProviders,
     setOpenCodeModelProviders,
     planUsageRefreshToken,
+    setPlanUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,
@@ -1281,6 +1283,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </div>
           <CursorSdkSignIn
             credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+            onCredentialChange={() => setPlanUsageRefreshToken((token) => token + 1)}
           />
         </div>
       </>,

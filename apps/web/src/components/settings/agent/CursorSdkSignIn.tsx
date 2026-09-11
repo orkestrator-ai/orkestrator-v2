@@ -26,9 +26,20 @@ const POLL_INTERVAL_MS = 1_500;
 interface CursorSdkSignInProps {
   /** Changes after a stored API key is saved or cleared. */
   credentialRevision: string;
+  /**
+   * Fired when a login or sign-out changes which credential the bridge
+   * resolves, so the plan-usage card can re-read past its cache.
+   */
+  onCredentialChange?: () => void;
 }
 
-export function CursorSdkSignIn({ credentialRevision }: CursorSdkSignInProps) {
+/** A stable identity for the credential the bridge is currently resolving. */
+function credentialStateKey(progress: CursorSdkLoginProgress | null): string {
+  const auth = progress?.auth;
+  return auth?.authenticated ? `authenticated:${auth.source}:${auth.email ?? ""}` : "signed-out";
+}
+
+export function CursorSdkSignIn({ credentialRevision, onCredentialChange }: CursorSdkSignInProps) {
   const [progress, setProgress] = useState<CursorSdkLoginProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +47,14 @@ export function CursorSdkSignIn({ credentialRevision }: CursorSdkSignInProps) {
   // Guards every setState against a poll that resolves after unmount, which is
   // ordinary here: the settings dialog closes while a login is still pending.
   const mounted = useRef(true);
+  // The last credential the bridge resolved. A change to it — a completed
+  // login or a sign-out — is what the plan-usage card needs to hear about.
+  const credentialStateRef = useRef<string | undefined>(undefined);
+  const onCredentialChangeRef = useRef(onCredentialChange);
+
+  useEffect(() => {
+    onCredentialChangeRef.current = onCredentialChange;
+  }, [onCredentialChange]);
 
   useEffect(() => {
     mounted.current = true;
@@ -47,9 +66,18 @@ export function CursorSdkSignIn({ credentialRevision }: CursorSdkSignInProps) {
   const refresh = useCallback(async () => {
     try {
       const next = await cursorSdkLoginStatus();
-      if (mounted.current) {
+      if (!mounted.current) return next;
+      if (next) {
+        const key = credentialStateKey(next);
+        const previous = credentialStateRef.current;
+        credentialStateRef.current = key;
         setProgress(next);
         setError(null);
+        // A failed attempt that leaves the resolved credential untouched is not
+        // a change; only a terminal state that actually moved it is.
+        if (previous !== undefined && previous !== key && next.state !== "pending") {
+          onCredentialChangeRef.current?.();
+        }
       }
       return next;
     } catch (cause) {

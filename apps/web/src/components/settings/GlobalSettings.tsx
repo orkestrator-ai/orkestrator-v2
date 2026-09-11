@@ -705,6 +705,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         };
       }
       setConfig(newConfig);
+      if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
+        // The Claude plan read goes unavailable when host credentials are off,
+        // so the card must re-read rather than serve the pre-toggle snapshot.
+        setPlanUsageRefreshToken((token) => token + 1);
+      }
       if (anthropicApiKeyChanged) {
         newConfig = await backend.setAnthropicApiKey(
           clearAnthropicApiKey ? null : nextAnthropicApiKey,
@@ -944,6 +949,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     openCodeModelProviders,
     setOpenCodeModelProviders,
     planUsageRefreshToken,
+    setPlanUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,

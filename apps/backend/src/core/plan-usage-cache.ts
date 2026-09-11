@@ -15,6 +15,7 @@ import type {
   NativeAgentRateLimitWindow,
 } from "@orkestrator/protocol/native-agent";
 import {
+  claudePlanWindowIdFromLabel,
   isPlanUsagePlatform,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
@@ -58,7 +59,23 @@ export type PlanUsageCache = {
    * window.
    */
   recordSessionWindows: (platform: AgentPlatform, windows: NativeAgentAccountUsageWindow[]) => void;
+  /** Drop every cached entry. Test isolation, and a credential change. */
+  clear: () => void;
 };
+
+function mergeSessionWindows(
+  existing: NativeAgentAccountUsageWindow[],
+  incoming: NativeAgentAccountUsageWindow[],
+): NativeAgentAccountUsageWindow[] {
+  if (existing.length === 0) return incoming;
+  const merged = existing.map((row) => ({ ...row }));
+  for (const window of incoming) {
+    const index = merged.findIndex((row) => row.window === window.window);
+    if (index >= 0) merged[index] = { ...window };
+    else merged.push({ ...window });
+  }
+  return merged;
+}
 
 export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCache {
   const entries = new Map<PlanUsagePlatform, { expiresAt: number; snapshot: PlanUsageSnapshot }>();
@@ -80,16 +97,24 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
           : windows;
       if (planWindows.length === 0) return;
       const cached = entries.get(platform);
+      const existing = cached?.snapshot.status === "ok" ? cached.snapshot.windows : [];
+      // A session may report one window at a time — Claude's rate-limit events
+      // are sparse — so a wholesale replace would erase bars a provider read
+      // just stored. Merge by window identity and keep the unmatched rows.
+      const merged = mergeSessionWindows(existing, planWindows);
       // Sessions re-report an unchanged snapshot on every poll. Treating those
       // as updates would push the next read out forever and freeze the card.
-      if (cached?.snapshot.status === "ok" && sameWindows(cached.snapshot.windows, planWindows)) {
+      if (cached?.snapshot.status === "ok" && sameWindows(cached.snapshot.windows, merged)) {
         return;
       }
       const at = now();
       entries.set(platform, {
         expiresAt: at + CACHE_TTL_MS,
-        snapshot: okSnapshot(platform, planWindows, new Date(at).toISOString()),
+        snapshot: okSnapshot(platform, merged, new Date(at).toISOString()),
       });
+    },
+    clear() {
+      entries.clear();
     },
   };
 }
@@ -99,24 +124,33 @@ export const sharedPlanUsageCache = createPlanUsageCache();
 
 /**
  * Claude reports its plan windows per session as rate limits, not as account
- * rows, so the same quota arrives under a different key. Slugified labels
- * match what the bridge's own plan read produces.
+ * rows, so the same quota arrives under a different key. Known labels map onto
+ * the canonical ids the direct OAuth read emits, so a window a session reports
+ * updates the same cached row rather than sitting beside it under a slug.
  */
 function accountWindowsFromRateLimits(
   limits: NativeAgentRateLimitWindow[],
+  agent: AgentPlatform,
 ): NativeAgentAccountUsageWindow[] {
   return limits.map((limit) => ({
     window:
-      limit.label
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "window",
+      (agent === "claude" ? claudePlanWindowIdFromLabel(limit.label) : undefined) ??
+      sessionWindowId(limit.label),
     label: limit.label,
     ...(limit.usedPercent !== undefined ? { usedPercent: limit.usedPercent } : {}),
     ...(limit.resetsAt !== undefined ? { resetsAt: limit.resetsAt } : {}),
     ...(limit.windowMinutes !== undefined ? { windowMinutes: limit.windowMinutes } : {}),
   }));
+}
+
+function sessionWindowId(label: string): string {
+  return (
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "window"
+  );
 }
 
 /**
@@ -135,7 +169,7 @@ export function contextUsageWithPlanUsage(
   const windows = usage?.account?.length
     ? usage.account
     : usage?.rateLimits?.length
-      ? accountWindowsFromRateLimits(usage.rateLimits)
+      ? accountWindowsFromRateLimits(usage.rateLimits, agent)
       : undefined;
   if (windows) sharedPlanUsageCache.recordSessionWindows(agent, windows);
   return usage;

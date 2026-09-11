@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
+import {
+  ERROR_CACHE_TTL_MS,
+  contextUsageWithPlanUsage,
+  sharedPlanUsageCache,
+} from "./plan-usage-cache.js";
 import {
   CLAUDE_USAGE_URL,
   CODEX_USAGE_URL,
@@ -10,14 +18,19 @@ import {
   normalizeAccountWindows,
   OPENCODE_USAGE_URL,
   openCodePlanWindows,
+  readPlanUsage,
 } from "./plan-usage.js";
 
-function contextWithGlobal(global: Record<string, unknown> = {}): CommandContext {
+function contextWithGlobal(
+  global: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+): CommandContext {
   return {
     storage: {
       loadConfig: async () => ({ global }),
       getDataDir: () => "/tmp/orkestrator-plan-usage",
     },
+    ...extra,
   } as unknown as CommandContext;
 }
 
@@ -501,5 +514,238 @@ describe("recordSessionWindows", () => {
     reader.recordSessionWindows("pi", [{ window: "primary", usedPercent: 10 }]);
     const snapshot = await reader(contextWithGlobal(), "pi");
     expect(snapshot.status).toBe("unavailable");
+  });
+});
+
+describe("createPlanUsageReader refresh and cache lifetime", () => {
+  test("a forced read does not reuse an in-flight non-forced result", async () => {
+    let releaseFirst!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      if (calls === 1) return firstResponse;
+      return jsonResponse({ usage: { rolling: { status: "ok", percent: 99 } } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+    const context = contextWithGlobal({ openCodeZenApiKey: "zen-key" });
+
+    const pending = reader(context, "opencode");
+    const forced = await reader(context, "opencode", { force: true });
+    expect(forced.windows[0]?.usedPercent).toBe(99);
+
+    releaseFirst(jsonResponse({ usage: { rolling: { status: "ok", percent: 1 } } }));
+    const stale = await pending;
+    expect(stale.windows[0]?.usedPercent).toBe(1);
+
+    // The stale non-forced read must not have overwritten the forced result.
+    const cached = await reader(context, "opencode");
+    expect(cached.windows[0]?.usedPercent).toBe(99);
+  });
+
+  test("holds an unavailable snapshot only briefly so a fixed credential is picked up", async () => {
+    let clock = 1_700_000_000_000;
+    let available = false;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return jsonResponse({ five_hour: { utilization: 9 } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { claude: async () => (available ? "token" : undefined) },
+    });
+    const first = await reader(contextWithGlobal(), "claude");
+    expect(first.status).toBe("unavailable");
+
+    available = true;
+    clock += ERROR_CACHE_TTL_MS + 1;
+    const second = await reader(contextWithGlobal(), "claude");
+    expect(second.status).toBe("ok");
+    expect(calls).toBe(1);
+  });
+});
+
+describe("createPlanUsageReader Cursor token lifecycle", () => {
+  test("mints a fresh dashboard token after the dashboard rejects one", async () => {
+    let exchanges = 0;
+    let dashboards = 0;
+    const fetchImpl = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/auth/exchange_user_api_key")) {
+        exchanges += 1;
+        return jsonResponse({ accessToken: tokenExpiringAt(2_000_000_000) });
+      }
+      dashboards += 1;
+      if (dashboards === 1) return new Response(null, { status: 401 });
+      return jsonResponse({ planUsage: { autoPercentUsed: 40 } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => 1_700_000_000_000,
+      credentials: { cursor: async () => "cursor-key" },
+    });
+    const context = contextWithGlobal();
+
+    const first = await reader(context, "cursor");
+    expect(first.status).toBe("unavailable");
+    expect(exchanges).toBe(1);
+
+    const second = await reader(context, "cursor", { force: true });
+    expect(second.status).toBe("ok");
+    expect(exchanges).toBe(2);
+  });
+
+  test("reports unavailable when the Cursor exchange fails", async () => {
+    const fetchImpl = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      credentials: { cursor: async () => "cursor-key" },
+    });
+    const snapshot = await reader(contextWithGlobal(), "cursor");
+    expect(snapshot.status).toBe("unavailable");
+    expect(snapshot.message).toMatch(/would not exchange/);
+  });
+
+  test("reuses the token for the fallback lifetime when the payload omits an expiry", async () => {
+    let clock = 1_700_000_000_000;
+    let exchanges = 0;
+    const fetchImpl = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/auth/exchange_user_api_key")) {
+        exchanges += 1;
+        return jsonResponse({ accessToken: "opaque-token" });
+      }
+      return jsonResponse({ planUsage: { autoPercentUsed: 40 } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { cursor: async () => "cursor-key" },
+    });
+    const context = contextWithGlobal();
+
+    await reader(context, "cursor");
+    clock += 54 * 60_000;
+    await reader(context, "cursor", { force: true });
+    expect(exchanges).toBe(1);
+
+    clock += 2 * 60_000;
+    await reader(context, "cursor", { force: true });
+    expect(exchanges).toBe(2);
+  });
+});
+
+describe("createPlanUsageReader credential resolution", () => {
+  test("reads the Cursor login Orkestrator stored and skips an expired one", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ork-plan-usage-"));
+    try {
+      const credentialDir = path.join(dir, "cursor-sdk");
+      await mkdir(credentialDir, { recursive: true });
+      const credentialFile = path.join(credentialDir, "auth.json");
+      const seenAuth: string[] = [];
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/auth/exchange_user_api_key")) {
+          seenAuth.push(((init?.headers ?? {}) as Record<string, string>).Authorization ?? "");
+          return jsonResponse({ accessToken: tokenExpiringAt(2_000_000_000) });
+        }
+        return jsonResponse({ planUsage: { autoPercentUsed: 40 } });
+      }) as unknown as typeof fetch;
+      const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+      const context = contextWithGlobal(
+        {},
+        {
+          storage: { loadConfig: async () => ({ global: {} }), getDataDir: () => dir },
+        },
+      );
+
+      await writeFile(
+        credentialFile,
+        JSON.stringify({ apiKey: "expired-key", apiKeyExpiresAtMs: 1_000_000_000_000 }),
+      );
+      const expired = await reader(context, "cursor");
+      expect(expired.status).toBe("unavailable");
+      expect(seenAuth).toEqual([]);
+
+      await writeFile(
+        credentialFile,
+        JSON.stringify({ apiKey: "stored-key", apiKeyExpiresAtMs: 2_000_000_000_000 }),
+      );
+      const stored = await reader(context, "cursor", { force: true });
+      expect(stored.status).toBe("ok");
+      expect(seenAuth).toEqual(["Bearer stored-key"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves Codex auth from CODEX_HOME", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ork-plan-usage-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      const codexHome = path.join(dir, "codex-home");
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(
+        path.join(codexHome, "auth.json"),
+        JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } }),
+      );
+      process.env.CODEX_HOME = codexHome;
+      const fetchImpl = (async () =>
+        jsonResponse({
+          rate_limits: { primary: { used_percent: 20, window_minutes: 300 } },
+        })) as unknown as typeof fetch;
+      const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+      const snapshot = await reader(contextWithGlobal(), "codex");
+      expect(snapshot.status).toBe("ok");
+      expect(snapshot.windows[0]?.usedPercent).toBe(20);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses host credentials an agent-test profile did not grant", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({ fetchImpl, now: () => 1_700_000_000_000 });
+    const context = contextWithGlobal(
+      {},
+      {
+        runtimeFlavor: "agent-test",
+        credentialSources: new Set(["claude"]),
+        storage: { loadConfig: async () => ({ global: {} }), getDataDir: () => "/nonexistent" },
+      },
+    );
+
+    const cursor = await reader(context, "cursor");
+    expect(cursor.status).toBe("unavailable");
+    const codex = await reader(context, "codex");
+    expect(codex.status).toBe("unavailable");
+    expect(codex.message).toMatch(/Sign in to Codex/);
+    expect(calls).toBe(0);
+  });
+});
+
+describe("shared plan-usage cache integration", () => {
+  test("serves windows a session recorded to the shared cache", async () => {
+    sharedPlanUsageCache.clear();
+    try {
+      contextUsageWithPlanUsage("claude", {
+        usedTokens: 1,
+        rateLimits: [{ label: "5-hour limit", usedPercent: 33 }],
+      });
+      const snapshot = await readPlanUsage(contextWithGlobal(), "claude");
+      expect(snapshot.status).toBe("ok");
+      expect(snapshot.windows).toEqual([
+        { window: "five_hour", label: "5-hour limit", usedPercent: 33 },
+      ]);
+    } finally {
+      sharedPlanUsageCache.clear();
+    }
   });
 });

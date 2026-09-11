@@ -54,3 +54,25 @@ export function isPlanUsageSnapshot(value: unknown): value is PlanUsageSnapshot 
   if (candidate.message !== undefined && typeof candidate.message !== "string") return false;
   return typeof candidate.fetchedAt === "string";
 }
+
+/**
+ * Claude's known OAuth usage window ids, their friendly labels and period.
+ *
+ * Shared so a window a session reports as a rate limit and the same window read
+ * straight from the OAuth endpoint resolve to one identity.
+ */
+export const CLAUDE_PLAN_WINDOW_LABELS: Record<string, { label: string; windowMinutes: number }> = {
+  five_hour: { label: "5-hour limit", windowMinutes: 300 },
+  seven_day: { label: "Weekly limit", windowMinutes: 7 * 24 * 60 },
+  seven_day_opus: { label: "Weekly Opus limit", windowMinutes: 7 * 24 * 60 },
+  seven_day_oauth_apps: { label: "Weekly apps limit", windowMinutes: 7 * 24 * 60 },
+};
+
+/** The canonical window id for a Claude rate-limit label, when it is a known one. */
+export function claudePlanWindowIdFromLabel(label: string): string | undefined {
+  const normalized = label.trim().toLowerCase();
+  for (const [id, meta] of Object.entries(CLAUDE_PLAN_WINDOW_LABELS)) {
+    if (meta.label.toLowerCase() === normalized) return id;
+  }
+  return undefined;
+}

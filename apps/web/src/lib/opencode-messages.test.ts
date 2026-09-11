@@ -485,6 +485,45 @@ describe("opencode-client streaming part normalization", () => {
     }
   });
 
+  test("reads current OpenCode filediff metadata and a path-like title", () => {
+    const fromFilediff = normalizeOpenCodePart({
+      type: "tool",
+      tool: "edit",
+      state: {
+        status: "completed",
+        title: "apps/web/src/a.ts",
+        input: {},
+        output: "Edit applied successfully.",
+        metadata: {
+          filediff: {
+            file: "apps/web/src/a.ts",
+            patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new",
+            additions: 1,
+            deletions: 1,
+          },
+        },
+      },
+    });
+    expect(fromFilediff?.toolDiff).toMatchObject({
+      filePath: "apps/web/src/a.ts",
+      diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new",
+      additions: 1,
+      deletions: 1,
+    });
+
+    const fromTitle = normalizeOpenCodePart({
+      type: "tool",
+      tool: "edit",
+      state: {
+        status: "completed",
+        title: "apps/web/src/app/about/you/decks/actions.test.ts",
+        input: {},
+        output: "Edit applied successfully.",
+      },
+    });
+    expect(fromTitle?.toolDiff?.filePath).toBe("apps/web/src/app/about/you/decks/actions.test.ts");
+  });
+
   test("maps tool error status to failure state and stringifies error payloads", () => {
     const part = normalizeOpenCodePart({
       id: "part-t",

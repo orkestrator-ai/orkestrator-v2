@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   countTextLines,
   filePathFromToolInput,
+  isFileEditToolName,
   lineChangeStatsFromSides,
   splitTextLines,
+  toolDiffFromOpenCodeToolState,
   toolDiffFromToolInput,
 } from "./tool-diff";
 
@@ -244,6 +246,114 @@ describe("toolDiffFromToolInput", () => {
     ).toEqual({
       filePath: "n.ipynb",
       after: undefined,
+    });
+  });
+});
+
+describe("toolDiffFromOpenCodeToolState", () => {
+  test("recognizes the same file-mutating names the edit row uses", () => {
+    expect(isFileEditToolName("edit")).toBe(true);
+    expect(isFileEditToolName("Write")).toBe(true);
+    expect(isFileEditToolName("apply_patch")).toBe(true);
+    expect(isFileEditToolName("bash")).toBe(false);
+    expect(isFileEditToolName()).toBe(false);
+  });
+
+  test("reads OpenCode 1.18+ filediff file/patch/additions/deletions", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        metadata: {
+          filediff: {
+            file: "/repo/apps/web/src/a.ts",
+            patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more",
+            additions: 2,
+            deletions: 1,
+          },
+        },
+        title: "apps/web/src/a.ts",
+        output: "Edit applied successfully.",
+      }),
+    ).toEqual({
+      filePath: "/repo/apps/web/src/a.ts",
+      before: undefined,
+      after: undefined,
+      diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more",
+      additions: 2,
+      deletions: 1,
+    });
+  });
+
+  test("falls back to a path-like title when input and filediff omit the file", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: {},
+        title: "apps/web/src/app/about/you/decks/actions.test.ts",
+        output: "Edit applied successfully.",
+      }),
+    ).toMatchObject({
+      filePath: "apps/web/src/app/about/you/decks/actions.test.ts",
+    });
+  });
+
+  test("does not treat a success string as a file path", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        title: "Edit applied successfully.",
+        output: "Edit applied successfully.",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("reads write-tool metadata.filepath", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "write",
+        input: { content: "one\ntwo" },
+        metadata: { filepath: "/repo/new.ts", exists: false },
+        title: "new.ts",
+      }),
+    ).toMatchObject({
+      filePath: "/repo/new.ts",
+      after: "one\ntwo",
+      additions: 2,
+      deletions: 0,
+    });
+  });
+
+  test("unwraps a nested metadata.metadata carrier from ctx.metadata", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        metadata: {
+          metadata: {
+            diff: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-old\n+new",
+            filediff: { file: "b.ts", additions: 1, deletions: 1 },
+          },
+        },
+      }),
+    ).toMatchObject({
+      filePath: "b.ts",
+      diff: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-old\n+new",
+      additions: 1,
+      deletions: 1,
+    });
+  });
+
+  test("keeps provider-authored root counts over filediff counts", () => {
+    expect(
+      toolDiffFromOpenCodeToolState({
+        toolName: "edit",
+        input: { filePath: "a.ts", oldString: "a", newString: "b" },
+        metadata: { additions: 9, deletions: 4, filediff: { additions: 1, deletions: 1 } },
+      }),
+    ).toMatchObject({
+      filePath: "a.ts",
+      additions: 9,
+      deletions: 4,
     });
   });
 });

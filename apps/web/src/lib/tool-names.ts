@@ -1,17 +1,4 @@
-/** Tool names that represent file-editing operations across different AI coding agents */
-export const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "write",
-  "patch",
-  "apply_patch",
-  "file_edit",
-  "multiedit",
-  "notebookedit",
-  "str_replace_editor",
-  "create_file",
-  "insert",
-  "replace",
-]);
+import { isFileEditToolName } from "@orkestrator/protocol/tool-diff";
 
 /**
  * File-read tools, after separators are stripped.
@@ -53,8 +40,7 @@ function formatToolDisplayLabel(label: string): string {
 
 /** Check if a tool name is a file-editing tool */
 export function isEditTool(toolName?: string): boolean {
-  if (!toolName) return false;
-  return EDIT_TOOL_NAMES.has(toolName.toLowerCase());
+  return isFileEditToolName(toolName);
 }
 
 /** Check if a tool name is a file-read tool. */

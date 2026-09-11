@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { AlertTriangle, Check, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
@@ -51,7 +49,10 @@ import {
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
-import { SettingsHeaderActions } from "./FullscreenSettingsLayout";
+
+// Long enough that a slider drag or a fast typist produces one write, short
+// enough that releasing a control feels like it saved immediately.
+const AUTO_SAVE_DEBOUNCE_MS = 400;
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -126,10 +127,9 @@ export function globalFormSignature(global: GlobalConfig): string {
 
 interface GlobalSettingsProps {
   activeSection: string;
-  onSaveSuccess?: () => void;
 }
 
-export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsProps) {
+export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const global = config.global;
@@ -238,8 +238,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const { copied: webClientUrlCopied, copy: copyWebClientUrl } = useTimedCopyFeedback();
   const [isResettingTailscaleServe, setIsResettingTailscaleServe] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
+  const [coreHasChanges, setCoreHasChanges] = useState(false);
   const [githubCredentialPropagationPending, setGithubCredentialPropagationPending] =
     useState(false);
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
@@ -431,24 +430,55 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     }
   }, []);
 
-  // Check for changes
+  // What the shared auto-save would persist for the current edit. Kept in a
+  // ref so the debounce effect can tell a fresh edit from one that already
+  // failed, and refuse to spin retrying a value the backend rejects.
+  const coreSignatureRef = useRef("");
+  const failedCoreSignatureRef = useRef<string | null>(null);
+  const persistCoreRef = useRef<() => Promise<void>>(async () => {});
+
+  // Detect changes to the fields the debounced auto-save owns. Credentials are
+  // excluded on purpose: they persist when their field loses focus, so a pause
+  // mid-typing cannot store a partial secret and then clear the field out from
+  // under the user. Keep this list in step with the `global` it compares to.
   useEffect(() => {
     const terminalAppearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
+    coreSignatureRef.current = JSON.stringify([
+      cpuCores,
+      memoryGb,
+      envPatterns,
+      useHostGitHubCredentials,
+      sshAgentSocketPath,
+      useHostClaudeCredentials,
+      githubCredentialPropagationPending,
+      allowedDomains,
+      preferredEditor,
+      enabledAgentPlatforms,
+      coordinatorProviderTiers,
+      agentSettings,
+      openCodeModelProviders,
+      codexMaxConcurrentThreads,
+      terminalFontFamily,
+      terminalFontSize,
+      terminalBackgroundColor,
+      terminalScrollback,
+      terminalHistoryEnabled,
+      terminalHistoryRetentionMb,
+      terminalHistoryGlobalRetentionMb,
+      terminalHistoryRetentionDays,
+      experimentalCodexRawEventLogging,
+      debugLogging,
+      debugLogRetentionDays,
+      webClientEnabled,
+      reviewInstruction,
+    ]);
     const changed =
       cpuCores !== global.containerResources.cpuCores ||
       memoryGb !== global.containerResources.memoryGb ||
       envPatterns !== global.envFilePatterns.join(", ") ||
-      anthropicApiKey.trim().length > 0 ||
-      clearAnthropicApiKey ||
-      cursorApiKey.trim().length > 0 ||
-      clearCursorApiKey ||
-      openCodeZenApiKey.trim().length > 0 ||
-      clearOpenCodeZenApiKey ||
       useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true) ||
       sshAgentSocketPath !== (global.sshAgentSocketPath ?? "") ||
       useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true) ||
-      githubToken.trim().length > 0 ||
-      clearGithubToken ||
       githubCredentialPropagationPending ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
@@ -478,28 +508,15 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       debugLogging !== (global.debugLogging ?? false) ||
       debugLogRetentionDays !== normalizeDebugLogRetentionDays(global.debugLogRetentionDays) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
-      reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
-      webClientApplyError !== null ||
-      gatewayToken !== savedGatewayToken;
-    setHasChanges(changed);
-    if (changed) {
-      setSaveSuccess(false);
-    }
+      reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction);
+    setCoreHasChanges(changed);
   }, [
     cpuCores,
     memoryGb,
     envPatterns,
-    anthropicApiKey,
-    clearAnthropicApiKey,
-    cursorApiKey,
-    clearCursorApiKey,
-    openCodeZenApiKey,
-    clearOpenCodeZenApiKey,
     useHostGitHubCredentials,
     sshAgentSocketPath,
     useHostClaudeCredentials,
-    githubToken,
-    clearGithubToken,
     githubCredentialPropagationPending,
     allowedDomains,
     preferredEditor,
@@ -521,9 +538,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     debugLogRetentionDays,
     webClientEnabled,
     reviewInstruction,
-    webClientApplyError,
-    gatewayToken,
-    savedGatewayToken,
     global,
   ]);
 
@@ -580,7 +594,61 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     }
   };
 
-  const handleSave = async () => {
+  /**
+   * Push the selected GitHub credential source to every running container.
+   *
+   * A failure is retained in `githubCredentialPropagationPending` so the next
+   * edit retries it rather than silently leaving containers on stale
+   * credentials.
+   */
+  const propagateGithubCredentials = async () => {
+    try {
+      const propagateResult = await backend.propagateGithubCredentialsToContainers();
+      if (propagateResult.failed.length > 0) {
+        setGithubCredentialPropagationPending(true);
+        const failureDetails = propagateResult.failed
+          .slice(0, 3)
+          .map(([environmentId, message]) => `${environmentId}: ${message}`)
+          .join("; ");
+        const remainingFailureCount = Math.max(0, propagateResult.failed.length - 3);
+        toast.error("Settings saved, but some containers were not updated", {
+          description: [
+            propagateResult.updated.length > 0
+              ? `Updated ${propagateResult.updated.length} container(s).`
+              : null,
+            `Failed: ${failureDetails}${remainingFailureCount > 0 ? `; and ${remainingFailureCount} more` : ""}.`,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        });
+        return;
+      }
+      setGithubCredentialPropagationPending(false);
+      if (propagateResult.updated.length > 0) {
+        toast.success(
+          `Updated GitHub credentials in ${propagateResult.updated.length} container(s)`,
+        );
+      }
+    } catch (err) {
+      console.error("[settings] Failed to propagate GitHub credentials:", err);
+      setGithubCredentialPropagationPending(true);
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error("Settings saved, but containers were not updated", {
+        description: message,
+      });
+    }
+  };
+
+  /**
+   * Persist every non-secret setting the shared form owns.
+   *
+   * Auto-save owns this path: it runs debounced whenever any of those fields
+   * changes, and on its own it never touches a credential. Credentials are
+   * written by `persistCredential` when their field loses focus, so pausing
+   * mid-typing cannot store a partial secret and then clear the field.
+   */
+  const persistCore = async () => {
+    const signature = coreSignatureRef.current;
     setIsSaving(true);
     try {
       // Filenames are case-sensitive, so these dedupe exactly.
@@ -665,75 +733,15 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         newGlobal.reviewInstruction = reviewInstruction;
       }
 
-      let newConfig = await backend.updateGlobalConfig(newGlobal);
-      const nextAnthropicApiKey = anthropicApiKey.trim();
-      const anthropicApiKeyChanged = clearAnthropicApiKey || nextAnthropicApiKey.length > 0;
-      const nextCursorApiKey = cursorApiKey.trim();
-      const cursorApiKeyChanged = clearCursorApiKey || nextCursorApiKey.length > 0;
-      const nextOpenCodeZenApiKey = openCodeZenApiKey.trim();
-      const openCodeZenApiKeyChanged = clearOpenCodeZenApiKey || nextOpenCodeZenApiKey.length > 0;
-      const nextGitHubToken = githubToken.trim();
+      const newConfig = await backend.updateGlobalConfig(newGlobal);
+      setConfig(newConfig);
       const githubCredentialSourceChanged =
         useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
-      const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
-      const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
-      if (anthropicApiKeyChanged) {
-        pendingAnthropicCredentialEditRef.current = {
-          apiKey: anthropicApiKey,
-          clear: clearAnthropicApiKey,
-        };
-      }
-      if (cursorApiKeyChanged) {
-        pendingCursorCredentialEditRef.current = {
-          apiKey: cursorApiKey,
-          clear: clearCursorApiKey,
-        };
-      }
-      if (openCodeZenApiKeyChanged) {
-        pendingOpenCodeZenCredentialEditRef.current = {
-          apiKey: openCodeZenApiKey,
-          clear: clearOpenCodeZenApiKey,
-        };
-      }
-      if (githubTokenChanged) {
-        // Persisted non-secret settings are already authoritative at this point.
-        // Preserve the credential edit across that store sync until its separate
-        // keychain/file write succeeds, so a partial failure remains retryable.
-        pendingGitHubCredentialEditRef.current = {
-          token: githubToken,
-          clear: clearGithubToken,
-        };
-      }
-      setConfig(newConfig);
-      if (anthropicApiKeyChanged) {
-        newConfig = await backend.setAnthropicApiKey(
-          clearAnthropicApiKey ? null : nextAnthropicApiKey,
-        );
-        pendingAnthropicCredentialEditRef.current = null;
-        setConfig(newConfig);
-        setPlanUsageRefreshToken((token) => token + 1);
-      }
-      if (cursorApiKeyChanged) {
-        newConfig = await backend.setCursorApiKey(clearCursorApiKey ? null : nextCursorApiKey);
-        pendingCursorCredentialEditRef.current = null;
-        setConfig(newConfig);
-        setPlanUsageRefreshToken((token) => token + 1);
-      }
-      if (openCodeZenApiKeyChanged) {
-        newConfig = await backend.setOpenCodeZenApiKey(
-          clearOpenCodeZenApiKey ? null : nextOpenCodeZenApiKey,
-        );
-        pendingOpenCodeZenCredentialEditRef.current = null;
-        setConfig(newConfig);
-        setPlanUsageRefreshToken((token) => token + 1);
-      }
-      if (githubTokenChanged) {
-        newConfig = await backend.setGitHubToken(clearGithubToken ? null : nextGitHubToken);
-        pendingGitHubCredentialEditRef.current = null;
-        setConfig(newConfig);
-      }
 
-      if (!window.orkestratorGateway?.enabled) {
+      if (
+        !window.orkestratorGateway?.enabled &&
+        webClientEnabled !== (global.webClientEnabled ?? true)
+      ) {
         try {
           const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
           setWebClientStatus(nextWebClientStatus);
@@ -752,78 +760,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         }
       }
 
-      if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
-        const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
-        setGatewayTokenSettings(nextGatewayTokenSettings);
-        setGatewayToken(nextGatewayTokenSettings.token);
-        setSavedGatewayToken(nextGatewayTokenSettings.token);
-      }
-
       // Apply the selected credential source to running containers if it changed,
       // or retry a previous partial propagation failure.
-      let githubCredentialPropagationFailed = false;
-      if (githubCredentialChanged || githubCredentialPropagationPending) {
-        try {
-          const propagateResult = await backend.propagateGithubCredentialsToContainers();
-          if (propagateResult.failed.length > 0) {
-            githubCredentialPropagationFailed = true;
-            setGithubCredentialPropagationPending(true);
-            const failureDetails = propagateResult.failed
-              .slice(0, 3)
-              .map(([environmentId, message]) => `${environmentId}: ${message}`)
-              .join("; ");
-            const remainingFailureCount = Math.max(0, propagateResult.failed.length - 3);
-            toast.error("Settings saved, but some containers were not updated", {
-              description: [
-                propagateResult.updated.length > 0
-                  ? `Updated ${propagateResult.updated.length} container(s).`
-                  : null,
-                `Failed: ${failureDetails}${remainingFailureCount > 0 ? `; and ${remainingFailureCount} more` : ""}.`,
-                "Save Changes to retry.",
-              ]
-                .filter(Boolean)
-                .join(" "),
-            });
-          } else {
-            setGithubCredentialPropagationPending(false);
-          }
-          if (propagateResult.updated.length > 0 && propagateResult.failed.length === 0) {
-            toast.success(
-              `Updated GitHub credentials in ${propagateResult.updated.length} container(s)`,
-            );
-          }
-        } catch (err) {
-          console.error("[settings] Failed to propagate GitHub credentials:", err);
-          githubCredentialPropagationFailed = true;
-          setGithubCredentialPropagationPending(true);
-          const message = err instanceof Error ? err.message : String(err);
-          toast.error("Settings saved, but containers were not updated", {
-            description: `${message}. Save Changes to retry.`,
-          });
-        }
+      if (githubCredentialSourceChanged || githubCredentialPropagationPending) {
+        await propagateGithubCredentials();
       }
-
-      setAnthropicApiKey("");
-      setClearAnthropicApiKey(false);
-      pendingAnthropicCredentialEditRef.current = null;
-      setCursorApiKey("");
-      setClearCursorApiKey(false);
-      pendingCursorCredentialEditRef.current = null;
-      setOpenCodeZenApiKey("");
-      setClearOpenCodeZenApiKey(false);
-      pendingOpenCodeZenCredentialEditRef.current = null;
-      setGithubToken("");
-      setClearGithubToken(false);
-      pendingGitHubCredentialEditRef.current = null;
-      setHasChanges(githubCredentialPropagationFailed);
-      setSaveSuccess(!githubCredentialPropagationFailed);
-      if (!githubCredentialPropagationFailed) {
-        toast.success("Settings saved");
-        setTimeout(() => {
-          onSaveSuccess?.();
-        }, 500);
-      }
+      failedCoreSignatureRef.current = null;
     } catch (err) {
+      // Remember the exact edit the backend rejected so the debounce effect does
+      // not spin retrying it; any further edit retries naturally.
+      failedCoreSignatureRef.current = signature;
       console.error("[settings] Failed to save config:", err);
       const message = err instanceof Error ? err.message : "Failed to save settings";
       toast.error("Failed to save settings", { description: message });
@@ -832,65 +778,102 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     }
   };
 
-  const handleReset = () => {
-    setCpuCores(global.containerResources.cpuCores);
-    setMemoryGb(global.containerResources.memoryGb);
-    setEnvPatterns(global.envFilePatterns.join(", "));
-    setAnthropicApiKey("");
-    setClearAnthropicApiKey(false);
-    pendingAnthropicCredentialEditRef.current = null;
-    setCursorApiKey("");
-    setClearCursorApiKey(false);
-    pendingCursorCredentialEditRef.current = null;
-    setOpenCodeZenApiKey("");
-    setClearOpenCodeZenApiKey(false);
-    pendingOpenCodeZenCredentialEditRef.current = null;
-    setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
-    setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
-    setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
-    setGithubToken("");
-    setClearGithubToken(false);
-    // Reset is an explicit discard. Without this the retained edit would be
-    // restored by the `[global]` sync effect on the next external config change,
-    // resurrecting a token — or a pending clear — the user just threw away.
-    pendingGitHubCredentialEditRef.current = null;
-    setAllowedDomains((global.allowedDomains || []).join("\n"));
-    setPreferredEditor(global.preferredEditor || "vscode");
-    setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
-    setCoordinatorProviderTiers(
-      global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
-    );
-    setAgentSettings(normalizeAgentSettings(global.agentSettings));
-    setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
-    setOpenCodeProviderDraft("");
-    setCodexMaxConcurrentThreads(
-      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
-    );
-    const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
-    setTerminalFontFamily(appearance.fontFamily);
-    setTerminalFontSize(appearance.fontSize);
-    setTerminalBackgroundColor(appearance.backgroundColor);
-    setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
-    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
-    setTerminalHistoryRetentionMb(
-      global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
-    );
-    setTerminalHistoryGlobalRetentionMb(
-      global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
-    );
-    setTerminalHistoryRetentionDays(
-      global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
-    );
-    setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
-    setDebugLogging(global.debugLogging ?? false);
-    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
-    setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
-    setWebClientApplyError(null);
-    setGatewayToken(savedGatewayToken);
-    setDomainErrors([]);
-    setColorError(null);
-    setTestResults(null);
+  type CredentialField = "anthropic" | "cursor" | "opencode-zen" | "github";
+
+  const writeCredential = async (field: CredentialField, value: string | null) => {
+    let nextConfig;
+    if (field === "anthropic") nextConfig = await backend.setAnthropicApiKey(value);
+    else if (field === "cursor") nextConfig = await backend.setCursorApiKey(value);
+    else if (field === "opencode-zen") nextConfig = await backend.setOpenCodeZenApiKey(value);
+    else nextConfig = await backend.setGitHubToken(value);
+    setConfig(nextConfig);
+    if (field !== "github") setPlanUsageRefreshToken((token) => token + 1);
+  };
+
+  const clearCredentialField = (field: CredentialField) => {
+    if (field === "anthropic") {
+      setAnthropicApiKey("");
+      setClearAnthropicApiKey(false);
+      pendingAnthropicCredentialEditRef.current = null;
+    } else if (field === "cursor") {
+      setCursorApiKey("");
+      setClearCursorApiKey(false);
+      pendingCursorCredentialEditRef.current = null;
+    } else if (field === "opencode-zen") {
+      setOpenCodeZenApiKey("");
+      setClearOpenCodeZenApiKey(false);
+      pendingOpenCodeZenCredentialEditRef.current = null;
+    } else {
+      setGithubToken("");
+      setClearGithubToken(false);
+      pendingGitHubCredentialEditRef.current = null;
+    }
+  };
+
+  /**
+   * Save one credential when its field loses focus.
+   *
+   * A secret is deliberately not debounced with the rest of the form:
+   * auto-saving it while the user is still typing would persist a prefix and
+   * clear the field, so the remainder would overwrite the real key. Blur is
+   * the first moment the value is whole.
+   */
+  const persistCredential = async (field: CredentialField) => {
+    const draft = {
+      anthropic: { value: anthropicApiKey, clear: clearAnthropicApiKey },
+      cursor: { value: cursorApiKey, clear: clearCursorApiKey },
+      "opencode-zen": { value: openCodeZenApiKey, clear: clearOpenCodeZenApiKey },
+      github: { value: githubToken, clear: clearGithubToken },
+    }[field];
+    const trimmed = draft.value.trim();
+    if (!draft.clear && trimmed.length === 0) return;
+    setIsSaving(true);
+    try {
+      await writeCredential(field, draft.clear ? null : trimmed);
+      clearCredentialField(field);
+      if (field === "github") await propagateGithubCredentials();
+    } catch (err) {
+      console.error("[settings] Failed to save credential:", err);
+      const message = err instanceof Error ? err.message : "Failed to save settings";
+      toast.error("Failed to save settings", { description: message });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  /** Clear a stored credential immediately, without waiting for a form submit. */
+  const clearCredential = async (field: CredentialField) => {
+    setIsSaving(true);
+    try {
+      await writeCredential(field, null);
+      clearCredentialField(field);
+      if (field === "github") await propagateGithubCredentials();
+    } catch (err) {
+      console.error("[settings] Failed to clear credential:", err);
+      const message = err instanceof Error ? err.message : "Failed to clear credential";
+      toast.error("Failed to clear credential", { description: message });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const persistGatewayToken = async () => {
+    if (!gatewayTokenSettings?.editable) return;
+    if (gatewayToken === savedGatewayToken) return;
+    if (getGatewayTokenValidationError(gatewayToken)) return;
+    setIsSaving(true);
+    try {
+      const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
+      setGatewayTokenSettings(nextGatewayTokenSettings);
+      setGatewayToken(nextGatewayTokenSettings.token);
+      setSavedGatewayToken(nextGatewayTokenSettings.token);
+    } catch (err) {
+      console.error("[settings] Failed to save gateway token:", err);
+      const message = err instanceof Error ? err.message : "Failed to save settings";
+      toast.error("Failed to save gateway token", { description: message });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const gatewayTokenValidationError = gatewayTokenSettings?.editable
@@ -1027,12 +1010,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     handleDomainsChange,
     handleBackgroundColorChange,
     handleTestDomains,
+    persistCredential,
+    clearCredential,
+    persistGatewayToken,
   };
 
-  // The Save button is shared by every section, so a validation failure in one
-  // section blocks saving in all of them. Each blocker carries the section that
-  // owns it so the save bar can name the reason when the user is looking
-  // somewhere else, rather than leaving the disabled button unexplained.
+  // A validation failure in one section blocks auto-save for every section: the
+  // whole form is written in one `update_global_config`, so a bad value in
+  // Network or Terminal would otherwise ship alongside an otherwise valid edit.
   const saveBlocker = useMemo(() => {
     const blockers: Array<{ section: string; message: string }> = [];
     if (domainErrors.length > 0) {
@@ -1087,54 +1072,19 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     reviewInstructionValidationError,
     sshAgentSocketPathValidationError,
   ]);
-  // The owning section already renders its own inline message; repeat only
-  // cross-section blockers beside the pinned Save action.
-  const saveBlockedReason =
-    saveBlocker && saveBlocker.section !== activeSection ? saveBlocker.message : null;
-  return (
-    <>
-      <SettingsHeaderActions>
-        {saveBlockedReason && (
-          <span className="flex min-w-0 items-center text-destructive" title={saveBlockedReason}>
-            <AlertTriangle className="h-4 w-4 shrink-0 lg:hidden" aria-hidden="true" />
-            <span
-              id="global-settings-save-blocked-reason"
-              role="alert"
-              className="sr-only text-xs lg:not-sr-only lg:block lg:max-w-64 lg:truncate"
-            >
-              {saveBlockedReason}
-            </span>
-          </span>
-        )}
-        <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
-          Reset
-        </Button>
-        <Button
-          aria-label="Save Changes"
-          onClick={handleSave}
-          disabled={!hasChanges || isSaving || saveSuccess || saveBlocker !== null}
-          aria-describedby={saveBlockedReason ? "global-settings-save-blocked-reason" : undefined}
-          title={saveBlockedReason ?? undefined}
-        >
-          {saveSuccess ? (
-            <>
-              <Check className="mr-2 h-4 w-4" />
-              Saved!
-            </>
-          ) : isSaving ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <span className="sm:hidden">Save</span>
-              <span className="hidden sm:inline">Save Changes</span>
-            </>
-          )}
-        </Button>
-      </SettingsHeaderActions>
-      <GlobalSettingsSections activeSection={activeSection} settings={sectionSettings} />
-    </>
-  );
+  // Debounced auto-save. `coreHasChanges` flips as the form diverges from the
+  // persisted config; the timer is cleared on every change and on unmount, so a
+  // slider drag or a burst of typing persists once, after the user stops. A
+  // rejected signature is not retried until the value changes again.
+  persistCoreRef.current = persistCore;
+  useEffect(() => {
+    if (!coreHasChanges || isSaving || saveBlocker) return;
+    if (failedCoreSignatureRef.current === coreSignatureRef.current) return;
+    const timer = setTimeout(() => {
+      void persistCoreRef.current();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [coreHasChanges, isSaving, saveBlocker]);
+
+  return <GlobalSettingsSections activeSection={activeSection} settings={sectionSettings} />;
 }

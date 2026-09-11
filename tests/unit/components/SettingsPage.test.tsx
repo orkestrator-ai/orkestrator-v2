@@ -15,16 +15,9 @@ import * as previousFullscreenSettingsLayout from "../../../apps/web/src/compone
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
 
 mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
-  GlobalSettings: ({
-    activeSection,
-    onSaveSuccess,
-  }: {
-    activeSection: string;
-    onSaveSuccess?: () => void;
-  }) => (
+  GlobalSettings: ({ activeSection }: { activeSection: string }) => (
     <div>
       <span data-testid="active-settings-section">{activeSection}</span>
-      <button onClick={onSaveSuccess}>finish save</button>
     </div>
   ),
 }));
@@ -219,15 +212,6 @@ describe("SettingsPage", () => {
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("active-settings-section")).toBeTruthy();
-  });
-
-  test("closes after a successful child save", async () => {
-    const onOpenChange = mock(() => undefined);
-    render(<SettingsPage open onOpenChange={onOpenChange} />);
-    await screen.findByTestId("active-settings-section");
-
-    fireEvent.click(screen.getByRole("button", { name: "finish save" }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   test("recovers from a config load failure and retries after reopening", async () => {

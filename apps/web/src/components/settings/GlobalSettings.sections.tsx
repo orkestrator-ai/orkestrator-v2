@@ -289,6 +289,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     handleDomainsChange,
     handleBackgroundColorChange,
     handleTestDomains,
+    persistCredential,
+    clearCredential,
+    persistGatewayToken,
   } = settings;
 
   const [runtimeAppVersion, setRuntimeAppVersion] = useState<string | null>(null);
@@ -648,6 +651,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                     setGithubToken(e.target.value);
                     if (e.target.value) setClearGithubToken(false);
                   }}
+                  onBlur={() => void persistCredential("github")}
                   placeholder={
                     global.githubTokenConfigured && !clearGithubToken
                       ? "Token configured — enter a replacement"
@@ -671,18 +675,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setGithubToken("");
-                    setClearGithubToken(true);
-                  }}
+                  onClick={() => void clearCredential("github")}
                 >
                   Clear stored token
                 </Button>
-              )}
-              {clearGithubToken && (
-                <p className="text-xs text-amber-500">
-                  The stored GitHub token will be cleared when you save.
-                </p>
               )}
               <p className="text-xs text-muted-foreground">
                 Create one at{" "}
@@ -942,6 +938,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 setAnthropicApiKey(event.target.value);
                 if (event.target.value) setClearAnthropicApiKey(false);
               }}
+              onBlur={() => void persistCredential("anthropic")}
               placeholder={
                 global.anthropicApiKeyConfigured && !clearAnthropicApiKey
                   ? "API key configured — enter a replacement"
@@ -964,18 +961,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
-                setAnthropicApiKey("");
-                setClearAnthropicApiKey(true);
-              }}
+              onClick={() => void clearCredential("anthropic")}
             >
               Clear stored Anthropic API key
             </Button>
-          )}
-          {clearAnthropicApiKey && (
-            <p className="text-xs text-amber-500">
-              The stored Anthropic API key will be cleared when you save.
-            </p>
           )}
           {global.anthropicApiKeySource === "host-env" && (
             <p className="text-xs text-amber-500">
@@ -1041,6 +1030,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 setOpenCodeZenApiKey(event.target.value);
                 if (event.target.value) setClearOpenCodeZenApiKey(false);
               }}
+              onBlur={() => void persistCredential("opencode-zen")}
               placeholder={
                 global.openCodeZenApiKeyConfigured && !clearOpenCodeZenApiKey
                   ? "API key configured — enter a replacement"
@@ -1066,18 +1056,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
-                setOpenCodeZenApiKey("");
-                setClearOpenCodeZenApiKey(true);
-              }}
+              onClick={() => void clearCredential("opencode-zen")}
             >
               Clear stored OpenCode Zen API key
             </Button>
-          )}
-          {clearOpenCodeZenApiKey && (
-            <p className="text-xs text-amber-500">
-              The stored OpenCode Zen API key will be cleared when you save.
-            </p>
           )}
           {global.openCodeZenApiKeySource === "host-env" && (
             <p className="text-xs text-amber-500">
@@ -1219,6 +1201,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 setCursorApiKey(event.target.value);
                 if (event.target.value) setClearCursorApiKey(false);
               }}
+              onBlur={() => void persistCredential("cursor")}
               placeholder={
                 global.cursorApiKeyConfigured && !clearCursorApiKey
                   ? "API key configured — enter a replacement"
@@ -1242,18 +1225,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
-                setCursorApiKey("");
-                setClearCursorApiKey(true);
-              }}
+              onClick={() => void clearCredential("cursor")}
             >
               Clear stored Cursor API key
             </Button>
-          )}
-          {clearCursorApiKey && (
-            <p className="text-xs text-amber-500">
-              The stored Cursor API key will be cleared when you save.
-            </p>
           )}
           {global.cursorApiKeySource === "host-env" && (
             // A key inherited from the backend process environment is forwarded to
@@ -1736,6 +1711,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 type={showGatewayToken ? "text" : "password"}
                 value={gatewayToken}
                 onChange={(event) => setGatewayToken(event.target.value)}
+                onBlur={() => void persistGatewayToken()}
                 placeholder={isLoadingGatewayToken ? "Loading gateway token…" : "Gateway token"}
                 className="pr-20 font-mono text-xs"
                 disabled={isLoadingGatewayToken || !gatewayTokenSettings?.editable || isSaving}
@@ -1795,7 +1771,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               gatewayToken !== savedGatewayToken &&
               !gatewayTokenValidationError && (
                 <p className="text-xs text-amber-400/90">
-                  Save changes to use this token for future sign-ins.
+                  This token is saved when you leave the field.
                 </p>
               )}
           </div>
@@ -1856,9 +1832,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
 
             {hasPendingAccessChange && (
-              <p className="mt-2 text-xs text-amber-400/90">
-                Save changes to {webClientEnabled ? "start" : "stop"} web access.
-              </p>
+              <p className="mt-2 text-xs text-amber-400/90">Applying web access change…</p>
             )}
             {!hasPendingAccessChange && webClientStatus?.error && (
               <div className="mt-2">

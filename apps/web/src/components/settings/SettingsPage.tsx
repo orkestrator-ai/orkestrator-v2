@@ -115,7 +115,7 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
     >
       {(activeSection) =>
         // Skills is a read-only browser of the host's skill directories, not a
-        // config form, so it bypasses GlobalSettings and its Reset/Save bar.
+        // config form, so it bypasses the auto-saving settings form.
         activeSection === "skills" ? (
           <SkillsSettings />
         ) : activeSection === "connections" ? (
@@ -129,7 +129,7 @@ export function SettingsPage({ open, onOpenChange, defaultSection }: SettingsPag
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <GlobalSettings activeSection={activeSection} onSaveSuccess={() => onOpenChange(false)} />
+          <GlobalSettings activeSection={activeSection} />
         )
       }
     </FullscreenSettingsLayout>

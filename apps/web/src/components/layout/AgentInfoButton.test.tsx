@@ -1580,6 +1580,28 @@ describe("AgentInfoButton usage panel", () => {
     expect(windowDurationMinutes({ label: "Weekly", windowMinutes: 0 })).toBeNull();
   });
 
+  test("measures a calendar-month window from its real reset boundary", () => {
+    // OpenCode Zen names a monthly window without reporting its duration, so
+    // the marker must be placed on the calendar month rather than a fixed 30
+    // days or it drifts by a day on 31-day months.
+    const resetMs = Date.parse("2026-09-01T00:00:00.000Z");
+    const halfwayMs = resetMs - 15.5 * 24 * 60 * 60 * 1_000;
+
+    expect(
+      limitWindowPosition(
+        { label: "Monthly", resetsAt: new Date(resetMs).toISOString() },
+        halfwayMs,
+      ),
+    ).toBe(50);
+    // A 28-day month is measured as 28 days, not the 30-day fallback.
+    expect(windowDurationMinutes({ label: "Monthly", resetsAt: "2026-03-01T00:00:00.000Z" })).toBe(
+      28 * 24 * 60,
+    );
+    // Without a reset instant there is nothing to measure, so the name's
+    // approximate span governs whether the row is treated as timed at all.
+    expect(labelWindowMinutes("Monthly")).toBe(30 * 24 * 60);
+  });
+
   test("does not place a marker on an unmeasurable or stale limit period", () => {
     const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
     // Neither the payload nor the label says how long the period is.

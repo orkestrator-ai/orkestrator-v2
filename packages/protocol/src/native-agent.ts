@@ -356,7 +356,19 @@ export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 export type NativeAgentDispatchOutcome =
   | { outcome: "accepted"; requestId: string }
   | { outcome: "rejected"; error: string }
-  | { outcome: "unknown"; requestId: string; error?: string };
+  | {
+      outcome: "unknown";
+      requestId: string;
+      error?: string;
+      /**
+       * Where the ambiguity was observed. `transport` means the dispatch call
+       * itself failed before it reached the backend's durable bookkeeping, so
+       * no recoverable record was created and the caller must surface the
+       * failure instead of waiting for a card that will never arrive. Absent
+       * (or `provider`) means the backend parked a recoverable dispatch.
+       */
+      origin?: "provider" | "transport";
+    };
 
 /**
  * A provider may have accepted this request even though Orkestrator did not

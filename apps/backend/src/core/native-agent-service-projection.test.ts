@@ -20,6 +20,7 @@ import { cursorConnection, httpProvider } from "./agent-provider-test-support.js
 import {
   ProviderSessionFailedError,
   ProviderUnavailableError,
+  AmbiguousPromptDispatchError,
   type NativeAgentRuntimeProvider,
   type ProviderInteractiveSnapshot,
   type ProviderStatus,
@@ -371,6 +372,83 @@ describe("NativeAgentService", () => {
         expect(recovered.status === "snapshot" ? recovered.token : undefined).not.toBe(
           update.status === "snapshot" ? update.token : undefined,
         );
+      },
+    );
+  });
+
+  test("flips a parked prompt from reconciling to action-required on the progressive state path", async () => {
+    let now = Date.parse("2026-09-11T10:00:00.000Z");
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      // The provider cannot prove the prompt landed, so the record stays parked.
+      dispatchStatus: async () => "unknown" as const,
+      sessionStateSnapshot: async () => ({ status: "idle", phase: "idle" }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-dispatch-grace-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-dispatch-grace",
+        };
+        await expect(
+          service.dispatchIntent({
+            ...identity,
+            prompt: "Do the work",
+            requestId: "grace-state-1",
+          }),
+        ).resolves.toMatchObject({ outcome: "unknown", requestId: "grace-state-1" });
+
+        // The tab polls this state path, not the joined projection, so the flip
+        // has to be observable here for the recovery card to ever settle.
+        const first = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(first.status).toBe("snapshot");
+        expect(
+          first.status === "snapshot" ? first.value.recoverableDispatch : undefined,
+        ).toMatchObject({ requestId: "grace-state-1", status: "reconciling" });
+
+        now += 15_000;
+        const second = await service.getSessionStateUpdate({ ...identity, viewVersion: 1 });
+        expect(second.status).toBe("snapshot");
+        expect(
+          second.status === "snapshot" ? second.value.recoverableDispatch : undefined,
+        ).toMatchObject({ requestId: "grace-state-1", status: "action-required" });
+      },
+    );
+  });
+
+  test("treats corrupt, future-dated, and steer parked records as action-required", async () => {
+    const now = Date.parse("2026-09-11T10:00:00.000Z");
+    await withService(
+      { prefix: "orkestrator-recoverable-status-", now: () => now },
+      async ({ service }) => {
+        const status = (
+          service as unknown as {
+            recoverableDispatchStatus(
+              createdAt: string,
+              kind?: "prompt" | "steer",
+            ): "reconciling" | "action-required";
+          }
+        ).recoverableDispatchStatus.bind(service);
+
+        // Inside the grace window a prompt is still reconciling.
+        expect(status(new Date(now - 5_000).toISOString(), "prompt")).toBe("reconciling");
+        // Once the window elapses it becomes a decision.
+        expect(status(new Date(now - 15_000).toISOString(), "prompt")).toBe("action-required");
+        // A timestamp ahead of the service clock must not pin the record in
+        // reconciling for the length of the skew.
+        expect(status(new Date(now + 60_000).toISOString(), "prompt")).toBe("action-required");
+        // Corrupt timestamps fall back to a choice the user can act on.
+        expect(status("not-a-date", "prompt")).toBe("action-required");
+        // A steer never waits out the prompt reconcile grace.
+        expect(status(new Date(now - 1_000).toISOString(), "steer")).toBe("action-required");
       },
     );
   });

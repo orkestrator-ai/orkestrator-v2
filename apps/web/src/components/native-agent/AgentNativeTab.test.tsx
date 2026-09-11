@@ -2436,9 +2436,8 @@ describe("AgentNativeTab", () => {
     );
   });
 
-  test("shows dispatch recovery once the send settles without an acknowledgement", async () => {
+  test("settles an unconfirmed send into a reconciling hold, then a recovery choice", async () => {
     const tabId = "tab-unconfirmed-dispatch";
-    const sessionKey = createSessionKey("env-1", tabId);
     let releaseDispatch!: () => void;
     const dispatchGate = new Promise<void>((resolve) => {
       releaseDispatch = resolve;
@@ -2454,48 +2453,68 @@ describe("AgentNativeTab", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
 
-    // The backend parked the request id before it reached the provider, so every
-    // projection read from here on carries the record — including the refresh
-    // the failing send performs on its way out.
     const requestId = dispatchNativeAgentIntentMock.mock.calls[0]![0].requestId;
-    const parked = {
-      requestId,
-      createdAt: "2026-09-09T19:12:51.000Z",
-    };
+    // The production combination: a lost acknowledgement the backend has parked
+    // and is still trying to confirm against the provider.
+    let status: "reconciling" | "action-required" = "reconciling";
     getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
-      recoverableDispatch: parked,
+      turn: { phase: "running" as const },
+      recoverableDispatch: { requestId, createdAt: "2026-09-09T19:12:51.000Z", status },
     }));
-    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
-    act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-        ...current,
-        revision: current.revision + 1,
-        turn: { phase: "running" },
-        recoverableDispatch: parked,
-      });
-    });
+
+    releaseDispatch();
+
+    // Settling unknown is not yet a choice while the record is reconciling.
+    expect(await screen.findByText(/Confirming delivery with Cursor Agent/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
 
-    // Settling without an answer is exactly what turns the parked record into a
-    // choice the user can act on, so the card must arrive with it.
-    releaseDispatch();
-    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+    // Once the backend's own projection poll says the window elapsed, the
+    // retry/discard card arrives without any client-side store write.
+    status = "action-required";
+    expect(
+      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
+    ).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
+  });
+
+  test("surfaces a transport failure and restores the draft when nothing was parked", async () => {
+    const tabId = "tab-transport-failed-dispatch";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => {
+      throw new Error("The connection dropped");
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The RPC failed before the backend persisted anything, so no recovery card
+    // can ever arrive. The failure must still be visible rather than leaving the
+    // optimistic prompt looking delivered.
+    expect(
+      await screen.findByText(/connection dropped before Codex confirmed your last message/i),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+        "Run the focused tests",
+      ),
+    );
   });
 
   test("holds the recovery card while a parked dispatch is still reconciling", async () => {
     const tabId = "tab-reconciling-dispatch";
-    const sessionKey = createSessionKey("env-1", tabId);
-    const reconciling = {
-      requestId: "reconciling-1",
-      createdAt: "2026-09-09T19:12:51.000Z",
-      status: "reconciling" as const,
-    };
+    let status: "reconciling" | "action-required" = "reconciling";
     getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
       ...(await defaultProjection(projectionInput)),
-      recoverableDispatch: reconciling,
+      turn: { phase: "running" as const },
+      recoverableDispatch: {
+        requestId: "reconciling-1",
+        createdAt: "2026-09-09T19:12:51.000Z",
+        status,
+      },
     }));
 
     render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
@@ -2508,17 +2527,13 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
     expect(screen.queryByText(/could not confirm delivery/i) === null).toBe(true);
 
-    // Once the grace window elapses the same record becomes the actionable
-    // final failure, and only then does the retry/discard card arrive.
-    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
-    act(() => {
-      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
-        ...current,
-        revision: current.revision + 1,
-        recoverableDispatch: { ...reconciling, status: "action-required" },
-      });
-    });
-    expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
+    // The flip arrives through the ordinary projection poll the tab already
+    // runs, not a client-side store write, so this exercises the wiring the UI
+    // actually depends on.
+    status = "action-required";
+    expect(
+      await screen.findByRole("button", { name: "Retry send" }, { timeout: 4_000 }),
+    ).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
   });

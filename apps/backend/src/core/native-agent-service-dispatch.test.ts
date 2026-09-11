@@ -612,6 +612,9 @@ describe("NativeAgentService", () => {
           recoverableDispatch: {
             requestId: pending!.requestId,
             kind: "steer",
+            // A steer never waits out the prompt reconcile grace, so the
+            // retry/discard choice is available on the first read.
+            status: "action-required",
           },
         });
         expect(stub.performSessionAction).toHaveBeenCalledTimes(1);

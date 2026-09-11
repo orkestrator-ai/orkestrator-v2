@@ -1202,10 +1202,23 @@ export function SharedNativeAgentController({
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
         keepTranscriptConfirmation = outcome.outcome === "unknown";
-        // An unknown outcome is a parked dispatch: the reconciling/action-required
-        // card is its single source of feedback. A red error here would flash
-        // alongside it and then vanish once the backend confirms the delivery.
-        if (outcome.outcome !== "unknown") setSendError(outcome.error);
+        /*
+         * A backend-reported unknown is a parked dispatch: the
+         * reconciling/action-required card is its single source of feedback, so
+         * a red error here would flash alongside it. A transport failure is
+         * different — the RPC failed before the backend persisted anything, so
+         * no card can arrive and the optimistic bubble must not stay looking
+         * delivered with no feedback.
+         */
+        const transportFailure = outcome.outcome === "unknown" && outcome.origin === "transport";
+        if (transportFailure) setOptimisticPrompt(null);
+        if (transportFailure) {
+          setSendError(
+            `The connection dropped before ${label} confirmed your last message. Retrying uses the same request id, so it cannot run twice.`,
+          );
+        } else if (outcome.outcome === "rejected") {
+          setSendError(outcome.error);
+        }
       } catch (error) {
         setOptimisticPrompt(null);
         setSendError(error instanceof Error ? error.message : String(error));

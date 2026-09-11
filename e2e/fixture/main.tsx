@@ -795,6 +795,7 @@ function validationResult(
   command: string,
   durationMs: number,
   queuedMs?: number,
+  overrides: Partial<ReviewValidationRun["results"][number]> = {},
 ): ReviewValidationRun["results"][number] {
   return {
     id,
@@ -809,8 +810,12 @@ function validationResult(
     durationMs,
     queuedMs,
     limitation: null,
+    ...overrides,
   };
 }
+
+const longValidationCommand =
+  "mise run test:logged -- --name review-validation-output -- bun test ./apps/web/src/components/review/ReviewValidationStatus.test.tsx --parallel=1 --only-failures";
 
 const reviewValidationOutputRun: ReviewValidationRun = {
   id: "validation-1",
@@ -823,7 +828,7 @@ const reviewValidationOutputRun: ReviewValidationRun = {
     headRef: "a".repeat(40),
     commands: [
       validationCommand("test", "mise run test"),
-      validationCommand("cargo", "cargo test --workspace"),
+      validationCommand("cargo", longValidationCommand),
       validationCommand("typecheck", "mise run typecheck"),
       validationCommand("lint", "mise run lintfix"),
       validationCommand("format", "mise run formatcheck"),
@@ -833,11 +838,16 @@ const reviewValidationOutputRun: ReviewValidationRun = {
   },
   results: [
     validationResult("test", "mise run test", 2_300),
-    validationResult("cargo", "cargo test --workspace", 8_000, 2_000),
-    validationResult("typecheck", "mise run typecheck", 4_100, 4_000),
+    validationResult("cargo", longValidationCommand, 8_000, 2_000),
+    validationResult("typecheck", "mise run typecheck", 4_100, 4_000, {
+      status: "queued",
+      exitCode: null,
+    }),
     validationResult("lint", "mise run lintfix", 1_000),
     validationResult("format", "mise run formatcheck", 900),
-    validationResult("build", "mise run buildworld", 46_200, 1_200),
+    validationResult("build", "mise run buildworld", 46_200, 1_200, {
+      limitation: "Build runner was unavailable.",
+    }),
   ],
 };
 

@@ -306,7 +306,10 @@ export function ReviewValidationStatus({
                 onClick={() => setSelectedResultId(result.id)}
               >
                 <code className="min-w-0 break-all">{result.command}</code>
-                <span className="whitespace-nowrap text-muted-foreground">
+                <span
+                  data-slot="validation-status"
+                  className="whitespace-nowrap text-muted-foreground"
+                >
                   {result.status === "queued" ? "waiting for capacity" : result.status}
                 </span>
                 <span
@@ -326,7 +329,10 @@ export function ReviewValidationStatus({
                 </span>
                 <SquareTerminal className="size-3.5 opacity-60" aria-hidden="true" />
                 {result.limitation && (
-                  <span className="col-span-full text-muted-foreground">
+                  <span
+                    data-slot="validation-limitation"
+                    className="col-span-full mt-1 text-muted-foreground"
+                  >
                     <span className="sr-only">{result.command}: </span>
                     {result.limitation}
                   </span>

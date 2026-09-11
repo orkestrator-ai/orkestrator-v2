@@ -123,7 +123,9 @@ describe("ReviewValidationStatus", () => {
     const runningRow = () =>
       screen.getByRole("button", { name: "View terminal output for bun run check" });
     expect(runningRow().textContent).toContain("running");
-    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("5.0s");
+    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+      "5.0s",
+    );
 
     view.rerender(
       <ReviewValidationStatus
@@ -134,7 +136,9 @@ describe("ReviewValidationStatus", () => {
     );
     expect(screen.getByText(/Validation: 13\.0s\./)).toBeTruthy();
     expect(runningRow().textContent).toContain("running");
-    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe("8.0s");
+    expect(runningRow().querySelector("[data-slot='validation-elapsed']")?.textContent).toBe(
+      "8.0s",
+    );
   });
 
   test("keeps run and queue times in shared columns when some rows omit them", () => {
@@ -177,12 +181,16 @@ describe("ReviewValidationStatus", () => {
       />,
     );
 
-    expect(screen.getByText("bun run check").closest("li")?.textContent).toContain(
-      "A prerequisite did not pass.",
-    );
-    expect(screen.getByText("bun run build").closest("li")?.textContent).toContain(
-      "A prerequisite did not pass.",
-    );
+    const checkRow = screen.getByText("bun run check").closest("li")!;
+    const buildRow = screen.getByText("bun run build").closest("li")!;
+    expect(checkRow.textContent).toContain("A prerequisite did not pass.");
+    expect(buildRow.textContent).toContain("A prerequisite did not pass.");
+    for (const row of [checkRow, buildRow]) {
+      const limitation = row.querySelector("[data-slot='validation-limitation']");
+      expect(limitation?.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["col-span-full", "mt-1"]),
+      );
+    }
     expect(screen.getAllByText("A prerequisite did not pass.")).toHaveLength(2);
     const notes = screen.getByText("Notes").closest("details")!;
     expect(notes.hasAttribute("open")).toBe(false);
@@ -217,7 +225,14 @@ describe("ReviewValidationStatus", () => {
     expect(screen.getByText("Terminal output")).toBeTruthy();
     const header = screen.getByRole("dialog").querySelector("[data-slot='dialog-header']");
     expect(header?.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(["m-0", "sm:m-0", "px-14", "sm:px-14", "text-center", "sm:text-center"]),
+      expect.arrayContaining([
+        "m-0",
+        "sm:m-0",
+        "px-14",
+        "sm:px-14",
+        "text-center",
+        "sm:text-center",
+      ]),
     );
     expect(screen.getByText("Terminal output").className).toContain("justify-center");
     await waitFor(() => expect(screen.getByText(/1 pass/)).toBeTruthy());

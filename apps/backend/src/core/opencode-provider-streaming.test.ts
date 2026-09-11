@@ -8,6 +8,7 @@ import type {
   ProviderInteractiveSnapshot,
   ProviderSessionStateSnapshot,
 } from "./agent-provider-contract.js";
+import { AmbiguousPromptDispatchError, PromptRejectedError } from "./native-agent-provider.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 
 type SnapshotProvider = {
@@ -128,6 +129,228 @@ describe("OpenCode provider v1 SSE projection", () => {
       });
       const next = await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
       expect(next.turnStartedAt).toBe(12_000);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("does not republish or restamp the turn clock after a streamed error", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const started = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running",
+      );
+      expect(started.turnStartedAt).toBe(1_000);
+
+      // The lifecycle cache stays running; only the stream error ends the turn.
+      stream.push({
+        type: "session.error",
+        properties: {
+          sessionID: "owned-session",
+          error: { name: "ProviderError", data: { message: "provider unavailable" } },
+        },
+      });
+      const failedState = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "error",
+      );
+      expect(failedState.turnStartedAt).toBeUndefined();
+      const failedInteractive = await waitForSnapshot(
+        provider,
+        (snapshot) => snapshot.status === "error",
+      );
+      expect(failedInteractive.turnStartedAt).toBeUndefined();
+
+      // An error-status read at a later time must not plant a fresh clock.
+      now = 500_000;
+      const restamped = await provider.sessionStateSnapshot?.("owned-session");
+      expect(restamped?.status).toBe("error");
+      expect(restamped?.turnStartedAt).toBeUndefined();
+
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const next = await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+      expect(next.turnStartedAt).toBe(500_000);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("clears a stale turn clock when an authoritative read reports the session idle", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+
+      // The idle transition is lost. Only the authoritative reconnect read can
+      // settle the turn, and it must not leave the old clock behind.
+      fake.setStatusResponse({ data: { "owned-session": { type: "idle" } } });
+      stream.push({ type: "server.instance.disposed", properties: {} });
+      const idle = await waitForSessionState(provider, (snapshot) => snapshot.status === "idle");
+      expect(idle.turnStartedAt).toBeUndefined();
+
+      await waitUntil(() => fake.subscriptions.length >= 2, 2_000);
+      now = 500_000;
+      fake.subscriptions.at(-1)!.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const next = await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+      expect(next.turnStartedAt).toBe(500_000);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("clears the turn clock when the turn is aborted", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      await provider.send("owned-session", "Keep working", { requestId: "request-1" });
+      fake.subscriptions[0]!.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      await waitForSessionState(provider, (snapshot) => snapshot.status === "running");
+
+      await provider.abort("owned-session");
+      // The lifecycle cache still reports running, so the cleared clock proves
+      // abort settled it rather than waiting for a missed idle event.
+      const after = await provider.sessionStateSnapshot?.("owned-session");
+      expect(after?.turnStartedAt).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("does not manufacture a turn clock for a turn only the provider observed", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      const state = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running",
+      );
+      // No dispatch and no busy transition: the renderer must fall back to the
+      // persisted user-message clock instead of a snapshot observation time.
+      expect(state.turnStartedAt).toBeUndefined();
+
+      now = 50_000;
+      const later = await provider.sessionStateSnapshot?.("owned-session");
+      expect(later?.turnStartedAt).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("clears an abandoned dispatch clock when the prompt request throws", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      fake.setPromptError(new Error("socket hang up"));
+      await expect(
+        provider.send("owned-session", "prompt", { requestId: "request-1" }),
+      ).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+
+      now = 7_000;
+      fake.subscriptions[0]!.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const running = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running",
+      );
+      expect(running.turnStartedAt).toBe(7_000);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("clears the dispatch clock when OpenCode rejects the prompt", async () => {
+    const fake = openCodeFake();
+    let now = 0;
+    const provider = openCodeActivityProvider(fake, {
+      now: () => now,
+      monitorRetryMs: 1,
+      openCodeStatusReconcileIntervalMs: 60_000,
+    });
+    provider.registerSession?.("owned-session");
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1 && fake.statusCallCount > 0);
+      now = 1_000;
+      fake.setPromptResponse({ error: { name: "ProviderError" }, response: { status: 400 } });
+      await expect(
+        provider.send("owned-session", "prompt", { requestId: "request-1" }),
+      ).rejects.toBeInstanceOf(PromptRejectedError);
+
+      now = 7_000;
+      fake.subscriptions[0]!.push({
+        type: "session.status",
+        properties: { sessionID: "owned-session", status: { type: "busy" } },
+      });
+      const running = await waitForSessionState(
+        provider,
+        (snapshot) => snapshot.status === "running",
+      );
+      expect(running.turnStartedAt).toBe(7_000);
     } finally {
       await provider.dispose?.();
     }

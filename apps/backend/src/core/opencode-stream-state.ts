@@ -28,6 +28,8 @@ type OpenCodeStreamSession = {
   permission?: unknown;
   runtime?: Pick<NativeAgentRuntimeSummary, "todos" | "files">;
   turnStartedAt?: number;
+  /** Whether a running observation confirmed the current turn clock. */
+  turnConfirmed?: boolean;
 };
 
 export type OpenCodeStreamEffect = {
@@ -117,7 +119,24 @@ export class OpenCodeStreamState {
 
   /** Record dispatch before a renderer has to observe the turn. */
   beginTurn(sessionId: string, startedAt: number): void {
-    this.session(sessionId).turnStartedAt = startedAt;
+    const state = this.session(sessionId);
+    state.turnStartedAt = startedAt;
+    state.turnConfirmed = false;
+  }
+
+  /** The authoritative turn clock, if one has been established. */
+  turnStartedAt(sessionId: string): number | undefined {
+    return this.sessions.get(sessionId)?.turnStartedAt;
+  }
+
+  /** Whether a running observation has confirmed the current turn clock. */
+  isTurnConfirmed(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.turnConfirmed === true;
+  }
+
+  /** Mark that a running observation confirmed the turn currently in flight. */
+  confirmTurn(sessionId: string): void {
+    this.session(sessionId).turnConfirmed = true;
   }
 
   /** Supply a backend observation clock for turns that started externally. */
@@ -131,18 +150,21 @@ export class OpenCodeStreamState {
       return state.turnStartedAt;
     }
     state.turnStartedAt ??= observedAt;
+    state.turnConfirmed = true;
     return state.turnStartedAt;
   }
 
   /** Remove only the dispatch clock belonging to this rejected request. */
   rejectTurn(sessionId: string, startedAt: number): void {
     const state = this.sessions.get(sessionId);
-    if (state?.turnStartedAt === startedAt) delete state.turnStartedAt;
+    if (state?.turnStartedAt === startedAt) this.endTurn(sessionId);
   }
 
   endTurn(sessionId: string): void {
     const state = this.sessions.get(sessionId);
-    if (state) delete state.turnStartedAt;
+    if (!state) return;
+    delete state.turnStartedAt;
+    delete state.turnConfirmed;
   }
 
   markGap(): void {

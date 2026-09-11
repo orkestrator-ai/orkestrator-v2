@@ -71,10 +71,14 @@ export function openCodeSessionStateSnapshot(input: {
   notices: NativeAgentNotice[];
 }): ProviderSessionStateSnapshot {
   const streamedError = input.notices.find((notice) => notice.kind === "error");
+  // A stream error overrides the lifecycle status. Gate the clock on the
+  // effective status so a running lifecycle never republishes a clock for a
+  // turn the stream already reported as failed.
+  const effectiveStatus: ProviderStatus = streamedError ? "error" : input.status;
   return {
-    status: streamedError ? "error" : input.status,
+    status: effectiveStatus,
     providerRevision: input.revision,
-    ...(input.status === "running" && input.turnStartedAt !== undefined
+    ...(effectiveStatus === "running" && input.turnStartedAt !== undefined
       ? { turnStartedAt: input.turnStartedAt }
       : {}),
     ...(input.title ? { title: input.title } : {}),
@@ -85,9 +89,9 @@ export function openCodeSessionStateSnapshot(input: {
       ? { phase: "error", error: streamedError.message }
       : {
           phase:
-            input.status === "running"
+            effectiveStatus === "running"
               ? "running"
-              : input.status === "blocked"
+              : effectiveStatus === "blocked"
                 ? "blocked"
                 : "idle",
         }),

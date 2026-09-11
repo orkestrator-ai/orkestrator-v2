@@ -3,6 +3,7 @@ import {
   tryParseStructuredOutputText,
   type JsonSchema,
 } from "@orkestrator/protocol/structured-output";
+import { toolDiffFromOpenCodeToolState } from "@orkestrator/protocol/tool-diff";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
 
 /**
@@ -375,6 +376,15 @@ export function normalizeOpenCodeInteractiveMessage(
     // The provider's own `subtask` record for this child already produced a
     // row. Keeping the heuristic one too would show one sub-agent twice.
     if (isSubagent && subagentId && subtaskSessionIds.has(subagentId)) continue;
+    const toolDiff = isSubagent
+      ? undefined
+      : toolDiffFromOpenCodeToolState({
+          toolName,
+          input,
+          metadata,
+          title: typeof state?.title === "string" ? state.title : undefined,
+          output: toolOutput,
+        });
     parts.push({
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
@@ -384,6 +394,7 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
       ...(toolOutput === undefined ? {} : { toolOutput }),
       ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
+      ...(toolDiff ? { toolDiff } : {}),
       ...(isSubagent
         ? {
             // The fallback path: recognised from the tool call's shape rather

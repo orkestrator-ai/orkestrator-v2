@@ -1,20 +1,8 @@
 import type { Part as OpenCodePart } from "@opencode-ai/sdk/v2/types";
-import { countTextLines, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
-import { isEditTool } from "./tool-names";
+import { toolDiffFromOpenCodeToolState } from "@orkestrator/protocol/tool-diff";
 import { createUuid } from "./uuid";
 
-import {
-  isRecord,
-  type OpenCodeMessage,
-  type OpenCodeMessagePart,
-  type ToolDiffMetadata,
-} from "./opencode-types";
-
-interface FileDiffMetadata {
-  file?: string;
-  before?: string;
-  after?: string;
-}
+import { isRecord, type OpenCodeMessage, type OpenCodeMessagePart } from "./opencode-types";
 
 function stringifyToolPayload(value: unknown): string | undefined {
   if (value === undefined) {
@@ -475,132 +463,13 @@ export function normalizeOpenCodePart(
       });
     }
 
-    let toolDiff: ToolDiffMetadata | undefined;
-    if (isEditTool(toolName)) {
-      const input = p.state?.input || {};
-      const mappedSides = isRecord(input) ? toolDiffFromToolInput(toolName, input) : undefined;
-      const meta = p.state?.metadata || {};
-      const filediff = meta.filediff as FileDiffMetadata | undefined;
-
-      const filePath = (input.filePath ||
-        input.file_path ||
-        input.path ||
-        input.file ||
-        meta.file ||
-        meta.filePath ||
-        meta.path ||
-        filediff?.file ||
-        mappedSides?.filePath) as string | undefined;
-
-      const oldString =
-        typeof input.oldString === "string"
-          ? input.oldString
-          : typeof input.old_string === "string"
-            ? input.old_string
-            : undefined;
-      const newString =
-        typeof input.newString === "string"
-          ? input.newString
-          : typeof input.new_string === "string"
-            ? input.new_string
-            : typeof input.content === "string"
-              ? input.content
-              : undefined;
-      const metaBefore =
-        typeof filediff?.before === "string"
-          ? filediff.before
-          : typeof meta.before === "string"
-            ? meta.before
-            : undefined;
-      const metaAfter =
-        typeof filediff?.after === "string"
-          ? filediff.after
-          : typeof meta.after === "string"
-            ? meta.after
-            : undefined;
-
-      const unifiedDiff =
-        typeof meta.diff === "string"
-          ? meta.diff
-          : typeof input.patch === "string"
-            ? input.patch
-            : typeof input.diff === "string"
-              ? input.diff
-              : undefined;
-
-      // OpenCode-native sides win when present. Mapped Claude-shaped input
-      // (MultiEdit `edits[]`, Write `content`) fills the gap so those tools
-      // still get a before/after body and per-chunk counts.
-      const nativeBefore = oldString ?? metaBefore;
-      const nativeAfter = newString ?? metaAfter;
-      const usingMappedSides = nativeBefore === undefined && nativeAfter === undefined;
-      const beforeValue = usingMappedSides ? mappedSides?.before : nativeBefore;
-      const afterValue = usingMappedSides ? mappedSides?.after : nativeAfter;
-
-      let additions: number | undefined;
-      let deletions: number | undefined;
-
-      if (typeof meta.additions === "number" && typeof meta.deletions === "number") {
-        additions = meta.additions as number;
-        deletions = meta.deletions as number;
-      } else if (unifiedDiff) {
-        let addCount = 0;
-        let delCount = 0;
-        const lines = unifiedDiff.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("+") && !line.startsWith("+++")) addCount++;
-          else if (line.startsWith("-") && !line.startsWith("---")) delCount++;
-        }
-        additions = addCount;
-        deletions = delCount;
-      } else if (
-        toolOutput &&
-        toolOutput.includes("@@") &&
-        (toolOutput.includes("\n+") || toolOutput.includes("\n-"))
-      ) {
-        let addCount = 0;
-        let delCount = 0;
-        const lines = toolOutput.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("+") && !line.startsWith("+++")) addCount++;
-          else if (line.startsWith("-") && !line.startsWith("---")) delCount++;
-        }
-        if (addCount > 0 || delCount > 0) {
-          additions = addCount;
-          deletions = delCount;
-        }
-      } else if (
-        usingMappedSides &&
-        (mappedSides?.additions !== undefined || mappedSides?.deletions !== undefined)
-      ) {
-        // Per-chunk MultiEdit counts must win over recounting the joined
-        // string, which would charge separators the mapping already avoided.
-        additions = mappedSides.additions;
-        deletions = mappedSides.deletions;
-      } else if (beforeValue !== undefined || afterValue !== undefined) {
-        const oldLines = countTextLines(beforeValue);
-        const newLines = countTextLines(afterValue);
-        if (beforeValue && afterValue) {
-          deletions = oldLines;
-          additions = newLines;
-        } else if (afterValue) {
-          additions = newLines;
-          deletions = 0;
-        } else if (beforeValue) {
-          additions = 0;
-          deletions = oldLines;
-        }
-      }
-
-      toolDiff = {
-        filePath,
-        additions,
-        deletions,
-        before: beforeValue,
-        after: afterValue,
-        diff: unifiedDiff,
-      };
-    }
+    const toolDiff = toolDiffFromOpenCodeToolState({
+      toolName,
+      input: p.state?.input,
+      metadata: p.state?.metadata ?? p.metadata,
+      title: toolTitle,
+      output: toolOutput,
+    });
 
     return stamp({
       type: "tool-invocation",

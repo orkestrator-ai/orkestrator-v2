@@ -13,8 +13,96 @@ import {
 } from "./native-agent-service.js";
 
 import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import { normalizeOpenCodeInteractiveMessage } from "./opencode-messages.js";
 
 describe("NativeAgentService transcript projection", () => {
+  test("defers an OpenCode edit body while keeping its path and counts projected", async () => {
+    // This is the persisted-transcript path a user sees on reload: an OpenCode
+    // edit is normalized, then the projection moves its heavy diff body behind a
+    // detail reference. The row the renderer reads must still know the file and
+    // the +/- counts, and the reference must resolve back to the full diff.
+    const normalized = normalizeOpenCodeInteractiveMessage(
+      {
+        info: { id: "msg-opencode-edit", role: "assistant", time: { created: 0 } },
+        parts: [
+          {
+            id: "p1",
+            type: "tool",
+            tool: "edit",
+            state: {
+              status: "completed",
+              title: "apps/web/src/a.ts",
+              input: {},
+              output: "Edit applied successfully.",
+              metadata: {
+                filediff: {
+                  file: "apps/web/src/a.ts",
+                  patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new",
+                  additions: 1,
+                  deletions: 1,
+                },
+              },
+            },
+          },
+        ],
+      },
+      0,
+    );
+    const normalizedParts = (normalized?.parts ?? []) as Array<{
+      toolDiff?: Record<string, unknown>;
+    }>;
+    expect(normalizedParts[0]?.toolDiff).toMatchObject({
+      filePath: "apps/web/src/a.ts",
+      additions: 1,
+      deletions: 1,
+    });
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: normalized ? [normalized] : [],
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-diff-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-opencode-edit",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        const part = (
+          projection!.messages[0] as {
+            parts: Array<{ detailRef?: string; toolDiff?: Record<string, unknown> }>;
+          }
+        ).parts[0];
+
+        expect(part?.toolDiff).toEqual({
+          filePath: "apps/web/src/a.ts",
+          additions: 1,
+          deletions: 1,
+          deferred: true,
+        });
+        expect(part?.detailRef).toBeString();
+
+        const details = await service.getProjectionToolDetails({
+          ...identity,
+          detailRef: part!.detailRef!,
+        });
+        expect(details.toolDiff).toMatchObject({
+          filePath: "apps/web/src/a.ts",
+          diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new",
+          additions: 1,
+          deletions: 1,
+        });
+      },
+    );
+  });
+
   test("persists async-question attention once and projects a queued response", async () => {
     const itemId = "question/item-1";
     const requestId = nativeAsyncQuestionRequestId(itemId);

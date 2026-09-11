@@ -1,5 +1,13 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { FileText, Image as ImageIcon, Quote, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
@@ -16,7 +24,13 @@ import {
   readImagePreviewCache,
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
-import { markdownComponents, USER_PROMPT_COLLAPSED_LINE_COUNT } from "./NativeMessage.shared";
+import {
+  cacheToolDetails,
+  cachedToolDetails,
+  markdownComponents,
+  ToolDetailLoaderContext,
+  USER_PROMPT_COLLAPSED_LINE_COUNT,
+} from "./NativeMessage.shared";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 
 function ImagePreviewOverlay({
@@ -147,14 +161,30 @@ export function FilePart({
   filename,
   containerId,
   eagerPreview = false,
+  detailRef,
+  alwaysImage = false,
 }: {
   path: string;
   fileUrl?: string;
   filename?: string;
   containerId?: string;
   eagerPreview?: boolean;
+  /**
+   * Backend reference for an inline image with no readable path.
+   *
+   * OpenCode persists a pasted attachment as a data URL and a bare filename, so
+   * `projectionPart` moves the bytes behind this reference; the image itself is
+   * fetched on demand and never inflates the live transcript.
+   */
+  detailRef?: string;
+  /**
+   * The caller already knows this is an image (a first-class image part), so
+   * the filename-extension heuristic must not decide for it.
+   */
+  alwaysImage?: boolean;
 }) {
-  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl);
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl, detailRef);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
@@ -162,7 +192,7 @@ export function FilePart({
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
 
   const displayName = filename || path.split(/[\\/]/).pop() || path || "file";
-  const isImage = isImageReference(fileUrl) || isImageReference(path);
+  const isImage = alwaysImage || isImageReference(fileUrl) || isImageReference(path);
   // Only the thumbnail-bearing surface gets the tile chrome. A part that is
   // never eagerly loaded would otherwise sit as an empty card until clicked.
   const showThumbnailTile = isImage && eagerPreview;
@@ -178,16 +208,28 @@ export function FilePart({
     setLoadError(false);
     const request = (async () => {
       try {
-        if (fileUrl?.startsWith("data:image/")) {
-          return fileUrl;
+        // No path and no inline copy on the part: the bytes live behind the
+        // deferred detail reference. Fetch them before choosing a source.
+        let resolvedFileUrl = fileUrl;
+        if (!resolvedFileUrl && detailRef && loadToolDetails) {
+          let details = cachedToolDetails(detailRef);
+          if (!details) {
+            details = await loadToolDetails(detailRef);
+            cacheToolDetails(details);
+          }
+          resolvedFileUrl = details.fileDataUrl;
         }
 
-        if (isRemoteImageUrl(fileUrl)) {
-          return fileUrl ?? null;
+        if (resolvedFileUrl?.startsWith("data:image/")) {
+          return resolvedFileUrl;
         }
 
-        const localFilePath = fileUrl?.startsWith("file://")
-          ? parseLocalFilePathFromUrl(fileUrl)
+        if (isRemoteImageUrl(resolvedFileUrl)) {
+          return resolvedFileUrl ?? null;
+        }
+
+        const localFilePath = resolvedFileUrl?.startsWith("file://")
+          ? parseLocalFilePathFromUrl(resolvedFileUrl)
           : null;
 
         if (containerId) {
@@ -232,7 +274,7 @@ export function FilePart({
       }
     });
     return request;
-  }, [cacheKey, isImage, path, fileUrl, containerId]);
+  }, [cacheKey, isImage, path, fileUrl, containerId, detailRef, loadToolDetails]);
 
   useEffect(() => {
     if (!eagerPreview || !isImage || imageSrc || isRemoteImageUrl(fileUrl)) return;

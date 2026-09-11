@@ -179,6 +179,12 @@ export function ImagePart({
 }) {
   const source = part.imageSource ?? "attachment";
   const caption = part.content.trim();
+  // A first-class image part is only loadable when it names its bytes. Codex
+  // reports a caption-only image (`item.path` absent) with no `fileUrl`, so
+  // forcing the image treatment there would render a thumbnail whose eager load
+  // cannot succeed and leaves a red "preview unavailable" badge. Without a
+  // reference the row is just a caption, not a broken picture.
+  const hasBytes = Boolean(part.fileUrl || part.detailRef);
   return (
     <div className="my-1 space-y-1">
       <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
@@ -187,8 +193,10 @@ export function ImagePart({
       <FilePart
         path={caption || part.filename || "image"}
         fileUrl={part.fileUrl}
+        detailRef={part.detailRef}
         filename={part.filename}
         containerId={containerId}
+        alwaysImage={hasBytes}
         // Provenance is the reason to show it at all, so it loads without a
         // click — unlike a generic file row, which may be one of many.
         eagerPreview

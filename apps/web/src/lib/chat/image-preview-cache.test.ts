@@ -11,19 +11,30 @@ describe("image preview cache", () => {
     clearImagePreviewCache();
   });
 
-  test("separates the same path by container and by URL spelling", () => {
+  test("separates the same path by container, URL spelling and detail reference", () => {
     const local = imagePreviewCacheKey(undefined, "/w/a.png", undefined);
     const inContainer = imagePreviewCacheKey("container-1", "/w/a.png", undefined);
     const otherContainer = imagePreviewCacheKey("container-2", "/w/a.png", undefined);
     const withUrl = imagePreviewCacheKey(undefined, "/w/a.png", "file:///w/a.png");
+    // Two deferred images can share a display name; their bytes are told apart
+    // only by the detail reference, so the key must carry it.
+    const firstDeferred = imagePreviewCacheKey(undefined, "a.png", undefined, "detail-1");
+    const secondDeferred = imagePreviewCacheKey(undefined, "a.png", undefined, "detail-2");
 
-    expect(new Set([local, inContainer, otherContainer, withUrl]).size).toBe(4);
+    expect(
+      new Set([local, inContainer, otherContainer, withUrl, firstDeferred, secondDeferred]).size,
+    ).toBe(6);
 
     writeImagePreviewCache(inContainer, "data:image/png;base64,one");
     expect(readImagePreviewCache(inContainer)).toBe("data:image/png;base64,one");
     // A different container serving the same path must not read the first
     // container's bytes.
     expect(readImagePreviewCache(otherContainer)).toBeNull();
+
+    writeImagePreviewCache(firstDeferred, "data:image/png;base64,first");
+    writeImagePreviewCache(secondDeferred, "data:image/png;base64,second");
+    expect(readImagePreviewCache(firstDeferred)).toBe("data:image/png;base64,first");
+    expect(readImagePreviewCache(secondDeferred)).toBe("data:image/png;base64,second");
   });
 
   test("returns null for a key that was never written", () => {

@@ -5,12 +5,16 @@
  * presentation, and none of these components may learn which provider produced
  * the part they are showing.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 
+const invokeMock = invoke as ReturnType<typeof mock>;
+
 afterEach(cleanup);
+beforeEach(() => invokeMock.mockClear());
 
 function part<T extends NativeMessagePart["type"]>(
   type: T,
@@ -118,5 +122,20 @@ describe("ImagePart", () => {
   test("defaults to an attachment when the provider does not say", () => {
     render(<ImagePart part={part("image", { content: "a cat" })} />);
     expect(screen.getByText("Attached image")).toBeTruthy();
+  });
+
+  test("a caption-only image is a quiet row, not a failing thumbnail", () => {
+    // Codex reports an image with no path when the item carries no bytes.
+    // Forcing the image treatment would eagerly read the caption as a path.
+    render(
+      <ImagePart
+        part={part("image", { content: "a generated cat", imageSource: "generated" })}
+        containerId="container-1"
+      />,
+    );
+
+    expect(screen.getByText("a generated cat")).toBeTruthy();
+    expect(screen.queryByText("preview unavailable") === null).toBe(true);
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 });

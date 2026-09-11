@@ -524,6 +524,16 @@ export const NATIVE_HISTORY_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES = 4_096;
 export const NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 export const NATIVE_TOOL_DETAIL_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Ceiling for a deferred inline image's data URL.
+ *
+ * An attachment is capped at 8 MiB decoded, which is roughly 10.7 MiB once
+ * base64 encoded, so this covers every image the composer can produce with
+ * headroom for the JSON envelope. It is deliberately larger than the tool
+ * detail cap: a tool result is one row among many, whereas an image is content
+ * the user explicitly attached and expects to see.
+ */
+export const NATIVE_FILE_DETAIL_MAX_BYTES = 16 * 1024 * 1024;
 export const NATIVE_MODEL_CATALOG_TTL_MS = 30_000;
 export const NATIVE_MODEL_CATALOG_CACHE_LIMIT = 128;
 export const NATIVE_SLASH_COMMAND_TTL_MS = 30_000;

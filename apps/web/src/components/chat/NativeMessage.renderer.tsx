@@ -1,5 +1,6 @@
-import { useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { isEditTool } from "@/lib/tool-names";
+import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
@@ -20,7 +21,12 @@ import {
   ToolPart,
   hasRenderableDiff,
 } from "./NativeMessage.basic-parts";
-import { FilePart, TextPart, TranscriptReferencePart } from "./NativeMessage.file-parts";
+import {
+  FilePart,
+  TextPart,
+  TranscriptReferencePart,
+  canLoadImagePreview,
+} from "./NativeMessage.file-parts";
 import { CompactionPart, ImagePart, RetryPart, StatusPart } from "./NativeMessage.notice-parts";
 import {
   AgentGroupPart,
@@ -38,6 +44,7 @@ export function DeferredToolMessagePart({
   renderJsonPayload,
   containerId,
   eagerImagePreview,
+  suppressImageReadPreview,
 }: {
   part: Extract<NativeMessagePart, { type: "tool-invocation" }>;
   partKey: string;
@@ -46,6 +53,7 @@ export function DeferredToolMessagePart({
   renderJsonPayload: boolean;
   containerId?: string;
   eagerImagePreview: boolean;
+  suppressImageReadPreview?: boolean;
 }) {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const expansionScope = useContext(MessageExpansionScopeContext);
@@ -123,7 +131,50 @@ export function DeferredToolMessagePart({
       renderJsonPayload={renderJsonPayload}
       containerId={containerId}
       eagerImagePreview={eagerImagePreview}
+      suppressImageReadPreview={suppressImageReadPreview}
     />
+  );
+}
+
+/**
+ * A recovered image preview that removes itself when the bytes cannot be read.
+ *
+ * `canLoadImagePreview` rejects what is knowably unreadable before anything
+ * mounts, but on the host it cannot be exact: the renderer does not know the
+ * worktree root the backend confines reads to, and it cannot know that a path
+ * component is a symbolic link or that the file has since been deleted. This
+ * preview was synthesized from a path argument rather than reported by the
+ * transcript, so the honest answer to a failed load is to show nothing and
+ * leave the tool row to speak for the call.
+ */
+function ImageReadPreview({
+  imageRead,
+  containerId,
+  children,
+}: {
+  imageRead: ImageRead;
+  containerId?: string;
+  children: ReactNode;
+}) {
+  const [unavailable, setUnavailable] = useState(false);
+  const handleUnavailable = useCallback(() => setUnavailable(true), []);
+
+  if (unavailable) return <>{children}</>;
+  return (
+    <div className="space-y-1">
+      {children}
+      <ImagePart
+        part={{
+          type: "image",
+          content: imageRead.path,
+          fileUrl: imageRead.fileUrl,
+          filename: imageRead.filename,
+          imageSource: "viewed",
+        }}
+        containerId={containerId}
+        onUnavailable={handleUnavailable}
+      />
+    </div>
   );
 }
 
@@ -139,6 +190,7 @@ export function MessagePart({
   partKey,
   deferredDetails = false,
   embedded = false,
+  suppressImageReadPreview = false,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
@@ -147,6 +199,8 @@ export function MessagePart({
   renderJsonPayload?: boolean;
   containerId?: string;
   eagerImagePreview?: boolean;
+  /** A bridge already supplied the image bytes for this tool call. */
+  suppressImageReadPreview?: boolean;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
   /**
@@ -170,6 +224,7 @@ export function MessagePart({
         renderJsonPayload={renderJsonPayload}
         containerId={containerId}
         eagerImagePreview={eagerImagePreview}
+        suppressImageReadPreview={suppressImageReadPreview}
       />
     );
   }
@@ -244,8 +299,11 @@ export function MessagePart({
           />
         );
       }
-      // Use generic ToolPart for other tools
-      return (
+      // Codex already emits a first-class `image` part for viewed files. Every
+      // other platform reports the same action as a Read with a path, so the
+      // preview is recovered here — one place, every transcript.
+      const imageRead = suppressImageReadPreview ? null : imageReadFromToolPart(part);
+      const toolCard = (
         <ToolPart
           expansionKey={toolExpansionKey}
           toolName={part.toolName}
@@ -258,6 +316,14 @@ export function MessagePart({
           progress={part.progress}
           deferredDetails={deferredDetails}
         />
+      );
+      if (!imageRead || !canLoadImagePreview(imageRead.path, imageRead.fileUrl, containerId)) {
+        return toolCard;
+      }
+      return (
+        <ImageReadPreview imageRead={imageRead} containerId={containerId} key={imageRead.path}>
+          {toolCard}
+        </ImageReadPreview>
       );
     case "tool-result":
       // Tool results are typically shown inline with tool invocations

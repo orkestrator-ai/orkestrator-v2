@@ -14,6 +14,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { toolResultImagePartId } from "@orkestrator/protocol/transcript-part-ids";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
 import {
@@ -418,7 +419,7 @@ function appendToolResultImages(
 ): void {
   if (!images || images.length === 0) return;
   for (const [index, image] of images.entries()) {
-    const sourcePartId = `image:${toolCallId}:${index}`;
+    const sourcePartId = toolResultImagePartId(toolCallId, index);
     if (message.parts.some((candidate) => candidate.sourcePartId === sourcePartId)) continue;
     const part: BridgeImagePart = {
       type: "image",

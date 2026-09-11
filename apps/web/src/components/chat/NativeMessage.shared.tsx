@@ -216,6 +216,7 @@ export interface NativeMessagePartRendererProps {
   renderJsonPayload?: boolean;
   containerId?: string;
   eagerImagePreview?: boolean;
+  suppressImageReadPreview?: boolean;
   deferredDetails?: boolean;
   embedded?: boolean;
 }

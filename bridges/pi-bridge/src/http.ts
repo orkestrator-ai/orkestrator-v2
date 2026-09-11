@@ -25,6 +25,8 @@ import {
   resolveApproval,
 } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
+import { parseAgentMcpConnection } from "./mcp-config.js";
+import { publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
@@ -231,6 +233,7 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     );
+    storeAgentMcp(state, body.agentMcp);
     if (typeof body.readOnly === "boolean") {
       if (
         (state.readOnly === true) !== body.readOnly &&
@@ -265,6 +268,7 @@ async function routeGlobal(
     ).catch((error) => {
       throw new HttpError(400, errorText(error));
     });
+    storeAgentMcp(state, body.agentMcp);
     await persistBarrier();
     json(response, 201, publicSessionReference(state));
     return true;
@@ -425,9 +429,8 @@ async function routeSession(
   if (action === "commands" && request.method === "GET") {
     return json(response, 200, { commands: state.slashCommands });
   }
-  // Pi extensions are native tools, not MCP servers.
   if (action === "mcp" && request.method === "GET") {
-    return json(response, 200, { servers: [] });
+    return json(response, 200, { servers: publicPiMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
     return json(response, 200, { ...state.composer, commands: state.slashCommands });
@@ -838,6 +841,7 @@ async function handlePrompt(
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
     throw new HttpError(400, "readOnly must be a boolean");
+  storeAgentMcp(state, body.agentMcp);
 
   // Claim the turn synchronously. `ensureSession` yields even on its attached
   // fast path, so a second request would otherwise pass both the duplicate and
@@ -960,6 +964,11 @@ function appendUserMessage(
     createdAt: new Date().toISOString(),
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (attachments.length + 1));
+}
+
+function storeAgentMcp(state: SessionState, value: unknown): void {
+  const parsed = parseAgentMcpConnection(value);
+  if (parsed) state.agentMcp = parsed;
 }
 
 function readBoundedString(value: unknown, limit: number, field: string): string | undefined {

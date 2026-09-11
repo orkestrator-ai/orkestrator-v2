@@ -423,5 +423,7 @@ source narrowed to that platform: open two tabs in one environment, ask each
 - Attachments. Text only.
 - `wait_for_reply` or deadlock detection. Rate limits, hop caps, and the
   inject-depth breaker stay the loop controls.
-- Injection for Cursor, Grok, or Pi. Those tabs remain non-addressable until
-  their bridges can pull and acknowledge.
+- Injection for Cursor or Grok until `agentMailCapabilities()` flips with
+  pull and ack. Those bridges already inject the Orkestrator MCP server;
+  the flags, not the bridges, are what keep those native tabs
+  human-inbox-only. Native Pi mail flags are on.

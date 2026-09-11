@@ -5,6 +5,13 @@ interfaces it provisions, and where the unused surface would give users
 something they do not have today. No code was changed. Line references are
 against commit `9e86f008` (v2.12.11).
 
+> Later note (2026-09-11): Cursor now sets `AgentOptions.mcpServers` from
+> `ORKESTRATOR_AGENT_MCP_*` (`bridges/cursor-bridge/src/mcp.ts`). Grok no
+> longer sends `mcpServers: []` — `configuredAcpMcpServers()` injects the
+> same Orkestrator HTTP server on `session/new` and `session/load`. Native Pi
+> later gained a bridge-owned MCP client and on mail flags; Cursor/Grok
+> native mail flags remain all-false.
+
 Method: for every platform, the installed SDK typings (or, for Codex, the
 generated protocol; for Grok, the bridge's own hand-written ACP shapes) were
 enumerated and compared against the bridge, the backend provider layer and the
@@ -281,10 +288,12 @@ browser login with a relocated credential store, and history replay via
    no approval surface and no `tools`/`disallowedTools`, a host worktree tab
    runs `shell`, `write`, `delete` and `task` unsandboxed and ungated. The
    container boundary covers container runs; host runs have no boundary.
-2. **No MCP at all from Orkestrator's side.** `AgentOptions.mcpServers` is
-   never set, and on host runs `settingSources` is `["user"]` only
-   (`commands-servers.ts:1016`), so a repo's `.cursor/mcp.json` and rules are
-   invisible on the host but active in a container. Same repo, different agent.
+2. **~~No MCP at all from Orkestrator's side.~~ Settled 2026-09-11.**
+   `AgentOptions.mcpServers` is set from `ORKESTRATOR_AGENT_MCP_*`
+   (`bridges/cursor-bridge/src/mcp.ts`). Host runs still use
+   `settingSources: ["user"]` only, so a repo's `.cursor/mcp.json` stays
+   invisible on the host and active in a container. Same repo, different
+   project-MCP set; the Orkestrator server is present on both.
 3. **`Run.steer()` unused** (`run.d.ts:61`); a prompt while running is a 409.
 4. **`Run.stream()` is drained but only `usage` is read**
    (`prompt.ts:519-523`). The `system` message carrying the actual toolset and
@@ -300,8 +309,9 @@ browser login with a relocated credential store, and history replay via
 7. **Checkpoints and revert** (`AgentCheckpointStore`, `CheckpointRef`) exist
    in the SDK and are unused; Cursor has no rewind.
 8. **Custom tools and custom subagents** (`local.customTools`,
-   `AgentOptions.agents`) unused, so Orkestrator cannot inject its tools the
-   way it does for Claude.
+   `AgentOptions.agents`) unused. Orkestrator tools now arrive through MCP
+   (`mcpServers.orkestrator`), not `customTools`. The unused SDK surfaces
+   remain unused.
 9. **Model axes**: `thinking`, `context`, `cyber` parameters and variants are
    dropped (`models.ts:16-17`); only effort and fast are offered.
 10. **Cloud agents** (`CloudAgentOptions`, auto-PR, `RunResult.git`) entirely
@@ -349,9 +359,11 @@ dependency.
 4. **No `authenticate`.** `authMethods` from initialize is never inspected.
    An unauthenticated Grok surfaces as a spawn failure, not a sign-in state;
    there is no `/global/auth` route.
-5. **No MCP passthrough.** Every `session/new` sends `mcpServers: []` with no
-   code path to populate it. `--always-approve` is unconditional on host
-   worktrees as well as containers.
+5. **~~No MCP passthrough.~~ Settled 2026-09-11.** `session/new` and
+   `session/load` pass `configuredAcpMcpServers()` (Orkestrator HTTP server
+   from process env). `--always-approve` is no longer unconditional: the
+   execution policy adds it only when approvals are auto-approve. Host
+   project-MCP trust stays a separate launcher flag.
 6. **Modes capped at two ids** (`session-config.ts:628-643`); anything other
    than agent/code/build/plan/architect/ask is silently dropped.
 7. **Cost withheld**: Grok's `costUsdTicks` is rejected as undocumented, so
@@ -451,7 +463,7 @@ declared dependencies but never imported.
 | 17 | OpenCode | Consume `session.status`, `session.idle`, `todo.updated`, `session.diff`, `session.error` SSE events to cut polling latency |
 | 18 | OpenCode | Remove or wire the dead `openCodeStore` permission path and `OpenCodeQuestionCard`; update AGENTS.md |
 | 19 | Cursor | Read the `system` message from `Run.stream()` for the real toolset; render `user-message-appended` |
-| 20 | Cursor | Pass `mcpServers` and decide whether host runs load `project` settings |
+| 20 | Cursor | ~~Pass `mcpServers`~~ done 2026-09-11. Remaining: decide whether host runs load `project` settings (still fail-closed) |
 | 21 | Grok | Carry `availableCommands` names through to the slash-command picker |
 | 22 | Grok | Render non-text content blocks (at least images) |
 | 23 | Pi | Advertise skills and extension commands in the picker; set session names |

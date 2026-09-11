@@ -7,6 +7,13 @@ Recorded 2026-08-16 from a read-only inventory of the six agent surfaces.
 > been removed. Cursor now runs only through `bridges/cursor-bridge/` and
 > `@cursor/sdk`; Grok remains on `bridges/acp-bridge/`. The retained comparison
 > records the state that motivated later work and is not current architecture.
+>
+> Historical note (2026-09-11): `session/new` / `session/load` no longer pass
+> `mcpServers: []`. Grok receives `configuredAcpMcpServers()` (the Orkestrator
+> HTTP server from process env). Cursor is not on ACP; its SDK bridge sets
+> `AgentOptions.mcpServers` the same way. Native mail capabilities for both
+> are still all-false in `agentMailCapabilities()`. Native Pi later gained a
+> bridge-owned MCP client and on mail flags.
 
 The six surfaces compared:
 
@@ -237,9 +244,11 @@ The capability table treats them as identical. Runtime is not.
 
 `--always-approve` on Grok is **not** environment-gated. Cursor’s `--force` is
 always on; MCP is the extra lock and is pinned to `"0"` for local worktrees.
-Only Cursor **containers** opt into `--approve-mcps`. `session/new` and
-`session/load` always pass `mcpServers: []`; agents load their own project MCP
-configs. Cloning a repository must not be enough to run its MCP on the host.
+Only Cursor **containers** opt into `--approve-mcps`. As of 2026-09-11 this
+ACP `mcpServers: []` claim is stale: Grok sessions receive the Orkestrator
+server from `configuredAcpMcpServers()`, and Cursor's SDK bridge injects the
+same server via `AgentOptions.mcpServers`. Project MCP on the host is still
+fail-closed — cloning a repository must not be enough to run its MCP there.
 
 Fork, slash, compact, and file attachments are advertised **off** and really
 absent. Orkestrator never calls ACP equivalents — unknown whether the vendors

@@ -294,6 +294,66 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("stores tab-scoped MCP credentials and serves the live inventory", async () => {
+    const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    setPiMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "send_message" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {},
+        };
+      },
+    });
+    try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "tab-mcp",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+        }),
+      });
+      expect(created.status).toBe(201);
+      const body = (await created.json()) as { sessionId: string; runtime?: { mcp?: unknown } };
+      expect(JSON.stringify(body)).not.toContain("tab-secret");
+      const state = sessions.get(body.sessionId)!;
+      expect(state.agentMcp).toEqual({
+        url: "http://127.0.0.1:4567/mcp",
+        token: "tab-secret",
+      });
+
+      const empty = await call(`/session/${body.sessionId}/mcp`);
+      expect(await empty.json()).toEqual({ servers: [] });
+
+      await preparePiMcp(state, {
+        agentDir: await mkdtemp(join(tmpdir(), "pi-http-mcp-")),
+        cwd: process.cwd(),
+        env: {},
+      });
+      const inventory = await call(`/session/${body.sessionId}/mcp`);
+      expect(await inventory.json()).toEqual({
+        servers: [
+          expect.objectContaining({
+            id: "orkestrator",
+            scope: "orkestrator",
+            status: "connected",
+            tools: ["send_message"],
+          }),
+        ],
+      });
+      const status = await call(`/session/${body.sessionId}/status`);
+      const statusBody = (await status.json()) as { runtime?: { mcpServers?: number } };
+      expect(statusBody.runtime?.mcpServers).toBe(1);
+    } finally {
+      const { setPiMcpTransportForTests: reset } = await import("./mcp.js");
+      reset();
+      resetTestDependencies();
+    }
+  });
+
   test("validates and symmetrically updates readOnly on idempotent creation", async () => {
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     try {

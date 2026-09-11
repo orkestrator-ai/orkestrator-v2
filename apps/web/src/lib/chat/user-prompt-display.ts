@@ -10,10 +10,16 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
+  STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   parseCoordinatorDelegatedPrompt,
   type ReviewEvidenceFrameDisplayContract,
   type UserPromptPresentationKind,
 } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
+  MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
+  MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+} from "@orkestrator/protocol/multi-review";
 import { parseJsonPayload, type JsonPayload } from "./json-payload";
 
 export interface UserPromptPresentation {
@@ -55,6 +61,46 @@ function readableEvidencePayload(payload: JsonPayload): JsonPayload {
   };
 }
 
+function generatedReviewInstructionPresentation(source: string): UserPromptPresentation | null {
+  const generatedPrompts = [
+    `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
+    `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
+  ];
+  return generatedPrompts.includes(source)
+    ? { displayText: MULTI_REVIEW_ADDRESS_USER_INSTRUCTION, evidencePayload: null }
+    : null;
+}
+
+function customFixPresentation(source: string): UserPromptPresentation | null {
+  const instructionPrefix = `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`;
+  if (!source.startsWith(instructionPrefix)) return null;
+
+  const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+  const close = source.lastIndexOf(contract.closeMarker);
+  if (close < instructionPrefix.length) return null;
+  const afterFrame = source.slice(close + contract.closeMarker.length).trim();
+  if (afterFrame !== contract.continuationPrefix) return null;
+
+  const open = source.lastIndexOf(contract.openMarker, close);
+  if (open < instructionPrefix.length) return null;
+  const hiddenContextSuffix = `\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n`;
+  const beforeFrame = source.slice(0, open);
+  if (!beforeFrame.endsWith(hiddenContextSuffix)) return null;
+
+  const instruction = beforeFrame.slice(
+    instructionPrefix.length,
+    beforeFrame.length - hiddenContextSuffix.length,
+  );
+  if (!instruction.trim()) return null;
+
+  const evidenceSource = source.slice(open + contract.openMarker.length, close).trim();
+  const parsedEvidence = parseJsonPayload(evidenceSource);
+  return {
+    displayText: parsedEvidence ? instruction : `${instruction}\n\n${contract.omissionText}`,
+    evidencePayload: parsedEvidence ? readableEvidencePayload(parsedEvidence) : null,
+  };
+}
+
 function presentationForContract(
   source: string,
   contract: ReviewEvidenceFrameDisplayContract,
@@ -80,6 +126,27 @@ function presentationForContract(
       const parsedEvidence = rendersEvidence ? parseJsonPayload(evidenceSource) : null;
       const evidencePayload = parsedEvidence ? readableEvidencePayload(parsedEvidence) : null;
       const beforeFrame = source.slice(0, open).trimEnd();
+      if (contract === STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT && rendersEvidence) {
+        const legacyInstructionPrefix = `${contract.continuationPrefix}\n\n${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`;
+        const legacyInstructionSuffix = `\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
+        if (
+          afterFrame.startsWith(legacyInstructionPrefix) &&
+          afterFrame.endsWith(legacyInstructionSuffix)
+        ) {
+          const instruction = afterFrame.slice(
+            legacyInstructionPrefix.length,
+            afterFrame.length - legacyInstructionSuffix.length,
+          );
+          if (instruction.trim()) {
+            return {
+              displayText: evidencePayload
+                ? instruction
+                : `${instruction}\n\n${contract.omissionText}`,
+              evidencePayload,
+            };
+          }
+        }
+      }
       return {
         displayText: evidencePayload
           ? `${beforeFrame}\n\n${afterFrame}`
@@ -103,6 +170,16 @@ export function userPromptPresentation(
       ? parseCoordinatorDelegatedPrompt(source)
       : null;
   const displaySource = delegation?.source ?? source;
+  const customFix = customFixPresentation(displaySource);
+  if (customFix !== null) {
+    return delegation ? withCoordinatorDelegationNotice(customFix) : customFix;
+  }
+  const generatedReviewInstruction = generatedReviewInstructionPresentation(displaySource);
+  if (generatedReviewInstruction !== null) {
+    return delegation
+      ? withCoordinatorDelegationNotice(generatedReviewInstruction)
+      : generatedReviewInstruction;
+  }
   for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
     const presentation = presentationForContract(displaySource, contract);
     if (presentation !== null) {

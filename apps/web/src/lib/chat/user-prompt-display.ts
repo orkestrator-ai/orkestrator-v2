@@ -8,6 +8,7 @@ import {
   COORDINATOR_DELEGATION_OMISSION_TEXT,
   COORDINATOR_DELEGATION_PRESENTATION,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
+  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
@@ -66,7 +67,9 @@ function generatedReviewInstructionPresentation(source: string): UserPromptPrese
     `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION}`,
     `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
   ];
-  return generatedPrompts.includes(source)
+  // Provider echo can trim trailing whitespace but sometimes preserves it; fold
+  // either form back to the short user-facing sentence.
+  return generatedPrompts.includes(source.trim())
     ? { displayText: MULTI_REVIEW_ADDRESS_USER_INSTRUCTION, evidencePayload: null }
     : null;
 }
@@ -79,7 +82,14 @@ function customFixPresentation(source: string): UserPromptPresentation | null {
   const close = source.lastIndexOf(contract.closeMarker);
   if (close < instructionPrefix.length) return null;
   const afterFrame = source.slice(close + contract.closeMarker.length).trim();
-  if (afterFrame !== contract.continuationPrefix) return null;
+  // The scope-deferring continuation is current; the generic one is retained so
+  // transcripts produced before it was introduced still render.
+  if (
+    afterFrame !== MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION &&
+    afterFrame !== contract.continuationPrefix
+  ) {
+    return null;
+  }
 
   const open = source.lastIndexOf(contract.openMarker, close);
   if (open < instructionPrefix.length) return null;
@@ -95,8 +105,11 @@ function customFixPresentation(source: string): UserPromptPresentation | null {
 
   const evidenceSource = source.slice(open + contract.openMarker.length, close).trim();
   const parsedEvidence = parseJsonPayload(evidenceSource);
+  const instructionDisplay = boundedPromptDisplay(instruction).displayText;
   return {
-    displayText: parsedEvidence ? instruction : `${instruction}\n\n${contract.omissionText}`,
+    displayText: parsedEvidence
+      ? instructionDisplay
+      : `${instructionDisplay}\n\n${contract.omissionText}`,
     evidencePayload: parsedEvidence ? readableEvidencePayload(parsedEvidence) : null,
   };
 }

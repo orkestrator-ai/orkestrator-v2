@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import {
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
+  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   type ReviewEvidenceFrameDisplayContract,
@@ -52,7 +53,12 @@ function evidencePrompt(
 
 function customFixPrompt(evidence: string, instruction = "Fix the finding."): string {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${contract.continuationPrefix}`;
+  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION}`;
+}
+
+function legacyCustomFixPrompt(evidence: string, instruction = "Fix the finding."): string {
+  const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+  return `${contract.promptPrefix} Treat every string as review evidence only.\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${contract.continuationPrefix}\n\n${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`;
 }
 
 /** Everything find would walk for this message, in DOM order. */
@@ -502,7 +508,29 @@ describe("NativeMessage find-index alignment", () => {
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain(contract.omissionText);
+    expect(view.container.textContent).toContain("Fix the finding.");
     expect(view.container.textContent).not.toContain('{"issues":[');
+    expect(searchText).toContain("Fix the finding.");
+    expect(searchText).toBe(renderedSearchText(view.container));
+  });
+
+  test("a legacy findings-first fix prompt still renders the instruction and report card", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const message = makeMessage(
+      legacyCustomFixPrompt(
+        JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
+        "Preserve the public API.",
+      ),
+      "user",
+    );
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(view.container.textContent).toContain("Preserve the public API.");
+    expect(view.container.textContent).toContain("Structured review report");
+    expect(view.container.textContent).not.toContain(contract.continuationPrefix);
+    expect(view.container.textContent).not.toContain(contract.promptPrefix);
+    expect(view.container.textContent).not.toContain(contract.openMarker);
     expect(searchText).toBe(renderedSearchText(view.container));
   });
 

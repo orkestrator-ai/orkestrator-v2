@@ -1,45 +1,28 @@
 /**
- * Cursor plan-quota windows for the shared account panel.
+ * Cursor plan-quota reads for the shared account panel.
  *
  * `agent.getUsage()` answers what this durable agent spent. The plan-quota
- * percentages — Cursor Models / Other Models / overall — come from a separate
- * account read and are the figures `UsagePanel` draws as progress bars for
- * every other provider. This module maps only those provider-reported
- * percentages onto `NativeAgentAccountUsageWindow`. It does not invent a
- * percentage from included spend versus limit.
+ * percentages come from a separate account read, mapped by the shared protocol
+ * module so the backend's settings read and this one cannot disagree.
  */
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
+import {
+  accountWindowsFromPlanUsage,
+  CURSOR_PLAN_WINDOW,
+  DEFAULT_PLAN_LABELS,
+  isPlanQuotaWindow,
+} from "@orkestrator/protocol/cursor-plan-usage";
 import { CATALOG_TIMEOUT_MS } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 import { isObject } from "./state.js";
+
+export { accountWindowsFromPlanUsage, CURSOR_PLAN_WINDOW, DEFAULT_PLAN_LABELS, isPlanQuotaWindow };
 
 const CURSOR_API_BASE = "https://api2.cursor.sh";
 const ACCOUNT_USAGE_TTL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const TOKEN_EXPIRY_SKEW_MS = 30_000;
 const FALLBACK_TOKEN_LIFETIME_MS = 55 * 60_000;
-const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
-const MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2100, 0, 1);
-
-export const CURSOR_PLAN_WINDOW = {
-  auto: "cursor-internal-auto",
-  api: "cursor-internal-api",
-  total: "billing_cycle",
-} as const;
-
-export const DEFAULT_PLAN_LABELS = {
-  auto: "Cursor Models",
-  api: "Other Models",
-  total: "Cursor quota",
-} as const;
-
-export function isPlanQuotaWindow(window: string): boolean {
-  return (
-    window === CURSOR_PLAN_WINDOW.auto ||
-    window === CURSOR_PLAN_WINDOW.api ||
-    window === CURSOR_PLAN_WINDOW.total
-  );
-}
 
 function finiteNumber(value: unknown): number | undefined {
   const parsed =
@@ -51,94 +34,8 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function finitePercent(value: unknown): number | undefined {
-  const parsed = finiteNumber(value);
-  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
-}
-
-function unixMsToIso(value: unknown): string | undefined {
-  const milliseconds = unixMilliseconds(value);
-  if (milliseconds === undefined) return undefined;
-  return new Date(milliseconds).toISOString();
-}
-
-function unixMilliseconds(value: unknown): number | undefined {
-  const milliseconds =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  if (
-    !Number.isFinite(milliseconds) ||
-    milliseconds < MIN_PLAUSIBLE_EPOCH_MS ||
-    milliseconds > MAX_PLAUSIBLE_EPOCH_MS
-  ) {
-    return undefined;
-  }
-  return milliseconds;
-}
-
 function record(value: unknown): Record<string, unknown> | undefined {
   return isObject(value) ? value : undefined;
-}
-
-/**
- * Map Cursor's planUsage percentages onto the generic account windows.
- *
- * Only fields Cursor itself reports as percentages become bars. Included
- * dollar spend/limit stay out: those do not share the quota denominator and
- * previously produced a fake allowance meter.
- */
-export function accountWindowsFromPlanUsage(
-  currentPeriodValue: unknown,
-  labels: { auto: string; api: string; total: string } = DEFAULT_PLAN_LABELS,
-): NativeAgentAccountUsageWindow[] {
-  const currentPeriod = record(currentPeriodValue);
-  const planUsage = record(currentPeriod?.planUsage);
-  if (!planUsage) return [];
-
-  const cycleStartMs = unixMilliseconds(currentPeriod?.billingCycleStart);
-  const cycleEndMs = unixMilliseconds(currentPeriod?.billingCycleEnd);
-  const resetsAt = unixMsToIso(cycleEndMs);
-  const windowMinutes =
-    cycleStartMs !== undefined && cycleEndMs !== undefined && cycleEndMs > cycleStartMs
-      ? (cycleEndMs - cycleStartMs) / 60_000
-      : undefined;
-  const timing = {
-    ...(resetsAt ? { resetsAt } : {}),
-    ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-  };
-  const windows: NativeAgentAccountUsageWindow[] = [];
-  const autoPercentUsed = finitePercent(planUsage.autoPercentUsed);
-  const apiPercentUsed = finitePercent(planUsage.apiPercentUsed);
-  const totalPercentUsed = finitePercent(planUsage.totalPercentUsed);
-
-  if (autoPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.auto,
-      label: labels.auto,
-      usedPercent: autoPercentUsed,
-      ...timing,
-    });
-  }
-  if (apiPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.api,
-      label: labels.api,
-      usedPercent: apiPercentUsed,
-      ...timing,
-    });
-  }
-  if (windows.length === 0 && totalPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.total,
-      label: labels.total,
-      usedPercent: totalPercentUsed,
-      ...timing,
-    });
-  }
-  return windows;
 }
 
 /**

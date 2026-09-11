@@ -515,7 +515,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
     <div className="max-w-2xl space-y-5">
       {(PLAN_USAGE_PLATFORMS as readonly AgentPlatform[]).includes(platform) ? (
-        <PlanUsageSection key={`${platform}:${planUsageRefreshToken}`} platform={platform} />
+        <PlanUsageSection key={platform} platform={platform} reloadToken={planUsageRefreshToken} />
       ) : null}
       <AgentPlatformPane
         platform={platform}

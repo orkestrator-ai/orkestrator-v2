@@ -141,6 +141,7 @@ export { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
 export {
   assertBase64PayloadWithinLimit,
   base64DecodedByteLength,
+  createConfinedDirectory,
   MAX_BINARY_FILE_BYTES,
   MAX_TEXT_FILE_BYTES,
   MAX_TEXT_FILE_SIZE_LABEL,
@@ -150,6 +151,7 @@ export {
   workspaceFilePath,
   writeConfinedFile,
 } from "./path-safety.js";
+export type { ConfinedCreateTestHooks } from "./path-safety.js";
 export { terminateProcessTree } from "./process-tree.js";
 export {
   cleanupEnvironmentTmux,

@@ -568,6 +568,37 @@ export function useFilesPanel() {
     [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
   );
 
+  const createFolder = useCallback(
+    async (parentDirectory: string, folderName: string) => {
+      if (!isAvailable || !selectedEnvironmentId) {
+        throw new Error("The selected environment is not available");
+      }
+
+      const pendingKey = `${parentDirectory}\0${folderName}`;
+      setFileActionPending(pendingKey);
+      try {
+        const created =
+          isLocalEnvironment && worktreePath
+            ? await backend.createLocalFolder(selectedEnvironmentId, parentDirectory, folderName)
+            : await backend.createContainerFolder(
+                selectedEnvironmentId,
+                parentDirectory,
+                folderName,
+              );
+        await refreshAllFilesData();
+        toast.success("Folder created", { description: created });
+        return created;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Failed to create folder", { description: message });
+        throw error;
+      } finally {
+        setFileActionPending(null);
+      }
+    },
+    [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, refreshAllFilesData],
+  );
+
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
     if (isOpen && isAvailable) {
@@ -610,6 +641,7 @@ export function useFilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    createFolder,
     fileActionPending,
   };
 }

@@ -18,11 +18,16 @@ const CONTROL_PATH_CHARS = /[\0\r\n]/;
 const ERRNO_ENOENT = 2;
 const ERRNO_EEXIST = 17;
 const ERRNO_EXDEV = 18;
+const ERRNO_ENOTDIR = 20;
+const ERRNO_ELOOP_LINUX = 40;
+const ERRNO_ELOOP_DARWIN = 62;
 
-type ConfinedMoveTestHooks = {
-  /** Tests use this to replace a checked pathname after both parent handles are pinned. */
+type ConfinedPathTestHooks = {
+  /** Tests use this to replace a checked pathname after parent handles are pinned. */
   afterDirectoriesOpened?: () => void | Promise<void>;
 };
+
+type ConfinedMoveTestHooks = ConfinedPathTestHooks;
 
 function nulTerminated(value: string): Buffer {
   return Buffer.from(`${value}\0`);
@@ -36,6 +41,7 @@ function assertPinnedDirectoryStillNamed(
   canonicalRoot: string,
   relativeDirectory: string,
   fd: number,
+  message = "Workspace directory changed while the file was being moved; please try again",
 ): void {
   const namedPath =
     relativeDirectory === "." ? canonicalRoot : path.join(canonicalRoot, relativeDirectory);
@@ -43,7 +49,7 @@ function assertPinnedDirectoryStillNamed(
   try {
     named = fsSync.lstatSync(namedPath);
   } catch {
-    throw new Error("Workspace directory changed while the file was being moved; please try again");
+    throw new Error(message);
   }
   const pinned = fsSync.fstatSync(fd);
   if (
@@ -52,8 +58,12 @@ function assertPinnedDirectoryStillNamed(
     named.dev !== pinned.dev ||
     named.ino !== pinned.ino
   ) {
-    throw new Error("Workspace directory changed while the file was being moved; please try again");
+    throw new Error(message);
   }
+}
+
+function isLoopOrNoFollowError(code: number): boolean {
+  return code === ERRNO_ELOOP_LINUX || code === ERRNO_ELOOP_DARWIN;
 }
 
 /**
@@ -221,6 +231,144 @@ export async function moveConfinedFile(
       throw new Error(`Unable to move file safely: ${source}`);
     }
     assertPinnedDirectoryStillNamed(canonicalRoot, destinationParent, destinationParentFd);
+  } finally {
+    for (const fd of nativeFds.reverse()) library.symbols.close(fd);
+    library.close();
+    await rootHandle?.close();
+  }
+}
+
+export type ConfinedCreateTestHooks = ConfinedPathTestHooks;
+
+/**
+ * Creates one empty directory without re-resolving mutable ancestors.
+ *
+ * The canonical root and every parent are opened with O_NOFOLLOW, then mkdirat
+ * uses the pinned parent descriptor. A repository process may replace a checked
+ * pathname with a symlink, but it cannot redirect the new directory outside
+ * those pinned handles.
+ */
+export async function createConfinedDirectory(
+  rootPath: string,
+  relativePath: string,
+  testHooks: ConfinedCreateTestHooks = {},
+): Promise<void> {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Safe workspace folder creation is not supported on this platform");
+  }
+
+  const target = validateRelativeFilePath(relativePath, "folderPath");
+  const parentDirectory = path.posix.dirname(target);
+  const folderName = path.posix.basename(target);
+  const canonicalRoot = await fs.realpath(rootPath);
+  const rootStats = await fs.lstat(canonicalRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error("Workspace root is not a directory");
+  }
+
+  const libraryPath = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6";
+  const library =
+    process.platform === "darwin"
+      ? dlopen(libraryPath, {
+          openat: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32],
+            returns: FFIType.i32,
+          },
+          mkdirat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+          readlinkat: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.u64],
+            returns: FFIType.i64,
+          },
+          close: { args: [FFIType.i32], returns: FFIType.i32 },
+          __error: { args: [], returns: FFIType.ptr },
+        })
+      : dlopen(libraryPath, {
+          openat: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32],
+            returns: FFIType.i32,
+          },
+          mkdirat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+          readlinkat: {
+            args: [FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.u64],
+            returns: FFIType.i64,
+          },
+          close: { args: [FFIType.i32], returns: FFIType.i32 },
+          __errno_location: { args: [], returns: FFIType.ptr },
+        });
+  const nativeFds: number[] = [];
+  const directoryFlags =
+    constants.O_RDONLY |
+    (constants.O_DIRECTORY ?? 0) |
+    (constants.O_NOFOLLOW ?? 0) |
+    ((constants as Record<string, number>).O_CLOEXEC ?? 0);
+  const errno = (): number => {
+    const errnoPointer =
+      process.platform === "darwin"
+        ? (library.symbols as { __error(): Pointer }).__error()
+        : (library.symbols as { __errno_location(): Pointer }).__errno_location();
+    return read.i32(errnoPointer, 0);
+  };
+  const openAt = (parentFd: number, name: string, flags: number): number => {
+    const encoded = nulTerminated(name);
+    const fd = library.symbols.openat(parentFd, ptr(encoded), flags, 0);
+    if (fd >= 0) nativeFds.push(fd);
+    return fd;
+  };
+  const isSymlinkName = (parentFd: number, name: string): boolean => {
+    const encoded = nulTerminated(name);
+    const scratch = Buffer.alloc(1);
+    return library.symbols.readlinkat(parentFd, ptr(encoded), ptr(scratch), 1) >= 0;
+  };
+  const rejectAncestor = (parentFd: number, name: string, code: number): never => {
+    if (code === ERRNO_ENOENT) {
+      throw new Error(`Parent directory does not exist: ${parentDirectory}`);
+    }
+    if (isLoopOrNoFollowError(code) || isSymlinkName(parentFd, name)) {
+      throw new Error(`Invalid filePath: symlink ancestor is not allowed: ${target}`);
+    }
+    throw new Error(`Invalid filePath: ancestor is not a directory: ${target}`);
+  };
+  const changedMessage =
+    "Workspace directory changed while the folder was being created; please try again";
+
+  let rootHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    rootHandle = await fs.open(canonicalRoot, directoryFlags);
+    const openedRoot = await rootHandle.stat();
+    if (openedRoot.dev !== rootStats.dev || openedRoot.ino !== rootStats.ino) {
+      throw new Error(changedMessage);
+    }
+
+    let parentFd = openAt(rootHandle.fd, ".", directoryFlags);
+    if (parentFd < 0) throw new Error("Workspace root is not available");
+    for (const segment of directorySegments(parentDirectory)) {
+      const next = openAt(parentFd, segment, directoryFlags);
+      if (next < 0) rejectAncestor(parentFd, segment, errno());
+      parentFd = next;
+    }
+
+    await testHooks.afterDirectoriesOpened?.();
+    assertPinnedDirectoryStillNamed(canonicalRoot, parentDirectory, parentFd, changedMessage);
+
+    const encodedName = nulTerminated(folderName);
+    const created = library.symbols.mkdirat(parentFd, ptr(encodedName), 0o777);
+    if (created !== 0) {
+      const code = errno();
+      if (code === ERRNO_EEXIST) {
+        throw new Error(`A file or folder already exists at ${target}`);
+      }
+      if (code === ERRNO_ENOENT) {
+        throw new Error(`Parent directory does not exist: ${parentDirectory}`);
+      }
+      if (isLoopOrNoFollowError(code)) {
+        throw new Error(`Invalid filePath: symlink ancestor is not allowed: ${target}`);
+      }
+      if (code === ERRNO_ENOTDIR) {
+        throw new Error(`Invalid filePath: ancestor is not a directory: ${target}`);
+      }
+      throw new Error(`Unable to create folder safely: ${target}`);
+    }
+    assertPinnedDirectoryStillNamed(canonicalRoot, parentDirectory, parentFd, changedMessage);
   } finally {
     for (const fd of nativeFds.reverse()) library.symbols.close(fd);
     library.close();

@@ -5,6 +5,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  FolderPlus,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -39,6 +40,10 @@ export function workspaceParentDirectory(filePath: string): string {
   return separator === -1 ? "." : filePath.slice(0, separator);
 }
 
+function stopContextMenuPropagation(event: { stopPropagation(): void }): void {
+  event.stopPropagation();
+}
+
 interface FileTreeNodeProps {
   item: FileNode;
   depth: number;
@@ -51,6 +56,7 @@ interface FileTreeNodeProps {
   onDelete?: (paths: string[]) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
+  onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
 }
 
@@ -66,6 +72,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onDelete,
   onMove,
   onRequestMove,
+  onCreateFolder,
   movePending = false,
 }: FileTreeNodeProps) {
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
@@ -80,61 +87,87 @@ export const FileTreeNode = memo(function FileTreeNode({
   const paddingLeft = depth * 12 + 8; // Indentation based on depth
 
   if (isFolder) {
+    const folderRow = (
+      <CollapsibleTrigger asChild>
+        <button
+          onDragEnter={(event) => {
+            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            event.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragOver={(event) => {
+            if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setIsDragOver(true);
+          }}
+          onDragLeave={(event) => {
+            if (
+              event.relatedTarget instanceof Node &&
+              event.currentTarget.contains(event.relatedTarget)
+            ) {
+              return;
+            }
+            setIsDragOver(false);
+          }}
+          onDrop={(event) => {
+            setIsDragOver(false);
+            if (!onMove || movePending) return;
+            const sourcePaths = decodeWorkspaceFileDrag(
+              event.dataTransfer.getData(FILE_DRAG_TYPE),
+            ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
+            if (sourcePaths.length === 0) return;
+            event.preventDefault();
+            setFolderExpanded(item.path, true);
+            onMove(sourcePaths, item.path);
+          }}
+          className={cn(
+            "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
+            isDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+          )}
+          style={{ paddingLeft }}
+        >
+          <ChevronRight
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
+              isExpanded && "rotate-90",
+            )}
+          />
+          {isExpanded ? (
+            <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate">{item.name}</span>
+        </button>
+      </CollapsibleTrigger>
+    );
+
     return (
       <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
-        <CollapsibleTrigger asChild>
-          <button
-            onDragEnter={(event) => {
-              if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              setIsDragOver(true);
-            }}
-            onDragOver={(event) => {
-              if (!onMove || movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              setIsDragOver(true);
-            }}
-            onDragLeave={(event) => {
-              if (
-                event.relatedTarget instanceof Node &&
-                event.currentTarget.contains(event.relatedTarget)
-              ) {
-                return;
-              }
-              setIsDragOver(false);
-            }}
-            onDrop={(event) => {
-              setIsDragOver(false);
-              if (!onMove || movePending) return;
-              const sourcePaths = decodeWorkspaceFileDrag(
-                event.dataTransfer.getData(FILE_DRAG_TYPE),
-              ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
-              if (sourcePaths.length === 0) return;
-              event.preventDefault();
-              setFolderExpanded(item.path, true);
-              onMove(sourcePaths, item.path);
-            }}
-            className={cn(
-              "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
-              isDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
-            )}
-            style={{ paddingLeft }}
-          >
-            <ChevronRight
-              className={cn(
-                "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
-                isExpanded && "rotate-90",
-              )}
-            />
-            {isExpanded ? (
-              <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
-            ) : (
-              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-            )}
-            <span className="truncate">{item.name}</span>
-          </button>
-        </CollapsibleTrigger>
+        {onCreateFolder ? (
+          <ContextMenu>
+            <ContextMenuTrigger
+              asChild
+              onPointerDown={stopContextMenuPropagation}
+              onContextMenu={stopContextMenuPropagation}
+            >
+              <div>{folderRow}</div>
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem disabled={movePending} onSelect={() => onCreateFolder(item.path)}>
+                <FolderPlus />
+                New folder
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
+                <Copy />
+                Copy path
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          folderRow
+        )}
         <CollapsibleContent>
           {item.children?.map((child) => (
             <FileTreeNode
@@ -150,6 +183,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onDelete={onDelete}
               onMove={onMove}
               onRequestMove={onRequestMove}
+              onCreateFolder={onCreateFolder}
               movePending={movePending}
             />
           ))}
@@ -213,8 +247,23 @@ export const FileTreeNode = memo(function FileTreeNode({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{fileRow}</ContextMenuTrigger>
+      <ContextMenuTrigger
+        asChild
+        onPointerDown={stopContextMenuPropagation}
+        onContextMenu={stopContextMenuPropagation}
+      >
+        {fileRow}
+      </ContextMenuTrigger>
       <ContextMenuContent>
+        {onCreateFolder && (
+          <ContextMenuItem
+            disabled={movePending}
+            onSelect={() => onCreateFolder(workspaceParentDirectory(item.path))}
+          >
+            <FolderPlus />
+            New folder
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
           <Copy />
           Copy path

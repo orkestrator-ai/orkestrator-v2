@@ -203,6 +203,19 @@ export async function moveContainerFile(
   });
 }
 
+/** Create an empty folder inside an existing container workspace directory. */
+export async function createContainerFolder(
+  environmentId: string,
+  parentDirectory: string,
+  folderName: string,
+): Promise<string> {
+  return invoke<string>("create_container_folder", {
+    environmentId,
+    parentDirectory,
+    folderName,
+  });
+}
+
 // --- Local Environment File Commands ---
 
 /** Get git changes for a local environment (worktree path) */
@@ -357,6 +370,19 @@ export async function moveLocalFile(
     environmentId,
     sourcePath,
     destinationDirectory,
+  });
+}
+
+/** Create an empty folder inside an existing local-worktree directory. */
+export async function createLocalFolder(
+  environmentId: string,
+  parentDirectory: string,
+  folderName: string,
+): Promise<string> {
+  return invoke<string>("create_local_folder", {
+    environmentId,
+    parentDirectory,
+    folderName,
   });
 }
 

@@ -672,14 +672,13 @@ When touching the SDK bridge:
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
 - Project settings (`.cursor/`) are read inside containers and not on the host,
   so cloning a repository is not enough to run its code on the user's machine.
-- The Orkestrator Agent MCP server is injected from
-  `ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN` as
-  `AgentOptions.mcpServers.orkestrator` (`src/mcp.ts`). Host runs still do not
-  load a repo's `.cursor/mcp.json`. That is launch configuration, not mailbox
-  capability: `agentMailCapabilities("agent-native", "cursor")` stays all-false
-  until a live tool-call probe and an explicit flag flip. The bridge does not
-  yet consume per-tab `agentMcp` from create/prompt the way Claude and Codex
-  do; the process-wide environment token is the fallback.
+- The Orkestrator Agent MCP server is injected from a per-tab `agentMcp`
+  body or, as fallback, `ORKESTRATOR_AGENT_MCP_URL` /
+  `ORKESTRATOR_AGENT_MCP_TOKEN` as `AgentOptions.mcpServers.orkestrator`
+  (`src/mcp.ts`). Host runs still do not load a repo's `.cursor/mcp.json`.
+  Native Cursor mail is on (`{canPull,canSend,canInject}=true`). A rotated
+  tab token detaches and re-attaches the SDK agent; the bearer is never
+  persisted.
 - The host launcher spawns the bridge in its own package directory, never in
   the worktree. `bun` reads `bunfig.toml` — `preload` included — and `.env`
   from its working directory before the entrypoint runs, so spawning there
@@ -755,14 +754,12 @@ next to the platform they are choosing.
 
 `delegation` is derived, not declared per platform. It is an MCP client *and* an
 injectable native mailbox, because `launch_environment` goes out over MCP while
-the worker's reply comes back as agent mail. Cursor and Grok already have an
-MCP client: their bridges inject the `orkestrator` HTTP server from the process
-env. What still blocks them is `NATIVE_AGENT_MAIL_CAPABILITIES` — pull, send and
-inject are all false until a live tool-call probe lands and the flags flip
-together. Native Pi has a bridge-owned MCP client and a mailbox that can
-pull, send, and be injected into, so delegation follows. Deriving
-delegation from the outbound half alone is what would let the coordinator
-prompt promise workers whose mailbox cannot receive the answer.
+the worker's reply comes back as agent mail. Native Claude, Codex, OpenCode,
+Pi, Cursor, and Grok all have both. Cursor and Grok consume per-tab
+`agentMcp` the same way Claude and Pi do; the process-env token is only the
+fallback. Deriving delegation from the outbound half alone is what would
+let the coordinator prompt promise workers whose mailbox cannot receive the
+answer.
 
 ### Coordinator shell allowlist
 

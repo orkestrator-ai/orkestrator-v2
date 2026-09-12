@@ -57,7 +57,7 @@ These are the only unfinished `docs/todo/` files.
 
 | Document | Status | Notes |
 | --- | --- | --- |
-| [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Provider parity for Coordinator: mail/wake on Cursor and Grok, read-only adapters, one live suite. |
+| [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Coordinator read-only adapters, turn-control gaps, and one live suite. |
 | [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.18.29`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

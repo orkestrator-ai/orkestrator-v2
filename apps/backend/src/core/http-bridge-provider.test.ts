@@ -40,9 +40,15 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
-  test("forwards tab-scoped MCP credentials in Claude, Codex, and Pi request bodies", async () => {
+  test("forwards tab-scoped MCP credentials in Claude, Codex, Pi, Cursor, and Grok request bodies", async () => {
     const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
-    for (const connection of [claudeConnection, codexConnection, piConnection]) {
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      piConnection,
+      cursorConnection,
+      grokConnection,
+    ]) {
       const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
       await created.provider.createSession("build", "Scoped", { agentMcp });
       expect(JSON.parse(String(created.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
@@ -462,16 +468,21 @@ describe("HTTP bridge provider", () => {
   ])(
     "attaches a %s session before dispatch and tolerates older bridges",
     async (_agent, connection) => {
+      const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
       const attached = httpProvider(() => Response.json({ attached: true }), connection);
-      await attached.provider.prepareDispatch?.("session-1");
+      await attached.provider.prepareDispatch?.("session-1", { agentMcp });
       expect(attached.requests.map((request) => [request.url, request.init.method])).toEqual([
         [`${connection.baseUrl}/session/session-1/attach`, "POST"],
       ]);
+      expect(JSON.parse(String(attached.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);
 
       // A bridge that predates the route must not fail the dispatch that follows:
       // the prompt request performs the same work and answers authoritatively.
       const older = httpProvider(() => new Response(null, { status: 404 }), connection);
       await expect(older.provider.prepareDispatch?.("session-1")).resolves.toBeUndefined();
+
+      const busy = httpProvider(() => new Response(null, { status: 409 }), connection);
+      await expect(busy.provider.prepareDispatch?.("session-1")).resolves.toBeUndefined();
 
       const broken = httpProvider(() => new Response(null, { status: 500 }), connection);
       await expect(broken.provider.prepareDispatch?.("session-1")).rejects.toThrow();

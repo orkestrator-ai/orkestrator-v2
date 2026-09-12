@@ -23,7 +23,7 @@ import { CURSOR_AUTHENTICATION_REQUIRED_MESSAGE, resolveCredential } from "./cre
 import { schedulePlanAccountRefresh } from "./plan-usage.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";
-import { cursorMcpServers } from "./mcp.js";
+import { cursorMcpServers, mcpConnectionKey } from "./mcp.js";
 import {
   cursorLocalAgentStore,
   hasUnusedInitialRun,
@@ -149,6 +149,9 @@ export async function createSession(
  * concurrency rather than a corner case.
  */
 export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
+  if (state.agent && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
+    await detachAgent(state);
+  }
   if (state.agent) return state.agent;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -256,8 +259,9 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   if (!apiKey) {
     throw new CredentialError(CURSOR_AUTHENTICATION_REQUIRED_MESSAGE);
   }
-  const mcpServers = await cursorMcpServers();
+  const mcpServers = await cursorMcpServers(state.agentMcp);
   state.mcpServerNames = Object.keys(mcpServers);
+  state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   const options: AgentOptions = {
     apiKey,
     model: modelSelection(state.composer),
@@ -432,6 +436,7 @@ export async function detachAgent(state: SessionState): Promise<void> {
   const agent = state.agent;
   const releaseWarmWorkspace = state.workspaceWarmRelease;
   state.agent = null;
+  state.attachedMcpKey = undefined;
   state.workspaceWarmRelease = undefined;
   await Promise.allSettled([
     ...(agent ? [agent[Symbol.asyncDispose]()] : []),

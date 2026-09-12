@@ -180,6 +180,22 @@ describe("session creation", () => {
     });
   });
 
+  test("stores a per-tab agentMcp and ignores a malformed one", async () => {
+    const state = await createSession({
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+    });
+    expect(state.agentMcp).toEqual({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "tab-secret",
+    });
+
+    const rejected = await createSession({
+      clientSessionKey: "malformed-mcp",
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) },
+    });
+    expect(rejected.agentMcp).toBeUndefined();
+  });
+
   test("records the read-only boundary before the session is attached", async () => {
     const state = await createSession({ mode: "plan", readOnly: true });
 
@@ -451,6 +467,36 @@ describe("prompt dispatch", () => {
     });
     expect(second.status).toBe(409);
     release();
+  });
+
+  test("refuses attach while a turn is running and leaves the agent in place", async () => {
+    const state = await createSession();
+    let release = () => undefined as void;
+    const agent = attachFake(state, {
+      hold: new Promise<void>((resolve) => (release = () => resolve())),
+    });
+
+    await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first", requestId: "r1" }),
+    });
+    const attach = await call(`/session/${state.id}/attach`, {
+      method: "POST",
+      body: JSON.stringify({
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+      }),
+    });
+    expect(attach.status).toBe(409);
+    expect(await attach.json()).toEqual({ error: "Session is already running" });
+    expect(state.agent).toBe(agent);
+    expect(state.agentMcp).toBeUndefined();
+
+    release();
+    await waitFor(() => state.status !== "running");
+    expect((await call(`/session/${state.id}/attach`, { method: "POST", body: "{}" })).status).toBe(
+      200,
+    );
+    expect(state.agent).toBe(agent);
   });
 
   test("an empty prompt with no attachment is a caller error", async () => {

@@ -93,27 +93,13 @@ describe("coordinator read-only conformance", () => {
     ).toBe(false);
   });
 
-  test("a platform without delegation says so, so the prompt can stop promising it", () => {
-    // Delegation needs both halves of the round trip: an MCP client to call
+  test("every native platform can complete a delegation round trip", () => {
+    // Delegation needs both halves: an MCP client to call
     // `launch_environment`, and a mailbox the worker's reply can be injected
-    // into. Cursor and Grok have the first and lack the second.
-    const withoutDelegation = everyPlatform.filter(
-      (platform) =>
-        !coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
-          .delegation,
-    );
-    expect(withoutDelegation.toSorted()).toEqual(["cursor", "grok"]);
-    for (const platform of withoutDelegation) {
-      // Silent absence is the failure mode this guards: the caveat has to be
-      // readable next to the platform being chosen.
-      expect(
-        coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
-          .reason,
-      ).toBeTruthy();
-    }
-    for (const platform of everyPlatform.filter(
-      (candidate) => !withoutDelegation.includes(candidate),
-    )) {
+    // into. Native Claude, Codex, OpenCode, Pi, Cursor, and Grok all have both.
+    // Grok can still be withheld at the default safety tier; that is
+    // availability, not a missing mailbox.
+    for (const platform of everyPlatform) {
       expect(
         coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
           .delegation,

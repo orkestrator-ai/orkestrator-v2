@@ -269,6 +269,13 @@ export interface SessionState {
   /** MCP names only. Launch configuration can contain credentials and is never persisted. */
   mcpServerNames?: string[];
   /**
+   * Tab-scoped Orkestrator MCP connection. Memory only — persistence must never
+   * write the bearer token. Env is the fallback when this is absent.
+   */
+  agentMcp?: { url: string; token: string };
+  /** Fingerprint of the MCP connection the attached SDK agent was built with. */
+  attachedMcpKey?: string;
+  /**
    * A turn the user cancelled before its run handle existed.
    *
    * `cancelTurn` is only assignable once `agent.send` has resolved, and that

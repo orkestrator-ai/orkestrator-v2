@@ -256,6 +256,7 @@ async function withService(
     toolDetailCacheMaxBytes?: number;
     abortGraceMs?: number;
     launchReconcileIntervalMs?: number;
+    resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -304,6 +305,9 @@ async function withService(
     ...(setup.launchReconcileIntervalMs === undefined
       ? {}
       : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
+    ...(setup.resolveAgentToolConnection
+      ? { resolveAgentToolConnection: setup.resolveAgentToolConnection }
+      : {}),
   });
   try {
     await run({ storage, service });
@@ -1268,6 +1272,80 @@ describe("NativeAgentService", () => {
           base.logicalSessionKey,
         );
         expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+      },
+    );
+  });
+
+  test("hands the same tab-scoped connection to warm-up attach and the prompt", async () => {
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    const resolveAgentToolConnection = mock(() => connection);
+    const stub = createProviderStub("cursor", {
+      prepareDispatch: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-tab-mcp-",
+        provider: async () => stub.provider,
+        resolveAgentToolConnection,
+      },
+      async ({ service }) => {
+        await expect(
+          service.dispatchIntent({
+            environmentId: "env-1",
+            agent: "cursor",
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Do the work",
+            requestId: "warm-tab",
+            owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+          }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: "warm-tab" });
+        expect(stub.prepareDispatch).toHaveBeenCalledWith("provider-session", {
+          agentMcp: connection,
+        });
+        expect(stub.send).toHaveBeenCalledWith(
+          "provider-session",
+          "Do the work",
+          expect.objectContaining({ agentMcp: connection }),
+        );
+      },
+    );
+  });
+
+  test("retries a failed warm-up credential resolve on the prompt path", async () => {
+    const connection = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    let calls = 0;
+    const stub = createProviderStub("cursor", {
+      prepareDispatch: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-mcp-retry-",
+        provider: async () => stub.provider,
+        resolveAgentToolConnection: () => {
+          calls += 1;
+          if (calls === 2) throw new Error("warm-up mint failed");
+          return connection;
+        },
+      },
+      async ({ service }) => {
+        await expect(
+          service.dispatchIntent({
+            environmentId: "env-1",
+            agent: "cursor",
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Do the work",
+            requestId: "warm-retry",
+            owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+          }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: "warm-retry" });
+        expect(stub.prepareDispatch).toHaveBeenCalledWith("provider-session", {
+          agentMcp: undefined,
+        });
+        expect(stub.send).toHaveBeenCalledWith(
+          "provider-session",
+          "Do the work",
+          expect.objectContaining({ agentMcp: connection }),
+        );
       },
     );
   });

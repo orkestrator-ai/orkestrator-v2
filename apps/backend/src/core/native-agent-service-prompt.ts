@@ -360,7 +360,13 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         durable: PersistedNativeAgentSession,
       ): Promise<{ url: string; token: string } | undefined> => {
         if (
-          !(durable.agent === "claude" || durable.agent === "codex" || durable.agent === "pi") ||
+          !(
+            durable.agent === "claude" ||
+            durable.agent === "codex" ||
+            durable.agent === "pi" ||
+            durable.agent === "cursor" ||
+            durable.agent === "grok"
+          ) ||
           durable.owner?.kind !== "environment" ||
           !this.options.resolveAgentToolConnection
         ) {

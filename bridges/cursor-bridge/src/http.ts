@@ -18,7 +18,7 @@ import {
   logout,
 } from "./credentials.js";
 import { listModels, refreshModels } from "./models.js";
-import { publicCursorMcpServers } from "./mcp.js";
+import { parseAgentMcpConnection, publicCursorMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import { refreshPlanAccountWindows } from "./plan-usage.js";
 import {
@@ -198,6 +198,7 @@ async function routeGlobal(
       body.policy,
       readOnly,
     );
+    storeAgentMcp(state, body.agentMcp);
     // Creation is idempotent by client key, so this can be a session that
     // already exists under the other boundary. Move it rather than answering
     // 201 with the old one: an attach would otherwise warm an agent the caller
@@ -222,6 +223,7 @@ async function routeGlobal(
       throw new HttpError(400, "policy is required");
     }
     const state = await resumeSession(agentId, parseComposerPatch(body), body.policy);
+    storeAgentMcp(state, body.agentMcp);
     json(response, 201, publicSessionReference(state));
     return true;
   }
@@ -379,6 +381,20 @@ async function routeSession(
     // Never dispatches. Attach exists to move the SDK's cold start *outside*
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
+    //
+    // The tab-scoped connection is accepted here too. The backend's warm-up
+    // attach runs before it resolves the prompt's credential, and a restarted
+    // bridge has no persisted one, so without this the warm-up would connect
+    // the process-env identity and the prompt would have to rebuild the agent
+    // to correct it.
+    //
+    // A rotated token detaches the live agent. Refuse that while a turn is
+    // in flight so a warm-up cannot destroy the work that is already running.
+    if (state.status === "running" || state.dispatching) {
+      throw new HttpError(409, "Session is already running");
+    }
+    const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
+    storeAgentMcp(state, isObject(body) ? body.agentMcp : undefined);
     await ensureAgent(state);
     // A failed resume can replace the underlying SDK agent and rebase its
     // agent-scoped usage counters. Persist that lifecycle change even when
@@ -645,6 +661,7 @@ async function handlePrompt(
     // Read attachments first: an unreadable image must fail before an agent is
     // attached, and it is far cheaper than a cold start.
     images = await readPromptImages(attachments, workingDirectory);
+    storeAgentMcp(state, body.agentMcp);
     applyComposerPatch(state, parseComposerPatch(body));
     if (typeof readOnly === "boolean" && (state.readOnly === true) !== readOnly) {
       await detachAgent(state);
@@ -836,6 +853,11 @@ function sendJson(
     ...(compressed ? { "content-encoding": "gzip" } : {}),
   });
   response.end(body);
+}
+
+function storeAgentMcp(state: SessionState, value: unknown): void {
+  const parsed = parseAgentMcpConnection(value);
+  if (parsed) state.agentMcp = parsed;
 }
 
 export function json(response: ServerResponse, status: number, body: unknown): void {

@@ -182,13 +182,11 @@ client and a native mailbox that can pull, ack, and be injected into.
 `delegation` on the qualification is derived from those two halves, not
 declared per platform.
 
-**Delegation is available on Claude, Codex, OpenCode, and native Pi.** Cursor
-and Grok already inject the `orkestrator` HTTP MCP server from
-`ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`, but
-`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false. On those two platforms the
-coordinator prompt says worker controls are unavailable rather than offering a
-tool whose answer never arrives; inspection and planning work normally. The
-caveat is shown in the picker.
+**Delegation is available on every native platform** that has an MCP client
+and `{canPull,canSend,canInject}=true`: Claude, Codex, OpenCode, Pi, Cursor,
+and Grok. Cursor and Grok receive a per-tab `agentMcp` on create/prompt;
+the process-env token is only the fallback. Grok still needs the host
+safety setting to admit `advisory`.
 
 Worker creation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker. A container worker

@@ -157,6 +157,10 @@ function internals(service: NativeAgentService) {
     drainPromptQueueOnce(queueKey: string): Promise<void>;
     reconcilePendingLaunches(): Promise<void>;
     provider(input: EnsureNativeAgentSessionInput): Promise<AgentSessionProvider>;
+    createProviderSession(
+      provider: NativeAgentRuntimeProvider,
+      input: EnsureNativeAgentSessionInput,
+    ): Promise<string>;
     bridgeConnection(
       agent: BuildPipelineAgent,
       environment: Environment,
@@ -219,6 +223,7 @@ async function withService(
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
+    resolveAgentToolConnection?: NativeAgentServiceOptions["resolveAgentToolConnection"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -263,6 +268,9 @@ async function withService(
     ...(setup.toolDetailCacheMaxBytes === undefined
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
+    ...(setup.resolveAgentToolConnection
+      ? { resolveAgentToolConnection: setup.resolveAgentToolConnection }
+      : {}),
   });
   try {
     await run({ storage, service });
@@ -1082,5 +1090,98 @@ describe("NativeAgentService", () => {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test.each(["cursor", "grok"] as const)(
+    "forwards a tab-scoped MCP connection when creating a %s environment-owned session",
+    async (agent) => {
+      const connection = { url: "http://127.0.0.1:4567/mcp", token: `${agent}-tab-token` };
+      const resolveAgentToolConnection = mock(() => connection);
+      const stub = createProviderStub(agent);
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-tab-mcp-`,
+          provider: async () => stub.provider,
+          resolveAgentToolConnection,
+        },
+        async ({ service }) => {
+          await service.ensureSession({
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: "env-env-1:tab-1",
+            owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+          });
+          expect(resolveAgentToolConnection).toHaveBeenCalledWith(
+            "env-1",
+            "project-1",
+            "tab-1",
+            "host",
+          );
+          expect(stub.createSession).toHaveBeenCalledWith(
+            "build",
+            "Agent Session",
+            expect.objectContaining({ agentMcp: connection }),
+          );
+        },
+      );
+    },
+  );
+
+  test("does not mint a tab credential for a coordinator-owned session", async () => {
+    const resolveAgentToolConnection = mock(() => ({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "should-not-be-used",
+    }));
+    const stub = createProviderStub("cursor");
+    await withService(
+      {
+        prefix: "orkestrator-native-cursor-coordinator-mcp-",
+        provider: async () => stub.provider,
+        resolveAgentToolConnection,
+      },
+      async ({ service }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+          owner: {
+            kind: "coordinator" as const,
+            projectId: "project-1",
+            coordinatorId: "coord-1",
+          },
+        };
+        await internals(service).createProviderSession(stub.provider, input);
+        expect(resolveAgentToolConnection).not.toHaveBeenCalled();
+        expect(stub.createSession).toHaveBeenCalledWith(
+          "build",
+          "Agent Session",
+          expect.objectContaining({ agentMcp: undefined }),
+        );
+      },
+    );
+  });
+
+  test("fails session creation when the tab credential cannot be resolved", async () => {
+    const stub = createProviderStub("cursor");
+    await withService(
+      {
+        prefix: "orkestrator-native-cursor-mcp-fail-",
+        provider: async () => stub.provider,
+        resolveAgentToolConnection: () => {
+          throw new Error("mint failed");
+        },
+      },
+      async ({ service }) => {
+        await expect(
+          service.ensureSession({
+            environmentId: "env-1",
+            agent: "cursor",
+            logicalSessionKey: "env-env-1:tab-1",
+            owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+          }),
+        ).rejects.toThrow("mint failed");
+        expect(stub.createSession).not.toHaveBeenCalled();
+      },
+    );
   });
 });

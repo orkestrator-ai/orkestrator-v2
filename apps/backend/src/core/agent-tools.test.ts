@@ -575,6 +575,46 @@ describe("agent Kanban tools", () => {
     }
   });
 
+  test("a tab-scoped credential resolves list_mailboxes as that tab", async () => {
+    await addMessagingEnvironment("env-tabs", "project-mail", ["tab-a", "tab-b"]);
+    const first = server.connection("env-tabs", "project-mail", "host", "tab-a");
+    const second = server.connection("env-tabs", "project-mail", "host", "tab-b");
+    const client = new McpClient(
+      { name: "orkestrator-tab-credential", version: "1.0.0" },
+      { versionNegotiation: { mode: "auto" } },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(first.url), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${first.token}` },
+      },
+    });
+
+    try {
+      await client.connect(transport);
+      const listed = await client.callTool({ name: "list_mailboxes", arguments: {} });
+      expect(listed.structuredContent).toMatchObject({
+        identity: {
+          environmentId: "env-tabs",
+          tabId: "tab-a",
+          resolved: "credential",
+        },
+      });
+    } finally {
+      await client.close();
+    }
+
+    const other = await rpc(second.url, second.token, "tools/call", {
+      name: "list_mailboxes",
+      arguments: {},
+    });
+    expect(other.body.result?.structuredContent?.identity).toEqual({
+      environmentId: "env-tabs",
+      tabId: "tab-b",
+      title: expect.any(String),
+      resolved: "credential",
+    });
+  });
+
   test("omits messaging tools immediately when messaging is disabled", async () => {
     const connection = server.connection("env-disabled", "project-disabled", "host");
     const config = await storage.loadConfig();

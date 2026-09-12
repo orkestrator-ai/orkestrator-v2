@@ -1,15 +1,14 @@
 # Coordinator — remaining work
 
-Status: Active — provider parity for Coordinator.
+Status: Active — read-only parity and live conformance for Coordinator.
 
 Current product and architecture:
 [`docs/architecture/coordinator.md`](../architecture/coordinator.md).
 
-The product already runs on every enabled platform. What it can *do* is not
-the same on every platform. The remaining work is to make Coordinator one
-interface at the top — inspect, delegate, wake, queue — with platform-specific
-adapters underneath, so a conversation on Claude, Codex, OpenCode, Pi, Cursor,
-or Grok is the same product.
+The product already runs on every enabled platform, and every native platform
+can inspect, delegate, wake, and queue through the same top-level interface.
+The remaining work is to prove the read-only boundary against real providers
+and close the platform-specific turn-control and safety-strength gaps.
 
 A platform joins that unified set only when its adapter holds the same
 contracts the others do. Do not paper over a missing half with prompt text.
@@ -34,7 +33,7 @@ The top of the stack already aims at this: `coordinator-providers.ts` is the
 qualification table, `capabilityPolicy` names operations rather than vendor
 tools, `nativeAgentCapabilities()` is the shared composer/action table, and
 `NativeAgentRuntimeProvider` is the runtime contract. What is still
-platform-shaped is mail, wake, and how strongly the read-only boundary is
+platform-shaped is turn control and how strongly the read-only boundary is
 held.
 
 ## Current matrix
@@ -43,48 +42,21 @@ held.
 | --- | --- | --- | --- | --- | --- | --- |
 | Offered at default safety level | yes (enforced on Linux/macOS; provider-configured on Windows) | yes (enforced) | yes (provider-configured) | yes (enforced) | yes (provider-configured) | no (advisory; opt-in) |
 | MCP client (outbound launch) | yes | yes | yes | yes (bridge-owned) | yes (HTTP inject) | yes (HTTP inject) |
-| Native mail pull / send / inject | yes | yes | yes | yes | **no** | **no** |
-| Delegation + wake | yes | yes | yes | yes | **no** | **no** |
+| Native mail pull / send / inject | yes | yes | yes | yes | yes | yes |
+| Delegation + wake | yes | yes | yes | yes | yes | yes |
 | Queue during a turn | yes | yes | yes | yes | yes | yes |
 | Steer a running turn | yes | yes | **no** | yes | yes | **no** |
-| Idle is an observed edge | yes | yes | yes | yes | yes (session), unused for wake | same |
+| Idle is an observed edge | yes | yes | yes | yes | yes | yes |
 | Read-only strength | OS sandbox + hook; hook-only on Windows | OS profile, fail-closed | SDK `plan` + permission rules; project `opencode.json` still loads | in-process tool gate | SDK sandbox + tool ban; no approval callback | ask-then-cancel; a tool that does not ask is not stopped |
-| Waiting tools (`sleep`, schedulers) | refused | sandbox allows `sleep` | no sleep primitive | no sleep primitive | n/a until mail lands | n/a until mail lands |
+| Waiting tools (`sleep`, schedulers) | refused | sandbox allows `sleep` | no sleep primitive | no sleep primitive | provider-dependent | provider-dependent |
 
-Cursor and Grok are the functional split: they can inspect, they cannot
-complete a delegation. Everything else is a strength or control-surface gap
-on an otherwise working path.
+Cursor and Grok gained native mail pull, send, and inject together on
+2026-09-12. Cursor receives per-tab Agent MCP through the SDK, and Grok through
+ACP session configuration; both can now complete the same delegation and wake
+round trip as the other native platforms. The remaining differences are
+strength and control-surface gaps on an otherwise working path.
 
-## 1. Mail and delegation adapters — Cursor and Grok
-
-Delegation is a round trip. Outbound MCP without an injectable mailbox
-produces a conversation that launches work and never hears back. That is why
-`delegation` is derived from `mcpClient && canInject`, and why Cursor and Grok
-are told worker controls are unavailable.
-
-Do not flip `NATIVE_AGENT_MAIL_CAPABILITIES` from a table. Add a mailbox
-adapter per platform, prove it with a live tool-call probe (pull, send, ack,
-inject), then flip pull, send, and inject together. A carrier the recipient
-cannot acknowledge wedges the mailbox backlog.
-
-Required of each adapter:
-
-- The bridge already injects the reserved `orkestrator` HTTP MCP server from
-  `ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`. Keep that
-  backend-authoritative.
-- Native pull, send, and inject must work against a coordinator mailbox, not
-  only an environment tab.
-- Injected worker mail must go through the existing idle fence, queue-first
-  ordering, and delegation hold (`delegation-running` until `working → idle`).
-- The coordinator prompt offers launch tools only after `delegation` becomes
-  true. Until then the caveat stays on the qualification `reason`.
-
-Pi already has this adapter (bridge-owned MCP client plus mail flags). Treat
-it as the template, not as remaining work. Ticket
-`Enable agent mail for Cursor, Grok, and Pi` is the historical tracker; Pi
-is done.
-
-## 2. Read-only adapters — same operations, same outcome
+## 1. Read-only adapters — same operations, same outcome
 
 The top-level deny list is already unified:
 
@@ -102,7 +74,7 @@ URL all fail, and Control MCP discovery still succeeds.
 | Codex | Read-only sandbox still allows `sleep`. | Optional argv0 deny on the coordinator permission profile if a conformance run shows Codex reaching for it. The mailbox poll guard is the backstop either way. |
 | OpenCode | Always loads the checkout's `opencode.json`, including command-backed MCP servers. | The picker already shows the caveat. If unification requires `enforced`, the adapter must disable or ignore project MCP that can execute. Until then the tier stays `provider-configured` and the note stays visible. |
 | Cursor | Sandbox and `disallowedTools` apply; no approval callback to verify them. Refused if the sandbox cannot be enabled. | Leave at `provider-configured` until a probe can prove a denied tool did not run. |
-| Grok | Advisory only. Every permission request is cancelled; a tool that does not ask is not stopped. | Do not raise the tier without a real gate. Unification for Grok is "honest advisory" plus mail (section 1), not a fake `enforced`. |
+| Grok | Advisory only. Every permission request is cancelled; a tool that does not ask is not stopped. | Do not raise the tier without a real gate. Unification for Grok is honest `advisory`, not a fake `enforced`. |
 | Pi | Already enforced at the `tool_call` gate. | No change. |
 
 Process authority is already shared:
@@ -111,7 +83,7 @@ coordinator launch. New adapter work must honour it on create, resume,
 config, and every turn, and fail closed if a persisted session carries
 another policy id.
 
-## 3. One conformance suite, one claim of "same"
+## 2. One conformance suite, one claim of "same"
 
 `coordinator-conformance.test.ts` and the per-bridge policy tests are the
 cheap half. They do not drive a real provider against a fixture tree.
@@ -127,8 +99,7 @@ the qualification table the suite:
    existing file, run a writing shell command, fetch a URL, and then call the
    Control MCP discovery tool.
 4. Asserts the tree hash is unchanged, the transcript shows each mutation
-   denied, and discovery returned — or, for `delegation: false`, was never
-   offered.
+   denied, and discovery returned.
 
 A second scenario defines "async" for a delegating platform:
 
@@ -151,7 +122,7 @@ require every `enforced` platform to have a translation. Extend that so
 every `enforced` platform is also in the live suite's list. A platform may
 not move to `enforced` without both.
 
-## 4. Turn-control adapters
+## 3. Turn-control adapters
 
 Steer is already on the shared session-action surface. Coordinator does not
 opt out. What is missing is the adapter on two platforms:
@@ -169,7 +140,7 @@ during a turn is already true for all six.
 Do not block mail/delegation work on steer. A platform without steer is
 still a complete dispatcher if queue and wake work.
 
-## 5. Smaller consistency gaps
+## 4. Smaller consistency gaps
 
 These are not what split the product, but they keep platforms from feeling
 the same.
@@ -200,7 +171,7 @@ is created, so the limit cannot be filled with unused composers.
 **Model favourites.** With `platformFilter`, hide rather than dim favourites
 for platforms the current conversation cannot use.
 
-## 6. Product surfaces that are not provider work
+## 5. Product surfaces that are not provider work
 
 These are missing coordinator capabilities, not platform adapters. Keep them
 out of the parity path.
@@ -217,8 +188,7 @@ out of the parity path.
 
 A platform is at the unified level when:
 
-- Its qualification `delegation` is true, or it is honestly labelled and
-  hidden from launch tools.
+- Its qualification `delegation` is true.
 - The live read-only suite leaves the fixture tree unchanged and still
   reaches Control MCP discovery.
 - The live async scenario (if `delegation` is true) produces one wake per

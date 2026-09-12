@@ -32,6 +32,7 @@ import {
   adjustAnonymousSessionCreations,
   clientSessionKeys,
   configuredAcpMcpServers,
+  mcpConnectionKey,
   externalSessionToken,
   isObject,
   isCursorTaskMethod,
@@ -167,9 +168,10 @@ export async function resumeSession(
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
   policy?: AcpSpawnOptions["policy"],
+  agentMcp?: AcpSpawnOptions["agentMcp"],
 ): Promise<SessionState> {
   const existing = sessions.get(selectedSessionId);
-  if (existing) return resumeExistingSession(existing, signal, patch, policy);
+  if (existing) return resumeExistingSession(existing, signal, patch, policy, agentMcp);
   const acpSessionId = parseExternalSessionToken(selectedSessionId);
   if (!acpSessionId) throw new HttpError(404, "ACP session was not found");
   // Checked before the `sessions` scan below: an adoption registers its state
@@ -180,13 +182,18 @@ export async function resumeSession(
   const pending = sessionResumes.get(acpSessionId);
   if (pending) {
     const adopted = await pending;
-    return patch || policy ? resumeExistingSession(adopted, signal, patch, policy) : adopted;
+    // The in-flight adoption carries the first caller's MCP credential. A
+    // later tab must apply its own rather than keep reading or sending mail as
+    // the first identity — same rule as composer controls.
+    return patch || policy || agentMcp
+      ? resumeExistingSession(adopted, signal, patch, policy, agentMcp)
+      : adopted;
   }
   const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
-  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy, agentMcp);
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");
-  const operation = resumeSessionReserved(acpSessionId, signal, patch, policy);
+  const operation = resumeSessionReserved(acpSessionId, signal, patch, policy, agentMcp);
   sessionResumes.set(acpSessionId, operation);
   try {
     return await operation;
@@ -200,10 +207,12 @@ export async function resumeExistingSession(
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
   policy?: AcpSpawnOptions["policy"],
+  agentMcp?: AcpSpawnOptions["agentMcp"],
 ): Promise<SessionState> {
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
+  if (agentMcp) state.agentMcp = agentMcp;
   state.dispatching = true;
   try {
     if (policy && JSON.stringify(state.policy) !== JSON.stringify(policy)) {
@@ -226,6 +235,7 @@ export async function resumeSessionReserved(
   signal?: AbortSignal,
   patch?: AcpComposerPatch,
   policy?: AcpSpawnOptions["policy"],
+  agentMcp?: AcpSpawnOptions["agentMcp"],
 ): Promise<SessionState> {
   const child = new AcpProcess({ policy });
   let state: SessionState | undefined;
@@ -267,6 +277,8 @@ export async function resumeSessionReserved(
       dispatching: true,
       historyReplay: "hydrate",
       health: new RuntimeHealthRecorder(),
+      attachedMcpKey: mcpConnectionKey(agentMcp),
+      ...(agentMcp ? { agentMcp } : {}),
     };
     attachChild(state, child);
     sessions.set(state.id, state);
@@ -275,7 +287,7 @@ export async function resumeSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(),
+        mcpServers: configuredAcpMcpServers(state.agentMcp),
         sessionId: acpSessionId,
       },
       RPC_TIMEOUT_MS,
@@ -339,6 +351,7 @@ export async function createSession(
           await setSessionReadOnly(existing, spawnOptions.readOnly);
           schedulePersist();
         }
+        if (spawnOptions.agentMcp) existing.agentMcp = spawnOptions.agentMcp;
         return existing;
       }
     }
@@ -386,7 +399,7 @@ export async function createSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(),
+        mcpServers: configuredAcpMcpServers(spawnOptions.agentMcp),
       },
       RPC_TIMEOUT_MS,
       signal,
@@ -426,6 +439,8 @@ export async function createSessionReserved(
       sessionConfig,
       ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
       ...(typeof spawnOptions.readOnly === "boolean" ? { readOnly: spawnOptions.readOnly } : {}),
+      attachedMcpKey: mcpConnectionKey(spawnOptions.agentMcp),
+      ...(spawnOptions.agentMcp ? { agentMcp: spawnOptions.agentMcp } : {}),
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
@@ -549,6 +564,12 @@ export async function ensureSessionProcess(
   if (state.attaching) {
     return signal ? raceAbort(state.attaching, signal) : state.attaching;
   }
+  if (state.child && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
+    const previous = state.child;
+    state.child = null;
+    clearApprovals(state);
+    await previous.close();
+  }
   if (state.child) return state.child;
   const attach = attachSessionProcess(state);
   return signal ? raceAbort(attach, signal) : attach;
@@ -582,7 +603,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(),
+        mcpServers: configuredAcpMcpServers(state.agentMcp),
         sessionId: state.acpSessionId,
       },
       RPC_TIMEOUT_MS,
@@ -601,6 +622,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
         rememberCatalog(sessionConfig.composer);
       }
     }
+    state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
     state.status = "idle";
     state.error = undefined;
     state.revision += 1;

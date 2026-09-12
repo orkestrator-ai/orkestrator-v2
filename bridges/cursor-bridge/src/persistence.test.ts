@@ -64,9 +64,13 @@ describe("round trip", () => {
       createdAt: new Date(0).toISOString(),
     });
     state.revision = 7;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "do-not-persist" };
     sessions.set(state.id, state);
 
     await persist();
+    const raw = await readFile(stateFile, "utf8");
+    expect(raw).not.toContain("agentMcp");
+    expect(raw).not.toContain("do-not-persist");
     sessions.clear();
     clientSessionKeys.clear();
     await loadPersistedState();
@@ -78,6 +82,7 @@ describe("round trip", () => {
     expect(clientSessionKeys.get("client-key")).toBe(state.id);
     expect(restored.messages).toHaveLength(1);
     expect(restored.revision).toBe(7);
+    expect(restored.agentMcp).toBeUndefined();
     expect(restored.composer.selectedModelId).toBe("composer-2.5");
     expect(restored.composer.selectedModeId).toBe("plan");
     expect(restored.usage).toEqual(state.usage);

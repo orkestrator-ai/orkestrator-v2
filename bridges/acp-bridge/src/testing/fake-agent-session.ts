@@ -52,6 +52,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
     return true;
   }
   if (message.method === "session/new" && typeof message.id === "number") {
+    recordSessionRequest(message);
     write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
     if (process.env.FAKE_ACP_VENDOR_REQUEST_FILE) {
       write({
@@ -195,6 +196,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
     return true;
   }
   if (message.method === "session/load" && typeof message.id === "number") {
+    recordSessionRequest(message);
     if (process.env.FAKE_ACP_LIFECYCLE_FILE) {
       appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `load:${process.pid}\n`);
     }
@@ -634,4 +636,14 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
 
   return false;
+}
+
+function recordSessionRequest(message: JsonObject): void {
+  const path = process.env.FAKE_ACP_SESSION_REQUEST_FILE;
+  if (!path) return;
+  const params = isObject(message.params) ? message.params : {};
+  appendFileSync(
+    path,
+    `${JSON.stringify({ method: message.method, mcpServers: params.mcpServers })}\n`,
+  );
 }

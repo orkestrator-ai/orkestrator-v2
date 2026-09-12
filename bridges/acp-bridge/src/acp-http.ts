@@ -40,6 +40,7 @@ import {
   agentRuntime,
   clientSessionKeys,
   configuredAcpMcpServers,
+  parseAgentMcpConnection,
   externalSessionToken,
   provider,
   sessions,
@@ -137,6 +138,7 @@ export async function route(
       clientSignal,
       parseComposerPatch(body),
       effectiveExecutionPolicy(isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined),
+      parseAgentMcpConnection(body.agentMcp),
     );
     return json(response, 201, publicSessionReference(state));
   }
@@ -168,6 +170,9 @@ export async function route(
         );
         return policy ? { policy } : {};
       })(),
+      ...(parseAgentMcpConnection(body.agentMcp)
+        ? { agentMcp: parseAgentMcpConnection(body.agentMcp) }
+        : {}),
     });
     return json(response, 201, publicSession(state));
   }
@@ -302,6 +307,14 @@ export async function route(
    * unambiguously empty: nothing was journaled and no prompt was written.
    */
   if (action === "attach" && request.method === "POST") {
+    // Rebuilding for a rotated token closes the child. Doing that mid-turn
+    // leaves status running with no process: onClose returns early once
+    // `state.child` is nulled. Leave the live child and credential alone.
+    if (state.status === "running" || state.dispatching) {
+      return json(response, 409, { error: "Session is already running" });
+    }
+    const body = await readJson(request).catch(() => ({}) as JsonObject);
+    storeAgentMcp(state, body.agentMcp);
     await ensureSessionProcess(state, clientSignal);
     return json(response, 200, { attached: true });
   }
@@ -393,6 +406,7 @@ export async function route(
       // Read the attachments first: an unreadable image must fail before a
       // detached thread is reattached, and it is far cheaper than a spawn.
       promptContents = await readPromptContents(attachments, workingDirectory);
+      storeAgentMcp(state, body.agentMcp);
       if (typeof readOnly === "boolean") await setSessionReadOnly(state, readOnly);
       child = await ensureSessionProcess(state, clientSignal);
       if (
@@ -727,6 +741,11 @@ export function applyOriginPolicy(request: IncomingMessage, response: ServerResp
   );
   response.end();
   return false;
+}
+
+function storeAgentMcp(state: SessionState, value: unknown): void {
+  const parsed = parseAgentMcpConnection(value);
+  if (parsed) state.agentMcp = parsed;
 }
 
 export async function readJson(request: IncomingMessage): Promise<JsonObject> {

@@ -7,6 +7,7 @@
  * Nothing in the production path knows this exists.
  */
 import type { SDKAgent } from "@cursor/sdk";
+import { mcpConnectionKey } from "../mcp.js";
 import type { SessionState } from "../state.js";
 
 export interface FakeRunScript {
@@ -109,5 +110,8 @@ export function attachFake(state: SessionState, script: FakeRunScript = {}): Fak
   const agent = fakeAgent(script);
   state.agent = agent;
   state.agentId = agent.agentId;
+  // Same fingerprint `ensureAgent` writes after a real attach, including the
+  // empty-string env-fallback. Without it an installed agent looks stale.
+  state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
   return agent;
 }

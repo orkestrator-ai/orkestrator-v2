@@ -305,7 +305,14 @@ export function agentMailCapabilities(
 ): MailboxCapabilities {
   if (tabType === "agent-native") {
     if (!locked || !agent) return { canPull: false, canSend: false, canInject: false };
-    if (agent === "claude" || agent === "codex" || agent === "opencode" || agent === "pi") {
+    if (
+      agent === "claude" ||
+      agent === "codex" ||
+      agent === "opencode" ||
+      agent === "pi" ||
+      agent === "cursor" ||
+      agent === "grok"
+    ) {
       return { canPull: true, canSend: true, canInject: true };
     }
     // A carrier the recipient cannot acknowledge is not a usable delivery

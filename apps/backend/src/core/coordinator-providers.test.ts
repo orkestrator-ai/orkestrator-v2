@@ -97,21 +97,7 @@ describe("coordinator provider qualification", () => {
   });
 
   test("delegation follows the round trip, not just the outbound MCP call", () => {
-    // Cursor and Grok both ship an MCP client, so `launch_environment` is
-    // reachable — but their native mailboxes cannot be injected into, so the
-    // worker's reply can never come back. Advertising delegation there produces
-    // a coordinator that dispatches work and then waits for good.
-    for (const platform of ["cursor", "grok"] as const) {
-      const qualification = coordinatorProviderQualification(platform, {
-        tierSetting: "advisory",
-        host: sandboxed,
-        enabledPlatforms: everyPlatform,
-      });
-      expect(qualification.delegation).toBe(false);
-      expect(qualification.reason).toBeTruthy();
-    }
-    // The platforms whose mailboxes deliver keep it.
-    for (const platform of ["claude", "codex", "opencode", "pi"] as const) {
+    for (const platform of AGENT_PLATFORMS) {
       expect(
         coordinatorProviderQualification(platform, {
           tierSetting: "advisory",
@@ -122,16 +108,15 @@ describe("coordinator provider qualification", () => {
     }
   });
 
-  test("a platform that can call out but not be replied to says so in its reason", () => {
+  test("Cursor still reports its weaker sandbox tier after mail delivery is on", () => {
     const cursor = coordinatorProviderQualification("cursor", {
       tierSetting: "provider-configured",
       host: sandboxed,
       enabledPlatforms: everyPlatform,
     });
-    expect(cursor).toMatchObject({ available: true, delegation: false });
-    // The tier caveat and the delivery caveat both reach the picker.
+    expect(cursor).toMatchObject({ available: true, delegation: true });
     expect(cursor.reason).toContain("no approval callback");
-    expect(cursor.reason).toContain("mailbox cannot receive replies");
+    expect(cursor.reason).not.toContain("mailbox cannot receive replies");
   });
 
   test("only an absent tier uses the default while malformed values fail closed", () => {

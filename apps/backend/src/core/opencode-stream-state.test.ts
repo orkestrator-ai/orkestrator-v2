@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { OpenCodeStreamState } from "./opencode-stream-state.js";
+import { MAX_STREAM_MESSAGES, OpenCodeStreamState } from "./opencode-stream-state.js";
 
 describe("OpenCodeStreamState turn clock", () => {
   test("beginTurn stamps and rejectTurn clears only the matching dispatch", () => {
@@ -187,6 +187,108 @@ describe("OpenCodeStreamState turn clock", () => {
     expect(state.sessionModel("session")).toEqual({
       modelId: "opencode-go/deepseek-v4-flash",
       reasoningId: "default",
+    });
+  });
+});
+
+describe("OpenCodeStreamState usage ledger", () => {
+  function message(id: string, input: number, cacheRead = 0) {
+    return {
+      info: {
+        id,
+        sessionID: "session",
+        role: "assistant",
+        tokens: { input, output: 0, cache: { read: cacheRead, write: 0 } },
+        cost: 0.01,
+        time: { created: 1, completed: 2 },
+      },
+      parts: [],
+    };
+  }
+
+  test("keeps session and cache totals after a later snapshot replaces the transcript tail", () => {
+    const state = new OpenCodeStreamState();
+    const full = Array.from({ length: 80 }, (_, index) => message(`message-${index}`, 10, 100));
+    expect(state.replaceMessages("session", full)).toBe(true);
+
+    const tail = full.slice(-10);
+    expect(state.replaceMessages("session", tail)).toBe(true);
+
+    const usage = state.contextUsage("session", tail);
+    expect(usage).toMatchObject({
+      usedTokens: 110,
+      inputTokens: 800,
+      cacheReadTokens: 8_000,
+      sessionTokens: 8_800,
+    });
+    expect(usage?.costUsd).toBeCloseTo(0.8);
+  });
+
+  test("records usage from message.updated after the transcript cache is dirty", () => {
+    const state = new OpenCodeStreamState();
+    const full = Array.from({ length: MAX_STREAM_MESSAGES }, (_, index) =>
+      message(`message-${index}`, 1),
+    );
+    expect(state.replaceMessages("session", full)).toBe(true);
+
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("message-new-1", 1).info },
+    } as never);
+    expect(state.currentMessages("session")).toBeUndefined();
+
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("message-new-2", 1).info },
+    } as never);
+
+    expect(state.currentMessages("session")).toBeUndefined();
+    expect(state.contextUsage("session", [])).toMatchObject({
+      inputTokens: MAX_STREAM_MESSAGES + 2,
+      sessionTokens: MAX_STREAM_MESSAGES + 2,
+    });
+  });
+
+  test("records usage from message.updated during a gap before rehydration", () => {
+    const state = new OpenCodeStreamState();
+    expect(state.replaceMessages("session", [message("seed", 4)])).toBe(true);
+    state.markGap();
+    expect(state.currentMessages("session")).toBeUndefined();
+
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("after-gap-1", 3).info },
+    } as never);
+    state.apply({
+      type: "message.updated",
+      properties: { sessionID: "session", info: message("after-gap-2", 5).info },
+    } as never);
+
+    expect(state.currentMessages("session")).toBeUndefined();
+    expect(state.contextUsage("session", [])).toMatchObject({
+      inputTokens: 12,
+      sessionTokens: 12,
+    });
+  });
+
+  test("keeps lifetime spend after message.removed drops the transcript row", () => {
+    const state = new OpenCodeStreamState();
+    expect(state.replaceMessages("session", [message("keep", 2), message("drop", 7)])).toBe(true);
+
+    state.apply({
+      type: "message.removed",
+      properties: { sessionID: "session", messageID: "drop" },
+    } as never);
+
+    expect(
+      state.currentMessages("session")?.map((candidate) => {
+        const info = (candidate as { info?: { id?: string } }).info;
+        return info?.id;
+      }),
+    ).toEqual(["keep"]);
+    expect(state.contextUsage("session")).toMatchObject({
+      inputTokens: 9,
+      sessionTokens: 9,
     });
   });
 });

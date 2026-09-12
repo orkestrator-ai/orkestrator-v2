@@ -216,6 +216,34 @@ export type NativeAgentServiceLayerTypes = [
  * id also moves a corrected row to the newest position while retaining the
  * strict twenty-row bound.
  */
+const CUMULATIVE_USAGE_KEYS = [
+  "inputTokens",
+  "outputTokens",
+  "reasoningTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "sessionTokens",
+  "costUsd",
+  "durationMs",
+  "apiDurationMs",
+] as const;
+
+const CUMULATIVE_USAGE_SOURCES = new Set<NativeAgentContextUsage["source"]>([
+  "claude",
+  "opencode",
+  "codex",
+]);
+
+function isCumulativeUsageSource(source: NativeAgentContextUsage["source"]): boolean {
+  return source !== undefined && CUMULATIVE_USAGE_SOURCES.has(source);
+}
+
+function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
+}
+
 export function mergeContextUsageTurns(
   previous: NativeAgentContextUsage | undefined,
   current: NativeAgentContextUsage | undefined,
@@ -227,10 +255,25 @@ export function mergeContextUsageTurns(
     turns.set(turn.turnId, turn);
   }
   const mergedTurns = [...turns.values()].slice(-20);
-  return {
+  const merged: NativeAgentContextUsage = {
     ...current,
     ...(mergedTurns.length > 0 ? { turns: mergedTurns } : {}),
   };
+  if (!previous) return merged;
+  // Lifetime spend can only grow for providers whose top-level counters are
+  // cumulative. A later OpenCode or Claude snapshot that only sees the live
+  // transcript tail would otherwise walk session/cache/cost backwards.
+  // ACP-backed cursor, grok, and pi publish those same fields as the current
+  // turn, so clamping them would freeze the panel on the largest turn ever
+  // seen. Context occupancy (`usedTokens`) is always left on `current` so
+  // compaction can shrink the gauge.
+  if (isCumulativeUsageSource(current.source)) {
+    for (const key of CUMULATIVE_USAGE_KEYS) {
+      const value = maxDefined(previous[key], current[key]);
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 /**

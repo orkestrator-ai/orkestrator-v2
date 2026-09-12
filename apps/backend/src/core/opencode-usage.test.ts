@@ -1,5 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { openCodeContextUsage } from "./opencode-usage.js";
+import {
+  MAX_LEDGER_MESSAGES,
+  createOpenCodeUsageLedger,
+  openCodeContextUsage,
+  openCodeContextUsageFromLedger,
+  recordOpenCodeUsageMessages,
+} from "./opencode-usage.js";
+
+function assistantMessage(
+  id: string,
+  tokens: { input: number; output?: number; cacheRead?: number; cost?: number },
+) {
+  return {
+    info: {
+      id,
+      role: "assistant",
+      tokens: {
+        input: tokens.input,
+        output: tokens.output ?? 0,
+        cache: { read: tokens.cacheRead ?? 0, write: 0 },
+      },
+      cost: tokens.cost ?? 0,
+      time: { created: 1, completed: 2 },
+    },
+    parts: [],
+  };
+}
 
 describe("openCodeContextUsage", () => {
   test("keeps message totals and maps step-finish accounting into bounded turn rows", () => {
@@ -99,5 +125,115 @@ describe("openCodeContextUsage", () => {
 
     expect(usage).toMatchObject({ usedTokens: 10, source: "opencode" });
     expect(usage?.updatedAt).toBeUndefined();
+  });
+
+  test("keeps lifetime session and cache totals after earlier messages leave the window", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const earlier = [
+      assistantMessage("a", { input: 100, cacheRead: 1_000, cost: 0.2 }),
+      assistantMessage("b", { input: 50, cacheRead: 2_000, cost: 0.1 }),
+    ];
+    recordOpenCodeUsageMessages(ledger, earlier);
+
+    const laterWindow = [assistantMessage("c", { input: 10, cacheRead: 500, cost: 0.05 })];
+    recordOpenCodeUsageMessages(ledger, laterWindow);
+    const usage = openCodeContextUsageFromLedger(ledger, laterWindow);
+
+    expect(usage).toMatchObject({
+      usedTokens: 510,
+      inputTokens: 160,
+      cacheReadTokens: 3_500,
+      sessionTokens: 3_660,
+      source: "opencode",
+    });
+    expect(usage?.costUsd).toBeCloseTo(0.35);
+    expect(openCodeContextUsage(laterWindow)?.sessionTokens).toBe(510);
+  });
+
+  test("does not let an in-flight zero snapshot erase a completed message", () => {
+    const ledger = createOpenCodeUsageLedger();
+    recordOpenCodeUsageMessages(ledger, [
+      assistantMessage("a", { input: 80, cacheRead: 20, cost: 0.4 }),
+    ]);
+    recordOpenCodeUsageMessages(ledger, [
+      assistantMessage("a", { input: 0, cacheRead: 0, cost: 0 }),
+    ]);
+
+    expect(openCodeContextUsageFromLedger(ledger, [])).toMatchObject({
+      inputTokens: 80,
+      cacheReadTokens: 20,
+      sessionTokens: 100,
+    });
+  });
+
+  test("replaying more than the ledger bound does not double-count retired ids", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES + 8 }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 1 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, messages);
+    const second = openCodeContextUsageFromLedger(ledger, []);
+
+    expect(first).toMatchObject({
+      inputTokens: MAX_LEDGER_MESSAGES + 8,
+      sessionTokens: MAX_LEDGER_MESSAGES + 8,
+    });
+    expect(second).toEqual(first);
+  });
+
+  test("a late update to a retired message id does not charge it again", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES + 1 }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 1 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, [assistantMessage("message-0", { input: 9, cost: 1 })]);
+
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(first);
+  });
+
+  test("keeps incremental totals after filling the live ledger window", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 2, cacheRead: 1, cost: 0.01 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, messages);
+
+    expect(first).toMatchObject({
+      inputTokens: MAX_LEDGER_MESSAGES * 2,
+      cacheReadTokens: MAX_LEDGER_MESSAGES,
+      sessionTokens: MAX_LEDGER_MESSAGES * 3,
+    });
+    expect(first?.costUsd).toBeCloseTo(MAX_LEDGER_MESSAGES * 0.01);
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(first);
+  });
+
+  test("omits updatedAt instead of throwing when a timestamp is outside the Date range", () => {
+    const ledger = createOpenCodeUsageLedger();
+    recordOpenCodeUsageMessages(ledger, [
+      {
+        info: {
+          id: "assistant-1",
+          role: "assistant",
+          tokens: { input: 7, output: 3 },
+          time: { created: 1, completed: 1e18 },
+        },
+        parts: [],
+      },
+    ]);
+
+    const usage = openCodeContextUsageFromLedger(ledger, []);
+    expect(usage).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 3,
+      sessionTokens: 10,
+    });
+    expect(usage?.updatedAt).toBeUndefined();
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(usage);
   });
 });

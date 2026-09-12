@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import type { ActionDefaults } from "../../../packages/protocol/src/action-defaults";
 
@@ -37,6 +37,12 @@ function openPicker(action: string) {
   fireEvent.pointerDown(
     screen.getByRole("combobox", { name: `${action} default agent, model and reasoning` }),
   );
+}
+
+async function flushAutoSave() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 450));
+  });
 }
 
 describe("GlobalSettings defaults section", () => {
@@ -113,7 +119,7 @@ describe("GlobalSettings defaults section", () => {
         .textContent,
     ).toContain("Haiku");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual({
@@ -130,7 +136,7 @@ describe("GlobalSettings defaults section", () => {
     openPicker("Fix review issues");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
         review2: { platform: "codex", model: "gpt-5.4" },
@@ -143,7 +149,7 @@ describe("GlobalSettings defaults section", () => {
       name: "Review 2 default agent, model and reasoning",
     });
     fireEvent.click(within(review2Picker.parentElement!).getByRole("button", { name: "Clear" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
@@ -161,7 +167,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     // Claude's `haiku` is meaningless to Codex, so the platform switch must
@@ -183,7 +189,7 @@ describe("GlobalSettings defaults section", () => {
     expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
@@ -224,7 +230,7 @@ describe("GlobalSettings defaults section", () => {
       screen.getByRole("combobox", { name: "Push default agent, model and reasoning" }).textContent,
     ).toContain("App default");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual({});
@@ -249,9 +255,7 @@ describe("GlobalSettings defaults section", () => {
         .textContent,
     ).toContain("Haiku");
 
-    const saveButton = screen.getByRole("button", { name: "Save Changes" });
-    expect(saveButton.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(saveButton);
+    await flushAutoSave();
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
@@ -302,7 +306,7 @@ describe("GlobalSettings defaults section", () => {
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
         resolve: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
@@ -314,7 +318,7 @@ describe("GlobalSettings defaults section", () => {
     mockUpdateGlobalConfig.mockClear();
     openPicker("Resolve");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Default" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
@@ -366,7 +370,7 @@ describe("GlobalSettings defaults section", () => {
     expect(screen.queryByRole("menuitemradio", { name: /^Default/ }) === null).toBe(true);
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
     await waitFor(() =>
       expect(savedActionDefaults()).toEqual({
         push: { platform: "opencode" },
@@ -393,7 +397,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.change(screen.getByLabelText("Review instruction"), {
       target: { value: "Focus on release blockers." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedActionDefaults()).toEqual(stored);
@@ -423,7 +427,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()).toMatchObject({
       actionDefaults: { review: { platform: "claude", model: "haiku" } },
@@ -501,7 +505,7 @@ describe("GlobalSettings defaults section", () => {
         .getByRole("group", { name: "Default Multi Review models" })
         .querySelectorAll("[data-multi-review-default-row]"),
     ).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toBeUndefined();
@@ -533,7 +537,7 @@ describe("GlobalSettings defaults section", () => {
       .getByRole("group", { name: "Default Multi Review models" })
       .querySelectorAll<HTMLElement>("[data-multi-review-default-row]");
     fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toEqual({
@@ -565,7 +569,7 @@ describe("GlobalSettings defaults section", () => {
       .getByRole("group", { name: "Default Multi Review models" })
       .querySelectorAll<HTMLElement>("[data-multi-review-default-row]");
     fireEvent.click(within(rows[2]!).getByRole("button", { name: "Reset model" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await flushAutoSave();
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     expect(savedAgentSettings()?.multiReview).toEqual({ reviewerCount: 3 });

@@ -151,6 +151,8 @@ const RESET_DATE_TIME_FORMAT_OPTIONS = {
 
 const WEEK_MINUTES = 7 * 24 * 60;
 const DAY_MINUTES = 24 * 60;
+// Approximate span for a month named without a reset instant to measure from.
+const MONTH_MINUTES = 30 * DAY_MINUTES;
 const MINUTE_MS = 60_000;
 
 const SPELLED_HOURS: Record<string, number> = {
@@ -178,6 +180,7 @@ const SPELLED_HOURS: Record<string, number> = {
  * window whose length is known by name can still be placed in time.
  */
 export function labelWindowMinutes(label: string): number | null {
+  if (/\bmonth(ly)?\b/i.test(label)) return MONTH_MINUTES;
   if (/\bweek(ly)?\b/i.test(label)) return WEEK_MINUTES;
   if (/\bdaily\b/i.test(label)) return DAY_MINUTES;
   const numericHours = label.match(/\b(\d+)\s*(?:-\s*)?h(?:ours?|r)?\b/i);
@@ -188,6 +191,42 @@ export function labelWindowMinutes(label: string): number | null {
   const spelledHours = label.match(/\b([a-z]+)[\s-]+hours?\b/i);
   const spelled = spelledHours ? SPELLED_HOURS[spelledHours[1]!.toLowerCase()] : undefined;
   return spelled === undefined ? null : spelled * 60;
+}
+
+/**
+ * True when a label names a calendar month rather than a fixed span.
+ *
+ * A month is not a fixed number of minutes, so a reported or name-derived
+ * duration is a fallback only; `windowDurationMinutes` prefers the real
+ * calendar boundary whenever a reset instant is available.
+ */
+export function labelWindowIsMonth(label: string): boolean {
+  return /\bmonth(ly)?\b/i.test(label);
+}
+
+/**
+ * Length, in minutes, of the calendar month that ends at `resetMs`.
+ *
+ * OpenCode Zen names its windows without reporting a duration, so a monthly
+ * limit has no fixed span to measure back from. The period is the calendar
+ * month before the reset instant, which makes the marker correct across
+ * 28-, 29-, 30- and 31-day months instead of drifting by up to a day.
+ */
+function calendarMonthMinutes(resetMs: number): number | null {
+  const reset = new Date(resetMs);
+  if (!Number.isFinite(reset.getTime())) return null;
+  // UTC arithmetic on purpose: a reset instant is absolute, so the calendar
+  // boundary is the same month regardless of the host's timezone.
+  const start = new Date(resetMs);
+  const day = start.getUTCDate();
+  start.setUTCDate(1);
+  start.setUTCMonth(start.getUTCMonth() - 1);
+  const daysInPriorMonth = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  start.setUTCDate(Math.min(day, daysInPriorMonth));
+  const durationMs = reset.getTime() - start.getTime();
+  return durationMs > 0 ? durationMs / MINUTE_MS : null;
 }
 
 /** Anything that occupies a bounded quota period, however the provider named it. */
@@ -201,6 +240,13 @@ export function windowDurationMinutes(window: TimedWindow): number | null {
   const reported = window.windowMinutes;
   if (reported !== undefined) {
     return Number.isFinite(reported) && reported > 0 ? reported : null;
+  }
+  // A calendar month has no fixed span; measure the real one when the reset
+  // instant is known, so a 31-day month is not drawn as 30 days.
+  if (window.resetsAt && labelWindowIsMonth(window.label)) {
+    const resetMs = new Date(window.resetsAt).getTime();
+    const calendar = calendarMonthMinutes(resetMs);
+    if (calendar !== null) return calendar;
   }
   return labelWindowMinutes(window.label);
 }

@@ -1,4 +1,5 @@
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
   MULTI_REVIEW_FIX_TAB_TITLE,
@@ -120,7 +121,7 @@ export async function recoverMissingMultiReviewFixSession(
   const requestId = replacementRequestId(workflow, replacement.replacementProviderSessionId);
   const outcome = await nativeAgents.dispatchIntent({
     ...identity,
-    prompt: `${addressPrompt(workflow.consolidatedReport)}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}`,
+    prompt: `${addressPrompt(workflow.consolidatedReport)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
     requestId,
     mode: "build",
   });

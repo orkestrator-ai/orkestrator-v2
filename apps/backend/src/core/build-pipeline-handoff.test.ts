@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import {
   BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET,
   buildReviewHandoffPrompt,
@@ -44,7 +45,10 @@ describe("build review handoff", () => {
     });
     const prompt = prependReviewHandoff(handoff, "Address every finding.");
 
-    expect(prompt).toStartWith('<orkestrator-handoff format="json-v2">');
+    expect(prompt).toStartWith(
+      `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n<orkestrator-handoff format="json-v2">`,
+    );
+    expect(prompt).toEndWith("Address every finding.");
     expect(prompt).toContain("handed off from Codex to a new Claude session");
     expect(prompt).toContain("Review the range boundary.");
     expect(prompt).toContain("boundary test failed");

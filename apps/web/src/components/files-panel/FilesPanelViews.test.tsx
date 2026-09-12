@@ -347,7 +347,7 @@ describe("files panel views", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
     fireEvent.click(await screen.findByText("New folder"));
     expect(await screen.findByRole("dialog", { name: "New folder" })).toBeTruthy();
-    expect(screen.queryByText(/workspace root/)).toBeNull();
+    expect(screen.queryByText(/workspace root/) === null).toBe(true);
     expect(screen.getByText(/Create a folder in/).textContent).toContain("src");
 
     const nameInput = screen.getByLabelText("Folder name") as HTMLInputElement;
@@ -357,7 +357,7 @@ describe("files panel views", () => {
 
     await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "hooks"));
     expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
-    expect(screen.queryByRole("dialog", { name: "New folder" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "New folder" }) === null).toBe(true);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
     const fileMenuItems = await screen.findAllByText("New folder");
@@ -365,6 +365,50 @@ describe("files panel views", () => {
     fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "legacy" } });
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
     await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "legacy"));
+  });
+
+  test("opens only the leaf context menu for a nested file", async () => {
+    const onCreateFolder = mock(async () => "src/hooks");
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
+
+    const fileButton = await screen.findByRole("button", { name: "App.tsx" });
+    const srcButton = screen.getByRole("button", { name: "src" });
+    expect(srcButton.contains(fileButton)).toBe(false);
+    expect(screen.getByLabelText("Workspace empty space").contains(fileButton)).toBe(false);
+
+    fireEvent.pointerDown(fileButton, { pointerType: "touch", pointerId: 1, button: 0 });
+    fireEvent.contextMenu(fileButton);
+    expect(await screen.findByText("Copy path")).toBeTruthy();
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getAllByText("New folder")).toHaveLength(1);
+  });
+
+  test("keeps New folder disabled while a mutation is pending", async () => {
+    const onCreateFolder = mock(async () => "src/hooks");
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} movePending />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
+    const item = await screen.findByText("New folder");
+    expect(item.closest("[data-disabled]") !== null || item.hasAttribute("data-disabled")).toBe(
+      true,
+    );
+  });
+
+  test("creates a folder at the workspace root from empty space in a populated tree", async () => {
+    const onCreateFolder = mock(async (_parent: string, folderName: string) => folderName);
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
+
+    fireEvent.contextMenu(screen.getByLabelText("Workspace empty space"));
+    fireEvent.click(await screen.findByText("New folder"));
+    expect(await screen.findByRole("dialog", { name: "New folder" })).toBeTruthy();
+    expect(screen.getByText(/workspace root/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith(".", "notes"));
+    expect(screen.queryByRole("dialog", { name: "New folder" }) === null).toBe(true);
   });
 
   test("creates a folder at the workspace root from empty space", async () => {
@@ -398,6 +442,29 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
     await waitFor(() => expect(screen.getByText("already exists")).toBeTruthy());
     expect(screen.getByRole("dialog", { name: "New folder" })).toBeTruthy();
+  });
+
+  test("CreateFolderDialog ignores dismissals while creation is pending", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const onCreate = mock(async () => pending);
+    const onCancel = mock(() => undefined);
+    render(
+      <CreateFolderDialog
+        parentDirectory="src"
+        isPending
+        onCancel={onCancel}
+        onCreate={onCreate}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Creating…" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New folder" }), { key: "Escape" });
+    expect(onCancel).not.toHaveBeenCalled();
+    release();
   });
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {

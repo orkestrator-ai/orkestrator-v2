@@ -148,53 +148,62 @@ export function AllFilesView({
     );
   }
 
+  const workspaceRootTarget = onMove ? (
+    <div
+      aria-label="Workspace root drop target"
+      onDragEnter={(event) => {
+        if (movePending || !isWorkspaceFileDrag(event)) return;
+        event.preventDefault();
+        setIsRootDragOver(true);
+      }}
+      onDragOver={(event) => {
+        if (movePending || !isWorkspaceFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setIsRootDragOver(true);
+      }}
+      onDragLeave={() => setIsRootDragOver(false)}
+      onDrop={handleRootDrop}
+      className={cn(
+        "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
+        isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+      )}
+    >
+      <Folder className="h-3.5 w-3.5" />
+      Workspace root
+    </div>
+  ) : null;
+
   return (
     <>
-      <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
-        <div className="min-h-40 p-2">
-          {onMove && (
-            <div
-              aria-label="Workspace root drop target"
-              onDragEnter={(event) => {
-                if (movePending || !isWorkspaceFileDrag(event)) return;
-                event.preventDefault();
-                setIsRootDragOver(true);
-              }}
-              onDragOver={(event) => {
-                if (movePending || !isWorkspaceFileDrag(event)) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-                setIsRootDragOver(true);
-              }}
-              onDragLeave={() => setIsRootDragOver(false)}
-              onDrop={handleRootDrop}
-              className={cn(
-                "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
-                isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
-              )}
-            >
-              <Folder className="h-3.5 w-3.5" />
-              Workspace root
-            </div>
-          )}
-          {fileTree.map((node) => (
-            <FileTreeNode
-              key={node.path}
-              item={node}
-              depth={0}
-              onFileClick={handleFileClick}
-              onReveal={onReveal}
-              changedPaths={changedPaths}
-              onRevert={onRevert}
-              onDelete={onDelete}
-              onMove={onMove}
-              onRequestMove={onMove ? setMoveSourcePath : undefined}
-              onCreateFolder={requestCreateFolder}
-              movePending={movePending}
-            />
-          ))}
-        </div>
-      </WorkspaceCreateFolderMenu>
+      <div className="flex min-h-40 flex-col p-2">
+        {workspaceRootTarget && (
+          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+            {workspaceRootTarget}
+          </WorkspaceCreateFolderMenu>
+        )}
+        {fileTree.map((node) => (
+          <FileTreeNode
+            key={node.path}
+            item={node}
+            depth={0}
+            onFileClick={handleFileClick}
+            onReveal={onReveal}
+            changedPaths={changedPaths}
+            onRevert={onRevert}
+            onDelete={onDelete}
+            onMove={onMove}
+            onRequestMove={onMove ? setMoveSourcePath : undefined}
+            onCreateFolder={requestCreateFolder}
+            movePending={movePending}
+          />
+        ))}
+        {requestCreateFolder && (
+          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+            <div className="min-h-16 flex-1" aria-label="Workspace empty space" />
+          </WorkspaceCreateFolderMenu>
+        )}
+      </div>
       <CreateFolderDialog
         parentDirectory={createParentDirectory}
         isPending={movePending}

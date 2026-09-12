@@ -1,5 +1,7 @@
 # Isolated development and agent testing
 
+Status: Living — isolated profiles and real-stack QA.
+
 Use agent-test profiles whenever testing Orkestrator from an installed Orkestrator
 instance. A profile has its own Electron `userData`, backend registry, browser
 gateway, worktrees, fixture, logs, Docker owner, and development image tag. It
@@ -65,7 +67,7 @@ page, the session lapsed and the fix is a fresh `dev:login` link.
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
 OpenCode credentials by default so manual QA can run real agents:
 
-See [`../todo/credentials-and-models.md`](../todo/credentials-and-models.md) for the full
+See [`credentials-and-models.md`](credentials-and-models.md) for the full
 per-platform credential, container-import, and model-cache matrix.
 
 ```bash

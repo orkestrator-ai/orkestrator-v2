@@ -1,5 +1,7 @@
 # Testing guide
 
+Status: Living — how to choose and run tests.
+
 This is the operating guide for choosing, running, and diagnosing Orkestrator's
 automated tests. Use repository-level `mise` tasks for complete workflows and
 the repository-pinned Bun runtime for focused tests. For isolated development
@@ -305,7 +307,7 @@ a failed test or claim full validation passed.
 Workspace and bridge package tests run as Turbo tasks, but both are declared
 `"cache": false`. A replayed cache entry would let a group report success having
 executed nothing, and this repository still tracks live flakes in
-`docs/flaky-tests.md`, so a green that proves only "the inputs are unchanged" is
+`docs/development/flaky-tests.md`, so a green that proves only "the inputs are unchanged" is
 not worth the seconds it saves. Every aggregate invocation runs every test.
 
 `build` stays cacheable, and it is the expensive dependency. `test:workspace`
@@ -366,7 +368,7 @@ Use this order:
 5. Rerun the affected group or `mise run test:changed`; finish with the full
    suite once the cause is addressed.
 
-Keep [../flaky-tests.md](../flaky-tests.md) current for credible flakes. Record
+Keep [flaky-tests.md](flaky-tests.md) current for credible flakes. Record
 the exact test and file, original command and worker configuration, failure
 message and duration, suite counts, isolated rerun command and result,
 observation date, and an evidence-backed hypothesis. Do not skip, loosen, or

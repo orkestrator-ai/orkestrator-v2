@@ -1,10 +1,11 @@
 # Agent Instructions
 
 This file provides specific guidance for AI agents working on this codebase.
+The living documentation catalog is [`docs/README.md`](docs/README.md).
 
 ## Project Overview
 
-Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
+Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, OpenCode, Cursor Agent, Grok Build, and Pi.
 
 ## Main Branch and Pull Request Policy
 
@@ -32,9 +33,8 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 
 ## Efficiency and Transport Invariants
 
-When implementing `docs/efficiency-plan.md` or changing gateway, bridge,
-terminal, streaming, replay, compression, or synchronization behavior, preserve
-these non-negotiable invariants:
+When changing gateway, bridge, terminal, streaming, replay, compression, or
+synchronization behavior, preserve these non-negotiable invariants:
 
 1. Long-running state lives in the backend, bridge, persistent store, or
    external process, not only in mounted React state.
@@ -106,12 +106,14 @@ apps/
     └── src/core/           # Docker, worktree, PTY, storage, and agent lifecycle state
 
 packages/
-└── protocol/               # Shared gateway contracts and validation
+├── protocol/               # Shared gateway contracts and validation
+└── cli/                    # Published `orkestrator` standalone backend CLI
 
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
 ├── pi-bridge/              # Pi Native Mode bridge server (Pi SDK, in process)
-├── cursor-bridge/          # Cursor via @cursor/sdk (experimental, off by default)
+├── cursor-bridge/          # Cursor via @cursor/sdk (off by default on legacy installs)
+├── acp-bridge/             # Grok Build via ACP over stdio
 └── codex-bridge/           # Codex Native Mode bridge server
     └── src/
         ├── index.ts            # Routes, SSE, composition root
@@ -469,7 +471,7 @@ The bridge supervises one persistent `codex app-server --stdio` child per
 environment and talks to it over JSON-RPC on private stdio. There is no second
 engine and no feature flag: the per-turn `codex exec` path and the
 `@openai/codex-sdk` dependency were both removed once app-server reached parity.
-See [`docs/technical-architecture/agent-engines.md`](docs/technical-architecture/agent-engines.md).
+See [`docs/architecture/agent-engines.md`](docs/architecture/agent-engines.md).
 
 `session-titles.ts` is the deliberate exception — it still spawns its own hermetic
 `codex exec` with a custom model catalog, read-only sandbox and user config
@@ -542,7 +544,7 @@ When touching the app-server engine:
   it: storage refuses every other request id until it is settled. Surface both
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
-- Agent version bumps follow [`docs/upgrade-agents.md`](docs/upgrade-agents.md);
+- Agent version bumps follow [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
@@ -1251,7 +1253,7 @@ report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 
-Keep [`docs/flaky-tests.md`](docs/flaky-tests.md) current whenever test behavior
+Keep [`docs/development/flaky-tests.md`](docs/development/flaky-tests.md) current whenever test behavior
 shows a credible flake. It is the only flake registry — do not start a second
 one. If a test fails in the normal aggregate or parallel suite but passes when
 its owning file is rerun alone, add or update its entry in that document in the

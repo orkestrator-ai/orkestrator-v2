@@ -1,6 +1,10 @@
 # 14 — ACP bridge generalization
 
-**Status:** 🟨 In progress · core implementation complete, awaiting real-agent/browser QA and merge · Depends on: 02, 06, 08
+**Status:** 🟨 In progress · ~85% · Depends on: 02, 06, 08
+
+Refreshed 2026-09-11. Typed ACP client, fs/terminal, authenticate, and
+Cursor-era module removal are in tree. Still open: fence or delete
+`grok-interjection.ts`, and real-Grok / browser QA.
 
 ## Goal
 
@@ -88,7 +92,7 @@ against it.
 
 - [ ] Bridge tests with the fake agent extended to exercise `fs/*`,
   `terminal/*`, `authenticate`, an unmapped mode, and a v2 `protocolVersion`.
-- [ ] Manual: the argv contract check from `docs/upgrade-agents.md` against
+- [ ] Manual: the argv contract check from `docs/development/upgrade-agents.md` against
   the pinned Grok binary, since nothing in CI runs the real agent.
 - [ ] Browser: Grok fixture shows terminal output inline for a shell tool
   call; reload preserves it.

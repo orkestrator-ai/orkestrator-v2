@@ -1,5 +1,7 @@
 # Flaky tests
 
+Status: Living — only flake registry.
+
 This living record tracks tests that fail during normal aggregate or parallel execution
 but pass when their owning file is rerun alone. A single failure is not treated
 as a flake until that isolated rerun passes. Resolved entries remain here with

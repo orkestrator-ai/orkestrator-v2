@@ -85,7 +85,7 @@ export function managedBinaryPath(version: string, options: SelectBinaryOptions 
  * then `CODEX_PATH`, then whatever `codex` is on PATH.
  *
  * `CODEX_PATH` is what `process-supervisor.ts` actually launches (see
- * `docs/upgrade-agents.md`), so omitting it here would fail the suite for a
+ * `docs/development/upgrade-agents.md`), so omitting it here would fail the suite for a
  * developer whose pinned binary is exactly where the supervisor expects it.
  *
  * `CODEX_PROTOCOL_BINARY` stays a hard assertion rather than a hint: during an

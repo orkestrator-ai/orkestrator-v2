@@ -1,6 +1,10 @@
 # 13 — OpenCode on v1: streaming and cleanup
 
-**Status:** 🟨 In progress · implementation complete, awaiting merge and browser QA · Depends on: 03
+**Status:** 🟨 In progress · code complete, awaiting browser QA · Depends on: 03
+
+Refreshed 2026-09-11. v1 SSE adoption and dead renderer-card removal are in
+tree. Remaining work is inactive-path browser QA. This is not the Session v2
+migration; see `docs/todo/opencode-v2.md`.
 
 ## Goal
 

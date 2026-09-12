@@ -1,6 +1,11 @@
 # 04 — Interactions: elicitation, dialogs and permissions
 
-**Status:** 🟨 In progress · 11/20 tasks · Depends on: 02
+**Status:** 🟨 In progress · ~65% · Depends on: 02
+
+Refreshed 2026-09-11. Shared interaction contract, capability bits, and
+unattended defaults are in tree. Still open: `listPermissionRules` /
+`removePermissionRule`, full MCP elicitation parking, Grok permission
+titling, and browser QA.
 
 ## Goal
 

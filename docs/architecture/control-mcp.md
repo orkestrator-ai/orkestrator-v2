@@ -1,5 +1,7 @@
 # Orkestrator control MCP
 
+Status: Living — Control MCP operator guide.
+
 Orkestrator exposes its core controls to Codex, Claude Code, and other MCP
 clients through a local Streamable HTTP server.
 

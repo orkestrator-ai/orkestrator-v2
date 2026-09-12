@@ -1,6 +1,6 @@
 # Project coordinator implementation plan
 
-Status: implemented.
+Status: Done — implemented.
 
 The project landing page will open a **Coordinator** tab by default. Its chat
 runs against the project's actual local checkout, can inspect the codebase and
@@ -452,6 +452,6 @@ authenticate with `dev:login`. Run owning tests and affected package typechecks
 before browser QA. Run root formatting/lint checks and the declared `mise run test`
 suite before delivery; never substitute bare root-level `bun test`.
 
-Update `docs/technical-architecture/control-mcp.md`, session architecture docs,
+Update `docs/architecture/control-mcp.md`, session architecture docs,
 and user-facing coordinator guidance to explain identity, provider availability,
 read-only enforcement, branch/sync behavior, message delivery, and recovery.

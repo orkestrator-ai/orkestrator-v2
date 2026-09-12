@@ -1,7 +1,17 @@
 # Platform inconsistencies
 
-Status: analysis only. No implementation in this document's originating change.
-Recorded 2026-08-16 from a read-only inventory of the six agent surfaces.
+Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note.
+
+> **Current (2026-09-11).** Cursor runs only through `bridges/cursor-bridge/`
+> and `@cursor/sdk`. Grok remains on `bridges/acp-bridge/`. Steer is shipped
+> for Codex, Claude, Pi, and Cursor (`nativeAgentCapabilities().actions.steer`).
+> Grok and OpenCode still have no production steer. Cursor also exposes
+> `rewindMessages`. Native Pi has a bridge-owned MCP client and mail
+> pull/send/inject, so coordinator delegation is available there. Cursor and
+> Grok inject the Orkestrator MCP server at launch but mail flags stay off.
+> Plan 05 in `docs/plans/sdk-coverage/` is the living steer backlog. Tables
+> below that still say Cursor is ACP or steer is Codex-only are the
+> 2026-08-16 snapshot.
 
 > Historical note (2026-08-26): Cursor's ACP/CLI interface described below has
 > been removed. Cursor now runs only through `bridges/cursor-bridge/` and
@@ -22,7 +32,7 @@ The six surfaces compared:
 | Claude Native | Claude Code (native) | `bridges/claude-bridge/` wrapping the Claude Agent SDK |
 | Claude Tmux | Claude Code (tmux) | Claude Code CLI under tmux; `apps/backend/src/core/tmux-*.ts` |
 | Codex Native | Codex | `bridges/codex-bridge/` speaking JSON-RPC to `codex app-server` |
-| Cursor Agent Native | Cursor Agent | `bridges/acp-bridge/` ACP JSON-RPC over stdio (`ACP_PROVIDER=cursor`) |
+| Cursor Agent Native | Cursor Agent | `bridges/cursor-bridge/` via `@cursor/sdk` (ACP path removed) |
 | Grok Build Native | Grok Build | Same ACP bridge (`ACP_PROVIDER=grok`) |
 | OpenCode Native | OpenCode | No Orkestrator bridge; backend drives `opencode serve` via SDK v2 |
 
@@ -43,7 +53,7 @@ Primary sources:
 - `apps/web/src/components/claude/ClaudeTmuxChatTab.tsx`
 - `apps/backend/src/core/native-agent-service-*.ts`
 - `apps/backend/src/core/tmux-*.ts`
-- `docs/technical-architecture/agent-engines.md`
+- `docs/architecture/agent-engines.md`
 
 ---
 
@@ -92,7 +102,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Compact | full | **partial** (`/compact` typed) | full | none | none | full |
 | Rewind files | full | **none** | none | none | none | none |
 | Undo / redo / share | none | none | none | none | none | **full** |
-| Steer | none | none | **full** | none | none | none |
+| Steer | **full** | none | **full** | **full** | none | none |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
 | Tool approvals | **fail-open** in build | **fail-closed hooks** | fail-closed | fail-closed cards; CLI `--force` | `--always-approve` | full |
@@ -314,7 +324,8 @@ Each native platform grew unique Agent Info verbs and never back-ported them:
 | Claude Native | rewind files, background tasks, local settings, prompt suggestions |
 | Codex | steer (`turn/steer`), native review (`review/start`), `CodexPlanModeCard`, hermetic titles |
 | OpenCode | undo (`session.revert`), redo (`unrevert`), share / unshare |
-| Cursor / Grok | none (`actions: {}`; `performSessionAction` throws) |
+| Cursor | steer (`Run.steer`), rewind messages |
+| Grok | none (`actions: {}`) |
 | Claude Tmux | none of those APIs; compact/fast/model are TUI keystrokes |
 
 Users switching agents therefore lose verbs, not just models.

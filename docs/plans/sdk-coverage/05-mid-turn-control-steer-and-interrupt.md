@@ -1,6 +1,11 @@
 # 05 — Mid-turn control: steer and graceful interrupt
 
-**Status:** ⬜ Not started · 0/21 tasks · Depends on: 02 (02 is now done)
+**Status:** 🟨 In progress · ~50% · Depends on: 02 (02 is now done)
+
+Refreshed 2026-09-11. Shared abort ladder, dynamic `steerSupported`, and
+production `/steer` exist for Codex, Claude, Pi, and Cursor. Still open:
+Claude long-lived cross-turn `query()`, Grok/OpenCode steer, Cursor crash
+recovery, and browser QA.
 
 ## Goal
 
@@ -99,7 +104,7 @@ No new renderer surface. Changes are in the provider contract and bridges:
 
 - [ ] Keep `actions.steer` false. Delete or clearly fence the dormant
   `grok-interjection.ts` extension behind a feature flag with a comment
-  pointing at the ACP v2 discussion in `docs/todo/steer/opus.md`.
+  pointing at the ACP v2 discussion.
 
 ## Verification
 

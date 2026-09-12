@@ -1,6 +1,10 @@
 # Coordinator for every provider — implementation plan
 
-Status: proposal, 2026-09-07. Branch `change-conversation-model-4302c7d2eb93-r1`.
+Status: Done — implemented. Proposed 2026-09-07; the tier table, unassigned-first
+conversations, and per-platform enforcement now live in
+`apps/backend/src/core/coordinator-providers.ts` and
+[`docs/architecture/coordinator.md`](../architecture/coordinator.md). This file is the original plan,
+not the product doc.
 
 > Later note (2026-09-11): native Pi now has a bridge-owned MCP client and
 > `{canPull,canSend,canInject}=true`, so coordinator delegation is available
@@ -46,7 +50,7 @@ Per-bridge enforcement today (from a survey of each bridge on this commit):
 | --- | --- | --- |
 | codex-bridge | OS permission profile, `sandbox: "read-only"`, `approvalPolicy: "never"`, private `CODEX_HOME`, network off, features off, re-stamped on every create/resume/fork/turn, fails closed if the profile is not echoed back | Enforced |
 | claude-bridge | `permissionMode: "dontAsk"`, `allowedTools`/`disallowedTools`, `sandbox.enabled`, `settingSources` trimming. No `PreToolUse` hook. Deny list uses Codex tool names, so it is a no-op here | Achievable, not built |
-| pi-bridge | In-process `tool_call` gate with `READ_ONLY_TOOLS` whitelist plus `setActiveToolsByName`; project resources off | Enforced at dispatch; no MCP client at all (mail/delegation would be `pi.registerTool`, not MCP) |
+| pi-bridge | In-process `tool_call` gate with `READ_ONLY_TOOLS` whitelist plus `setActiveToolsByName`; project resources off | Enforced at dispatch. Later: bridge-owned MCP client and native mail flags, so delegation is available (see later note) |
 | OpenCode | `session.create/update({ permission })` from `openCodePermissionRules`; `effectiveOpenCodePolicy` **throws** for coordinator because project config cannot be disabled | SDK-enforced, currently refused |
 | cursor-bridge | `sandboxOptions.enabled`, `disallowedTools`; `approvals: "deny"` **refuses attach** because the SDK has no approval callback | Provider-configured only |
 | acp-bridge (Grok) | Strips `--always-approve`; answers every permission request `cancelled`; no tool policy applied | Advisory only |
@@ -356,14 +360,11 @@ and cannot create a file, edit a file, run `touch`, or fetch a URL.
 - Backend: Pi branch of `prepareCoordinatorHome` sets a private
   `PI_AGENT_DIR` containing only `auth.json`, and separate
   `PI_SESSION_DIR`/`PI_BRIDGE_STATE_DIR` under the coordinator runtime dir.
-- `coordinator-providers.ts`: pi → `enforced`, `delegation: false`. The
-  context prompt already switches to the "worker controls are unavailable"
-  wording when delegation is off; make `coordinatorDelegationAvailable`
-  per-session so it reflects the platform, not only the global MCP state.
-- Follow-up (separate PR): bridge-registered Pi custom tools that proxy the
-  Control MCP `tools/list` and `tools/call` over HTTP, so delegation works
-  without an MCP client. Until then the panel footer says delegation is
-  unavailable on Pi.
+- `coordinator-providers.ts`: pi → `enforced`, `delegation: false` at the
+  time of this plan. Done later in #714: bridge-owned MCP client + native
+  mail flags, so `delegation` is now true.
+- Follow-up (separate PR): ~~bridge-registered Pi custom tools that proxy
+  Control MCP over HTTP~~ done via the bridge-owned MCP client in #714.
 
 ## Phase 5 — Cursor as `provider-configured`, Grok as `advisory`
 
@@ -396,7 +397,7 @@ and cannot create a file, edit a file, run `touch`, or fetch a URL.
      was never offered).
 - `coordinator-providers.test.ts` asserts the table: every platform marked
   `enforced` is in the conformance suite's list.
-- Docs: rewrite the provider paragraph in `docs/coordinator.md`; add a
+- Docs: rewrite the provider paragraph in `docs/architecture/coordinator.md`; add a
   "Coordinator qualification" subsection to `AGENTS.md` under the bridge
   sections stating that a platform may not be moved to `enforced` without the
   conformance suite and the process-authority env var; add the new setting

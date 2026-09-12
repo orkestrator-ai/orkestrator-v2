@@ -1,9 +1,9 @@
 # TODO: evaluate remote stream compression
 
-Status: deferred investigation; recommendation 6 from the bandwidth review.
+Status: Deferred — investigation; recommendation 6 from the bandwidth review.
 
-Related work: [remote-client efficiency plan](../efficiency-plan.md). Establish
-results with redundant payloads removed before changing compression defaults.
+Establish results with redundant payloads removed before changing compression
+defaults.
 
 ## Existing behavior
 

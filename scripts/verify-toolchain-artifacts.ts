@@ -533,7 +533,7 @@ export async function run(options: RunOptions = {}): Promise<void> {
   }
 
   // `--emit` prints the computed digests instead of asserting them, for the
-  // version-bump workflow in docs/upgrade-agents.md.
+  // version-bump workflow in docs/development/upgrade-agents.md.
   const { emit, filters } = parseArguments(argv);
   const selected = selectArtifacts(filters, artifacts);
   if (selected.length === 0) throw new Error("No artifacts matched the filters");

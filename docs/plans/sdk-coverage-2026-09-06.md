@@ -1,5 +1,13 @@
 # Agent SDK coverage review — 2026-09-06
 
+Status: Historical — 2026-09-06 snapshot; superseded by the SDK coverage index.
+
+> **Superseded snapshot.** This review is against commit `9e86f008` (v2.12.11).
+> Most of the gaps it lists have since been planned or implemented in
+> [`docs/plans/sdk-coverage/00-index.md`](sdk-coverage/00-index.md).
+> Do not pick work from this file without checking that index and the current
+> tree.
+
 Read-only review of how completely Orkestrator uses each of the six agent
 interfaces it provisions, and where the unused surface would give users
 something they do not have today. No code was changed. Line references are
@@ -166,7 +174,7 @@ used and thirteen are not.
     (`types/index.ts:25-99`) and casts through `any`; the SDK's `SDKMessage`
     union is never imported.
 
-Doc drift: `docs/upgrade-agents.md:240` still names `session-manager.ts` as the
+Doc drift: `docs/development/upgrade-agents.md:240` still names `session-manager.ts` as the
 compatibility surface; it is now an 8-line barrel.
 
 ## 4. Codex (`bridges/codex-bridge`, app-server protocol 0.153.3)
@@ -491,5 +499,5 @@ declared dependencies but never imported.
   containers; Grok passes `--always-approve` everywhere; Pi loads project
   resources only in containers. These are deliberate trust boundaries, but the
   user sees the same repo behave differently and nothing tells them why.
-- **`docs/todo/platform-inconsistencies.md`** (2026-08-16) predates Pi and the
+- **`docs/architecture/platform-inconsistencies.md`** (2026-08-16) predates Pi and the
   Cursor SDK bridge; this document supersedes its feature matrix.

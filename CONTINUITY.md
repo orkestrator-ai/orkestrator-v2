@@ -1,3 +1,8 @@
+> **Stale session ledger.** This file is leftover from an old
+> `orkestrator-ai` / Tauri worktree (`src-tauri`, flat `src/lib/*`). It is not
+> current architecture and must not guide work. Current agent instructions are
+> in [`AGENTS.md`](AGENTS.md).
+
 Goal (incl. success criteria):
 - Ensure todo writes in all native environments (`claude`, `opencode`, `codex`) surface a fresh todo list as the newest timeline item, always reflecting the latest todo state.
 - Success: refreshed/resumed timelines append a latest todo snapshot instead of leaving the todo list buried at its original tool position or stale after later updates.

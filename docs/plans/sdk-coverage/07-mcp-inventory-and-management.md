@@ -1,7 +1,12 @@
 # 07 — MCP inventory and management
 
-**Status:** 🟨 In progress · launch wiring for Cursor/Grok done; inventory
-panel and lifecycle actions not started · Depends on: 02, 04
+**Status:** 🟨 In progress · ~75% · Depends on: 02, 04
+
+Refreshed 2026-09-11; Pi inventory updated after #714. `NativeAgentMcpServer`,
+bridge `/mcp` routes, `mcpServerAction`, and `McpServersPanel` are live.
+Cursor/Grok receive the Orkestrator MCP server at launch. Pi reports a live
+`GET /session/:id/mcp` inventory. Still open: Claude `~/.claude.json` parse
+leftover, count-only fallbacks, lifecycle polish, browser QA.
 
 ## Goal
 
@@ -118,8 +123,10 @@ config editing.
 
 ### Pi bridge
 
-- [ ] Serve an empty list with a comment; capability absent. Extension-
-  registered tools are not MCP.
+- [x] Bridge-owned MCP client (`bridges/pi-bridge/src/mcp.ts`) and live
+  `GET /session/:id/mcp` inventory. Orkestrator from env / per-tab
+  `agentMcp`; user `~/.pi/agent/mcp.json`; project `.pi/mcp.json` only when
+  `policy.projectResources` is on. Settings-pane CLI discovery stays empty.
 
 ## Verification
 
@@ -132,4 +139,4 @@ config editing.
 ## Out of scope
 
 Editing MCP config files from the UI. Codex `mcpServer/tool/call` and
-`resource/read`. Pi.
+`resource/read`.

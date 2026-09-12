@@ -85,7 +85,7 @@ each can be reviewed and reverted on its own.
   `write` and `delete` run ungated with no approval surface. This task is a
   decision, not a feature: either the host launcher sets
   `CURSOR_BRIDGE_SANDBOX=1` (and the bridge passes `autoReview: true`), or
-  `docs/technical-architecture/agent-engines.md` states that Cursor host tabs
+  `docs/architecture/agent-engines.md` states that Cursor host tabs
   are ungated and why. Plan 12 builds the generic policy; this task closes the
   immediate gap. Test: whichever way it goes, `config.test.ts` asserts the
   chosen default.

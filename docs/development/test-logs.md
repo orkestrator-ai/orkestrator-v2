@@ -1,10 +1,7 @@
 # Test diagnostics, logs, and retention
 
-For current test selection, concurrency, cache, lease, watchdog, and artifact
-instructions, use
-[`../development/testing-guide.md`](../development/testing-guide.md). This
-document retains the diagnostic-bounds rationale and lower-level implementation
-notes.
+Status: Living — diagnostic-bounds rationale. Operator commands live in
+[`testing-guide.md`](testing-guide.md).
 
 The test infrastructure bounds diagnostics at their source and owns the log
 lifecycle. Use the repository runners instead of adding an unbounded `tee` file

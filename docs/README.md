@@ -21,7 +21,7 @@ Refreshed 2026-09-12 against the current tree.
 | Document | Status | Notes |
 | --- | --- | --- |
 | [agent-engines.md](architecture/agent-engines.md) | Living | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
-| [coordinator.md](architecture/coordinator.md) | Living | Product coordinator guide: unassigned-first conversations, delegation, read-only checkout. |
+| [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Living | Standalone backend, Tailscale Serve, flags, troubleshooting. |
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
@@ -48,9 +48,6 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | Document | Status | Notes |
 | --- | --- | --- |
 | [sdk-coverage/00-index.md](plans/sdk-coverage/00-index.md) | Active | Living index. 01–03 Done; 04–10 and 14–15 Active; 11–13 code done, QA leftover. |
-| [coordinator-implementation-plan.md](plans/coordinator-implementation-plan.md) | Done | Original landing-page plan. Product doc is `architecture/coordinator.md`. |
-| [coordinator-all-providers.md](plans/coordinator-all-providers.md) | Done | Multi-provider tiers shipped. Product doc is `architecture/coordinator.md`. |
-| [async-coordinator.md](plans/async-coordinator.md) | Done | Fire-and-finish plus one-wake batching shipped 2026-09-08. |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 
@@ -60,6 +57,7 @@ These are the only unfinished `docs/todo/` files.
 
 | Document | Status | Notes |
 | --- | --- | --- |
+| [coordinator-to-implement.md](todo/coordinator-to-implement.md) | Active | Provider parity for Coordinator: mail/wake on Cursor and Grok, read-only adapters, one live suite. |
 | [opencode-v2.md](todo/opencode-v2.md) | Deferred | Session v2 is unused. Production stays on the legacy `client.session.*` API. Pin is `1.18.29`. |
 | [remote-stream-compression.md](todo/remote-stream-compression.md) | Deferred | Measure redundant payloads before changing compression defaults. |
 | [remote-client-data-saving-mode.md](todo/remote-client-data-saving-mode.md) | Deferred | Proposal only. Measure existing incremental reads first. |

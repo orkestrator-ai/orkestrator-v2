@@ -176,6 +176,8 @@ const removeMultiReviewWorkflowMock = mock((_workflowId: string) => {});
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
 const selectEnvironmentMock = mock((_environmentId: string | null) => {});
+const selectProjectMock = mock((_projectId: string | null) => {});
+const setProjectCollapsedMock = mock((_projectId: string, _collapsed: boolean) => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 let projectBoardActionLog: string[] = [];
@@ -661,6 +663,8 @@ mock.module("@/stores", () => ({
       selectedEnvironmentId: string | null;
       selectedProjectId: string | null;
       selectEnvironment: (environmentId: string | null) => void;
+      selectProject: (projectId: string | null) => void;
+      setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
       projectBoardTab: "coordinator" | "kanban" | "linear" | "github" | "features";
       setProjectBoardTab: (
         tab: "coordinator" | "kanban" | "linear" | "github" | "features",
@@ -673,6 +677,8 @@ mock.module("@/stores", () => ({
         selectedEnvironmentId: currentSelectedEnvironmentId,
         selectedProjectId: currentSelectedProjectId,
         selectEnvironment: selectEnvironmentMock,
+        selectProject: selectProjectMock,
+        setProjectCollapsed: setProjectCollapsedMock,
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
         setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
@@ -889,12 +895,22 @@ beforeEach(() => {
   toastInfoMock.mockReset();
   toastWarningMock.mockReset();
   selectEnvironmentMock.mockReset();
+  selectProjectMock.mockReset();
+  setProjectCollapsedMock.mockReset();
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
   projectBoardActionLog = [];
   selectEnvironmentMock.mockImplementation((environmentId) => {
     projectBoardActionLog.push(`environment:${environmentId}`);
     currentSelectedEnvironmentId = environmentId;
+  });
+  selectProjectMock.mockImplementation((projectId) => {
+    projectBoardActionLog.push(`project:${projectId}`);
+    currentSelectedProjectId = projectId;
+    currentSelectedEnvironmentId = null;
+  });
+  setProjectCollapsedMock.mockImplementation((projectId, collapsed) => {
+    projectBoardActionLog.push(`collapsed:${projectId}:${collapsed}`);
   });
   setProjectBoardTabMock.mockImplementation((tab) => {
     projectBoardActionLog.push(`tab:${tab}`);
@@ -5985,6 +6001,35 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(screen.queryByRole("button", { name: "Delete Environment" }) === null).toBe(true);
   });
 
+  test("activates the project as soon as cleanup is confirmed", async () => {
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("does not leave a different selected environment when retrying a pinned cleanup", async () => {
+    const { rerender } = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "second-env",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    expect(selectProjectMock).not.toHaveBeenCalled();
+    expect(currentSelectedEnvironmentId).toBe("env-2");
+  });
+
   test("discloses that draft pull requests are marked ready before merging", () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     render(<ActionBar />);
@@ -6037,6 +6082,8 @@ describe("ActionBar successful cleanup and merge actions", () => {
       ),
     );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
   });
 
   test("leaves pending cleanup orchestration with the backend", async () => {
@@ -6082,6 +6129,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(errorAlert.textContent).toContain("delete failed");
     expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    expect(selectProjectMock).not.toHaveBeenCalled();
   });
 
   test("uses generic cleanup guidance when the backend omits the cleanup error", async () => {
@@ -6816,7 +6864,7 @@ describe("ActionBar error dialogs", () => {
   test("keeps cleanup errors constrained and scrollable", async () => {
     deleteEnvironmentMock.mockRejectedValueOnce(new Error(longError("delete failed")));
 
-    render(<ActionBar />);
+    const { rerender } = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
@@ -6834,6 +6882,8 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.className).toContain("[overflow-wrap:anywhere]");
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    currentSelectedEnvironmentId = selectedEnvironment.id;
+    rerender(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     expect(
       screen.queryByText(

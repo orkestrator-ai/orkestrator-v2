@@ -147,7 +147,13 @@ describe("useEnvironments", () => {
       error: null,
       deletingEnvironments: new Set(),
     });
-    useUIStore.setState({ unreadEnvironmentIds: [] });
+    useUIStore.setState({
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+      recentProjectIds: [],
+      collapsedProjects: [],
+      selectedEnvironmentIds: [],
+    });
     usePaneLayoutStore.setState({ environments: new Map(), activeEnvironmentId: null });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
@@ -497,6 +503,46 @@ describe("useEnvironments", () => {
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
     expect(useLoopedReviewStore.getState().workflows.has(deletedWorkflow.id)).toBe(false);
     expect(useLoopedReviewStore.getState().workflows.has(retainedWorkflow.id)).toBe(true);
+  });
+
+  test("deleteEnvironment activates the project as soon as cleanup starts", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "test-env",
+    });
+    const deferred = createDeferred<void>();
+    mockDeleteEnvironment.mockImplementationOnce(() => deferred.promise);
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+    });
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    useUIStore.setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      collapsedProjects: ["project-1"],
+    });
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    let deletePromise: Promise<void> = Promise.resolve();
+    act(() => {
+      deletePromise = result.current.deleteEnvironment("env-1");
+    });
+
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+
+    deferred.resolve();
+    await act(async () => {
+      await deletePromise;
+    });
   });
 
   test("deleteEnvironment drops the environment and its unread marker with it", async () => {
@@ -2501,6 +2547,33 @@ describe("useEnvironments", () => {
       delete (document as unknown as Record<string, unknown>).visibilityState;
       if (visibility) Object.defineProperty(Document.prototype, "visibilityState", visibility);
     }
+  });
+
+  test("activates the project when the selected environment starts deleting", () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "test-env",
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    useUIStore.setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+      collapsedProjects: ["project-1"],
+    });
+
+    renderHook(() => useEnvironmentLifecycleService());
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        lifecycleOperation: "deleting",
+        deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+      });
+    });
+
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    expect(useUIStore.getState().collapsedProjects).toEqual([]);
   });
 
   test("can disable rename events while keeping setup lifecycle listeners", async () => {

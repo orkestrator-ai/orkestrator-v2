@@ -154,8 +154,11 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentProjectionUpdate: getNativeAgentProjectionUpdateMock,
 }));
 
-const { useNativeAgentSession, resetNativeAgentSyncCapabilityForTests } =
-  await import("./useNativeAgentSession");
+const {
+  useNativeAgentSession,
+  resetNativeAgentSyncCapabilityForTests,
+  IDLE_PROJECTION_REFRESH_MS,
+} = await import("./useNativeAgentSession");
 
 afterAll(() => {
   resetNativeAgentSyncCapabilityForTests();
@@ -515,46 +518,102 @@ describe("useNativeAgentSession progressive view", () => {
     });
   });
 
-  test("an unchanged transcript does not turn a state-only projection into an empty transcript", async () => {
+  test("recovers history when a progressive token outlives its projection body", async () => {
     useNativeAgentProjectionStore.getState().setProgressiveCache(identity.logicalSessionKey, {
       identity,
       transcriptToken: "transcript-1",
+      transcriptHistoryEpoch: "epoch-1",
       transcriptAvailability: "current",
       transcriptRefreshing: false,
       stateAvailability: "unavailable",
     });
 
-    let releaseTranscript: (() => void) | undefined;
     transcriptUpdates = [
-      () =>
-        new Promise<NativeAgentTranscriptUpdate<TestMessage>>((resolve) => {
-          releaseTranscript = () =>
-            resolve({
-              viewVersion: 1,
-              status: "unchanged",
-              token: "transcript-1",
-              identity,
-            });
-        }),
+      () => {
+        const last = transcriptCalls.at(-1);
+        if (last?.knownToken && !last.forceSnapshot) {
+          return {
+            viewVersion: 1,
+            status: "unchanged",
+            token: last.knownToken,
+            identity,
+          };
+        }
+        return transcriptSnapshot("transcript-2", [message("m1"), message("m2")]);
+      },
+      () => transcriptSnapshot("transcript-2", [message("m1"), message("m2")]),
     ];
     stateUpdates = [() => stateSnapshot("state-1")];
 
     const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1", "m2"]),
+    );
+    expect(result.current.transcriptAvailability).toBe("current");
+    expect(transcriptCalls.some((call) => call.forceSnapshot === true || !call.knownToken)).toBe(
+      true,
+    );
+  });
+
+  test("a remount applies a transcript delta without waiting for the idle poll", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.transcriptAvailability).toBe("empty"));
+    first.unmount();
+
+    transcriptCalls = [];
+    transcriptUpdates = [
+      () => ({
+        viewVersion: 1,
+        status: "delta",
+        baseToken: "transcript-1",
+        token: "transcript-2",
+        identity,
+        delta: {
+          messageUpserts: [message("m1")],
+          liveMessageIds: ["m1"],
+          deletedMessageIds: [],
+          freshness: "current",
+          historyEpoch: "epoch-1",
+          historyComplete: true,
+        },
+      }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-2")];
+
+    const remount = renderSession();
+    expect(remount.result.current.transcriptAvailability).toBe("empty");
+    await waitFor(() =>
+      expect(remount.result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]),
+    );
+    expect(remount.result.current.transcriptAvailability).toBe("current");
+    expect(transcriptCalls[0]?.knownToken).toBe("transcript-1");
+    expect(transcriptCalls[0]?.forceSnapshot).toBeUndefined();
+  });
+
+  test("background polls do not oscillate transcriptRefreshing while unavailable", async () => {
+    transcriptUpdates = [() => ({ viewVersion: 1, status: "missing" })];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
-    expect(result.current.projection?.messages).toEqual([]);
+    expect(result.current.projection).toBeTruthy();
     expect(result.current.transcriptAvailability).toBe("unavailable");
+    expect(result.current.transcriptRefreshing).toBe(false);
 
-    await waitFor(() => expect(releaseTranscript).toBeDefined());
+    const seen: boolean[] = [];
     await act(async () => {
-      releaseTranscript?.();
+      await new Promise((resolve) => setTimeout(resolve, IDLE_PROJECTION_REFRESH_MS + 100));
     });
-
-    await waitFor(() => expect(result.current.transcriptRefreshing).toBe(false));
+    seen.push(result.current.transcriptRefreshing);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, IDLE_PROJECTION_REFRESH_MS + 100));
+    });
+    seen.push(result.current.transcriptRefreshing);
+    expect(seen).toEqual([false, false]);
     expect(result.current.transcriptAvailability).toBe("unavailable");
-    expect(
-      useNativeAgentProjectionStore.getState().progressiveCaches.get(identity.logicalSessionKey)
-        ?.transcriptAvailability,
-    ).toBe("unavailable");
   });
 
   test("clears transcriptRefreshing when the transcript read fails", async () => {

@@ -87,6 +87,21 @@ interface NativeAgentProjectionState {
   reset: () => void;
 }
 
+function dropProgressiveTranscriptToken(
+  caches: Map<string, NativeAgentProgressiveCacheEntry>,
+  sessionKey: string,
+): void {
+  const entry = caches.get(sessionKey);
+  if (!entry || (entry.transcriptToken === undefined && entry.transcriptHistoryEpoch === undefined)) {
+    return;
+  }
+  caches.set(sessionKey, {
+    ...entry,
+    transcriptToken: undefined,
+    transcriptHistoryEpoch: undefined,
+  });
+}
+
 /** Renderer cache only; the backend projection remains authoritative. */
 export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>((set) => ({
   projections: new Map(),
@@ -101,6 +116,7 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
       const next = new Map(state.projections);
       const nextBytes = new Map(state.projectionBytes);
       const nextSync = new Map(state.syncCaches);
+      const nextProgressive = new Map(state.progressiveCaches);
       if (projection) {
         const previous = state.projections.get(sessionKey);
         next.set(sessionKey, projection);
@@ -114,6 +130,7 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
         next.delete(sessionKey);
         nextBytes.delete(sessionKey);
         nextSync.delete(sessionKey);
+        dropProgressiveTranscriptToken(nextProgressive, sessionKey);
         // Nothing retains this session's history any more, so its eviction
         // counter has no reader left to compare against. Dropping it keeps the
         // map bounded by live sessions rather than by session-key churn.
@@ -124,6 +141,7 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
             projections: next,
             projectionBytes: nextBytes,
             syncCaches: nextSync,
+            progressiveCaches: nextProgressive,
             historyEvictions: nextEvictions,
           };
         }
@@ -144,8 +162,14 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
         next.delete(oldest);
         nextBytes.delete(oldest);
         nextSync.delete(oldest);
+        dropProgressiveTranscriptToken(nextProgressive, oldest);
       }
-      return { projections: next, projectionBytes: nextBytes, syncCaches: nextSync };
+      return {
+        projections: next,
+        projectionBytes: nextBytes,
+        syncCaches: nextSync,
+        progressiveCaches: nextProgressive,
+      };
     }),
   setProgressiveCache: (sessionKey, cache) =>
     set((state) => {

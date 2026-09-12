@@ -3830,7 +3830,10 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
 
     expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
-    expect(screen.getByTestId("session-refresh-shimmer-transcript")).toBeTruthy();
+    expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+    expect(
+      screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+    ).toBe("false");
 
     await act(async () => {
       settleRead!();

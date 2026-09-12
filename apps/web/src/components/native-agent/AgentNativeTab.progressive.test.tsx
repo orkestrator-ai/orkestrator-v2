@@ -431,6 +431,46 @@ describe("AgentNativeTab progressive controller", () => {
 
     renderTab();
     await waitFor(() => expect(screen.getByText("Refreshing Codex session…")).toBeTruthy());
-    expect(screen.getByTestId("session-refresh-shimmer-transcript")).toBeTruthy();
+    expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+    expect(
+      screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+    ).toBe("false");
+  });
+
+  test("keeps the visible shimmer on remount of a cached transcript until it is proved", async () => {
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(identity.logicalSessionKey, seedProjection([message("m1", "Cached")]));
+    seedTranscriptCache("current");
+    transcriptUpdates = [neverSettlingTranscript()];
+    stateUpdates = [neverSettlingState()];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Cached")).toBeTruthy());
+    expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+    expect(
+      screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+    ).toBe("true");
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+  });
+
+  test("does not announce refresh on every idle poll of an unavailable transcript", async () => {
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(identity.logicalSessionKey, seedProjection([]));
+    seedTranscriptCache("unavailable");
+    transcriptUpdates = [
+      async () => ({ viewVersion: 1, status: "missing" }) satisfies NativeAgentTranscriptUpdate<TestMessage>,
+    ];
+    stateUpdates = [async () => stateSnapshot("state-1")];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+    expect(screen.queryByRole("status") === null).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 });

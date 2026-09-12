@@ -1,26 +1,52 @@
 # Project Coordinator
 
-Status: Living — product coordinator guide.
+Status: Living — current product and architecture.
 
 Select a project to open **Coordinator**, the default project page. Coordinator
-can read and discuss the configured local checkout, search the code, and use
+reads and discusses the configured local checkout, searches the code, and uses
 Orkestrator controls to delegate implementation to isolated worker environments.
 It cannot edit the project checkout itself.
 
-The repository toolbar shows the canonical path, branch, upstream freshness,
-ahead/behind state, local changes, and any retained Git error. **Refresh** fetches
-remote state. **Sync** performs only a fast-forward pull. Branch switching and
-sync are disabled for dirty/conflicted repositories, an ongoing merge/rebase,
-an occupied worktree branch, or an active coordinator turn. These buttons are
-explicit user actions; the coordinator agent cannot invoke them.
+What is still missing — mainly provider parity — lives in
+[`docs/todo/coordinator-to-implement.md`](../todo/coordinator-to-implement.md).
+Engine internals live in [`agent-engines.md`](agent-engines.md). Control MCP
+operator detail lives in [`control-mcp.md`](control-mcp.md). Qualification
+invariants for agents live in `AGENTS.md` under **Coordinator qualification**.
 
-Conversations and workflow links are durable. Leaving the page, switching to an
-environment, reloading the renderer, or restarting the backend does not discard
-them. Closing a conversation revokes its orchestration credential and closes its
-mailbox without deleting provider history. If all conversations are closed, use
-**New conversation**; Orkestrator does not silently recreate one.
-Removing the project stops its Coordinator and deletes the isolated Coordinator
-runtime, including retained Codex rollouts and attachments.
+## Ownership
+
+A coordinator is not a local environment whose `worktreePath` happens to point
+at the project root. Existing environment delete, merge, setup, and cleanup
+paths assume they own a disposable workspace. Routing the checkout through them
+would risk modifying or deleting the user's repository.
+
+The durable owner is `{ kind: "coordinator", projectId, coordinatorId }`.
+Provider processes, projections, queues, transcripts, attachments, and mail
+use a distinct `coordinator:` runtime namespace
+(`coordinator:<id>:<conversation>`). Each conversation gets its own bridge so
+its scoped MCP and mail credential cannot be shared with a sibling tab.
+
+One workspace is persisted per project: conversations, selected tab, immutable
+`coordinator-read-only` execution policy, repository-context revision, lifecycle
+state, and sanitized last startup error. Workflow associations are stored
+separately so their lifetime is independent of an open chat tab.
+
+The working directory is the canonical `Project.localPath`. A project without a
+valid local path shows a checkout setup state; it does not silently use an
+environment worktree, a container, or a temporary clone. Bridge state,
+transcripts, attachments, and generated configuration live under application
+data. Opening Coordinator does not run project setup scripts, install
+dependencies, copy environment files, or load repository hooks.
+
+Unmounting the page or changing projects detaches the view only. Backend-owned
+sessions, pending mail, and workflows continue. Closing a conversation settles
+live approvals, revokes its credential, and tombstones its mailbox without
+deleting provider history or the checkout. Orkestrator does not silently
+recreate a tab the user just closed. Removing the project stops Coordinator and
+deletes the isolated runtime, never the user's local repository.
+
+At most 16 conversations may be open. Unassigned conversations count toward
+that limit.
 
 ## Choosing an agent
 
@@ -31,27 +57,29 @@ one-way: the transcript and rollout belong to that platform, so a different one
 means a new conversation. Re-assignment is allowed only while the first send has
 not yet reached a provider, so a failed start does not strand the conversation.
 
-A valid project local path is required. Control MCP may be disabled globally;
-chat remains read-only and usable, while the page shows that delegation
-controls are unavailable.
+There is no silent fallback and no silent provider substitution. Control MCP may
+be disabled globally; chat remains read-only and usable, while the page shows
+that delegation controls are unavailable.
 
 ## Provider qualification
 
 Coordinator runs against the project's real checkout, so how strongly a
-platform holds the read-only boundary is a property worth naming rather than
-flattening to available/unavailable. Each platform is offered at one of three
-tiers, shown in the picker when it carries a caveat:
+platform holds the read-only boundary is named rather than flattened to
+available/unavailable. The single table is
+`apps/backend/src/core/coordinator-providers.ts`. Every gate — workspace
+service, runtime resolver, bridge launcher, trusted session input — consults
+it.
 
 | Tier | Meaning | Platforms |
 | --- | --- | --- |
 | `enforced` | The provider or the OS blocks the mutation whatever the agent attempts | Codex; Claude where its command sandbox is available; Pi |
-| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor |
+| `provider-configured` | The SDK is told to deny, and exposes no way to verify it | OpenCode, Cursor; Claude when the host has no command sandbox |
 | `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
 
 **Settings → Agent platforms → Coordinator safety level** chooses the weakest
-tier this installation will offer. It defaults to `provider-configured`, which
-is also the recommended level: `enforced` and `provider-configured` platforms
-are offered, and `advisory` stays opt-in.
+tier this installation will offer. It defaults to `provider-configured`:
+`enforced` and `provider-configured` platforms are offered, and `advisory`
+stays opt-in.
 
 What each enforced platform actually does:
 
@@ -64,9 +92,8 @@ What each enforced platform actually does:
   `settingSources: []`, a private `CLAUDE_CONFIG_DIR` holding only the
   credential, and a bridge-owned `PreToolUse` hook. The hook is the real
   boundary for shell: it allows a fixed list of reading commands and refuses
-  pipes, redirection, substitution and chaining, because a composed command is
-  not the one that was checked. Where the host has no command sandbox — Windows
-  — Claude drops to `provider-configured` automatically.
+  pipes, redirection, substitution and chaining. On Windows, where there is no
+  command sandbox, Claude drops to `provider-configured` automatically.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -75,6 +102,11 @@ OpenCode denies through its own permission rules and runs its `plan` agent, but
 always loads the checkout's project configuration, including any MCP servers it
 declares. Cursor applies the sandbox and a tool ban but exposes no approval
 callback, and is refused outright if its sandbox cannot be enabled.
+
+The coordinator policy names operations, not one provider's tool strings:
+`capabilityPolicy.deny` is `file.write`, `file.patch`, `shell.mutate`, and
+`network`. Each bridge translates that list. `toolPolicy` stays Codex-shaped
+and is also the user-override surface, so it cannot carry the translation.
 
 Every coordinator bridge is launched with
 `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`. That is process
@@ -92,37 +124,106 @@ so each coordinator bridge is launched with
 readable root; Codex additionally grants it `read` in the conversation's
 permission profile. Like the execution policy, this is process configuration —
 a request body cannot name a root of its own — and it is scoped to the one
-conversation, so a bridge cannot read another's attachments. Deleting the
-project removes them with the rest of the coordinator runtime.
+conversation. Deleting the project removes them with the rest of the coordinator
+runtime.
+
+## Repository toolbar
+
+The toolbar shows the canonical path, branch, upstream freshness, ahead/behind
+state, local changes, and any retained Git error. **Refresh** fetches remote
+state. **Sync** performs only a fast-forward pull. Branch switching and sync are
+disabled for dirty or conflicted repositories, an ongoing merge or rebase, an
+occupied worktree branch, or an active coordinator turn.
+
+These buttons are explicit user actions. The coordinator agent cannot invoke
+them. Mutations are serialized by canonical repository root, across windows and
+tabs, and hold a lease that also prevents new coordinator turns and mail
+injections from starting. After a successful or externally detected branch or
+HEAD change, the repository-context revision increments and is supplied before
+the next turn so the agent does not assume its old analysis still describes the
+checkout.
+
+A chip in the same toolbar shows **Waiting on N workers** when the selected
+conversation has open delegations. It is a projection from the snapshot, not
+from anything this page observed, so it is correct after a reload.
+
+## Control MCP
+
+Coordinator uses the same Control MCP HTTP endpoint as an ordinary external
+client, with a separate backend-issued credential bound to project, workspace,
+conversation, mailbox incarnation, and allowed capabilities. The credential is
+written only into the trusted bridge runtime; it is not returned to the
+renderer or stored in a transcript. Closing the conversation revokes it.
+Restart reaps the old bridge and issues a new credential on reattachment.
+
+Role is authenticated server-side. Supplying `role: coordinator`, a sender tab
+id, or text in a message cannot gain coordinator privileges. Discovery is
+limited to the bound project. Environment and workflow mutations must target a
+disposable worker in that project. The credential cannot dispatch arbitrary
+backend commands, change application settings, merge or delete the root
+checkout, or mint credentials.
+
+Delegation tools return as soon as the resource is reserved and started. Their
+JSON result includes `delivery: "async"`, a wake sentence, and
+`nextStep: "Finish your turn now. Do not poll."` The same contract is the
+exported `COORDINATOR_ASYNC_CONTRACT` used in the coordinator context prompt
+and the mailbox poll guard.
+
+Repeated unchanged reads of `read_messages` or `get_message_status` return the
+authorized page with `repeatedRead: true` and the contract attached, after
+three identical answers inside 120 seconds. The guard never withholds data.
+`list_environments` is not covered.
 
 ## Worker delegation
 
-Delegation is a round trip, not one outbound call. `launch_environment` goes out
-over MCP, and the worker's result comes back as agent mail — so a platform needs
-both an MCP client and a native mailbox that can pull, ack, and be injected
-into.
+Delegation is a round trip. `launch_environment` goes out over MCP, and the
+worker's result comes back as agent mail — so a platform needs both an MCP
+client and a native mailbox that can pull, ack, and be injected into.
+`delegation` on the qualification is derived from those two halves, not
+declared per platform.
 
-**Delegation is available on Claude, Codex, OpenCode, and native Pi.** Pi has a
-bridge-owned MCP client and `{canPull,canSend,canInject}=true`. Cursor and Grok
-already inject the `orkestrator` HTTP MCP server from
+**Delegation is available on Claude, Codex, OpenCode, and native Pi.** Cursor
+and Grok already inject the `orkestrator` HTTP MCP server from
 `ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`, but
-`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false until a live tool-call probe
-and an explicit flag flip. On those two platforms the coordinator prompt says
-worker controls are unavailable rather than offering a tool whose answer never
-arrives; inspection and planning work normally.
+`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false. On those two platforms the
+coordinator prompt says worker controls are unavailable rather than offering a
+tool whose answer never arrives; inspection and planning work normally. The
+caveat is shown in the picker.
 
-A platform's caveat is carried on its qualification `reason` and shown in the
-picker, so the limitation is readable when the platform is chosen rather than
-discovered when a worker never reports back.
-
-Worker delegation records an explicit base branch and commit. Uncommitted root
+Worker creation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker. A container worker
 can start only from a commit published to a remote branch; unpublished commits
-remain available to local workers. Coordinator mail, worker replies, and workflow
-completion notices are durable and can wake an idle participant, but stored,
-injected, acknowledged, and completed remain distinct states. Pause or mute
-messaging, or set a mailbox's injection policy explicitly to **Off**, to hold
-automatic delivery.
+remain available to local workers.
+
+A coordinator turn ends when it has delegated. It does not wait for the worker,
+so the composer stays open. A prompt typed during a turn is queued and runs
+before any worker mail. While the turn is running the send button reads **Send
+after this turn**.
+
+Each launch, job, or message to a worker opens one **delegation** on the
+workflow association (`requestedAt`, `workerTabId`, `state`, `wakeKind`,
+`wokenAt`). Each delegation wakes the conversation exactly once, when that
+worker's turn ends (`working → idle`). Environment error, stop, or deletion
+closes it as `failed` or `stopped` on the periodic sweep. A worker blocked on
+an approval or a question has not finished — that needs a person — so
+`working → waiting` does not close the delegation.
+
+Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
+and readable, held with reason `delegation-running`, and released together with
+the final report. The mail drain claims every ready message for one mailbox,
+renders them into a single carrier in send order (bounded at 10 messages and
+128 KiB), and settles them together. A worker that finishes without reporting
+still wakes its coordinator, with a system notice saying so. A second live
+request to the same worker tab is rejected: one turn-end cannot identify which
+queued request it completed.
+
+Coordinator sessions participate in the same activity reconciler as environment
+sessions, so `idle` is an observed edge. That edge drains mail and the prompt
+queue immediately. User prompts queued during a turn still run first.
+
+Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
+hold automatic delivery. Stored, injected, acknowledged, and completed remain
+distinct states. An injection receipt is not proof that the task finished.
 
 ## Complete application actions
 
@@ -168,7 +269,7 @@ Read the result before reporting success:
   requests cancellation. Cancellation may still be in progress or unconfirmed;
   the result says which. An already active review is never cancelled because
   reattachment failed. Completed cancellation records are retained as retry and
-  recovery evidence, rather than deleted as the renderer's older handler did.
+  recovery evidence.
 
 Retry launches with the same request ID and payload. The durable coordinator
 receipt and reserved workflow identity survive backend restarts, including the
@@ -182,11 +283,6 @@ CAS conflict. They preserve concurrent pane structure, moves, and tabs, enforce
 the tab limit on each attempt, and announce the existing `pane-layout` resource.
 Workflow writes announce `multi-review`. Both initial restoration and live
 authoritative reconciliation load referenced workflows before installing tabs.
-Initial restoration handles a pane snapshot newer than the workflow-list
-snapshot; default terminal seeding checks current store state so a stale render
-cannot take focus from a newly published tab.
-Older pane schema versions require the normal renderer migration before these
-controls modify them; container generations are never silently replaced.
 
 ### Exposed-action audit
 
@@ -206,31 +302,22 @@ Terminal/tmux launch already has a backend `launch_terminal_job` command with
 stable tabs, process ownership and bootstrap journaling, but it is not currently
 exposed by coordinator MCP. Browser launch/navigation, arbitrary pane editing,
 custom-fix model switches, reviewer subtabs, looped review and feature-plan
-launch are likewise not exposed coordinator controls. New APIs for those buttons
-are deferred to their own authority and idempotency designs; this change does
-not add speculative surfaces. Repository checkout mutation controls remain
-unavailable to coordinators.
+launch are likewise not exposed coordinator controls. Repository checkout
+mutation controls remain unavailable to coordinators.
 
-## Delegation is asynchronous
+## Tests that exist today
 
-A coordinator turn ends when it has delegated. It does not wait for the worker,
-so the composer stays open and the next thing you type runs as the next turn —
-before any worker mail, which is held behind a queued prompt on purpose.
+The async and read-only contracts are asserted at the layer that owns each
+guarantee, not by one end-to-end scenario replayed per platform:
 
-Each launch, job, or message to a worker opens one **delegation**, and each
-delegation wakes the conversation exactly once, when that worker's turn ends.
-Nothing the worker does in between reaches the coordinator: progress mail is
-stored and readable, but held, and released together with the final report so
-one delegation produces one turn rather than one per message. A worker that
-finishes without reporting still wakes its coordinator, with a notice saying so.
-A worker blocked on an approval or a question has not finished — that needs a
-person. The toolbar keeps showing that the selected conversation is waiting on
-the worker without inferring tab-level attention from an environment-wide
-status.
+- coordinator presence and the turn-end edge:
+  `native-agent-service-reconciliation.test.ts`
+- one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- single-turn mail batching: `agent-mail-service.test.ts`
+- tool contract and poll guard: `control-mcp-server.test.ts`
+- no-waiting-tools boundary and tier table: `coordinator-conformance.test.ts`
+- per-bridge activity and policy tests already cover whether a bridge reports
+  `idle` at turn end and how it translates `capabilityPolicy`
 
-Because a coordinator is woken rather than waiting, it has no reason to poll.
-Repeatedly reading an unchanged mailbox returns the page with the delegation
-contract attached, and the platforms hold the same line at the tool
-level: Claude's read-only shell has no `sleep`, `watch` or `timeout`, and its
-scheduling and monitoring tools are refused with an explanation rather than a
-bare denial.
+A live per-provider tree-hash suite is not in the tree. That gap is part of
+[`docs/todo/coordinator-to-implement.md`](../todo/coordinator-to-implement.md).

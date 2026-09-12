@@ -27,6 +27,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 interface TestMessage {
   id: string;
   text: string;
+  parts?: Array<{ type: string; content: string }>;
 }
 
 const realBackendSnapshot = { ...realBackend };
@@ -165,8 +166,19 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-function message(id: string, text = `body-${id}`): TestMessage {
-  return { id, text };
+function message(
+  id: string,
+  text = `body-${id}`,
+  parts?: TestMessage["parts"],
+): TestMessage {
+  return parts ? { id, text, parts } : { id, text };
+}
+
+function parts(count: number): Array<{ type: string; content: string }> {
+  return Array.from({ length: count }, (_, index) => ({
+    type: "text",
+    content: `part-${index}`,
+  }));
 }
 
 function transcriptView(
@@ -907,6 +919,89 @@ describe("useNativeAgentSession progressive view", () => {
     // cursor for them, so the control stays: one click mints a cursor through
     // the joined snapshot and fetches what is older than m1.
     expect(result.current.projection?.messageWindow?.canLoadEarlier).toBe(true);
+  });
+
+  test("keeps local parts when a later snapshot omits leading parts of the same message", async () => {
+    const full = message("asst", "turn", parts(5));
+    const trimmed = message("asst", "turn", parts(5).slice(2));
+    transcriptUpdates = [
+      () => transcriptSnapshot("transcript-1", [message("old"), message("user"), full]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "old",
+        "user",
+        "asst",
+      ]),
+    );
+    expect((result.current.projection?.messages[2] as TestMessage).parts).toHaveLength(5);
+
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [trimmed], {
+          historyComplete: true,
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedParts: 2,
+            canLoadEarlier: true,
+          },
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+      "old",
+      "user",
+      "asst",
+    ]);
+    expect((result.current.projection?.messages[2] as TestMessage).parts).toHaveLength(5);
+    expect(result.current.projection?.messageWindow?.canLoadEarlier).toBeFalsy();
+  });
+
+  test("does not stitch older messages in front of a part-trimmed live head it does not already hold", async () => {
+    const trimmed = message("asst", "turn", parts(2));
+    transcriptUpdates = [
+      () => transcriptSnapshot("transcript-1", [message("old"), message("user"), trimmed]),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.messages.map(({ id }) => id)).toEqual([
+        "old",
+        "user",
+        "asst",
+      ]),
+    );
+
+    transcriptUpdates = [
+      () =>
+        transcriptSnapshot("transcript-2", [trimmed], {
+          historyComplete: true,
+          messageWindow: {
+            limit: 1,
+            truncated: true,
+            truncationReason: "bytes",
+            omittedParts: 3,
+            canLoadEarlier: false,
+          },
+        }),
+    ];
+    stateUpdates = [];
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["asst"]);
+    expect((result.current.projection?.messages[0] as TestMessage).parts).toHaveLength(2);
   });
 
   test("drops retained history when the history epoch rotates", async () => {

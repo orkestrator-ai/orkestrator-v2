@@ -782,22 +782,34 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
     // A single valid message may exceed the soft live/page target. The hard
     // transcript limit was already enforced while normalizing history.
+    const omittedParts = boundedTranscript.overflowed
+      ? 0
+      : (boundedTranscript.messageWindow.omittedParts ?? 0);
     const messagesInWindow = boundedTranscript.overflowed
       ? requested.slice(-1)
       : boundedTranscript.messages;
     const omitted = messages.length - messagesInWindow.length;
+    const truncatedByCount = messages.length > requested.length;
+    const droppedByBytes = messagesInWindow.length < requested.length || omittedParts > 0;
+    const truncated = omitted > 0 || omittedParts > 0;
     return {
       messages: messagesInWindow,
       window: {
         limit,
-        truncated: omitted > 0,
-        ...(omitted > 0
+        truncated,
+        ...(truncated
           ? {
+              /*
+               * Only a count slice responds to a larger `limit`. Part-trimming
+               * and whole-message byte drops return the same set when the
+               * caller asks for more, so the load-earlier control must stay
+               * off — it cannot restore omitted leading parts of the live head.
+               */
+              canLoadEarlier: truncatedByCount && !droppedByBytes,
               truncationReason:
-                messages.length > limit && requested.length === messagesInWindow.length
-                  ? ("count" as const)
-                  : ("bytes" as const),
-              omittedMessages: omitted,
+                truncatedByCount && !droppedByBytes ? ("count" as const) : ("bytes" as const),
+              ...(omitted > 0 ? { omittedMessages: omitted } : {}),
+              ...(omittedParts > 0 ? { omittedParts } : {}),
             }
           : {}),
       },
@@ -1358,8 +1370,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...bounded.window,
         // The provider may already have cut history before this window was
         // bounded. Preserve that gap so the tab exposes transcript recovery.
+        // Part-only byte cuts are not pageable: a larger limit returns the
+        // same live head with the same omitted leading parts.
         truncated: !complete || bounded.window.truncated,
-        canLoadEarlier: !complete || bounded.window.truncated,
+        canLoadEarlier: !complete || bounded.window.canLoadEarlier === true,
       },
       ...(snapshot.title ? { title: snapshot.title } : {}),
       ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),

@@ -80,6 +80,7 @@ const ensureNativeAgentSessionMock = mock(async () => ({
   environmentId: "env-1",
   agent: "codex",
 }));
+const adoptNativeAgentSessionMock = mock(async () => ({}));
 const stopNativeAgentSessionMock = mock(
   async (): Promise<NativeAgentSessionProjection<TestMessage> | null> => null,
 );
@@ -96,7 +97,7 @@ mock.module("@/lib/backend", () => ({
   getNativeAgentProjectionUpdate: getNativeAgentProjectionUpdateMock,
   getNativeAgentMessagePage: getNativeAgentMessagePageMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
-  adoptNativeAgentSession: async () => ({}),
+  adoptNativeAgentSession: adoptNativeAgentSessionMock,
   stopNativeAgentSession: stopNativeAgentSessionMock,
   resumeNativeAgentSession: resumeNativeAgentSessionMock,
   getNativeAgentProjection: getNativeAgentProjectionMock,
@@ -198,6 +199,8 @@ beforeEach(() => {
   getNativeAgentProjectionUpdateMock.mockClear();
   getNativeAgentMessagePageMock.mockClear();
   ensureNativeAgentSessionMock.mockClear();
+  adoptNativeAgentSessionMock.mockClear();
+  adoptNativeAgentSessionMock.mockImplementation(async () => ({}));
   stopNativeAgentSessionMock.mockClear();
   stopNativeAgentSessionMock.mockImplementation(async () => null);
   resumeNativeAgentSessionMock.mockClear();
@@ -908,5 +911,34 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
     expect(
       useNativeAgentProjectionStore.getState().syncCaches.get(SESSION_KEY)?.historyComplete,
     ).toBe(true);
+  });
+
+  test("clears transcriptRefreshing when an establishing read is skipped", async () => {
+    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection([message("m1")]));
+    let releaseAdopt: (() => void) | undefined;
+    adoptNativeAgentSessionMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseAdopt = () => resolve({});
+        }),
+    );
+    projectionUpdates = [() => ({ syncVersion: 1, status: "missing" })];
+
+    const { result } = renderHook(() =>
+      useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: true,
+        enabled: true,
+        initialProviderSessionId: "session-1",
+      }),
+    );
+
+    await waitFor(() => expect(updateCalls.length).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.transcriptRefreshing).toBe(false));
+    expect(result.current.projection?.messages.map(({ id }) => id)).toEqual(["m1"]);
+    expect(result.current.transcriptAvailability).toBe("cached");
+    releaseAdopt?.();
   });
 });

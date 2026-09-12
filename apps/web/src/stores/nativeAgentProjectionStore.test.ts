@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentSessionProjection,
+  NativeAgentViewIdentity,
+} from "@orkestrator/protocol/native-agent";
 import {
   evictNativeAgentHistoryCaches,
   useNativeAgentProjectionStore,
@@ -116,6 +119,50 @@ describe("native agent projection history cache", () => {
     expect(cached?.historyEpoch).toBeUndefined();
     expect(cached?.historyBootstrap).toBe(true);
     expect(cached?.historyMessages).toEqual([{ id: "history-message" }]);
+  });
+
+  test("drops a progressive transcript token when its projection is evicted", () => {
+    const store = useNativeAgentProjectionStore.getState();
+    const identity: NativeAgentViewIdentity = {
+      backendInstanceId: "backend-1",
+      environmentId: "env-1",
+      platform: "codex",
+      logicalSessionKey: "session-old",
+      providerSessionId: "session-old-session",
+      sourceGeneration: "generation-1",
+    };
+    store.setProgressiveCache("session-old", {
+      identity,
+      transcriptToken: "tok-old",
+      transcriptHistoryEpoch: "epoch-1",
+      transcriptAvailability: "current",
+      transcriptRefreshing: false,
+      stateAvailability: "unavailable",
+    });
+    store.setProjection("session-old", projection("old", [{ id: "m" }]));
+    for (let index = 0; index < 128; index += 1) {
+      store.setProjection(`session-${index}`, projection(`s${index}`, [{ id: "m" }]));
+    }
+
+    const next = useNativeAgentProjectionStore.getState();
+    expect(next.projections.has("session-old")).toBe(false);
+    expect(next.progressiveCaches.get("session-old")?.transcriptToken).toBeUndefined();
+    expect(next.progressiveCaches.get("session-old")?.transcriptHistoryEpoch).toBeUndefined();
+  });
+
+  test("drops a progressive transcript token when its projection is cleared", () => {
+    const store = useNativeAgentProjectionStore.getState();
+    store.setProgressiveCache("session-a", {
+      transcriptToken: "tok-a",
+      transcriptHistoryEpoch: "epoch-1",
+      transcriptAvailability: "current",
+      transcriptRefreshing: false,
+      stateAvailability: "unavailable",
+    });
+    store.setProjection("session-a", projection("a", [{ id: "m" }]));
+    store.setProjection("session-a", null);
+
+    expect(useNativeAgentProjectionStore.getState().progressiveCaches.get("session-a")?.transcriptToken).toBeUndefined();
   });
 
   test("releases the eviction counter once nothing is left to compare against", () => {

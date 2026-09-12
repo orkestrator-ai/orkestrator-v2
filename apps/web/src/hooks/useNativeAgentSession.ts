@@ -15,6 +15,7 @@ import type {
   NativeAgentViewIdentity,
   NativeAgentDiscoveryView,
   NativeAgentSessionStateView,
+  NativeAgentTranscriptUpdate,
   NativeAgentTranscriptView,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -68,7 +69,7 @@ const DEFAULT_MESSAGE_WINDOW = 512;
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
 const ACTIVE_PROJECTION_REFRESH_MS = 500;
-const IDLE_PROJECTION_REFRESH_MS = 1_500;
+export const IDLE_PROJECTION_REFRESH_MS = 1_500;
 const CLIENT_HISTORY_MAX_MESSAGES = 4_096;
 const CLIENT_HISTORY_MAX_BYTES = 8 * 1024 * 1024;
 const CLIENT_HISTORY_TOTAL_MAX_BYTES = 32 * 1024 * 1024;
@@ -224,6 +225,46 @@ function sameProgressiveIdentity(
     left.providerSessionId === right.providerSessionId &&
     left.sourceGeneration === right.sourceGeneration,
   );
+}
+
+/**
+ * A transcript token is only meaningful when this tab still holds the body it
+ * describes. A state-only placeholder with `messages: []` is not that body
+ * unless the transcript surface itself already proved emptiness.
+ */
+function hasUsableTranscriptBody<TMessage>(
+  projection: NativeAgentSessionProjection<TMessage> | null | undefined,
+  availability: NativeAgentProgressiveCacheEntry["transcriptAvailability"],
+): boolean {
+  if (!projection) return false;
+  if (availability === "empty") return true;
+  return projection.messages.length > 0;
+}
+
+/**
+ * Rebuild the live transcript view a remount needs to apply deltas.
+ *
+ * The shared store keeps the projection and the token separately. Without this,
+ * a remount restores `knownToken` while `lastTranscriptViewRef` stays null and
+ * the first delta is discarded.
+ */
+function restoreTranscriptViewFromProjection<TMessage>(
+  identity: NativeAgentViewIdentity | undefined,
+  projection: NativeAgentSessionProjection<TMessage> | null | undefined,
+  historyEpoch: string | undefined,
+  availability: NativeAgentProgressiveCacheEntry["transcriptAvailability"],
+): NativeAgentTranscriptView<TMessage> | null {
+  if (!identity || !projection || !historyEpoch) return null;
+  if (!hasUsableTranscriptBody(projection, availability)) return null;
+  return {
+    identity,
+    freshness: availability === "empty" ? "empty" : "current",
+    messages: projection.messages,
+    ...(projection.messageWindow ? { messageWindow: projection.messageWindow } : {}),
+    ...(projection.title ? { title: projection.title } : {}),
+    historyEpoch,
+    historyComplete: projection.messageWindow?.canLoadEarlier !== true,
+  };
 }
 
 function invalidateNativeAgentSyncCapability(): void {
@@ -404,11 +445,24 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [transcriptAvailability, setTranscriptAvailability] = useState<
     NativeAgentProgressiveCacheEntry["transcriptAvailability"]
   >(
+    // Emptiness has to come from the transcript surface, not from an empty
+    // message array. A session-state snapshot installs a projection with
+    // `messages: []` before its paired transcript read resolves, so counting
+    // messages would call a state-only placeholder an authoritative empty
+    // transcript and suppress the shimmer for a session that still has history.
     matchingSharedProjection
       ? matchingProgressiveCache?.transcriptAvailability === "empty"
         ? "empty"
         : "cached"
       : "unavailable",
+  );
+  const transcriptAvailabilityRef = useRef(transcriptAvailability);
+  const markTranscriptAvailability = useCallback(
+    (availability: NativeAgentProgressiveCacheEntry["transcriptAvailability"]) => {
+      transcriptAvailabilityRef.current = availability;
+      setTranscriptAvailability(availability);
+    },
+    [],
   );
   const [transcriptRefreshing, setTranscriptRefreshing] = useState(enabled);
   const [transcriptError, setTranscriptError] = useState<string | null>(
@@ -467,17 +521,27 @@ export function useNativeAgentSession<TMessage = unknown>({
     matchingSharedProjection ?? null,
   );
   const syncTokenRef = useRef<string | undefined>(sharedSyncCache?.token);
-  const progressiveTranscriptTokenRef = useRef(matchingProgressiveCache?.transcriptToken);
-  const lastTranscriptViewRef = useRef<NativeAgentTranscriptView<TMessage> | null>(null);
+  const matchingTranscriptView = restoreTranscriptViewFromProjection(
+    matchingProgressiveCache?.identity,
+    matchingSharedProjection,
+    matchingProgressiveCache?.transcriptHistoryEpoch,
+    matchingProgressiveCache?.transcriptAvailability ?? "unavailable",
+  );
+  const progressiveTranscriptTokenRef = useRef(
+    matchingTranscriptView ? matchingProgressiveCache?.transcriptToken : undefined,
+  );
+  const lastTranscriptViewRef = useRef<NativeAgentTranscriptView<TMessage> | null>(
+    matchingTranscriptView,
+  );
   /**
    * The history epoch of the last transcript view this session installed,
    * including the one a previous mount installed.
    *
-   * `lastTranscriptViewRef` is rebuilt empty on every mount while the
-   * projection it describes is seeded from the shared store, so reading the
-   * epoch only from that ref left the first snapshot after a remount unable to
-   * tell a rotation from an ordinary poll — the one case where retaining aged
-   * out messages resurrects a history the provider has already rewritten.
+   * `lastTranscriptViewRef` is restored from the cached projection on remount
+   * when a matching transcript body is present, so a remounted tab can apply
+   * deltas instead of discarding them. The epoch is still cached separately
+   * because a rotation must be compared against the messages the store is
+   * holding, not only the view this mount has rebuilt.
    */
   const progressiveHistoryEpochRef = useRef<string | undefined>(
     matchingProgressiveCache?.transcriptHistoryEpoch,
@@ -1110,7 +1174,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveHistoryEvictionRef.current = evictionGeneration;
       progressiveIdentityRef.current = value.identity;
       const availability = value.freshness === "empty" ? "empty" : "current";
-      setTranscriptAvailability(availability);
+      markTranscriptAvailability(availability);
       setTranscriptRefreshing(false);
       setTranscriptError(null);
       applyProjection(next, {
@@ -1149,6 +1213,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identityBelongsToView,
       platform,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       sessionKey,
       updateProgressiveCache,
     ],
@@ -1161,7 +1226,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const knownIdentity = progressiveIdentityRef.current;
       if (knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId) {
         applyProjection(null);
-        setTranscriptAvailability("unavailable");
+        markTranscriptAvailability("unavailable");
         progressiveTranscriptTokenRef.current = undefined;
         lastTranscriptViewRef.current = null;
         progressiveHistoryEpochRef.current = undefined;
@@ -1218,6 +1283,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         stateToken: token,
         stateAvailability: "current",
         stateError: undefined,
+        ...(knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId
+          ? {
+              transcriptToken: undefined,
+              transcriptHistoryEpoch: undefined,
+              transcriptAvailability: "unavailable" as const,
+            }
+          : {}),
       });
       return next;
     },
@@ -1226,6 +1298,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       environmentId,
       identityBelongsToView,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       platform,
       updateProgressiveCache,
     ],
@@ -1378,14 +1451,19 @@ export function useNativeAgentSession<TMessage = unknown>({
       const sequence = ++refreshSequenceRef.current;
       const operationEpoch = projectionOperationEpochRef.current;
       setIsRefreshing(true);
+      // Background polls confirm a view this tab already holds. Raising the
+      // skeleton on every 500–1500 ms tick would flicker the indicator and the
+      // live region even when the displayed transcript cannot change.
+      if (!background) {
+        setTranscriptRefreshing(true);
+      }
       try {
         if (await nativeAgentProgressiveSupported()) {
-          setTranscriptRefreshing(true);
           setTranscriptError(null);
           const retainedStateAvailability = beginSessionStateRefresh();
           setSessionStateError(null);
           updateProgressiveCache({
-            transcriptRefreshing: true,
+            ...(background ? {} : { transcriptRefreshing: true }),
             transcriptError: undefined,
             stateAvailability: retainedStateAvailability,
             stateError: undefined,
@@ -1396,67 +1474,129 @@ export function useNativeAgentSession<TMessage = unknown>({
             operationEpoch === projectionOperationEpochRef.current;
           let transcriptMissing = false;
           let stateMissing = false;
-          const transcriptRead = getNativeAgentTranscriptUpdate<TMessage>({
-            ...identity,
-            viewVersion: 1,
-            liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
-            ...(progressiveTranscriptTokenRef.current
-              ? { knownToken: progressiveTranscriptTokenRef.current }
-              : {}),
-            ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          })
-            .then((update) => {
-              if (!stillCurrent()) return;
-              if (update.status === "snapshot") {
-                applyProgressiveTranscript(
-                  update.value as NativeAgentTranscriptView<TMessage>,
-                  update.token,
-                );
-              } else if (update.status === "delta") {
-                const current = lastTranscriptViewRef.current;
-                if (
-                  current &&
-                  progressiveTranscriptTokenRef.current === update.baseToken &&
-                  sameProgressiveIdentity(current.identity, update.identity)
-                ) {
-                  const merged = applyNativeAgentTranscriptDelta(current, update.delta);
-                  if (merged) {
-                    applyProgressiveTranscript(
-                      merged,
-                      update.token,
-                      update.delta.deletedMessageIds,
-                    );
-                    return;
-                  }
+          const requestTranscript = (forceSnapshot: boolean) =>
+            getNativeAgentTranscriptUpdate<TMessage>({
+              ...identity,
+              viewVersion: 1,
+              liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+              ...(forceSnapshot
+                ? { forceSnapshot: true }
+                : progressiveTranscriptTokenRef.current
+                  ? { knownToken: progressiveTranscriptTokenRef.current }
+                  : {}),
+              ...(options?.manual === true ? { forceSnapshot: true } : {}),
+            });
+          const applyTranscriptUpdate = (
+            update: NativeAgentTranscriptUpdate<TMessage>,
+            requestedWithToken: boolean,
+          ): "applied" | "retry-snapshot" | "missing" | "failed" => {
+            if (update.status === "snapshot") {
+              applyProgressiveTranscript(
+                update.value as NativeAgentTranscriptView<TMessage>,
+                update.token,
+              );
+              return "applied";
+            }
+            if (update.status === "delta") {
+              const current = lastTranscriptViewRef.current;
+              if (
+                current &&
+                progressiveTranscriptTokenRef.current === update.baseToken &&
+                sameProgressiveIdentity(current.identity, update.identity)
+              ) {
+                const merged = applyNativeAgentTranscriptDelta(current, update.delta);
+                if (merged) {
+                  applyProgressiveTranscript(
+                    merged,
+                    update.token,
+                    update.delta.deletedMessageIds,
+                  );
+                  return "applied";
                 }
+              }
+              progressiveTranscriptTokenRef.current = undefined;
+              lastTranscriptViewRef.current = null;
+              markTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+              return "retry-snapshot";
+            }
+            if (update.status === "unchanged") {
+              const previousAvailability = transcriptAvailabilityRef.current;
+              const hasLocalView = lastTranscriptViewRef.current != null;
+              const hasBody = hasUsableTranscriptBody(
+                projectionRef.current,
+                previousAvailability,
+              );
+              if (!hasLocalView && !hasBody) {
                 progressiveTranscriptTokenRef.current = undefined;
                 lastTranscriptViewRef.current = null;
-              } else if (update.status === "unchanged") {
-                progressiveTranscriptTokenRef.current = update.token;
-                setTranscriptAvailability((current) =>
-                  current === "empty" ? "empty" : projectionRef.current ? "current" : "unavailable",
-                );
+                // A tokened `unchanged` cannot rehydrate a body we no longer
+                // hold. Ask once for a snapshot. An untokened `unchanged` is
+                // just "nothing new" and must not start a retry loop.
+                if (requestedWithToken) return "retry-snapshot";
+                const availability = previousAvailability === "empty" ? "empty" : "unavailable";
+                markTranscriptAvailability(availability);
                 setTranscriptRefreshing(false);
                 setTranscriptError(null);
                 updateProgressiveCache({
-                  identity: update.identity,
-                  transcriptToken: update.token,
-                  transcriptAvailability:
-                    projectionRef.current?.messages.length === 0 ? "empty" : "current",
+                  transcriptToken: undefined,
+                  transcriptAvailability: availability,
                   transcriptRefreshing: false,
                   transcriptError: undefined,
                 });
-              } else if (update.status === "missing") {
-                transcriptMissing = true;
-                setTranscriptRefreshing(false);
-              } else {
-                const message = update.error ?? "Transcript is temporarily unavailable";
-                setTranscriptRefreshing(false);
-                setTranscriptError(message);
-                updateProgressiveCache({
-                  transcriptRefreshing: false,
-                  transcriptError: message,
-                });
+                return "applied";
+              }
+              progressiveTranscriptTokenRef.current = update.token;
+              const availability = previousAvailability === "empty" ? "empty" : "current";
+              markTranscriptAvailability(availability);
+              setTranscriptRefreshing(false);
+              setTranscriptError(null);
+              updateProgressiveCache({
+                identity: update.identity,
+                transcriptToken: update.token,
+                transcriptAvailability: availability,
+                transcriptRefreshing: false,
+                transcriptError: undefined,
+              });
+              return "applied";
+            }
+            if (update.status === "missing") {
+              transcriptMissing = true;
+              setTranscriptRefreshing(false);
+              return "missing";
+            }
+            const message = update.error ?? "Transcript is temporarily unavailable";
+            setTranscriptRefreshing(false);
+            setTranscriptError(message);
+            updateProgressiveCache({
+              transcriptRefreshing: false,
+              transcriptError: message,
+            });
+            return "failed";
+          };
+          const transcriptRead = requestTranscript(false)
+            .then(async (update) => {
+              if (!stillCurrent()) return;
+              let result = applyTranscriptUpdate(
+                update,
+                progressiveTranscriptTokenRef.current !== undefined &&
+                  update.status !== "snapshot",
+              );
+              if (result === "retry-snapshot") {
+                setTranscriptRefreshing(true);
+                updateProgressiveCache({ transcriptRefreshing: true });
+                const snapshot = await requestTranscript(true);
+                if (!stillCurrent()) return;
+                result = applyTranscriptUpdate(snapshot, false);
+                if (result === "retry-snapshot") {
+                  setTranscriptRefreshing(false);
+                  const availability = projectionRef.current ? "cached" : "unavailable";
+                  markTranscriptAvailability(availability);
+                  updateProgressiveCache({
+                    transcriptToken: undefined,
+                    transcriptAvailability: availability,
+                    transcriptRefreshing: false,
+                  });
+                }
               }
             })
             .catch((error) => {
@@ -1538,7 +1678,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             establishingSessionRef.current === 0
           ) {
             applyProjection(null);
-            setTranscriptAvailability("unavailable");
+            markTranscriptAvailability("unavailable");
             setTranscriptRefreshing(false);
             updateProgressiveCache({
               transcriptAvailability: "unavailable",
@@ -1645,7 +1785,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           if (!syncLiveProjectionRef.current || !next) applyProjection(next);
           markSessionStateAvailability(next ? "current" : "unavailable");
           setSessionStateRefreshing(false);
-          setTranscriptAvailability(
+          markTranscriptAvailability(
             next ? (next.messages.length === 0 ? "empty" : "current") : "unavailable",
           );
           setTranscriptRefreshing(false);
@@ -1656,6 +1796,11 @@ export function useNativeAgentSession<TMessage = unknown>({
           // its message survives instead of decaying into a generic failure.
           if (next) establishmentFailureRef.current = false;
           if (next || !establishmentFailureRef.current) setRuntimeError(null);
+        } else if (
+          sequence === refreshSequenceRef.current &&
+          operationEpoch === projectionOperationEpochRef.current
+        ) {
+          setTranscriptRefreshing(false);
         }
         return next;
       } catch (error) {
@@ -1664,6 +1809,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           operationEpoch === projectionOperationEpochRef.current
         ) {
           setRuntimeError(error instanceof Error ? error.message : String(error));
+          setTranscriptRefreshing(false);
         }
         return null;
       } finally {
@@ -1697,6 +1843,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identity,
       messageLimit,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       planSyncMaterialization,
       platform,
       resetSyncState,
@@ -1905,7 +2052,16 @@ export function useNativeAgentSession<TMessage = unknown>({
         progressive.identity.providerSessionId === initialProviderSessionId)
     ) {
       progressiveIdentityRef.current = progressive.identity;
-      progressiveTranscriptTokenRef.current = progressive.transcriptToken;
+      const restoredView = restoreTranscriptViewFromProjection(
+        progressive.identity,
+        projectionRef.current,
+        progressive.transcriptHistoryEpoch,
+        progressive.transcriptAvailability,
+      );
+      lastTranscriptViewRef.current = restoredView;
+      progressiveTranscriptTokenRef.current = restoredView
+        ? progressive.transcriptToken
+        : undefined;
       progressiveHistoryEpochRef.current = progressive.transcriptHistoryEpoch;
       /*
        * The shared cache carries tokens, not the session-state value they
@@ -1916,18 +2072,28 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
       progressiveDiscoveryRef.current = progressive.discovery;
-      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      markTranscriptAvailability(
+        progressive.transcriptAvailability === "empty"
+          ? "empty"
+          : projectionRef.current
+            ? "cached"
+            : "unavailable",
+      );
       setTranscriptError(progressive.transcriptError ?? null);
       markSessionStateAvailability("unavailable");
       setSessionStateError(null);
     } else {
       progressiveIdentityRef.current = undefined;
       progressiveTranscriptTokenRef.current = undefined;
+      lastTranscriptViewRef.current = null;
       progressiveHistoryEpochRef.current = undefined;
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = undefined;
       progressiveDiscoveryRef.current = undefined;
-      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      // No matching transcript metadata, so a retained or foreign projection is
+      // only ever `cached` here: its message count cannot prove the transcript
+      // read ever came back empty.
+      markTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
       setTranscriptError(null);
       markSessionStateAvailability("unavailable");
       setSessionStateError(null);
@@ -1938,6 +2104,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     identity,
     initialProviderSessionId,
     markSessionStateAvailability,
+    markTranscriptAvailability,
     platform,
     resetSyncState,
     sessionKey,
@@ -1946,6 +2113,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   useEffect(() => {
     if (!enabled || !isActive) {
       setIsRefreshing(false);
+      setTranscriptRefreshing(false);
       return;
     }
     void connect().then(() => undefined);

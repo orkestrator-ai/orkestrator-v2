@@ -872,6 +872,63 @@ function ReviewValidationOutputFixture() {
   );
 }
 
+function NativeRefreshShimmerFixture() {
+  const [generation, setGeneration] = useState(0);
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    setSettled(false);
+    const timer = window.setTimeout(() => setSettled(true), 200);
+    return () => window.clearTimeout(timer);
+  }, [generation]);
+
+  return (
+    <main className="h-screen bg-background text-foreground">
+      <button type="button" onClick={() => setGeneration((value) => value + 1)}>
+        Remount session
+      </button>
+      <section data-testid="native-refresh-shimmer-shell" className="h-[32rem]">
+        <NativeChatShell
+          key={generation}
+          agentLabel="Codex"
+          platform="codex"
+          agentExpansionScope="fixture-refresh-shimmer"
+          isActive
+          connectionState={settled ? "connected" : "connecting"}
+          displayAvailable
+          sessionEstablished
+          transcriptRefreshing={!settled}
+          transcriptSettled={settled}
+          onRetry={() => {}}
+          messages={[
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "Cached answer",
+              createdAt: "2026-09-09T00:00:00.000Z",
+              parts: [{ type: "text", content: "Cached answer" }],
+            },
+          ]}
+          isLoading={false}
+          elapsedSeconds={null}
+          finalElapsedSeconds={null}
+          centerCompose={false}
+          composer={<textarea aria-label="Prompt" />}
+          isAtBottom
+          scrollToBottom={() => {}}
+          scrollProps={{
+            followOutput: () => false,
+            atBottomStateChange: () => {},
+            atBottomThreshold: 100,
+            restoreStateFrom: undefined,
+          }}
+          virtuosoRef={createRef<VirtuosoHandle>()}
+        />
+      </section>
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/build-pipeline-header") {
@@ -891,6 +948,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {
     return <ReviewValidationOutputFixture />;
+  }
+  if (window.location.pathname === "/native-refresh-shimmer") {
+    return <NativeRefreshShimmerFixture />;
   }
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;

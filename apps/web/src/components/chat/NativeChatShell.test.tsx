@@ -504,6 +504,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           messages={[
             {
               id: "assistant-1",
@@ -526,10 +527,11 @@ describe("NativeChatShell", () => {
       expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
     });
 
-    test("leaves the composer centered while an empty established session refreshes", () => {
-      // A refresh is transient. Sending the dock to the bottom and animating it
-      // back is visible churn, and it swaps which "Resume Session" control the
-      // centered layout puts in front of the user mid-reconnect.
+    test("does not shimmer for an empty session whose transcript is already current", () => {
+      // Session state may still be reconnecting after the transcript read has
+      // authoritatively returned empty. That is a brand-new conversation, not
+      // missing transcript history, so the dock must stay clean even though the
+      // refresh flag is set.
       const { rerender } = render(
         <NativeChatShell
           {...shellProps()}
@@ -537,13 +539,36 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
+          transcriptSettled
           onResumeClick={() => {}}
         />,
       );
 
       const dock = screen.getByTestId("compose-dock");
       expect(dock.className).toContain("top-1/2");
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
       // Exactly one reachable entry point, the centered one, throughout.
+      expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+
+      rerender(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          centerCompose
+          connectionState="connecting"
+          displayAvailable
+          transcriptRefreshing
+          onResumeClick={() => {}}
+        />,
+      );
+
+      // A refresh with no settled transcript is exactly what the shimmer is
+      // for, so the same flag stays visible until the read proves otherwise.
+      expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+      expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+      expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
       expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
 
       rerender(
@@ -553,12 +578,63 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connected"
           displayAvailable
+          transcriptSettled
           onResumeClick={() => {}}
         />,
       );
 
       expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
       expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+    });
+
+    test("does not add and remove the refresh live region across successive background refreshes", () => {
+      const { rerender, container } = render(
+        <NativeChatShell
+          {...shellProps()}
+          agentLabel="Codex"
+          connectionState="connected"
+          displayAvailable
+          messages={[
+            {
+              id: "assistant-1",
+              role: "assistant",
+              content: "Previously visible answer",
+              createdAt: "2026-09-09T00:00:00.000Z",
+              parts: [{ type: "text", content: "Previously visible answer" }],
+            },
+          ]}
+        />,
+      );
+
+      const liveRegionCount = () =>
+        container.querySelectorAll("span.sr-only[aria-live='polite']").length;
+      const initialRegions = liveRegionCount();
+      expect(screen.queryByRole("status") === null).toBe(true);
+
+      for (let index = 0; index < 3; index += 1) {
+        rerender(
+          <NativeChatShell
+            {...shellProps()}
+            agentLabel="Codex"
+            connectionState="connected"
+            displayAvailable
+            messages={[
+              {
+                id: "assistant-1",
+                role: "assistant",
+                content: "Previously visible answer",
+                createdAt: "2026-09-09T00:00:00.000Z",
+                parts: [{ type: "text", content: "Previously visible answer" }],
+              },
+            ]}
+          />,
+        );
+        expect(liveRegionCount()).toBe(initialRegions);
+        expect(screen.queryByRole("status") === null).toBe(true);
+        expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+      }
     });
 
     test("pins the shimmer to the dock when the centered layout hides the transcript", () => {
@@ -569,6 +645,7 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
         />,
       );
 
@@ -588,6 +665,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           isAtBottom={false}
         />,
       );
@@ -605,6 +683,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           isAtBottom
         />,
       );
@@ -626,6 +705,7 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           desynced
         />,
       );
@@ -651,6 +731,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
         />,
       );
 

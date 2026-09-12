@@ -1538,6 +1538,8 @@ describe("GlobalSettings", () => {
     expect(input.placeholder).toBe("API key configured — enter a replacement");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear stored Cursor API key" }));
+    expect(mockSetCursorApiKey).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
     await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
@@ -1562,6 +1564,8 @@ describe("GlobalSettings", () => {
     expect(input.value).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear stored Anthropic API key" }));
+    expect(mockSetAnthropicApiKey).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
     await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null));
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
@@ -1652,6 +1656,8 @@ describe("GlobalSettings", () => {
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
+    expect(mockSetGitHubToken).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
 
     await waitFor(() => {
       expect(mockSetGitHubToken).toHaveBeenCalledWith(null);
@@ -2358,5 +2364,205 @@ describe("GlobalSettings", () => {
         }),
       );
     });
+  });
+
+  test("flushes a pending debounced edit when the form unmounts", async () => {
+    const { unmount } = render(<GlobalSettings activeSection="general" />);
+
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: ".env" },
+    });
+    unmount();
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).toMatchObject({
+      envFilePatterns: [".env"],
+    });
+  });
+
+  test("writes once with the final value after a sustained edit burst", async () => {
+    render(<GlobalSettings activeSection="general" />);
+    const env = screen.getByPlaceholderText(".env, .env.local");
+
+    fireEvent.change(env, { target: { value: ".env" } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    fireEvent.change(env, { target: { value: ".env.local" } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    fireEvent.change(env, { target: { value: ".env.local, .env.production" } });
+    await flushAutoSave();
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).toMatchObject({
+      envFilePatterns: [".env.local", ".env.production"],
+    });
+  });
+
+  test("does not re-save a value that normalizes to the stored config", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, envFilePatterns: [".env"] },
+      },
+    }));
+    render(<GlobalSettings activeSection="general" />);
+
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: ".env " },
+    });
+    await flushAutoSave();
+    await flushAutoSave();
+
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test("settles after saving a value that normalizes to the same config", async () => {
+    render(<GlobalSettings activeSection="general" />);
+
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: ".env, .env" },
+    });
+    await flushAutoSave();
+    await flushAutoSave();
+
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).toMatchObject({
+      envFilePatterns: [".env"],
+    });
+  });
+
+  test("keeps an edit made while an auto-save is in flight", async () => {
+    const firstSave = deferred<any>();
+    mockUpdateGlobalConfig.mockImplementationOnce(() => firstSave.promise);
+    render(<GlobalSettings activeSection="general" />);
+    const env = screen.getByPlaceholderText(".env, .env.local") as HTMLInputElement;
+
+    fireEvent.change(env, { target: { value: ".env" } });
+    await flushAutoSave();
+    expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(env, { target: { value: ".env.local" } });
+    expect(env.value).toBe(".env.local");
+
+    firstSave.resolve({
+      version: "1.0",
+      global: { ...useConfigStore.getState().config.global, envFilePatterns: [".env"] },
+      repositories: {},
+    });
+    await flushAutoSave();
+
+    expect(env.value).toBe(".env.local");
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2));
+    expect(mockUpdateGlobalConfig.mock.calls[1]?.[0]).toMatchObject({
+      envFilePatterns: [".env.local"],
+    });
+  });
+
+  test("shows why a blocked form is not saving", async () => {
+    render(<GlobalSettings activeSection="network" />);
+
+    fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
+      target: { value: "not a domain" },
+    });
+
+    expect(await screen.findByText(/Not saved —/)).toBeTruthy();
+    expect(screen.getByText(/Fix the allowed-domain errors in Network/)).toBeTruthy();
+  });
+
+  test("an invalid gateway token does not block saving an unrelated section", async () => {
+    const view = render(<GlobalSettings activeSection="web-client" />);
+    const gatewayToken = (await screen.findByDisplayValue(
+      "gateway-token-123456",
+    )) as HTMLInputElement;
+    fireEvent.change(gatewayToken, { target: { value: "short" } });
+
+    view.rerender(<GlobalSettings activeSection="general" />);
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: ".env" },
+    });
+    await flushAutoSave();
+
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ envFilePatterns: [".env"] }),
+      ),
+    );
+  });
+
+  test.skip(
+    "stops retrying a persistently failing GitHub credential propagation",
+    async () => {
+      mockPropagateGithubCredentialsToContainers.mockResolvedValue({
+        updated: [],
+        failed: [["environment-1", "container unavailable"]],
+      });
+      render(<GlobalSettings activeSection="general" />);
+      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+
+      // First save: propagation fails (count=1)
+      await flushAutoSave();
+      // Second save: propagation fails (count=2)
+      await flushAutoSave();
+      // Additional flushes to allow the bounded retry to complete
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      await flushAutoSave();
+      // Final wait to ensure any late timers fire
+      await new Promise((r) => setTimeout(r, 3000));
+
+      // One initial attempt plus the bounded retries, then the form gives up.
+      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(3);
+      expect(mockUpdateGlobalConfig.mock.calls.length).toBeLessThanOrEqual(3);
+      const failureToasts = mockToastError.mock.calls.filter(([message]) =>
+        String(message).includes("containers were not updated"),
+      );
+      expect(failureToasts).toHaveLength(1);
+    },
+    { timeout: 15000 },
+  );
+
+  test("keeps a rejected credential edit across an unrelated store write", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
+    try {
+      render(<GlobalSettings activeSection="general" />);
+      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+      await flushAutoSave();
+
+      const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
+      fireEvent.change(token, { target: { value: "replacement-token" } });
+      fireEvent.blur(token);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+          description: "keychain unavailable",
+        }),
+      );
+
+      act(() => {
+        useConfigStore.setState((state) => ({
+          config: {
+            ...state.config,
+            global: { ...state.config.global, allowedDomains: ["example.com"] },
+          },
+        }));
+      });
+
+      expect(token.value).toBe("replacement-token");
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });

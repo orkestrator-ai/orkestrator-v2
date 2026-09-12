@@ -43,6 +43,10 @@ export function MessagingSettings() {
   const savedSignature = JSON.stringify(saved);
   const changed = signature !== savedSignature;
 
+  // Latest values for the unmount flush, which must not re-run on every edit.
+  const latestRef = useRef({ loading, saving, changed, signature, settings });
+  latestRef.current = { loading, saving, changed, signature, settings };
+
   // Auto-save on every change once the initial load has settled. A rejected
   // edit is not retried until it changes again, so a backend that keeps
   // refusing the same value cannot spin.
@@ -67,6 +71,19 @@ export function MessagingSettings() {
     }, MESSAGING_AUTO_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [loading, saving, changed, signature, settings]);
+
+  // Switching to another settings section unmounts this pane. Flush a still
+  // debounced edit so it is not silently dropped.
+  useEffect(() => {
+    return () => {
+      const current = latestRef.current;
+      if (current.loading || current.saving || !current.changed) return;
+      if (failedSignatureRef.current === current.signature) return;
+      void backend.updateAgentMessagingSettings(current.settings).catch((error) => {
+        console.error("[settings] Failed to flush messaging settings:", error);
+      });
+    };
+  }, []);
 
   if (loading)
     return (

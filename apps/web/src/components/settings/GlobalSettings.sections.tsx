@@ -176,6 +176,43 @@ interface GlobalSettingsSectionsProps {
   settings: GlobalSettingsSectionSettings;
 }
 
+/**
+ * Clearing a stored credential is the one settings action that cannot be undone
+ * by re-entering the value, so it goes through a confirmation instead of firing
+ * on the first click.
+ */
+function CredentialClearButton({
+  label,
+  title,
+  description,
+  onConfirm,
+}: {
+  label: string;
+  title: string;
+  description: string;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button type="button" variant="outline" size="sm">
+          {label}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Clear</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function GlobalSettingsSections({ activeSection, settings }: GlobalSettingsSectionsProps) {
   const {
     global,
@@ -187,16 +224,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setEnvPatterns,
     anthropicApiKey,
     setAnthropicApiKey,
-    clearAnthropicApiKey,
-    setClearAnthropicApiKey,
     cursorApiKey,
     setCursorApiKey,
-    clearCursorApiKey,
-    setClearCursorApiKey,
     openCodeZenApiKey,
     setOpenCodeZenApiKey,
-    clearOpenCodeZenApiKey,
-    setClearOpenCodeZenApiKey,
     showOpenCodeZenApiKey,
     setShowOpenCodeZenApiKey,
     useHostGitHubCredentials,
@@ -208,8 +239,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setUseHostClaudeCredentials,
     githubToken,
     setGithubToken,
-    clearGithubToken,
-    setClearGithubToken,
     allowedDomains,
     preferredEditor,
     setPreferredEditor,
@@ -402,7 +431,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             value={reviewInstruction}
             onChange={(event) => setReviewInstruction(event.target.value)}
             maxLength={REVIEW_INSTRUCTION_MAX_LENGTH}
-            disabled={isSaving}
             spellCheck={false}
             className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
           />
@@ -626,7 +654,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <div className="border-t border-zinc-800 bg-emerald-500/[0.04] px-4 py-3">
               <p className="text-xs text-muted-foreground">
                 Host CLI authentication is selected.
-                {global.githubTokenConfigured && !clearGithubToken
+                {global.githubTokenConfigured
                   ? " Your stored PAT remains available if you turn this off."
                   : ""}
               </p>
@@ -647,13 +675,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   aria-label="GitHub token"
                   type={showGithubToken ? "text" : "password"}
                   value={githubToken}
-                  onChange={(e) => {
-                    setGithubToken(e.target.value);
-                    if (e.target.value) setClearGithubToken(false);
-                  }}
+                  onChange={(e) => setGithubToken(e.target.value)}
                   onBlur={() => void persistCredential("github")}
                   placeholder={
-                    global.githubTokenConfigured && !clearGithubToken
+                    global.githubTokenConfigured
                       ? "Token configured — enter a replacement"
                       : "ghp_..."
                   }
@@ -670,15 +695,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                   {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </Button>
               </div>
-              {global.githubTokenConfigured && !clearGithubToken && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void clearCredential("github")}
-                >
-                  Clear stored token
-                </Button>
+              {global.githubTokenConfigured && (
+                <CredentialClearButton
+                  label="Clear stored token"
+                  title="Clear the stored GitHub token?"
+                  description="This deletes the personal access token from Orkestrator. The token cannot be recovered from the app and must be recreated on GitHub if you need it again."
+                  onConfirm={() => void clearCredential("github")}
+                />
               )}
               <p className="text-xs text-muted-foreground">
                 Create one at{" "}
@@ -712,7 +735,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             value={sshAgentSocketPath}
             onChange={(event) => setSshAgentSocketPath(event.target.value)}
             placeholder="Auto-detect from desktop session"
-            disabled={isSaving}
             spellCheck={false}
             className="font-mono"
           />
@@ -934,13 +956,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <Input
               type={showApiKey ? "text" : "password"}
               value={anthropicApiKey}
-              onChange={(event) => {
-                setAnthropicApiKey(event.target.value);
-                if (event.target.value) setClearAnthropicApiKey(false);
-              }}
+              onChange={(event) => setAnthropicApiKey(event.target.value)}
               onBlur={() => void persistCredential("anthropic")}
               placeholder={
-                global.anthropicApiKeyConfigured && !clearAnthropicApiKey
+                global.anthropicApiKeyConfigured
                   ? "API key configured — enter a replacement"
                   : "sk-ant-..."
               }
@@ -956,15 +975,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
           </div>
-          {global.anthropicApiKeyConfigured && !clearAnthropicApiKey && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void clearCredential("anthropic")}
-            >
-              Clear stored Anthropic API key
-            </Button>
+          {global.anthropicApiKeyConfigured && (
+            <CredentialClearButton
+              label="Clear stored Anthropic API key"
+              title="Clear the stored Anthropic API key?"
+              description="This deletes the API key from Orkestrator. The key cannot be recovered from the app and must be recreated in the Anthropic console if you need it again."
+              onConfirm={() => void clearCredential("anthropic")}
+            />
           )}
           {global.anthropicApiKeySource === "host-env" && (
             <p className="text-xs text-amber-500">
@@ -1026,13 +1043,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               aria-label="OpenCode Zen API key"
               type={showOpenCodeZenApiKey ? "text" : "password"}
               value={openCodeZenApiKey}
-              onChange={(event) => {
-                setOpenCodeZenApiKey(event.target.value);
-                if (event.target.value) setClearOpenCodeZenApiKey(false);
-              }}
+              onChange={(event) => setOpenCodeZenApiKey(event.target.value)}
               onBlur={() => void persistCredential("opencode-zen")}
               placeholder={
-                global.openCodeZenApiKeyConfigured && !clearOpenCodeZenApiKey
+                global.openCodeZenApiKeyConfigured
                   ? "API key configured — enter a replacement"
                   : "OpenCode Zen API key"
               }
@@ -1051,15 +1065,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               {showOpenCodeZenApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
           </div>
-          {global.openCodeZenApiKeyConfigured && !clearOpenCodeZenApiKey && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void clearCredential("opencode-zen")}
-            >
-              Clear stored OpenCode Zen API key
-            </Button>
+          {global.openCodeZenApiKeyConfigured && (
+            <CredentialClearButton
+              label="Clear stored OpenCode Zen API key"
+              title="Clear the stored OpenCode Zen API key?"
+              description="This deletes the API key from Orkestrator. Plan usage stops updating until you enter a replacement."
+              onConfirm={() => void clearCredential("opencode-zen")}
+            />
           )}
           {global.openCodeZenApiKeySource === "host-env" && (
             <p className="text-xs text-amber-500">
@@ -1197,13 +1209,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               aria-label="Cursor API key"
               type={showCursorApiKey ? "text" : "password"}
               value={cursorApiKey}
-              onChange={(event) => {
-                setCursorApiKey(event.target.value);
-                if (event.target.value) setClearCursorApiKey(false);
-              }}
+              onChange={(event) => setCursorApiKey(event.target.value)}
               onBlur={() => void persistCredential("cursor")}
               placeholder={
-                global.cursorApiKeyConfigured && !clearCursorApiKey
+                global.cursorApiKeyConfigured
                   ? "API key configured — enter a replacement"
                   : "Cursor API key"
               }
@@ -1220,15 +1229,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               {showCursorApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
           </div>
-          {global.cursorApiKeyConfigured && !clearCursorApiKey && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void clearCredential("cursor")}
-            >
-              Clear stored Cursor API key
-            </Button>
+          {global.cursorApiKeyConfigured && (
+            <CredentialClearButton
+              label="Clear stored Cursor API key"
+              title="Clear the stored Cursor API key?"
+              description="This deletes the API key from Orkestrator. Cursor Agent in Linux containers stops working until you enter a replacement."
+              onConfirm={() => void clearCredential("cursor")}
+            />
           )}
           {global.cursorApiKeySource === "host-env" && (
             // A key inherited from the backend process environment is forwarded to
@@ -1294,7 +1301,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               }
             }}
             aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
-            disabled={isSaving}
             className="max-w-32"
           />
           <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground/60">
@@ -1714,7 +1720,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 onBlur={() => void persistGatewayToken()}
                 placeholder={isLoadingGatewayToken ? "Loading gateway token…" : "Gateway token"}
                 className="pr-20 font-mono text-xs"
-                disabled={isLoadingGatewayToken || !gatewayTokenSettings?.editable || isSaving}
+                disabled={isLoadingGatewayToken || !gatewayTokenSettings?.editable}
                 aria-describedby="gateway-token-description"
                 aria-invalid={gatewayTokenValidationError ? true : undefined}
                 autoComplete="off"

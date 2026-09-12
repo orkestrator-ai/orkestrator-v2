@@ -1,5 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { openCodeContextUsage } from "./opencode-usage.js";
+import {
+  createOpenCodeUsageLedger,
+  openCodeContextUsage,
+  openCodeContextUsageFromLedger,
+  recordOpenCodeUsageMessages,
+} from "./opencode-usage.js";
+
+function assistantMessage(
+  id: string,
+  tokens: { input: number; output?: number; cacheRead?: number; cost?: number },
+) {
+  return {
+    info: {
+      id,
+      role: "assistant",
+      tokens: {
+        input: tokens.input,
+        output: tokens.output ?? 0,
+        cache: { read: tokens.cacheRead ?? 0, write: 0 },
+      },
+      cost: tokens.cost ?? 0,
+      time: { created: 1, completed: 2 },
+    },
+    parts: [],
+  };
+}
 
 describe("openCodeContextUsage", () => {
   test("keeps message totals and maps step-finish accounting into bounded turn rows", () => {
@@ -99,5 +124,42 @@ describe("openCodeContextUsage", () => {
 
     expect(usage).toMatchObject({ usedTokens: 10, source: "opencode" });
     expect(usage?.updatedAt).toBeUndefined();
+  });
+
+  test("keeps lifetime session and cache totals after earlier messages leave the window", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const earlier = [
+      assistantMessage("a", { input: 100, cacheRead: 1_000, cost: 0.2 }),
+      assistantMessage("b", { input: 50, cacheRead: 2_000, cost: 0.1 }),
+    ];
+    recordOpenCodeUsageMessages(ledger, earlier);
+
+    const laterWindow = [assistantMessage("c", { input: 10, cacheRead: 500, cost: 0.05 })];
+    recordOpenCodeUsageMessages(ledger, laterWindow);
+    const usage = openCodeContextUsageFromLedger(ledger, laterWindow);
+
+    expect(usage).toMatchObject({
+      usedTokens: 510,
+      inputTokens: 160,
+      cacheReadTokens: 3_500,
+      sessionTokens: 3_660,
+      source: "opencode",
+    });
+    expect(usage?.costUsd).toBeCloseTo(0.35);
+    expect(openCodeContextUsage(laterWindow)?.sessionTokens).toBe(510);
+  });
+
+  test("does not let an in-flight zero snapshot erase a completed message", () => {
+    const ledger = createOpenCodeUsageLedger();
+    recordOpenCodeUsageMessages(ledger, [
+      assistantMessage("a", { input: 80, cacheRead: 20, cost: 0.4 }),
+    ]);
+    recordOpenCodeUsageMessages(ledger, [assistantMessage("a", { input: 0, cacheRead: 0, cost: 0 })]);
+
+    expect(openCodeContextUsageFromLedger(ledger, [])).toMatchObject({
+      inputTokens: 80,
+      cacheReadTokens: 20,
+      sessionTokens: 100,
+    });
   });
 });

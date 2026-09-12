@@ -68,6 +68,33 @@ describe("usage projection history", () => {
     ).toEqual({ usedTokens: 12, turns: [{ turnId: "turn-1", outputTokens: 2 }] });
   });
 
+  test("keeps the higher lifetime spend when a later snapshot only sees the tail", () => {
+    expect(
+      mergeContextUsageTurns(
+        {
+          usedTokens: 40_000,
+          inputTokens: 8_000,
+          cacheReadTokens: 16_000_000,
+          sessionTokens: 16_100_000,
+          costUsd: 4.2,
+        },
+        {
+          usedTokens: 12_000,
+          inputTokens: 3_000,
+          cacheReadTokens: 11_000_000,
+          sessionTokens: 11_050_000,
+          costUsd: 1.1,
+        },
+      ),
+    ).toMatchObject({
+      usedTokens: 12_000,
+      inputTokens: 8_000,
+      cacheReadTokens: 16_000_000,
+      sessionTokens: 16_100_000,
+      costUsd: 4.2,
+    });
+  });
+
   test("fills the context window a provider omitted", () => {
     expect(withProviderContextWindow({ usedTokens: 50_000 }, 200_000)).toEqual({
       usedTokens: 50_000,

@@ -13,6 +13,7 @@ import {
   type ProviderTranscriptSnapshot,
 } from "./agent-provider-contract.js";
 import type {
+  NativeAgentContextUsage,
   NativeAgentExecutionPolicy,
   NativeAgentNotice,
   NativeAgentRuntimeSummary,
@@ -77,15 +78,18 @@ export function openCodeSessionStateSnapshot(input: {
    * the renderer applies on every turn boundary: usage omitted from it would
    * drop the panel's counters even though the full projection reported them.
    * Every HTTP bridge reports usage on its state read for the same reason.
+   * Prefer `contextUsage` when the caller already has a lifetime ledger; the
+   * live transcript is a sliding window and under-counts a long job.
    */
   messages?: readonly unknown[];
+  contextUsage?: NativeAgentContextUsage;
 }): ProviderSessionStateSnapshot {
   const streamedError = input.notices.find((notice) => notice.kind === "error");
   // A stream error overrides the lifecycle status. Gate the clock on the
   // effective status so a running lifecycle never republishes a clock for a
   // turn the stream already reported as failed.
   const effectiveStatus: ProviderStatus = streamedError ? "error" : input.status;
-  const contextUsage = openCodeContextUsage(input.messages ?? []);
+  const contextUsage = input.contextUsage ?? openCodeContextUsage(input.messages ?? []);
   return {
     status: effectiveStatus,
     providerRevision: input.revision,

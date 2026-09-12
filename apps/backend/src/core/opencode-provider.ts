@@ -927,6 +927,10 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   readonly usageMessageLimit = OPEN_CODE_MESSAGE_HISTORY_LIMIT;
 
   usageFromMessages(messages: readonly unknown[]): NativeAgentContextUsage | undefined {
+    const sessionId = messages
+      .map((message) => nonEmptyString(asRecord(asRecord(message)?.info)?.sessionID))
+      .find((value): value is string => value !== undefined);
+    if (sessionId) return this.streamState.contextUsage(sessionId, messages);
     return openCodeContextUsage(messages);
   }
 
@@ -995,6 +999,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
         title: this.streamState.title(sessionId),
         messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
+        contextUsage: this.streamState.contextUsage(sessionId),
         policy: this.sessionPolicies.get(sessionId),
         runtime: this.streamState.runtime(sessionId),
         notices,
@@ -1062,7 +1067,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     );
     const streamNotices = this.streamState.notices(sessionId);
     const streamedError = streamNotices.find((notice) => notice.kind === "error");
-    const latestUsage = openCodeContextUsage(rawMessages);
+    const latestUsage = this.streamState.contextUsage(sessionId, rawMessages);
     const running = status === "running" && !terminal && !streamedError;
     const settled =
       Boolean(terminal) ||

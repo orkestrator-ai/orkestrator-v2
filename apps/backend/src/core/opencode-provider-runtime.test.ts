@@ -496,14 +496,24 @@ describe("OpenCode provider runtime", () => {
     const provider = openCodeActivityProvider(fake);
     try {
       const interactive = await provider.interactiveSnapshot?.("owned-session");
-      // The newest-64 window only sees the final messages.
-      expect(interactive?.contextUsage).toMatchObject({ usedTokens: 1, source: "opencode" });
+      // Context occupancy is the newest turn; session totals keep every
+      // message the oversized snapshot already reported, including ones
+      // outside the live 64-message window.
+      const sessionTokens = 10 * outsideWindow + OPEN_CODE_MESSAGE_HISTORY_LIMIT;
+      expect(interactive?.contextUsage).toMatchObject({
+        usedTokens: 1,
+        sessionTokens,
+        source: "opencode",
+      });
       // 1026 messages exceed MAX_STREAM_MESSAGES, so the stream cache is dirty
-      // and `currentMessages` is undefined; the state read must still report the
-      // last known usage and derive it from the same newest-64 window.
+      // and `currentMessages` is undefined; the state read must still report
+      // the same lifetime totals.
       const state = await provider.sessionStateSnapshot?.("owned-session");
-      expect(state?.contextUsage).toMatchObject({ usedTokens: 1, source: "opencode" });
-      expect(state?.contextUsage?.sessionTokens).toBe(interactive?.contextUsage?.sessionTokens);
+      expect(state?.contextUsage).toMatchObject({
+        usedTokens: 1,
+        sessionTokens,
+        source: "opencode",
+      });
     } finally {
       await provider.dispose?.();
     }

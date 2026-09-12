@@ -190,3 +190,39 @@ describe("OpenCodeStreamState turn clock", () => {
     });
   });
 });
+
+describe("OpenCodeStreamState usage ledger", () => {
+  function message(id: string, input: number, cacheRead = 0) {
+    return {
+      info: {
+        id,
+        sessionID: "session",
+        role: "assistant",
+        tokens: { input, output: 0, cache: { read: cacheRead, write: 0 } },
+        cost: 0.01,
+        time: { created: 1, completed: 2 },
+      },
+      parts: [],
+    };
+  }
+
+  test("keeps session and cache totals after a later snapshot replaces the transcript tail", () => {
+    const state = new OpenCodeStreamState();
+    const full = Array.from({ length: 80 }, (_, index) =>
+      message(`message-${index}`, 10, 100),
+    );
+    expect(state.replaceMessages("session", full)).toBe(true);
+
+    const tail = full.slice(-10);
+    expect(state.replaceMessages("session", tail)).toBe(true);
+
+    const usage = state.contextUsage("session", tail);
+    expect(usage).toMatchObject({
+      usedTokens: 110,
+      inputTokens: 800,
+      cacheReadTokens: 8_000,
+      sessionTokens: 8_800,
+    });
+    expect(usage?.costUsd).toBeCloseTo(0.8);
+  });
+});

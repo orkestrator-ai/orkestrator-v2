@@ -1,5 +1,6 @@
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2/types";
 import type {
+  NativeAgentContextUsage,
   NativeAgentNotice,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
@@ -10,6 +11,13 @@ import {
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
 import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
+import {
+  createOpenCodeUsageLedger,
+  openCodeContextUsage,
+  openCodeContextUsageFromLedger,
+  recordOpenCodeUsageMessages,
+  type OpenCodeUsageLedger,
+} from "./opencode-usage.js";
 
 const MAX_STREAM_SESSIONS = 1_024;
 const MAX_STREAM_MESSAGES = 1_025;
@@ -33,6 +41,13 @@ type OpenCodeStreamSession = {
   turnStartedAt?: number;
   /** Whether a running observation confirmed the current turn clock. */
   turnConfirmed?: boolean;
+  /**
+   * Lifetime per-message usage. The live transcript is a sliding window, so
+   * session totals derived from it walk backwards on a long job. This ledger
+   * keeps every message that has reported tokens, including ones that later
+   * fall out of the window or out of an oversized cache.
+   */
+  usageLedger: OpenCodeUsageLedger;
 };
 
 export type OpenCodeStreamEffect = {
@@ -66,6 +81,7 @@ export class OpenCodeStreamState {
       eventVersion: 0,
       notices: [],
       revision: 0,
+      usageLedger: createOpenCodeUsageLedger(),
     };
     setBoundedMapEntry(this.sessions, sessionId, created, MAX_STREAM_SESSIONS);
     return created;
@@ -81,6 +97,7 @@ export class OpenCodeStreamState {
       return false;
     }
     state.messages = [...messages];
+    this.recordUsage(sessionId, state.messages);
     state.transcriptBytes = serializedByteLength(state.messages);
     if (!this.messagesWithinBounds(state)) {
       state.messagesCurrent = false;
@@ -124,6 +141,26 @@ export class OpenCodeStreamState {
    */
   usageMessages(sessionId: string): unknown[] {
     return this.currentMessages(sessionId) ?? this.retainedMessages(sessionId) ?? [];
+  }
+
+  recordUsage(sessionId: string, messages: readonly unknown[]): void {
+    recordOpenCodeUsageMessages(this.session(sessionId).usageLedger, messages);
+  }
+
+  /**
+   * Lifetime session usage, including messages that have left the live window.
+   *
+   * `usedTokens` still comes from the newest turn so the context gauge can
+   * shrink after compaction. Session/cache/cost counters are the ledger sum.
+   */
+  contextUsage(
+    sessionId: string,
+    messages: readonly unknown[] = this.usageMessages(sessionId),
+  ): NativeAgentContextUsage | undefined {
+    const state = this.sessions.get(sessionId);
+    if (!state) return openCodeContextUsage(messages);
+    this.recordUsage(sessionId, messages);
+    return openCodeContextUsageFromLedger(state.usageLedger, messages);
   }
 
   revision(sessionId: string): number {
@@ -347,6 +384,7 @@ export class OpenCodeStreamState {
       const next = { info, parts: Array.isArray(previous?.parts) ? previous.parts : [] };
       if (index >= 0) state.messages[index] = next;
       else state.messages.push(next);
+      this.recordUsage(sessionId, [next]);
       this.finishMessageMutation(state);
       return { sessionId };
     }

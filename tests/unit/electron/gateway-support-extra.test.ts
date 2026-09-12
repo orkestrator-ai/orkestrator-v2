@@ -11,8 +11,10 @@ import {
   GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
   GATEWAY_COMPRESSION_MODES,
   GatewayMetricsStore,
+  GzipEventClientWriter,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
   MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+  MAX_CONCURRENT_STREAMING_COMPRESSIONS,
   normalizeAcceptEncoding,
   normalizeCacheControl,
   normalizeContentEncoding,
@@ -29,7 +31,8 @@ import {
   truncateUtf8,
 } from "../../../apps/backend/src/gateway";
 import { writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
+import { Writable } from "node:stream";
 
 import {
   auxiliaryServers,
@@ -653,6 +656,88 @@ describe("remote gateway", () => {
     expect(stream()).toMatchObject({ connecting: 0, open: 1, dropped: 1 });
     metrics.recordStreamClosed();
     expect(stream()).toMatchObject({ connecting: 0, open: 0, dropped: 1 });
+  });
+
+  test("bounds streaming compression contexts and records byte outcomes", () => {
+    const metrics = new GatewayMetricsStore("on");
+    const releases = Array.from({ length: MAX_CONCURRENT_STREAMING_COMPRESSIONS }, () =>
+      metrics.tryStartStreamingCompression(),
+    );
+    expect(releases.every(Boolean)).toBe(true);
+    expect(metrics.tryStartStreamingCompression()).toBeNull();
+    metrics.recordStreamingCompressionSourceBytes(4_096);
+    metrics.recordStreamingCompressionEncodedBytes(1_024);
+    metrics.recordStreamingCompressionFailure();
+
+    releases[0]?.();
+    releases[0]?.();
+    expect(metrics.tryStartStreamingCompression()).toBeFunction();
+    expect(metrics.snapshot().compression).toMatchObject({
+      streamingActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingPeakActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingStarted: MAX_CONCURRENT_STREAMING_COMPRESSIONS + 1,
+      streamingDeclined: 1,
+      streamingFailures: 1,
+      streamingSourceBytes: 4_096,
+      streamingEncodedBytes: 1_024,
+    });
+  });
+
+  test("sums pending input, compressor backlog, and response buffer for gzip SSE writers", async () => {
+    const response = new Writable({
+      highWaterMark: 1,
+      write() {
+        // Leave encoded bytes queued so the hard-drop sum cannot ignore a stage.
+      },
+    });
+    const writer = new GzipEventClientWriter(response as unknown as ServerResponse);
+    const internals = writer as unknown as {
+      pendingBytes: number;
+      compressor: { readableLength: number };
+    };
+
+    writer.write("n".repeat(32 * 1024));
+    expect(writer.writableLength).toBe(
+      internals.pendingBytes + internals.compressor.readableLength + response.writableLength,
+    );
+
+    await waitUntil(() => writer.writableLength > 0, "Compressed SSE writer never queued bytes");
+    const pending = internals.pendingBytes;
+    const readable = internals.compressor.readableLength;
+    const responseBytes = response.writableLength;
+    expect(writer.writableLength).toBe(pending + readable + responseBytes);
+    expect(pending + readable + responseBytes).toBeGreaterThan(0);
+
+    Object.defineProperty(response, "writableLength", {
+      configurable: true,
+      get: () => 50,
+    });
+    expect(writer.writableLength).toBe(pending + readable + 50);
+
+    const blocked = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    Object.defineProperty(blocked, "writableLength", {
+      configurable: true,
+      get: () => 0,
+    });
+    const backpressured = new GzipEventClientWriter(blocked as unknown as ServerResponse);
+    const backpressuredInternals = backpressured as unknown as {
+      pendingBytes: number;
+      compressor: { readableLength: number; cork(): void; uncork(): void };
+    };
+    backpressuredInternals.compressor.cork();
+    backpressured.write("blocked-input");
+    expect(backpressuredInternals.pendingBytes).toBe(Buffer.byteLength("blocked-input"));
+    expect(backpressured.writableLength).toBe(
+      backpressuredInternals.pendingBytes + backpressuredInternals.compressor.readableLength + 0,
+    );
+    backpressuredInternals.compressor.uncork();
+    backpressured.destroy();
+    writer.destroy();
+    expect(internals.pendingBytes).toBe(0);
   });
 
   test("sizes the command label budget to hold the whole backend registry", () => {

@@ -1,6 +1,10 @@
 # TODO: evaluate remote stream compression
 
-Status: Deferred — investigation; recommendation 6 from the bandwidth review.
+Status: Active — telemetry and resource bounds implemented; representative
+measurement remains pending.
+
+The staged measurement and rollout work is tracked in
+[`plans/stream-efficience.md`](../../plans/stream-efficience.md).
 
 Establish results with redundant payloads removed before changing compression
 defaults.
@@ -16,6 +20,14 @@ defaults.
   selected transport rather than assuming all terminal traffic uses WebSockets.
 - `TerminalWebSocketGateway` does not configure WebSocket message compression.
   HTTP body/SSE compression does not compress those binary WebSocket frames.
+- Streaming gzip contexts, terminal WebSocket sockets, and terminal WebSocket
+  channels now have explicit concurrency/admission bounds. Saturated streaming
+  compression falls back to identity without changing the default mode.
+- Gateway metrics now distinguish serialized/source bytes from encoded SSE
+  bytes and report terminal WebSocket payload, framed-byte, ACK, queue, and
+  lifecycle totals.
+- Terminal WebSocket output ACKs are cumulative and coalesced over a short
+  bounded interval.
 
 ## Investigation sequence
 
@@ -58,7 +70,7 @@ documentation through Context7 before implementing library-specific options.
 
 ## Acceptance and measurement
 
-- [ ] Report actual encoded bytes separately from pre-compression event/command
+- [x] Report actual encoded bytes separately from pre-compression event/command
       counters, and include WebSocket framing/compression in its own measurement.
 - [ ] Test local and remote proxy paths at normal and constrained bandwidth.
 - [ ] Record p50/p95 first-update and completion latency, bytes/minute, backend

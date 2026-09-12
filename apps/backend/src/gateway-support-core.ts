@@ -101,6 +101,12 @@ export interface OrkestratorGatewayOptions {
     handshakeFrameCapacity?: number;
     handshakeMaxBytes?: number;
   };
+  /** Optional admission overrides, primarily for constrained deployments and boundary tests. */
+  terminalWebSocket?: {
+    maxSockets?: number;
+    maxChannelsPerSocket?: number;
+    maxChannels?: number;
+  };
   webClientControl?: {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
@@ -151,6 +157,12 @@ export const COMPRESSION_MIN_BYTES = 1024;
 export const MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES = 48 * 1024 * 1024;
 export const MAX_DYNAMIC_COMPRESSION_OUTPUT_OVERHEAD_BYTES = 64 * 1024;
 export const MAX_CONCURRENT_DYNAMIC_COMPRESSIONS = 8;
+/**
+ * Streaming compressors live for the lifetime of an SSE request, unlike the
+ * short body-compression jobs above. Bound them separately so a collection of
+ * idle browser tabs cannot retain an unlimited number of zlib contexts.
+ */
+export const MAX_CONCURRENT_STREAMING_COMPRESSIONS = 8;
 export const MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES = 64 * 1024 * 1024;
 export const MAX_BUFFERED_BODY_CHUNKS = 8192;
 /**
@@ -277,6 +289,9 @@ export type GatewayCommandMetrics = {
 
 export type GatewayEventMetrics = {
   frames: number;
+  /** Serialized SSE bytes before any content coding is applied. */
+  serializedBytes: number;
+  /** @deprecated Compatibility alias for `serializedBytes`. */
   wireBytes: number;
   droppedFrames: number;
   droppedClients: number;
@@ -291,6 +306,10 @@ export type GatewayStreamMetrics = {
   stalled: number;
   softDesyncs: number;
   keepalives: number;
+  /** Direct event-stream bytes before content coding. */
+  sourceBytes: number;
+  /** Direct event-stream body bytes after content coding. */
+  encodedBodyBytes: number;
 };
 
 /**
@@ -309,6 +328,35 @@ export type GatewayReplayMetrics = {
 
 export type GatewayCompressionMetrics = {
   configuredMode: GatewayCompressionMode;
+  streamingActive: number;
+  streamingPeakActive: number;
+  streamingStarted: number;
+  streamingDeclined: number;
+  streamingFailures: number;
+  streamingSourceBytes: number;
+  streamingEncodedBytes: number;
+};
+
+export type GatewayTerminalWebSocketMetrics = {
+  open: number;
+  opened: number;
+  closed: number;
+  rejected: number;
+  channelsOpen: number;
+  channelsOpened: number;
+  channelsClosed: number;
+  receivedFrames: number;
+  receivedPayloadBytes: number;
+  sentFrames: number;
+  sentPayloadBytes: number;
+  outputFrames: number;
+  outputPayloadBytes: number;
+  acknowledgementFrames: number;
+  acknowledgementPayloadBytes: number;
+  desyncs: number;
+  peakQueuedBytes: number;
+  framedReceivedBytes: number;
+  framedSentBytes: number;
 };
 
 export type GatewayClientBootReport = {
@@ -767,6 +815,8 @@ export class GatewayMetricsStore {
     stalled: 0,
     softDesyncs: 0,
     keepalives: 0,
+    sourceBytes: 0,
+    encodedBodyBytes: 0,
   };
   private readonly replay: GatewayReplayMetrics = {
     fresh: 0,
@@ -783,9 +833,39 @@ export class GatewayMetricsStore {
     },
   };
   private readonly compression: GatewayCompressionMetrics;
+  private readonly terminalWebSocket: GatewayTerminalWebSocketMetrics = {
+    open: 0,
+    opened: 0,
+    closed: 0,
+    rejected: 0,
+    channelsOpen: 0,
+    channelsOpened: 0,
+    channelsClosed: 0,
+    receivedFrames: 0,
+    receivedPayloadBytes: 0,
+    sentFrames: 0,
+    sentPayloadBytes: 0,
+    outputFrames: 0,
+    outputPayloadBytes: 0,
+    acknowledgementFrames: 0,
+    acknowledgementPayloadBytes: 0,
+    desyncs: 0,
+    peakQueuedBytes: 0,
+    framedReceivedBytes: 0,
+    framedSentBytes: 0,
+  };
 
   constructor(configuredMode: GatewayCompressionMode) {
-    this.compression = { configuredMode };
+    this.compression = {
+      configuredMode,
+      streamingActive: 0,
+      streamingPeakActive: 0,
+      streamingStarted: 0,
+      streamingDeclined: 0,
+      streamingFailures: 0,
+      streamingSourceBytes: 0,
+      streamingEncodedBytes: 0,
+    };
   }
 
   setConfiguredCompressionMode(mode: GatewayCompressionMode): void {
@@ -889,16 +969,18 @@ export class GatewayMetricsStore {
     this.commands.set(key, bucket);
   }
 
-  recordEvent(event: string, wireBytes: number): void {
+  recordEvent(event: string, serializedBytes: number): void {
     const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
+      serializedBytes: 0,
       wireBytes: 0,
       droppedFrames: 0,
       droppedClients: 0,
     };
     bucket.frames += 1;
-    bucket.wireBytes += wireBytes;
+    bucket.serializedBytes += serializedBytes;
+    bucket.wireBytes += serializedBytes;
     this.events.set(key, bucket);
   }
 
@@ -906,6 +988,7 @@ export class GatewayMetricsStore {
     const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
+      serializedBytes: 0,
       wireBytes: 0,
       droppedFrames: 0,
       droppedClients: 0,
@@ -918,6 +1001,7 @@ export class GatewayMetricsStore {
     const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
     const bucket = this.events.get(key) ?? {
       frames: 0,
+      serializedBytes: 0,
       wireBytes: 0,
       droppedFrames: 0,
       droppedClients: 0,
@@ -967,6 +1051,103 @@ export class GatewayMetricsStore {
     this.stream.keepalives += 1;
   }
 
+  recordStreamSourceBytes(bytes: number): void {
+    this.stream.sourceBytes += Math.max(0, bytes);
+  }
+
+  recordStreamEncodedBodyBytes(bytes: number): void {
+    this.stream.encodedBodyBytes += Math.max(0, bytes);
+  }
+
+  tryStartStreamingCompression(): (() => void) | null {
+    if (this.compression.streamingActive >= MAX_CONCURRENT_STREAMING_COMPRESSIONS) {
+      this.compression.streamingDeclined += 1;
+      return null;
+    }
+    this.compression.streamingActive += 1;
+    this.compression.streamingStarted += 1;
+    this.compression.streamingPeakActive = Math.max(
+      this.compression.streamingPeakActive,
+      this.compression.streamingActive,
+    );
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.compression.streamingActive = Math.max(0, this.compression.streamingActive - 1);
+    };
+  }
+
+  recordStreamingCompressionSourceBytes(bytes: number): void {
+    this.compression.streamingSourceBytes += Math.max(0, bytes);
+  }
+
+  recordStreamingCompressionEncodedBytes(bytes: number): void {
+    this.compression.streamingEncodedBytes += Math.max(0, bytes);
+  }
+
+  recordStreamingCompressionFailure(): void {
+    this.compression.streamingFailures += 1;
+  }
+
+  recordTerminalWebSocketOpened(): void {
+    this.terminalWebSocket.open += 1;
+    this.terminalWebSocket.opened += 1;
+  }
+
+  recordTerminalWebSocketClosed(): void {
+    this.terminalWebSocket.open = Math.max(0, this.terminalWebSocket.open - 1);
+    this.terminalWebSocket.closed += 1;
+  }
+
+  recordTerminalWebSocketFramedBytes(receivedBytes: number, sentBytes: number): void {
+    this.terminalWebSocket.framedReceivedBytes += Math.max(0, receivedBytes);
+    this.terminalWebSocket.framedSentBytes += Math.max(0, sentBytes);
+  }
+
+  recordTerminalWebSocketRejected(): void {
+    this.terminalWebSocket.rejected += 1;
+  }
+
+  recordTerminalWebSocketChannelOpened(): void {
+    this.terminalWebSocket.channelsOpen += 1;
+    this.terminalWebSocket.channelsOpened += 1;
+  }
+
+  recordTerminalWebSocketChannelClosed(): void {
+    this.terminalWebSocket.channelsOpen = Math.max(0, this.terminalWebSocket.channelsOpen - 1);
+    this.terminalWebSocket.channelsClosed += 1;
+  }
+
+  recordTerminalWebSocketReceived(bytes: number, acknowledgement: boolean): void {
+    this.terminalWebSocket.receivedFrames += 1;
+    this.terminalWebSocket.receivedPayloadBytes += Math.max(0, bytes);
+    if (acknowledgement) {
+      this.terminalWebSocket.acknowledgementFrames += 1;
+      this.terminalWebSocket.acknowledgementPayloadBytes += Math.max(0, bytes);
+    }
+  }
+
+  recordTerminalWebSocketSent(bytes: number, outputBytes?: number): void {
+    this.terminalWebSocket.sentFrames += 1;
+    this.terminalWebSocket.sentPayloadBytes += Math.max(0, bytes);
+    if (outputBytes !== undefined) {
+      this.terminalWebSocket.outputFrames += 1;
+      this.terminalWebSocket.outputPayloadBytes += Math.max(0, outputBytes);
+    }
+  }
+
+  recordTerminalWebSocketDesync(): void {
+    this.terminalWebSocket.desyncs += 1;
+  }
+
+  recordTerminalWebSocketQueuedBytes(bytes: number): void {
+    this.terminalWebSocket.peakQueuedBytes = Math.max(
+      this.terminalWebSocket.peakQueuedBytes,
+      Math.max(0, bytes),
+    );
+  }
+
   recordReplayHandshake(
     status: "fresh" | "caught-up" | "replayed" | "reconcile",
     reason: GatewayReconcileReason | null,
@@ -1000,7 +1181,8 @@ export class GatewayMetricsStore {
       ),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
-      compression: { configuredMode: this.compression.configuredMode },
+      compression: { ...this.compression },
+      terminalWebSocket: { ...this.terminalWebSocket },
       recentRouteSamples: [...this.recentRouteSamples],
       recentClientBootReports: [...this.recentClientBootReports],
     };

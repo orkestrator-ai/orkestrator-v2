@@ -332,6 +332,7 @@ describe("remote gateway", () => {
     });
     expect(metrics.events["terminal-output"]).toEqual({
       frames: 1,
+      serializedBytes: Buffer.byteLength(terminalMessage),
       wireBytes: Buffer.byteLength(terminalMessage),
       droppedFrames: 1,
       droppedClients: 0,

@@ -230,6 +230,7 @@ export type GatewayMetricsSnapshot = {
     string,
     {
       frames: number;
+      serializedBytes: number;
       wireBytes: number;
       droppedFrames: number;
       droppedClients: number;
@@ -244,8 +245,40 @@ export type GatewayMetricsSnapshot = {
     stalled: number;
     softDesyncs: number;
     keepalives: number;
+    sourceBytes: number;
+    encodedBodyBytes: number;
   };
-  compression: { configuredMode: string };
+  compression: {
+    configuredMode: string;
+    streamingActive: number;
+    streamingPeakActive: number;
+    streamingStarted: number;
+    streamingDeclined: number;
+    streamingFailures: number;
+    streamingSourceBytes: number;
+    streamingEncodedBytes: number;
+  };
+  terminalWebSocket: {
+    open: number;
+    opened: number;
+    closed: number;
+    rejected: number;
+    channelsOpen: number;
+    channelsOpened: number;
+    channelsClosed: number;
+    receivedFrames: number;
+    receivedPayloadBytes: number;
+    sentFrames: number;
+    sentPayloadBytes: number;
+    outputFrames: number;
+    outputPayloadBytes: number;
+    acknowledgementFrames: number;
+    acknowledgementPayloadBytes: number;
+    desyncs: number;
+    peakQueuedBytes: number;
+    framedReceivedBytes: number;
+    framedSentBytes: number;
+  };
   recentRouteSamples: Array<{
     route: string;
     method: string;

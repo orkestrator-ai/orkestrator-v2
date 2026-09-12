@@ -622,14 +622,27 @@ export type DrainAwareEventClientWriter = EventClientWriter & {
   onDrain(listener: () => void): void;
 };
 
+export type EventClientWriterMetrics = {
+  sourceBytes(bytes: number): void;
+  encodedBytes(bytes: number): void;
+  compressionFailure?(): void;
+  closed?(): void;
+};
+
 export class IdentityEventClientWriter implements DrainAwareEventClientWriter {
-  constructor(readonly response: ServerResponse) {}
+  constructor(
+    readonly response: ServerResponse,
+    private readonly metrics?: EventClientWriterMetrics,
+  ) {}
 
   get writableLength(): number {
     return this.response.writableLength;
   }
 
   write(chunk: string): boolean {
+    const bytes = Buffer.byteLength(chunk);
+    this.metrics?.sourceBytes(bytes);
+    this.metrics?.encodedBytes(bytes);
     return this.response.write(chunk);
   }
 
@@ -653,9 +666,14 @@ export class GzipEventClientWriter implements DrainAwareEventClientWriter {
   private pendingBytes = 0;
   private closed = false;
 
-  constructor(readonly response: ServerResponse) {
+  constructor(
+    readonly response: ServerResponse,
+    private readonly metrics?: EventClientWriterMetrics,
+  ) {
     this.compressor.pipe(response);
+    this.compressor.on("data", (chunk: Buffer) => this.metrics?.encodedBytes(chunk.byteLength));
     this.compressor.once("error", (error) => {
+      this.metrics?.compressionFailure?.();
       if (!this.closed) response.destroy(error);
       this.destroy();
     });
@@ -664,12 +682,13 @@ export class GzipEventClientWriter implements DrainAwareEventClientWriter {
   }
 
   get writableLength(): number {
-    return this.pendingBytes;
+    return this.pendingBytes + this.compressor.readableLength + this.response.writableLength;
   }
 
   write(chunk: string): boolean {
     if (this.closed) return false;
     const bytes = Buffer.byteLength(chunk);
+    this.metrics?.sourceBytes(bytes);
     this.pendingBytes += bytes;
     return this.compressor.write(chunk, (error) => {
       this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
@@ -688,6 +707,7 @@ export class GzipEventClientWriter implements DrainAwareEventClientWriter {
     this.compressor.destroy();
     if (!this.response.destroyed) this.response.destroy();
     this.drainListeners.clear();
+    this.metrics?.closed?.();
   }
 
   onDrain(listener: () => void): void {

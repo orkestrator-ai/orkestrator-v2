@@ -206,6 +206,10 @@ export abstract class GatewayBase {
       originAllowed: (request) =>
         Boolean(request.headers.origin && this.isOriginAllowed(request, request.headers.origin)),
       logger: this.logger,
+      metrics: this.metrics,
+      maxSockets: options.terminalWebSocket?.maxSockets,
+      maxChannelsPerSocket: options.terminalWebSocket?.maxChannelsPerSocket,
+      maxChannels: options.terminalWebSocket?.maxChannels,
     });
   }
 

@@ -6086,6 +6086,41 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(selectProjectMock).toHaveBeenCalledWith("project-1");
   });
 
+  test("activates the project when post-merge cleanup is still pending", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "merged",
+      cleanupOutcome: "pending",
+    });
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+    );
+    expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("activates the project when the merge omits a cleanup outcome", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "merged",
+    } as MergeOutcome);
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+    );
+    expect(setProjectCollapsedMock).toHaveBeenCalledWith("project-1", false);
+    expect(selectProjectMock).toHaveBeenCalledWith("project-1");
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+  });
+
   test("leaves pending cleanup orchestration with the backend", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     mergeEnvironmentPrMock.mockResolvedValueOnce({

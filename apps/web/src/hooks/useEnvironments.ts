@@ -816,8 +816,11 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
   const deleteEnvironment = useCallback(
     async (environmentId: string) => {
+      const projectId =
+        useEnvironmentStore.getState().getEnvironmentById(environmentId)?.projectId ??
+        useUIStore.getState().selectedProjectId;
       setDeleting(environmentId, true);
-      activateProjectForEnvironmentCleanup(environmentId);
+      const didActivate = activateProjectForEnvironmentCleanup(environmentId);
       setError(null);
       try {
         // Delete all sessions for this environment first (cleans up buffer files too)
@@ -858,6 +861,13 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       } finally {
         setDeleting(environmentId, false);
+        if (
+          didActivate &&
+          projectId &&
+          useEnvironmentStore.getState().getEnvironmentById(environmentId)
+        ) {
+          useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+        }
       }
     },
     [removeEnvironmentFromStore, setError, deleteSessionsByEnvironment, setDeleting, showError],

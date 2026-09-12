@@ -601,6 +601,10 @@ describe("useEnvironments", () => {
       error: null,
     });
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    useUIStore.setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
     const pipelineId = seedBuildPipeline("env-1");
     const workflow = loopedReviewFixture({
       environmentId: "env-1",
@@ -621,6 +625,49 @@ describe("useEnvironments", () => {
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeDefined();
     expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
     expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+  });
+
+  test("deleteEnvironment leaves immediately even when a stale merge-cleanup error is present", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "test-env",
+      cleanupAfterMergeError: "delete failed",
+      lifecycleOperation: "deleting",
+      deletionRequestedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const deferred = createDeferred<void>();
+    mockDeleteEnvironment.mockImplementationOnce(() => deferred.promise);
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+    });
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    useUIStore.setState({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-1",
+    });
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    let deletePromise: Promise<void> = Promise.resolve();
+    act(() => {
+      deletePromise = result.current.deleteEnvironment("env-1");
+    });
+
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+
+    deferred.resolve();
+    await act(async () => {
+      await deletePromise;
+    });
   });
 
   test("deleteEnvironment sets error on failure", async () => {

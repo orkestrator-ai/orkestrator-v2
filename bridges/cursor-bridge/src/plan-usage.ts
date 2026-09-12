@@ -1,145 +1,30 @@
 /**
- * Cursor plan-quota windows for the shared account panel.
+ * Cursor plan-quota reads for the shared account panel.
  *
  * `agent.getUsage()` answers what this durable agent spent. The plan-quota
- * percentages — Cursor Models / Other Models / overall — come from a separate
- * account read and are the figures `UsagePanel` draws as progress bars for
- * every other provider. This module maps only those provider-reported
- * percentages onto `NativeAgentAccountUsageWindow`. It does not invent a
- * percentage from included spend versus limit.
+ * percentages come from a separate account read, mapped by the shared protocol
+ * module so the backend's settings read and this one cannot disagree.
  */
 import type { NativeAgentAccountUsageWindow } from "@orkestrator/protocol/native-agent";
+import {
+  accountWindowsFromPlanUsage,
+  CURSOR_API_BASE,
+  CURSOR_EXCHANGE_PATH,
+  CURSOR_PLAN_WINDOW,
+  CURSOR_TOKEN_EXPIRY_SKEW_MS,
+  cursorDashboardPath,
+  cursorExchangeAccessToken,
+  cursorExchangeExpiryMs,
+  DEFAULT_PLAN_LABELS,
+  isPlanQuotaWindow,
+} from "@orkestrator/protocol/cursor-plan-usage";
 import { CATALOG_TIMEOUT_MS } from "./config.js";
 import { resolveCredential } from "./credentials.js";
-import { isObject } from "./state.js";
 
-const CURSOR_API_BASE = "https://api2.cursor.sh";
+export { accountWindowsFromPlanUsage, CURSOR_PLAN_WINDOW, DEFAULT_PLAN_LABELS, isPlanQuotaWindow };
+
 const ACCOUNT_USAGE_TTL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-const TOKEN_EXPIRY_SKEW_MS = 30_000;
-const FALLBACK_TOKEN_LIFETIME_MS = 55 * 60_000;
-const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
-const MAX_PLAUSIBLE_EPOCH_MS = Date.UTC(2100, 0, 1);
-
-export const CURSOR_PLAN_WINDOW = {
-  auto: "cursor-internal-auto",
-  api: "cursor-internal-api",
-  total: "billing_cycle",
-} as const;
-
-export const DEFAULT_PLAN_LABELS = {
-  auto: "Cursor Models",
-  api: "Other Models",
-  total: "Cursor quota",
-} as const;
-
-export function isPlanQuotaWindow(window: string): boolean {
-  return (
-    window === CURSOR_PLAN_WINDOW.auto ||
-    window === CURSOR_PLAN_WINDOW.api ||
-    window === CURSOR_PLAN_WINDOW.total
-  );
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function finitePercent(value: unknown): number | undefined {
-  const parsed = finiteNumber(value);
-  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
-}
-
-function unixMsToIso(value: unknown): string | undefined {
-  const milliseconds = unixMilliseconds(value);
-  if (milliseconds === undefined) return undefined;
-  return new Date(milliseconds).toISOString();
-}
-
-function unixMilliseconds(value: unknown): number | undefined {
-  const milliseconds =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : Number.NaN;
-  if (
-    !Number.isFinite(milliseconds) ||
-    milliseconds < MIN_PLAUSIBLE_EPOCH_MS ||
-    milliseconds > MAX_PLAUSIBLE_EPOCH_MS
-  ) {
-    return undefined;
-  }
-  return milliseconds;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return isObject(value) ? value : undefined;
-}
-
-/**
- * Map Cursor's planUsage percentages onto the generic account windows.
- *
- * Only fields Cursor itself reports as percentages become bars. Included
- * dollar spend/limit stay out: those do not share the quota denominator and
- * previously produced a fake allowance meter.
- */
-export function accountWindowsFromPlanUsage(
-  currentPeriodValue: unknown,
-  labels: { auto: string; api: string; total: string } = DEFAULT_PLAN_LABELS,
-): NativeAgentAccountUsageWindow[] {
-  const currentPeriod = record(currentPeriodValue);
-  const planUsage = record(currentPeriod?.planUsage);
-  if (!planUsage) return [];
-
-  const cycleStartMs = unixMilliseconds(currentPeriod?.billingCycleStart);
-  const cycleEndMs = unixMilliseconds(currentPeriod?.billingCycleEnd);
-  const resetsAt = unixMsToIso(cycleEndMs);
-  const windowMinutes =
-    cycleStartMs !== undefined && cycleEndMs !== undefined && cycleEndMs > cycleStartMs
-      ? (cycleEndMs - cycleStartMs) / 60_000
-      : undefined;
-  const timing = {
-    ...(resetsAt ? { resetsAt } : {}),
-    ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-  };
-  const windows: NativeAgentAccountUsageWindow[] = [];
-  const autoPercentUsed = finitePercent(planUsage.autoPercentUsed);
-  const apiPercentUsed = finitePercent(planUsage.apiPercentUsed);
-  const totalPercentUsed = finitePercent(planUsage.totalPercentUsed);
-
-  if (autoPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.auto,
-      label: labels.auto,
-      usedPercent: autoPercentUsed,
-      ...timing,
-    });
-  }
-  if (apiPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.api,
-      label: labels.api,
-      usedPercent: apiPercentUsed,
-      ...timing,
-    });
-  }
-  if (windows.length === 0 && totalPercentUsed !== undefined) {
-    windows.push({
-      window: CURSOR_PLAN_WINDOW.total,
-      label: labels.total,
-      usedPercent: totalPercentUsed,
-      ...timing,
-    });
-  }
-  return windows;
-}
 
 /**
  * Keep session-scoped agent totals and fold in the latest plan-quota rows.
@@ -228,52 +113,28 @@ async function loadPlanAccountWindows(options?: {
   return cachedPlan?.windows;
 }
 
-function jwtExpiryMs(token: string): number | undefined {
-  const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  try {
-    const parsed = record(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
-    const expirySeconds = finiteNumber(parsed?.exp);
-    return expirySeconds === undefined ? undefined : expirySeconds * 1_000;
-  } catch {
-    return undefined;
-  }
-}
-
-function exchangeExpiryMs(payload: Record<string, unknown>, token: string, now: number): number {
-  const expiresIn = finiteNumber(payload.expiresIn) ?? finiteNumber(payload.expires_in);
-  const candidates = [
-    jwtExpiryMs(token),
-    finiteNumber(payload.expiresAt),
-    finiteNumber(payload.expires_at),
-    expiresIn === undefined ? undefined : now + expiresIn * 1_000,
-  ].filter((candidate): candidate is number => candidate !== undefined && candidate > now);
-  return candidates.length > 0 ? Math.min(...candidates) : now + FALLBACK_TOKEN_LIFETIME_MS;
-}
-
-async function exchangeAccessToken(
+function exchangeAccessToken(
   apiKey: string,
   fetchImpl: FetchLike,
   now: () => number,
   timeoutMs: number,
 ): Promise<string | undefined> {
   const current = now();
-  if (accessToken && accessToken.expiresAt > current + TOKEN_EXPIRY_SKEW_MS) {
-    return accessToken.value;
+  if (accessToken && accessToken.expiresAt > current + CURSOR_TOKEN_EXPIRY_SKEW_MS) {
+    return Promise.resolve(accessToken.value);
   }
-  const response = await requestJson(
-    `${CURSOR_API_BASE}/auth/exchange_user_api_key`,
-    { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    fetchImpl,
-    timeoutMs,
-  );
-  const payload = record(response);
-  const value = [payload?.accessToken, payload?.access_token, payload?.token].find(
-    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
-  );
-  if (!payload || !value) return undefined;
-  accessToken = { value, expiresAt: exchangeExpiryMs(payload, value, current) };
-  return value;
+  return (async () => {
+    const response = await requestJson(
+      `${CURSOR_API_BASE}${CURSOR_EXCHANGE_PATH}`,
+      { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      fetchImpl,
+      timeoutMs,
+    );
+    const value = cursorExchangeAccessToken(response);
+    if (!value) return undefined;
+    accessToken = { value, expiresAt: cursorExchangeExpiryMs(response, value, current) };
+    return value;
+  })();
 }
 
 async function dashboardRequest(
@@ -283,7 +144,7 @@ async function dashboardRequest(
   timeoutMs: number,
 ): Promise<unknown> {
   return requestJson(
-    `${CURSOR_API_BASE}/aiserver.v1.DashboardService/${method}`,
+    `${CURSOR_API_BASE}${cursorDashboardPath(method)}`,
     {
       Authorization: `Bearer ${accessTokenValue}`,
       "Content-Type": "application/json",

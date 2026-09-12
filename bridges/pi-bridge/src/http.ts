@@ -25,6 +25,8 @@ import {
   resolveApproval,
 } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
+import { parseAgentMcpConnection } from "./mcp-config.js";
+import { publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
@@ -65,6 +67,7 @@ import {
   listResumableSessions,
   navigateSessionHistory,
   parseComposerPatch,
+  reconcileAgentMcp,
   resumeSession,
   setSessionReadOnly,
   setSessionTitle,
@@ -231,6 +234,10 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     );
+    storeAgentMcp(state, body.agentMcp);
+    // An idempotent create can return an already-attached session; a rotated
+    // credential has to move the live MCP connection, not just memory.
+    await reconcileAgentMcp(state);
     if (typeof body.readOnly === "boolean") {
       if (
         (state.readOnly === true) !== body.readOnly &&
@@ -265,6 +272,7 @@ async function routeGlobal(
     ).catch((error) => {
       throw new HttpError(400, errorText(error));
     });
+    storeAgentMcp(state, body.agentMcp);
     await persistBarrier();
     json(response, 201, publicSessionReference(state));
     return true;
@@ -425,9 +433,8 @@ async function routeSession(
   if (action === "commands" && request.method === "GET") {
     return json(response, 200, { commands: state.slashCommands });
   }
-  // Pi extensions are native tools, not MCP servers.
   if (action === "mcp" && request.method === "GET") {
-    return json(response, 200, { servers: [] });
+    return json(response, 200, { servers: publicPiMcpServers(state) });
   }
   if (action === "config" && request.method === "GET") {
     return json(response, 200, { ...state.composer, commands: state.slashCommands });
@@ -439,6 +446,15 @@ async function routeSession(
     // Never dispatches. Attach exists to move the SDK's cold start *outside*
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
+    //
+    // The tab-scoped connection is accepted here too. The backend's warm-up
+    // attach runs before it resolves the prompt's credential, and a restarted
+    // bridge has no persisted one, so without this the warm-up would connect
+    // the process-env identity and the prompt would have to rebuild the session
+    // to correct it.
+    const body = await readJson(request);
+    storeAgentMcp(state, body.agentMcp);
+    await reconcileAgentMcp(state);
     // Truthiness, not `!== undefined`: an unattached session carries `null`,
     // which is exactly the check `ensureSession` itself makes.
     const wasAttached = Boolean(state.session);
@@ -838,6 +854,7 @@ async function handlePrompt(
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
     throw new HttpError(400, "readOnly must be a boolean");
+  storeAgentMcp(state, body.agentMcp);
 
   // Claim the turn synchronously. `ensureSession` yields even on its attached
   // fast path, so a second request would otherwise pass both the duplicate and
@@ -857,6 +874,10 @@ async function handlePrompt(
     files = await resolvePromptFiles(attachments, workingDirectory);
     if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
     applyComposerPatch(state, parseComposerPatch(body));
+    // A rotated tab credential has to rebuild the SDK session before the turn
+    // is dispatched, or the model reaches the mailbox under the previous
+    // identity while `/mcp` already reports the new one.
+    await reconcileAgentMcp(state);
     session = await ensureSession(state);
     await applyComposerToSession(state);
     // The prepared record must be on disk before Pi can possibly accept the
@@ -960,6 +981,11 @@ function appendUserMessage(
     createdAt: new Date().toISOString(),
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (attachments.length + 1));
+}
+
+function storeAgentMcp(state: SessionState, value: unknown): void {
+  const parsed = parseAgentMcpConnection(value);
+  if (parsed) state.agentMcp = parsed;
 }
 
 function readBoundedString(value: unknown, limit: number, field: string): string | undefined {

@@ -356,7 +356,19 @@ export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 export type NativeAgentDispatchOutcome =
   | { outcome: "accepted"; requestId: string }
   | { outcome: "rejected"; error: string }
-  | { outcome: "unknown"; requestId: string; error?: string };
+  | {
+      outcome: "unknown";
+      requestId: string;
+      error?: string;
+      /**
+       * Where the ambiguity was observed. `transport` means the dispatch call
+       * itself failed before it reached the backend's durable bookkeeping, so
+       * no recoverable record was created and the caller must surface the
+       * failure instead of waiting for a card that will never arrive. Absent
+       * (or `provider`) means the backend parked a recoverable dispatch.
+       */
+      origin?: "provider" | "transport";
+    };
 
 /**
  * A provider may have accepted this request even though Orkestrator did not
@@ -369,6 +381,14 @@ export interface NativeAgentRecoverableDispatch {
   createdAt: string;
   /** Omitted by older backends, where every recoverable dispatch was a prompt. */
   kind?: "prompt" | "steer";
+  /**
+   * `reconciling` while the backend may still confirm the dispatch against the
+   * provider's own journal, so the record is not yet a choice the user has to
+   * make. `action-required` once that reconciliation window has elapsed, when
+   * only retry or discard can resolve it. Absent means the backend predates
+   * this field, where every recoverable dispatch expected a decision.
+   */
+  status?: "reconciling" | "action-required";
 }
 
 export type NativeAgentTurnPhase =

@@ -347,12 +347,54 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
        * failure here is left for it to report authoritatively rather than
        * pre-empting it with a second, less specific error.
        */
-      await provider.prepareDispatch?.(session.providerSessionId).catch((error: unknown) => {
-        console.warn(
-          `[native-agent] Attaching ${input.agent} before dispatch failed:`,
-          error instanceof Error ? error.message : error,
+      /*
+       * Resolve the tab-scoped MCP credential once, before the warm-up attach.
+       *
+       * The bridge rebuilds its SDK session when the credential it was attached
+       * with differs from the one on the prompt, so handing the attach the same
+       * connection the prompt will send keeps a restarted session from paying a
+       * second cold start. A resolution failure is swallowed here: the prompt
+       * path resolves it authoritatively inside the dispatch window.
+       */
+      const resolveAgentMcp = async (
+        durable: PersistedNativeAgentSession,
+      ): Promise<{ url: string; token: string } | undefined> => {
+        if (
+          !(durable.agent === "claude" || durable.agent === "codex" || durable.agent === "pi") ||
+          durable.owner?.kind !== "environment" ||
+          !this.options.resolveAgentToolConnection
+        ) {
+          return undefined;
+        }
+        const prefix = `env-${durable.environmentId}:`;
+        const tabId = durable.logicalSessionKey.startsWith(prefix)
+          ? durable.logicalSessionKey.slice(prefix.length)
+          : "";
+        const environment = tabId ? await this.storage.getEnvironment(durable.environmentId) : null;
+        if (!environment) return undefined;
+        return this.options.resolveAgentToolConnection(
+          durable.environmentId,
+          durable.owner.projectId,
+          tabId,
+          environment.environmentType === "local" ? "host" : "container",
         );
-      });
+      };
+      let dispatchAgentMcp: { url: string; token: string } | undefined;
+      let dispatchAgentMcpResolved = false;
+      try {
+        dispatchAgentMcp = await resolveAgentMcp(session);
+        dispatchAgentMcpResolved = true;
+      } catch {
+        // Best-effort; the prompt request resolves it authoritatively below.
+      }
+      await provider
+        .prepareDispatch?.(session.providerSessionId, { agentMcp: dispatchAgentMcp })
+        .catch((error: unknown) => {
+          console.warn(
+            `[native-agent] Attaching ${input.agent} before dispatch failed:`,
+            error instanceof Error ? error.message : error,
+          );
+        });
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
       /*
        * Validate liveness before opening the durable dispatch window, but do not
@@ -389,28 +431,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
               };
             }
-            let agentMcp: { url: string; token: string } | undefined;
-            if (
-              (durable.agent === "claude" || durable.agent === "codex") &&
-              durable.owner?.kind === "environment" &&
-              this.options.resolveAgentToolConnection
-            ) {
-              const prefix = `env-${durable.environmentId}:`;
-              const tabId = durable.logicalSessionKey.startsWith(prefix)
-                ? durable.logicalSessionKey.slice(prefix.length)
-                : "";
-              const environment = tabId
-                ? await this.storage.getEnvironment(durable.environmentId)
-                : null;
-              if (environment) {
-                agentMcp = this.options.resolveAgentToolConnection(
-                  durable.environmentId,
-                  durable.owner.projectId,
-                  tabId,
-                  environment.environmentType === "local" ? "host" : "container",
-                );
-              }
-            }
+            // Reuse the credential resolved for the warm-up attach when it
+            // succeeded; otherwise resolve it here, inside the at-most-once
+            // window, which is the authoritative path.
+            const agentMcp = dispatchAgentMcpResolved
+              ? dispatchAgentMcp
+              : await resolveAgentMcp(durable);
             await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
               requestId: input.requestId,
               // Only a person typing into the composer can mean "run this

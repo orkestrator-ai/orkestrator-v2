@@ -1,16 +1,22 @@
 # 07 — MCP inventory and management
 
-**Status:** ⬜ Not started · 0/17 tasks · Depends on: 02, 04
+**Status:** 🟨 In progress · launch wiring for Cursor/Grok done; inventory
+panel and lifecycle actions not started · Depends on: 02, 04
 
 ## Goal
 
-Today MCP is a count in the runtime summary plus a settings-pane discovery
-that shells out to each CLI. Cursor cannot see a server at all; Claude reads
-fields that are structurally always undefined; no platform can reconnect,
-toggle or sign in to a server from Orkestrator. Add one normalized MCP model,
-served by the backend from each SDK's live status API, with the small set of
-actions the SDKs actually offer. One generic panel renders it. Pi has no MCP
-client and reports an empty list.
+Launch configuration is no longer the gap. Cursor's SDK bridge injects
+Orkestrator's HTTP MCP server (and, in containers, `.cursor/mcp.json`)
+through `AgentOptions.mcpServers`. Grok's ACP bridge passes the same
+Orkestrator server on `session/new` and `session/load`. What is still missing
+is a normalized live inventory: today MCP is a count in the runtime summary
+plus a settings-pane discovery that shells out to each CLI; Claude still
+reads fields that are structurally often undefined; no platform can
+reconnect, toggle or sign in to a server from Orkestrator. Add one
+normalized MCP model, served by the backend from each SDK's live status API,
+with the small set of actions the SDKs actually offer. One generic panel
+renders it. Pi now has a bridge-owned MCP client and reports a live
+`GET /session/:id/mcp` inventory; settings-pane CLI discovery stays empty.
 
 ## Normalized model
 
@@ -91,20 +97,24 @@ config editing.
 
 ### Cursor bridge
 
-- [ ] Pass Orkestrator's control MCP server and, inside containers, the
+- [x] Pass Orkestrator's Agent MCP server and, inside containers, the
   project's `.cursor/mcp.json` entries through `AgentOptions.mcpServers`
-  (never set today). Status comes from the `system` message's tool list
-  (plan 02) since the SDK has no MCP status call; report `unknown` where it
-  cannot tell. Actions: none.
+  (`bridges/cursor-bridge/src/mcp.ts`). Host runs still omit project MCP so
+  a cloned repo cannot start host processes.
+- [ ] Status from the `system` message's tool list (plan 02) since the SDK
+  has no MCP status call; report `unknown` where it cannot tell. Actions:
+  none.
 - [ ] Remove the "Cursor's SDK bridge does not expose an MCP server list"
-  error branch in `extension-discovery.ts:485-494` once the route answers.
+  error branch in `extension-discovery.ts` once the route answers.
 
 ### Grok bridge
 
-- [ ] Populate `mcpServers` on `session/new` and `session/load` from the same
-  Orkestrator control server config the other bridges receive (today always
-  `[]`, `acp-session.ts:347`). Status from `*/mcp/servers_updated` (count
-  today) with names only, since entries may carry keys.
+- [x] Populate `mcpServers` on `session/new` and `session/load` from
+  `configuredAcpMcpServers()` (`acp-context.ts`). Handshake
+  `_meta.mcpServers` is ignored because it is empty before the agent loads
+  the list.
+- [ ] Status from `*/mcp/servers_updated` (count today) with names only,
+  since entries may carry keys.
 
 ### Pi bridge
 

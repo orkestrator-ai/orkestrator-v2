@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -95,6 +96,16 @@ async function completed(root: string, run: ReviewValidationRun) {
     next = await control(root, run, "status");
   }
   expect(["planned", "running"]).not.toContain(next.status);
+  return next;
+}
+async function waitUntilQueued(root: string, run: ReviewValidationRun) {
+  const deadline = Date.now() + 3000;
+  let next = await control(root, run, "status");
+  while (next.results[0]!.status !== "queued" && Date.now() < deadline) {
+    await Bun.sleep(20);
+    next = await control(root, run, "status");
+  }
+  expect(next.results[0]!.status).toBe("queued");
   return next;
 }
 async function waitFor(
@@ -199,9 +210,13 @@ test("cancellation terminates children and a cancelled launch cannot start comma
   const cancelled = await control(root, run, "cancel");
   expect(cancelled.status).toBe("cancelled");
   expect((await control(root, run)).status).toBe("cancelled");
+  // The child was killed mid-flight, so it never reached its trailing command.
+  expect(existsSync(path.join(root, ".orkestrator", "unexpected"))).toBe(false);
   const early = await fixture([command("never", "touch .orkestrator/unexpected")]);
   await control(early.root, early.run, "cancel");
   expect((await completed(early.root, early.run)).status).toBe("cancelled");
+  // A cancelled launch must not start the command that was never dispatched.
+  expect(existsSync(path.join(early.root, ".orkestrator", "unexpected"))).toBe(false);
 });
 
 test("timeout and output overflow become incomplete evidence, never assertion failures", async () => {
@@ -260,7 +275,8 @@ test("host queue survives reconnect, excludes wait from timeout, and cancels wit
   });
   try {
     await control(root, run);
-    await Bun.sleep(1300);
+    await waitUntilQueued(root, run);
+    await Bun.sleep(1050);
     const waiting = await control(root, run, "status");
     expect(waiting.results[0]!.status).toBe("queued");
     expect(waiting.results[0]!.startedAt).toBeUndefined();
@@ -408,7 +424,8 @@ admission.close(); process.exitCode = result.status ?? 1;
   });
   try {
     await control(root, run);
-    await Bun.sleep(1500);
+    await waitUntilQueued(root, run);
+    await Bun.sleep(1050);
     const waiting = await control(root, run, "status");
     expect(waiting.results[0]!.status).toBe("queued");
     scheduler.release(ticket);
@@ -540,7 +557,11 @@ process.exit(0);
 
 test("review validation queues across worktrees and rehydrates hashed artifacts", async () => {
   const first = await fixture([
-    command("first", "sleep 8; printf first-output", { timeoutMs: 20000 }),
+    command(
+      "first",
+      "while [ ! -f .orkestrator/release-first ]; do sleep 0.1; done; printf first-output",
+      { timeoutMs: 20000 },
+    ),
   ]);
   const second = await fixture([command("second", "printf second-output")]);
   const schedulerDirectory = await mkdtemp(path.join(tmpdir(), "review-shared-scheduler-"));
@@ -581,6 +602,10 @@ test("review validation queues across worktrees and rehydrates hashed artifacts"
       secondState = await control(second.root, second.run, "status");
     }
     expect(secondState.results[0]!.status).toBe("queued");
+    // Release the held first command only after the queued observation is
+    // recorded, so host admission cannot be outrun by spawn latency.
+    await mkdir(path.join(first.root, ".orkestrator"), { recursive: true });
+    await writeFile(path.join(first.root, ".orkestrator", "release-first"), "release");
     scheduler.release(blocker);
     const doneFirst = await completed(first.root, first.run);
     const doneSecond = await completed(second.root, second.run);
@@ -595,24 +620,31 @@ test("review validation queues across worktrees and rehydrates hashed artifacts"
   }
 }, 30000);
 
-test("a cooperative startup slower than ten seconds is not mistaken for a stalled runner", async () => {
+test("a cooperative startup slower than the stall threshold is not mistaken for a stalled runner", async () => {
   const { root, run } = await cooperativeFixture(
     [
       command("slow-start", "bun slow-cooperative.ts", {
         weight: 1,
-        timeoutMs: 30000,
+        timeoutMs: 8000,
         resources: ["slow-startup"],
       }),
     ],
     {
       "slow-cooperative.ts": `import { createTestAdmission } from __MODULE__;
-await Bun.sleep(11000);
+await Bun.sleep(1500);
 const admission = createTestAdmission(import.meta.dir, process.env, console.log);
 const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1 }, async () => ({ status: 0 }));
 admission.close(); process.exitCode = result.status ?? 1;
 `,
     },
   );
-  const done = await waitFor(root, run, 25000, { ORKESTRATOR_COOPERATIVE_STARTUP_MS: "30000" });
+  // The child stays silent past the stale window (1000 ms) before its first
+  // publish, so the startup window — not the stale window — must cover it. The
+  // threshold keeps a wide slack above the sleep so spawn/transpile latency on a
+  // loaded host cannot turn a slow-but-healthy startup into a stall.
+  const done = await waitFor(root, run, 12000, {
+    ORKESTRATOR_COOPERATIVE_STALE_MS: "1000",
+    ORKESTRATOR_COOPERATIVE_STARTUP_MS: "10000",
+  });
   expect(done.results[0]!.status).toBe("passed");
-}, 30000);
+}, 20000);

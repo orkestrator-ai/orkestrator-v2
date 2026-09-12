@@ -76,11 +76,31 @@ describe("PlanUsageSection", () => {
     expect(await screen.findByText(/does not report any metered plan limits/)).toBeTruthy();
   });
 
-  test("does not spawn a bridge for a bridge-backed platform until refresh", async () => {
-    getPlanUsage.mockResolvedValue(snapshot({ platform: "claude", status: "ok", windows: [] }));
+  test("reads every platform when the pane opens", async () => {
+    getPlanUsage.mockResolvedValue(
+      snapshot({
+        platform: "claude",
+        windows: [{ window: "five_hour", label: "5-hour limit", usedPercent: 37 }],
+      }),
+    );
     render(<PlanUsageSection platform="claude" />);
-    expect(screen.getByText(/read on demand/)).toBeTruthy();
-    expect(getPlanUsage).not.toHaveBeenCalled();
+    expect(await screen.findByText("5-hour limit")).toBeTruthy();
+    expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false });
+  });
+
+  test("skips the cache after a credential save bumps the reload token", async () => {
+    getPlanUsage.mockResolvedValue(snapshot({ platform: "cursor" }));
+    const { rerender } = render(<PlanUsageSection platform="cursor" reloadToken={0} />);
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: false }));
+
+    rerender(<PlanUsageSection platform="cursor" reloadToken={1} />);
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("cursor", { force: true }));
+  });
+
+  test("re-reads past the cache when the refresh control is used", async () => {
+    getPlanUsage.mockResolvedValue(snapshot({ platform: "claude" }));
+    render(<PlanUsageSection platform="claude" />);
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }));
 
     fireEvent.click(screen.getByLabelText("Refresh plan usage"));
     await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: true }));
@@ -91,5 +111,34 @@ describe("PlanUsageSection", () => {
     render(<PlanUsageSection platform="opencode" />);
     expect(await screen.findByText("Plan usage is unavailable")).toBeTruthy();
     expect(getPlanUsage).toHaveBeenCalledWith("opencode", { force: false });
+  });
+
+  test("ignores a slow response once the platform has changed", async () => {
+    let resolveFirst!: (value: PlanUsageSnapshot) => void;
+    const firstRequest = new Promise<PlanUsageSnapshot>((resolve) => {
+      resolveFirst = resolve;
+    });
+    getPlanUsage.mockImplementation((async (platform: string) => {
+      return platform === "claude"
+        ? firstRequest
+        : snapshot({
+            platform: "codex",
+            windows: [{ window: "primary", label: "Primary limit", usedPercent: 5 }],
+          });
+    }) as unknown as () => Promise<PlanUsageSnapshot>);
+
+    const { rerender } = render(<PlanUsageSection platform="claude" />);
+    await waitFor(() => expect(getPlanUsage).toHaveBeenCalledWith("claude", { force: false }));
+
+    rerender(<PlanUsageSection platform="codex" />);
+    expect(await screen.findByText("Primary limit")).toBeTruthy();
+
+    resolveFirst(
+      snapshot({
+        platform: "claude",
+        windows: [{ window: "five_hour", label: "5-hour limit", usedPercent: 90 }],
+      }),
+    );
+    await waitFor(() => expect(screen.queryByText("5-hour limit") === null).toBe(true));
   });
 });

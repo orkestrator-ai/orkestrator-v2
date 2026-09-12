@@ -26,6 +26,7 @@ import {
   navigateSessionHistory,
   newSessionState,
   projectResourceDiscoveryOptions,
+  reconcileAgentMcp,
   recordExtensionLoadDiagnostics,
   resumeSession,
   sessionManagerFor,
@@ -909,5 +910,99 @@ describe("composer hydration", () => {
 
     expect(catalogReadFailed()).toBe(true);
     expect(state.composer.models.map((entry) => entry.id)).toEqual(["provider/stale"]);
+  });
+});
+
+describe("MCP lifecycle", () => {
+  async function prepareConnection(state: SessionState, onClose: () => void): Promise<void> {
+    const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+    setPiMcpTransportForTests({
+      async connect() {
+        return {
+          tools: [{ name: "send_message" }],
+          async call() {
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          async close() {
+            onClose();
+          },
+        };
+      },
+    });
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
+    await preparePiMcp(state, {
+      agentDir: sessionDirectory,
+      cwd: workingDirectory,
+      env: {},
+    });
+  }
+
+  test("detachSession closes the live MCP connections", async () => {
+    const { setPiMcpTransportForTests } = await import("./mcp.js");
+    let closed = 0;
+    const state = newSessionState();
+    await prepareConnection(state, () => {
+      closed += 1;
+    });
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    try {
+      await ensureSession(state);
+      await detachSession(state);
+
+      expect(closed).toBe(1);
+    } finally {
+      setPiMcpTransportForTests();
+    }
+  });
+
+  test("closes MCP clients already opened when the SDK session fails to attach", async () => {
+    const { setPiMcpTransportForTests } = await import("./mcp.js");
+    let closed = 0;
+    const state = newSessionState();
+    await prepareConnection(state, () => {
+      closed += 1;
+    });
+    installTestHooks({
+      createAgentSession: async () => {
+        throw new Error("the SDK refused to start");
+      },
+    });
+    try {
+      await expect(ensureSession(state)).rejects.toThrow("the SDK refused to start");
+
+      // `attach` opened these before the failure; leaving them open would leak
+      // a child process with no session to own it.
+      expect(closed).toBe(1);
+      expect(state.session).toBeNull();
+    } finally {
+      setPiMcpTransportForTests();
+    }
+  });
+
+  test("rebuilds only when the stored MCP credential actually changed", async () => {
+    const { setPiMcpTransportForTests } = await import("./mcp.js");
+    let closed = 0;
+    const state = newSessionState();
+    await prepareConnection(state, () => {
+      closed += 1;
+    });
+    const fake = fakeSession();
+    installTestHooks({ createAgentSession: async () => fake.session });
+    try {
+      await ensureSession(state);
+
+      // Same credential: the live session is kept.
+      await reconcileAgentMcp(state);
+      expect(state.session).toBe(fake.session);
+      expect(closed).toBe(0);
+
+      state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "rotated" };
+      await reconcileAgentMcp(state);
+      expect(state.session).toBeNull();
+      expect(closed).toBe(1);
+    } finally {
+      setPiMcpTransportForTests();
+    }
   });
 });

@@ -398,6 +398,36 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   >();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
+  /**
+   * Whether a parked dispatch is still reconciling or has become a final
+   * failure.
+   *
+   * Only a prompt gets the grace window: it is the kind whose acknowledgement
+   * the provider's own journal can positively confirm on a later projection
+   * read. A steer is reported as a choice immediately, because its best-effort
+   * settle needs a provider that answers the steer dispatch journal, and a
+   * provider that never does would otherwise leave the user locked behind a
+   * spinner for the whole window.
+   *
+   * An unparseable or future-dated timestamp is treated as final: a decision
+   * the user can make beats a record that can never leave the reconciling
+   * state. A timestamp ahead of the service clock (a backward clock adjustment
+   * between write and read) would otherwise keep the elapsed time negative for
+   * as long as the skew lasts.
+   */
+  protected recoverableDispatchStatus(
+    createdAt: string,
+    kind: "prompt" | "steer" = "prompt",
+  ): "reconciling" | "action-required" {
+    if (kind === "steer") return "action-required";
+    const created = Date.parse(createdAt);
+    const now = this.now();
+    if (!Number.isFinite(created) || created > now) return "action-required";
+    return now - created >= shared.PARKED_DISPATCH_RECONCILE_GRACE_MS
+      ? "action-required"
+      : "reconciling";
+  }
+
   protected async settleAndClearProgressiveReads(): Promise<void> {
     for (const timer of this.displayTailWriteTimers.values()) clearTimeout(timer);
     this.displayTailWriteTimers.clear();
@@ -1703,6 +1733,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                 resolved.session.pendingDispatch?.createdAt ??
                 resolved.session.pendingSteer!.createdAt,
               kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
+              status: this.recoverableDispatchStatus(
+                resolved.session.pendingDispatch?.createdAt ??
+                  resolved.session.pendingSteer!.createdAt,
+                resolved.session.pendingDispatch ? "prompt" : "steer",
+              ),
             },
           }
         : {}),
@@ -3168,6 +3203,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
                   resolved.session.pendingDispatch?.createdAt ??
                   resolved.session.pendingSteer!.createdAt,
                 kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
+                status: this.recoverableDispatchStatus(
+                  resolved.session.pendingDispatch?.createdAt ??
+                    resolved.session.pendingSteer!.createdAt,
+                  resolved.session.pendingDispatch ? "prompt" : "steer",
+                ),
               },
             }
           : {}),

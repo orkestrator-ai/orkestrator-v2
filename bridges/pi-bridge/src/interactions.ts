@@ -25,6 +25,7 @@ import {
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
+import { isOrkestratorMcpTool } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import { isObject, nonBlank, type JsonObject, type SessionState } from "./state.js";
 
@@ -49,7 +50,9 @@ export async function requestToolApproval(
   toolName: string,
   input: unknown,
 ): Promise<ToolCallDecision> {
-  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName)) {
+  const coordinatorMail =
+    state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
+  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail) {
     return {
       block: true,
       reason:
@@ -58,7 +61,7 @@ export async function requestToolApproval(
   }
   const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
   if (approvals === "auto-approve") return { block: false };
-  if (READ_ONLY_TOOLS.has(toolName)) return { block: false };
+  if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail) return { block: false };
   if (approvals === "deny") {
     return { block: true, reason: "The execution policy denies this tool call." };
   }

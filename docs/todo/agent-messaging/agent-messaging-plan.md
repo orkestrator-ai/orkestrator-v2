@@ -5,6 +5,7 @@
 | Status | Consolidated plan, supersedes the three source proposals for decision-making |
 | Sources | `agent-messaging-sol.md`, `agent-messaging-opus.md`, `agent-messaging-grok.md`, `compare.md` |
 | Date | 2026-08-28 |
+| Capabilities note | 2026-09-11: Cursor and Grok MCP launch wiring is in the bridges; the protocol table is still human-inbox-only. See §5.2. |
 
 This document is the single strategic plan for durable, addressed, bidirectional
 messaging between agent tabs across environments and projects. It resolves every
@@ -214,10 +215,14 @@ prefix + tab type + origin, not origin enum alone.
 
 ### 5.2 Per-platform capabilities
 
-Compare established that "every platform has the Agent MCP" is false today (Pi
-ships no MCP client; Cursor and Grok wiring is unconfirmed). Sol's capability
-table is therefore load-bearing: a protocol-level `MailboxCapabilities` record
-with independent flags —
+Compare established that "every platform has the Agent MCP" is false, and that
+is still true for Pi. Cursor and Grok wiring is no longer the open question:
+both native bridges inject the `orkestrator` HTTP MCP server from
+`ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN` (Cursor via
+`AgentOptions.mcpServers` in `bridges/cursor-bridge/src/mcp.ts`; Grok via
+`configuredAcpMcpServers()` on `session/new` and `session/load`). What remains
+load-bearing is Sol's capability table: a protocol-level
+`MailboxCapabilities` record with independent flags —
 
 ```ts
 interface MailboxCapabilities {
@@ -229,13 +234,23 @@ interface MailboxCapabilities {
 
 — derived from a single backend table, covered by a test that fails when a new
 platform or tab type appears without an explicit entry (sol's phase-0
-guardrail). v1 values per grok's audit: Claude/Codex/OpenCode native and
-Claude tmux full; Pi, Cursor, and Grok are human-inbox-only until their MCP
-wiring is confirmed, because an injected message the recipient cannot pull
-and acknowledge would never settle;
-terminal CLIs pull only where their CLI actually loads the env-configured MCP.
+guardrail). Current `agentMailCapabilities()` values
+(`packages/protocol/src/agent-mail.ts`):
+
+| Surface | Pull | Send | Inject | Why |
+| --- | --- | --- | --- | --- |
+| Native Claude / Codex / OpenCode | yes | yes | yes | MCP client + tab-scoped `agentMcp` on create/prompt |
+| Claude tmux | yes | yes | yes | `--mcp-config` + tmux inject |
+| Native Cursor / Grok | **no** | **no** | **no** | Bridges inject the server; flags stay off until a live tool-call probe. Inject must not precede pull/ack or an unackable carrier wedges the ring. Tab-scoped `agentMcp` is forwarded by `HttpBridgeProvider` and ignored by both bridges (process env is the fallback). |
+| Native Pi | yes | yes | yes | Bridge-owned MCP client on the inline `orkestrator-mcp` extension; tab-scoped `agentMcp` on create/prompt/resume |
+| Terminal `claude` / `codex` / `opencode` | yes | yes | no | CLI loads the env-configured MCP |
+| Terminal `cursor` / `grok` / `pi` | no | no | no | Cursor CLI reads `.cursor/mcp.json`, not the env vars; Pi CLI has no MCP |
+
 The UI and the tool descriptions read these flags — nothing infers support
-from a provider string.
+from a provider string. Coordinator `mcpClient` is already `true` for Cursor
+and Grok; `delegation` AND-s that with `canInject`, so a flag flip is what
+unblocks worker replies. Follow-up: ticket
+`872eb45b-0982-4a83-8a43-b53d1a1c7029`.
 
 ---
 

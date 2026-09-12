@@ -1,14 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 
-const LONG_PRESS_MS = 550;
+export const LONG_PRESS_MS = 550;
 /**
  * Mobile browsers synthesize a click once the pointer gesture completes, so a
  * long press that opened a dialog would also fire the button's ordinary action.
  * The suppression window is generous because that synthesized click can arrive
  * well after the pointer is lifted.
  */
-const CLICK_SUPPRESSION_MS = 1_000;
+export const CLICK_SUPPRESSION_MS = 1_000;
+let pressDelayMs = LONG_PRESS_MS;
+let clickSuppressionMs = CLICK_SUPPRESSION_MS;
+
+/** Shorten the production timers so ActionBar tests do not sleep 550–1000 ms. */
+export function setLongPressTimingsForTests(pressMs: number, suppressionMs: number): void {
+  pressDelayMs = pressMs;
+  clickSuppressionMs = suppressionMs;
+}
+
+export function restoreLongPressTimingsForTests(): void {
+  pressDelayMs = LONG_PRESS_MS;
+  clickSuppressionMs = CLICK_SUPPRESSION_MS;
+}
+
+export function getLongPressTimingsForTests(): { pressMs: number; suppressionMs: number } {
+  return { pressMs: pressDelayMs, suppressionMs: clickSuppressionMs };
+}
+
 /** Past this the gesture is a scroll, not a press. */
 const MOVE_TOLERANCE_PX = 10;
 
@@ -76,9 +94,9 @@ export function useLongPressAction(onLongPress: () => void, enabled = true): Lon
         suppressionTimerRef.current = setTimeout(() => {
           suppressClickRef.current = false;
           suppressionTimerRef.current = null;
-        }, CLICK_SUPPRESSION_MS);
+        }, clickSuppressionMs);
         onLongPressRef.current();
-      }, LONG_PRESS_MS);
+      }, pressDelayMs);
     },
     [cancel],
   );

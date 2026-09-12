@@ -505,5 +505,4 @@ describe("Electron tmux environment teardown", () => {
       ).toContain("original");
     });
   });
-
 });

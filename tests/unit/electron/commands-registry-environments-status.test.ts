@@ -1366,4 +1366,3 @@ exit 0
     expect(environment.agentSettings).toBeUndefined();
   });
 });
-

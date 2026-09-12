@@ -2117,5 +2117,4 @@ printf '%s\\n' '{}' > "$out"
     }
     expect(updates).toHaveLength(0);
   });
-
 });

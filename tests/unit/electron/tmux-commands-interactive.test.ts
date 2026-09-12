@@ -1149,5 +1149,4 @@ exit 0
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
   });
-
 });

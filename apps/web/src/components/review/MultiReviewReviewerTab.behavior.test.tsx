@@ -10,6 +10,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MANUAL_REFRESH_TIMEOUT_MS,
   MultiReviewReviewerTab,
+  REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
 } from "./MultiReviewReviewerTab";
 
@@ -614,6 +615,44 @@ describe("MultiReviewReviewerTab", () => {
     // during a full interval period after the error is shown.
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(calls).toBe(callsAtSettlement);
+  });
+
+  test("defaults its poll cadence to the production refresh interval", async () => {
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
+      agent: "cursor",
+      model: "composer-1",
+      status: "running",
+      startedAt: "2026-08-14T00:00:00.000Z",
+      messages: [],
+    };
+    const loadTranscript = mock(async () => running);
+    const originalSetInterval = window.setInterval;
+    const delays: number[] = [];
+    window.setInterval = ((...args: Parameters<typeof originalSetInterval>) => {
+      delays.push((args[1] as number | undefined) ?? 0);
+      return originalSetInterval(...args);
+    }) as typeof window.setInterval;
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    } finally {
+      window.setInterval = originalSetInterval;
+    }
+    expect(delays).toContain(REFRESH_INTERVAL_MS);
   });
 });
 

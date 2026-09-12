@@ -23,6 +23,10 @@ export function restoreLongPressTimingsForTests(): void {
   clickSuppressionMs = CLICK_SUPPRESSION_MS;
 }
 
+export function getLongPressTimingsForTests(): { pressMs: number; suppressionMs: number } {
+  return { pressMs: pressDelayMs, suppressionMs: clickSuppressionMs };
+}
+
 /** Past this the gesture is a scroll, not a press. */
 const MOVE_TOLERANCE_PX = 10;
 

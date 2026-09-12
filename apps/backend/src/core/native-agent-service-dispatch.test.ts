@@ -1268,6 +1268,38 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("the launch reconcile timer keeps the production default and a safe floor", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const record = async (launchReconcileIntervalMs?: number) => {
+      const delays: number[] = [];
+      const spy = ((...args: Parameters<typeof originalSetInterval>) => {
+        delays.push((args[1] as number | undefined) ?? 0);
+        return originalSetInterval(...args);
+      }) as typeof globalThis.setInterval;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-interval-",
+          ...(launchReconcileIntervalMs === undefined ? {} : { launchReconcileIntervalMs }),
+        },
+        async ({ service }) => {
+          globalThis.setInterval = spy;
+          try {
+            await service.init();
+          } finally {
+            globalThis.setInterval = originalSetInterval;
+          }
+        },
+      );
+      return delays;
+    };
+    expect(await record()).toEqual([2_000]);
+    expect(await record(75)).toEqual([75]);
+    expect(await record(0)).toEqual([20]);
+    expect(await record(-50)).toEqual([20]);
+    expect(await record(Number.NaN)).toEqual([2_000]);
+    expect(await record(Number.POSITIVE_INFINITY)).toEqual([2_000]);
+  });
+
   test("does not report a parked waiting turn as completed or complete it when it becomes idle", async () => {
     let activityState: ProviderActivityState = "working";
     const { provider } = createProviderStub("codex", {

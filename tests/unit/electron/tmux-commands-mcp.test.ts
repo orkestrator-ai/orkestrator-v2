@@ -720,5 +720,4 @@ describe("Electron tmux MCP config and session start", () => {
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
     });
   });
-
 });

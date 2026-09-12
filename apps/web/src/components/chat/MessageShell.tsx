@@ -28,7 +28,7 @@ interface MessageShellProps {
   children: ReactNode;
 }
 
-const LONG_PRESS_DELAY_MS = 500;
+export const LONG_PRESS_DELAY_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 let longPressDelayMs = LONG_PRESS_DELAY_MS;
 
@@ -38,6 +38,10 @@ export function setMessageShellLongPressDelayForTests(delayMs: number): void {
 
 export function restoreMessageShellLongPressDelayForTests(): void {
   longPressDelayMs = LONG_PRESS_DELAY_MS;
+}
+
+export function getMessageShellLongPressDelayForTests(): number {
+  return longPressDelayMs;
 }
 
 export function MessageShell({

@@ -22,6 +22,8 @@ import {
 } from "../../../../../tests/mocks/sonner";
 
 import {
+  getMessageShellLongPressDelayForTests,
+  LONG_PRESS_DELAY_MS,
   restoreMessageShellLongPressDelayForTests,
   setMessageShellLongPressDelayForTests,
 } from "./MessageShell";
@@ -639,6 +641,19 @@ describe("NativeMessage task list rendering", () => {
     clearImagePreviewCache();
     toastErrorMock.mockClear();
     toastSuccessMock.mockClear();
+  });
+
+  test("restores the production long-press delay after a test override", () => {
+    // The suite shortens the delay for speed; this pins the shipped default and
+    // proves the restore hook really returns the module state to it.
+    expect(getMessageShellLongPressDelayForTests()).toBe(15);
+    restoreMessageShellLongPressDelayForTests();
+    expect(LONG_PRESS_DELAY_MS).toBe(500);
+    expect(getMessageShellLongPressDelayForTests()).toBe(LONG_PRESS_DELAY_MS);
+    setMessageShellLongPressDelayForTests(25);
+    expect(getMessageShellLongPressDelayForTests()).toBe(25);
+    restoreMessageShellLongPressDelayForTests();
+    expect(getMessageShellLongPressDelayForTests()).toBe(LONG_PRESS_DELAY_MS);
   });
 
   test("renders task list in a collapsible thinking block that expands on click", () => {

@@ -11,6 +11,80 @@ export interface ReviewEvidenceFrameDisplayContract {
   omissionText: string;
 }
 
+/**
+ * Marks provider-only guidance that the backend prepends or appends to a
+ * user's own instruction.
+ *
+ * The provider must receive this text — it carries mode, validation and
+ * result-contract requirements — but it is not something the user wrote. A
+ * transcript is a record of the conversation, so presentation strips every
+ * complete frame and shows only the user's own words. A frame that is opened
+ * and never closed is untrusted, incomplete content and is left untouched.
+ */
+export const SYSTEM_INSTRUCTIONS_FRAME_OPEN = "<orkestrator-system-instructions>";
+export const SYSTEM_INSTRUCTIONS_FRAME_CLOSE = "</orkestrator-system-instructions>";
+
+/** Wrap backend-owned prompt guidance in one complete system-instructions frame. */
+export function wrapSystemInstructions(...parts: readonly string[]): string {
+  const content = parts.filter((part) => part.trim().length > 0).join("\n\n");
+  return `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n${content}\n${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}`;
+}
+
+/**
+ * Remove every complete system-instructions frame from a prompt.
+ *
+ * Returns the source unchanged when it holds no complete frame, so prompts that
+ * were never tagged keep their exact whitespace. When a frame is removed the
+ * surrounding blank lines are collapsed and the result trimmed.
+ *
+ * Frames are paired with a stack rather than by first-open/first-close. A user
+ * may type either marker into their own instruction, and the first open a plain
+ * substring scan finds may be that user text, not the producer's frame. Matching
+ * each close to its nearest unmatched open leaves an unmatched marker in place
+ * instead of letting it consume the complete frame that follows it.
+ */
+export function stripSystemInstructions(source: string): string {
+  if (!source.includes(SYSTEM_INSTRUCTIONS_FRAME_OPEN)) return source;
+
+  const openLength = SYSTEM_INSTRUCTIONS_FRAME_OPEN.length;
+  const closeLength = SYSTEM_INSTRUCTIONS_FRAME_CLOSE.length;
+  const removed: Array<[number, number]> = [];
+  const openStack: number[] = [];
+  let index = 0;
+
+  while (index < source.length) {
+    if (source.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN, index)) {
+      openStack.push(index);
+      index += openLength;
+      continue;
+    }
+    if (source.startsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE, index)) {
+      const open = openStack.pop();
+      if (open !== undefined) removed.push([open, index + closeLength]);
+      index += closeLength;
+      continue;
+    }
+    index += 1;
+  }
+  if (removed.length === 0) return source;
+
+  removed.sort((left, right) => left[0] - right[0]);
+  let result = "";
+  let cursor = 0;
+  for (const [start, end] of removed) {
+    // A frame nested inside an already-removed one has no bytes left to keep.
+    if (start < cursor) {
+      cursor = Math.max(cursor, end);
+      continue;
+    }
+    result += source.slice(cursor, start);
+    cursor = end;
+  }
+  result += source.slice(cursor);
+
+  return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export const COORDINATOR_DELEGATION_FRAME_OPEN = "<orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_CLOSE = "</orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_SEPARATOR = "\n\n";

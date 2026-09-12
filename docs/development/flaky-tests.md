@@ -12,6 +12,52 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## mise-task document scan races a temporary protocol root (2026-09-12)
+
+- **Status:** open; isolated owner passes.
+- **Original command:** `mise run test`, using the default worker plan (root group
+  ran with four workers).
+- **Test:** `mise task surface > every workspace script a document names is
+  declared by that workspace`, in `tests/unit/mise-tasks.test.ts`.
+- **Failure:** `ENOENT: no such file or directory, open
+  '.../tests/unit/.protocol-write-root-QON4zO/generated/README.md'` while the
+  test iterated markdown files (13.33 ms).
+- **Suite counts:** root and agent-support group 4,171 passed, 3 skipped, 1
+  failed across 193 files. The same aggregate run also reported the pre-existing
+  `agent provider module boundaries` failure for the unmodified
+  `opencode-provider.ts` (1,534 lines against a 1,500-line limit).
+- **Isolated rerun:** `mise run test:logged -- --name mise-task-surface -- bun
+  test ./tests/unit/mise-tasks.test.ts --parallel=1 --only-failures` → passed in
+  0.2 s.
+- **Hypothesis:** the document scan walks `tests/unit`, where a sibling protocol
+  test creates and removes a `.protocol-write-root-*` directory during the same
+  parallel run; the scan lists a file inside it and then reads after the owner
+  removes the directory.
+
+## `a throwing listener does not fail the mutation that succeeded` (`apps/backend/src/core/storage-resource-events.test.ts`)
+
+- **Status:** open; isolated owner passes.
+- **Date observed:** 2026-09-11.
+- **Original command:** `mise run test:changed`, default aggregate plan
+  (`scripts/test-all.ts` ran four groups concurrently; the backend workspace used
+  two Bun workers).
+- **Failure:** `expect(storage.addProject(...)).resolves.toMatchObject(...)` saw
+  the mutation reject with the listener's own `Error: client transport is
+  broken`, after the storage layer logged
+  `[Storage] Resource change listener threw`. The backend group reported 3061
+  passed, 1 skipped, 1 failed across 3063 tests in 199.38s; every other group
+  passed.
+- **Isolated rerun:** `mise run test:logged -- --name storage-resource-events --
+  bun --cwd=apps/backend test src/core/storage-resource-events.test.ts
+  --parallel=2 --only-failures` → passed (0.4s).
+- **Hypothesis:** the case deliberately throws from a listener, and the
+  background reject/trailing-error accounting that contains it is timing
+  sensitive under aggregate load. The change in flight (the parked-dispatch
+  reconcile grace window) touches only the native-agent projection and the
+  retry/discard card, not storage or resource events. A recurrence should
+  capture the `announce` rejection boundary before changing the handler or the
+  assertion.
+
 ## Missing-GitHub-CLI rollback fails in aggregate only (2026-09-10)
 
 - **Status:** open; isolated owner passes.

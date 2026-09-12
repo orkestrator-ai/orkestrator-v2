@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
 import {
   act,
   cleanup,
@@ -30,6 +30,11 @@ import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { KanbanTask } from "@/lib/backend";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
+import {
+  CLICK_SUPPRESSION_MS,
+  restoreLongPressTimingsForTests,
+  setLongPressTimingsForTests,
+} from "@/hooks/useLongPressAction";
 import {
   mockToastError as toastErrorMock,
   mockToastInfo as toastInfoMock,
@@ -783,6 +788,7 @@ const [{ ActionBar }, { OpenFileDialog }] = await Promise.all([
 ]);
 
 afterAll(() => {
+  restoreLongPressTimingsForTests();
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
@@ -806,6 +812,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  setLongPressTimingsForTests(15, CLICK_SUPPRESSION_MS);
   cleanup();
   console.error = mock(() => {}) as typeof console.error;
   console.log = mock(() => {}) as typeof console.log;
@@ -973,25 +980,39 @@ afterEach(() => {
 
 describe("ActionBar grid presentation", () => {
   test("does not show tooltips when mobile toolbar controls receive focus", async () => {
-    render(<ActionBar presentation="grid" />);
+    jest.useFakeTimers();
+    try {
+      render(<ActionBar presentation="grid" />);
 
-    fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
-    await new Promise((resolve) => setTimeout(resolve, 550));
+      fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
+      await act(async () => {
+        jest.advanceTimersByTime(550);
+      });
 
-    expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("does not show regular or context-menu tooltips on mobile pointer hover", async () => {
-    render(<ActionBar presentation="grid" />);
+    jest.useFakeTimers();
+    try {
+      render(<ActionBar presentation="grid" />);
 
-    const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
-    const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
-    fireEvent.mouseEnter(dockerButton.parentElement!);
-    fireEvent.mouseEnter(nativeButton);
-    await new Promise((resolve) => setTimeout(resolve, 550));
+      const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
+      const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
+      fireEvent.mouseEnter(dockerButton.parentElement!);
+      fireEvent.mouseEnter(nativeButton);
+      await act(async () => {
+        jest.advanceTimersByTime(550);
+      });
 
-    expect(screen.queryByText("Docker configuration") === null).toBe(true);
-    expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
+      expect(screen.queryByText("Docker configuration") === null).toBe(true);
+      expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("keeps context-menu tooltips enabled on desktop hover", async () => {
@@ -1962,7 +1983,7 @@ describe("ActionBar editor and run commands", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     fireEvent.pointerUp(runButton, {
       pointerId: 1,
       pointerType: "touch",
@@ -3680,7 +3701,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     fireEvent.pointerUp(createPrButton, {
       pointerId: 1,
       pointerType: "touch",
@@ -3688,9 +3709,8 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
 
-    // The 550 ms production timer is raced against this test's fixed 575 ms
-    // sleep, so under aggregate scheduling the dialog can mount just after an
-    // immediate query. Same fix as the code-review twin below.
+    // Long-press timings are shortened in this file; waitFor still covers the
+    // dialog mount so a busy host cannot race the assertion.
     await waitFor(
       () => {
         expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
@@ -3742,7 +3762,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     fireEvent.pointerUp(resolveButton, {
       pointerId: 1,
       pointerType: "touch",
@@ -3942,7 +3962,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     fireEvent.pointerUp(reviewButton, {
       pointerId: 1,
       pointerType: "touch",
@@ -3990,7 +4010,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     await waitFor(
       () => {
         expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
@@ -4024,7 +4044,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     await waitFor(
       () => {
         expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
@@ -4070,7 +4090,7 @@ describe("ActionBar workflow tabs", () => {
       pointerType: "touch",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     expect(screen.queryByRole("dialog", { name: "Configure code review" }) === null).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
@@ -4171,7 +4191,7 @@ describe("ActionBar workflow tabs", () => {
       clientX: 24,
       clientY: 24,
     });
-    await new Promise((resolve) => setTimeout(resolve, 575));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     fireEvent.pointerUp(multiReviewButton, {
       pointerId: 1,
       pointerType: "touch",

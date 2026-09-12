@@ -255,6 +255,7 @@ async function withService(
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     abortGraceMs?: number;
+    launchReconcileIntervalMs?: number;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -300,6 +301,9 @@ async function withService(
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
+    ...(setup.launchReconcileIntervalMs === undefined
+      ? {}
+      : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
   });
   try {
     await run({ storage, service });
@@ -511,6 +515,56 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("only turns a parked dispatch into a recovery choice after the reconcile grace", async () => {
+    let now = Date.parse("2026-09-11T10:00:00.000Z");
+    const stub = createProviderStub("cursor", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("Response was lost");
+      },
+      // The provider cannot prove the prompt landed, so the record stays parked.
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-grace-",
+        provider: async () => stub.provider,
+        now: () => now,
+      },
+      async ({ service }) => {
+        const base = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:tab-grace",
+          prompt: "Do the work",
+        };
+        await expect(service.dispatchIntent({ ...base, requestId: "grace-1" })).resolves.toEqual({
+          outcome: "unknown",
+          requestId: "grace-1",
+          error: "Response was lost",
+        });
+
+        // The user just submitted, so the card must not be actionable yet: the
+        // backend may still confirm this against the provider on a later read.
+        await expect(service.getProjection(base)).resolves.toMatchObject({
+          recoverableDispatch: {
+            requestId: "grace-1",
+            status: "reconciling",
+          },
+        });
+
+        // Once the window elapses the same parked record is a final failure and
+        // the only remaining ways out are retry or discard.
+        now += 15_000;
+        await expect(service.getProjection(base)).resolves.toMatchObject({
+          recoverableDispatch: {
+            requestId: "grace-1",
+            status: "action-required",
+          },
+        });
+      },
+    );
+  });
+
   test("owns steer identity, run pinning, parking, and exact recovery in the backend", async () => {
     let steerOutcome: "unknown" | "applied" = "unknown";
     const stub = createProviderStub("codex", {
@@ -562,6 +616,9 @@ describe("NativeAgentService", () => {
           recoverableDispatch: {
             requestId: pending!.requestId,
             kind: "steer",
+            // A steer never waits out the prompt reconcile grace, so the
+            // retry/discard choice is available on the first read.
+            status: "action-required",
           },
         });
         expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
@@ -1247,6 +1304,7 @@ describe("NativeAgentService", () => {
     await withService(
       {
         prefix: "orkestrator-native-launch-timer-body-",
+        launchReconcileIntervalMs: 40,
       },
       async ({ service }) => {
         const internal = service as unknown as {
@@ -1258,11 +1316,43 @@ describe("NativeAgentService", () => {
         internal.reconcilePendingLaunches = launches;
         internal.drainPromptQueues = drains;
         await service.init();
-        await Bun.sleep(2_100);
+        await Bun.sleep(120);
         expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(drains.mock.calls.length).toBeGreaterThanOrEqual(2);
       },
     );
+  });
+
+  test("the launch reconcile timer keeps the production default and a safe floor", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const record = async (launchReconcileIntervalMs?: number) => {
+      const delays: number[] = [];
+      const spy = ((...args: Parameters<typeof originalSetInterval>) => {
+        delays.push((args[1] as number | undefined) ?? 0);
+        return originalSetInterval(...args);
+      }) as typeof globalThis.setInterval;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-interval-",
+          ...(launchReconcileIntervalMs === undefined ? {} : { launchReconcileIntervalMs }),
+        },
+        async ({ service }) => {
+          globalThis.setInterval = spy;
+          try {
+            await service.init();
+          } finally {
+            globalThis.setInterval = originalSetInterval;
+          }
+        },
+      );
+      return delays;
+    };
+    expect(await record()).toEqual([2_000]);
+    expect(await record(75)).toEqual([75]);
+    expect(await record(0)).toEqual([20]);
+    expect(await record(-50)).toEqual([20]);
+    expect(await record(Number.NaN)).toEqual([2_000]);
+    expect(await record(Number.POSITIVE_INFINITY)).toEqual([2_000]);
   });
 
   test("does not report a parked waiting turn as completed or complete it when it becomes idle", async () => {

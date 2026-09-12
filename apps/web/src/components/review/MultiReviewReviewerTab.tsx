@@ -76,6 +76,7 @@ interface MultiReviewReviewerTabProps {
   stopReviewer?: typeof backend.stopMultiReviewReviewer;
   restartReviewer?: typeof backend.restartMultiReviewReviewer;
   unstickReviewer?: typeof backend.unstickMultiReviewReviewer;
+  refreshIntervalMs?: number;
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -109,6 +110,7 @@ export function MultiReviewReviewerTab({
   stopReviewer = backend.stopMultiReviewReviewer,
   restartReviewer = backend.restartMultiReviewReviewer,
   unstickReviewer = backend.unstickMultiReviewReviewer,
+  refreshIntervalMs = REFRESH_INTERVAL_MS,
 }: MultiReviewReviewerTabProps) {
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
@@ -294,11 +296,11 @@ export function MultiReviewReviewerTab({
     const gone = transcriptError !== null && isGoneError(transcriptError);
     if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending"))
       return;
-    const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    const interval = window.setInterval(() => void refresh(), refreshIntervalMs);
     return () => {
       window.clearInterval(interval);
     };
-  }, [isActive, refresh, snapshot?.status, transcriptError]);
+  }, [isActive, refresh, refreshIntervalMs, snapshot?.status, transcriptError]);
   /* oxlint-enable react-hooks/exhaustive-deps */
 
   const messages = useMemo(() => {

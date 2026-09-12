@@ -11,14 +11,18 @@ import {
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
+  SYSTEM_INSTRUCTIONS_FRAME_OPEN,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
   MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+  multiReviewCustomFixPrompt,
 } from "@orkestrator/protocol/multi-review";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MAX_JSON_PAYLOAD_LENGTH } from "./json-payload";
 import {
   USER_PROMPT_RENDER_CHARACTER_LIMIT,
@@ -53,7 +57,7 @@ function customFixPrompt(
   continuation = MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
 ): string {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${continuation}`;
+  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}\n\n${wrapSystemInstructions(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION)}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${wrapSystemInstructions(continuation)}`;
 }
 
 function legacyCustomFixPrompt(evidence: string): string {
@@ -62,6 +66,16 @@ function legacyCustomFixPrompt(evidence: string): string {
 }
 
 describe("userPromptDisplayText", () => {
+  test("hides an unframed evidence frame that follows a system-instructions frame", () => {
+    const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
+    const source = `${PREFIX}\n\n${wrapSystemInstructions("Provider-only guidance.")}\n\n${contract.openMarker}\n[{"summary":"secret"}]\n${contract.closeMarker}\n\n${CONTINUATION}`;
+    const displayed = userPromptDisplayText(source);
+
+    expect(displayed).toContain(contract.omissionText);
+    expect(displayed).not.toContain("secret");
+    expect(displayed).not.toContain(contract.openMarker);
+  });
+
   test("hides a complete leading coordinator delegation frame", () => {
     const prompt = "Implement the requested UI behavior.";
 
@@ -250,6 +264,19 @@ describe("userPromptDisplayText", () => {
     expect(userPromptDisplayText(incomplete)).toBe(incomplete);
   });
 
+  test("shows only the user's words after a producer-tagged system frame", () => {
+    const source = `${wrapSystemInstructions("This is an implementation turn, not a planning turn.")}\n\nAddress the failing test.`;
+
+    expect(userPromptDisplayText(source)).toBe("Address the failing test.");
+  });
+
+  test("leaves an untagged single-model review prompt fully visible", () => {
+    const review =
+      "You are performing an automated code review for this ticket. Fix the review snapshot first.";
+
+    expect(userPromptDisplayText(review)).toBe(review);
+  });
+
   test("keeps a marker-shaped instruction that precedes the real frame", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const instruction = `Only fix ${contract.openMarker} the typo ${contract.closeMarker} in the README.`;
@@ -262,6 +289,39 @@ describe("userPromptDisplayText", () => {
       kind: "json",
       value: { issues: [{ title: "Marker finding" }] },
     });
+  });
+
+  test("keeps user words after an unmatched system-instructions marker", () => {
+    const instruction = `Fix the ${SYSTEM_INSTRUCTIONS_FRAME_OPEN} handling in the frame code`;
+    const presentation = userPromptPresentation(
+      customFixPrompt('{"issues":[{"title":"Unmatched marker finding"}]}', instruction),
+    );
+
+    expect(presentation.displayText).toBe(instruction);
+    expect(presentation.displayText).toContain("handling in the frame code");
+    expect(presentation.evidencePayload).toMatchObject({
+      kind: "json",
+      value: { issues: [{ title: "Unmatched marker finding" }] },
+    });
+  });
+
+  test("escapes a literal system-instructions marker inside model-produced evidence", () => {
+    const report = {
+      issues: [
+        {
+          title: `Inject ${SYSTEM_INSTRUCTIONS_FRAME_OPEN} to shorten the frame`,
+          evidence: "Observed in source",
+        },
+      ],
+      testCoverageGaps: [],
+    } as unknown as StructuredReviewReport;
+    const source = multiReviewCustomFixPrompt(report, "Fix the finding");
+    const presentation = userPromptPresentation(source);
+
+    expect(source.split(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toHaveLength(4);
+    expect(presentation.displayText).toBe("Fix the finding");
+    expect(presentation.displayText).not.toContain(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
+    expect(presentation.evidencePayload).not.toBeNull();
   });
 
   test("bounds a custom-fix instruction before Markdown rendering", () => {

@@ -1730,8 +1730,9 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.getAllByText("claude-opus").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("region", { name: "Account usage" })).toBeTruthy();
     expect(screen.getByText("Weekly quota")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Turn usage" })).toBeTruthy();
-    expect(screen.getByText("600 · $0.25")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Turn usage" })).toBe(null);
+    expect(screen.queryByText("Recent turns")).toBe(null);
+    expect(screen.queryByText("600 · $0.25")).toBe(null);
   });
 
   test("charts daily token buckets instead of one card per day", () => {
@@ -1859,7 +1860,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(within(chart).getByText("Peak 3d 0")).toBeTruthy();
   });
 
-  test("retains provider-neutral account and turn rows beside legacy live counters", () => {
+  test("retains provider-neutral account rows beside legacy live counters", () => {
     useClaudeStore.setState({
       contextUsage: new Map([[CLAUDE_KEY, usage({ inputTokens: 123 })]]),
     } as never);
@@ -1902,7 +1903,9 @@ describe("AgentInfoButton usage panel", () => {
 
     expect(metricValue("Input")).toBe("123");
     expect(screen.getByText("Projected weekly")).toBeTruthy();
-    expect(screen.getByText("42 · $0.01")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Turn usage" })).toBe(null);
+    expect(screen.queryByText("Recent turns")).toBe(null);
+    expect(screen.queryByText("42 · $0.01")).toBe(null);
   });
 
   test.each([

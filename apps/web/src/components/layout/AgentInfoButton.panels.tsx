@@ -19,7 +19,6 @@ import type {
   NativeAgentMcpServerAction,
   NativeAgentRuntimeNotice,
   NativeAgentRuntimeSummary,
-  NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 
 function formatUsd(value: number): string {
@@ -1168,7 +1167,7 @@ function AccountSection({ rows, daily }: { rows: AccountRow[]; daily: DailyToken
 }
 
 /**
- * Account/quota rows without the session-shaped context and turn sections.
+ * Account/quota rows without the session-shaped context section.
  *
  * The global settings panes read plan quota without a session, so they cannot
  * host `UsagePanel`. This keeps the exact row rendering — label, percentage,
@@ -1193,50 +1192,6 @@ export function AccountQuotaList({
       ))}
       {daily.length > 0 ? <DailyTokenChart points={daily} /> : null}
     </div>
-  );
-}
-
-function TurnUsageSection({ turns }: { turns: NativeAgentTurnUsage[] }) {
-  return (
-    <section className="space-y-2" aria-label="Turn usage">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-        Recent turns
-      </div>
-      {Array.from(turns)
-        .reverse()
-        .map((turn) => {
-          const tokens =
-            turn.totalTokens ??
-            (turn.inputTokens ?? 0) +
-              (turn.outputTokens ?? 0) +
-              (turn.cacheReadTokens ?? 0) +
-              (turn.cacheWriteTokens ?? 0);
-          return (
-            <div key={turn.turnId} className="rounded-lg border border-border/60 px-3 py-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
-                  {turn.turnId}
-                </div>
-                <div className="shrink-0 font-mono text-xs tabular-nums text-foreground">
-                  {formatTokenCount(tokens)}
-                  {turn.costUsd !== undefined ? ` · ${formatUsd(turn.costUsd)}` : ""}
-                </div>
-              </div>
-              {turn.modelId || turn.requestId || turn.durationMs !== undefined ? (
-                <div className="mt-1 truncate text-[10px] text-muted-foreground">
-                  {[
-                    turn.modelId,
-                    turn.requestId,
-                    turn.durationMs === undefined ? undefined : formatDuration(turn.durationMs),
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-    </section>
   );
 }
 
@@ -1362,8 +1317,6 @@ export function UsagePanel({
        * ceiling it is spent against.
        */}
       {account}
-
-      {usage.turns?.length ? <TurnUsageSection turns={usage.turns} /> : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
         <span className="truncate">{usage.modelId ?? modelId ?? "Model unavailable"}</span>

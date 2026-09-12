@@ -1,6 +1,11 @@
 # 10 — Composer: model axes and settings
 
-**Status:** ⬜ Not started · 0/17 tasks · Depends on: 02
+**Status:** 🟨 In progress · ~60% · Depends on: 02
+
+Refreshed 2026-09-11. Generic `parameters` / `parameterValues` drive composer
+controls for Claude, Cursor, Pi, and ACP. Still open: Codex
+`summary`/`personality`, reasoning/speed alias cleanup, mid-session Claude
+parameter changes (blocked on plan 05), browser QA.
 
 ## Goal
 

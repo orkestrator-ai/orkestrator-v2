@@ -1,5 +1,7 @@
 # Project Coordinator
 
+Status: Living — product coordinator guide.
+
 Select a project to open **Coordinator**, the default project page. Coordinator
 can read and discuss the configured local checkout, search the code, and use
 Orkestrator controls to delegate implementation to isolated worker environments.
@@ -98,18 +100,15 @@ project removes them with the rest of the coordinator runtime.
 Delegation is a round trip, not one outbound call. `launch_environment` goes out
 over MCP, and the worker's result comes back as agent mail — so a platform needs
 both an MCP client and a native mailbox that can pull, ack, and be injected
-into. `coordinator-providers.ts` already marks Cursor and Grok `mcpClient:
-true`: their bridges inject the `orkestrator` HTTP MCP server from
-`ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`. **Delegation is
-still unavailable on Pi, Cursor and Grok** because
-`NATIVE_AGENT_MAIL_CAPABILITIES` keeps those native mailboxes
-`{canPull,canSend,canInject}=false`. Native Pi now has a bridge-owned MCP
-client and a mailbox that can pull, send, and be injected into, so
-delegation is available there. Cursor and Grok are still gated so an
-injected carrier the recipient cannot acknowledge cannot wedge the mailbox
-ring; flipping those flags after a live tool-call probe is what unblocks
-worker replies. On those platforms the coordinator prompt says worker
-controls are unavailable rather than offering a tool whose answer never
+into.
+
+**Delegation is available on Claude, Codex, OpenCode, and native Pi.** Pi has a
+bridge-owned MCP client and `{canPull,canSend,canInject}=true`. Cursor and Grok
+already inject the `orkestrator` HTTP MCP server from
+`ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`, but
+`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false until a live tool-call probe
+and an explicit flag flip. On those two platforms the coordinator prompt says
+worker controls are unavailable rather than offering a tool whose answer never
 arrives; inspection and planning work normally.
 
 A platform's caveat is carried on its qualification `reason` and shown in the

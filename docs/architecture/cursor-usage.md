@@ -1,5 +1,7 @@
 # Cursor usage
 
+Status: Living — Cursor usage mapping.
+
 Cursor usage is read from the SDK agent attached to the native session. After
 each completed run, the Cursor bridge calls `agent.getUsage()` and projects
 the provider's cumulative token and charged-cost totals into

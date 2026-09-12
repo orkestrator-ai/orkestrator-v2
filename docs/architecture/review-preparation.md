@@ -1,5 +1,7 @@
 # Multi-review preparation
 
+Status: Living — multi-review pipeline; queue wait is 30 minutes.
+
 Manual multi-review and pipeline review preparation use the same three stages:
 
 1. An agent commits the relevant safe changes and discovers a validation plan.
@@ -44,7 +46,8 @@ overflow terminate the command's process group. A worker-death watchdog also
 terminates its command groups. Intentionally detached commands are unsupported.
 
 Each workspace has one validation lock, preventing separate review jobs from
-interfering. Waiting for another job is bounded to two minutes. Backend or UI
+interfering. Waiting for another job is bounded by
+`ORKESTRATOR_TEST_QUEUE_TIMEOUT_MS` (default 30 minutes). Backend or UI
 restarts reconnect to the existing run rather than launching duplicate commands.
 An uncertain/stale worker is reported as an error and requires explicit recovery;
 it is never treated as evidence that a command did not run.

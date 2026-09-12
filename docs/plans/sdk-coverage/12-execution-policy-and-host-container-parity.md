@@ -1,6 +1,10 @@
 # 12 — Execution policy and host/container parity
 
-**Status:** 🟨 In progress · implementation complete, awaiting Docker/browser QA and merge · Depends on: 04
+**Status:** 🟨 In progress · code complete, awaiting Docker/browser QA · Depends on: 04
+
+Refreshed 2026-09-11. `NativeAgentExecutionPolicy` is resolved in the backend
+and applied on session create across adapters. Remaining work is the
+container-matrix QA and any leftover per-environment override UI polish.
 
 ## Goal
 
@@ -103,7 +107,7 @@ approvals off, project rules on"). The existing coordinator
 
 ### Documentation
 
-- [ ] `docs/technical-architecture/agent-engines.md`: replace the scattered
+- [ ] `docs/architecture/agent-engines.md`: replace the scattered
   "permissive by default" paragraphs with one section on the execution
   policy and the per-adapter mapping table.
 

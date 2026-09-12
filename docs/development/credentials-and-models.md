@@ -1,5 +1,7 @@
 # Credentials and model catalogues
 
+Status: Living — credential and catalogue inventory.
+
 This report describes the current credential and model-metadata behavior for
 Claude Code, Codex, OpenCode, Cursor Agent, and Grok Build. It covers normal
 local worktrees, Docker environments, and isolated `dev:test` profiles.

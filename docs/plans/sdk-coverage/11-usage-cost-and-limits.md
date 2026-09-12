@@ -1,6 +1,9 @@
 # 11 — Usage, cost and limits
 
-**Status:** 🟨 In progress · implementation complete, awaiting browser QA and merge · Depends on: 02
+**Status:** 🟨 In progress · code complete, awaiting browser QA · Depends on: 02
+
+Refreshed 2026-09-11. All six providers map usage into
+`NativeAgentContextUsage`. Remaining work is two-provider browser/reload QA.
 
 ## Goal
 

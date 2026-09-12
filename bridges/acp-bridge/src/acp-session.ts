@@ -1069,8 +1069,7 @@ export async function applyComposerPatch(
 
 export function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
   // ACP v1 cannot bind an interjection to a run safely. Keep the experimental
-  // adapter inaccessible unless an operator explicitly accepts that risk; see
-  // the ACP v2 design discussion in docs/todo/steer/opus.md.
+  // adapter inaccessible unless an operator explicitly accepts that risk.
   const interjection =
     provider === "grok" && process.env.GROK_UNSAFE_EXPERIMENTAL_INTERJECTION === "1"
       ? applyGrokInterjectionBroadcast(

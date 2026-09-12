@@ -1,6 +1,10 @@
 # 06 — Commands, skills and prompt templates
 
-**Status:** ⬜ Not started · 0/15 tasks · Depends on: 02
+**Status:** 🟨 In progress · ~80% · Depends on: 02
+
+Refreshed 2026-09-11. Normalized `source` tags, `/session/:id/commands`, and
+picker grouping are live on the major bridges. Still open: retire
+`/plugins/commands` and Claude filesystem discovery; browser QA.
 
 ## Goal
 

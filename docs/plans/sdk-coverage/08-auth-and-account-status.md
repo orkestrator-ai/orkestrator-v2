@@ -1,6 +1,11 @@
 # 08 — Auth and account status
 
-**Status:** ⬜ Not started · 0/16 tasks · Depends on: 02
+**Status:** 🟨 In progress · ~65% · Depends on: 02
+
+Refreshed 2026-09-11. `NativeAgentAuthStatus` and `/global/auth*` exist on
+Claude, Codex, Cursor, Pi, and ACP; OpenCode reports through the capabilities
+adapter. Still open: OpenCode per-provider OAuth, turn-time auth notices, a
+settings-pane auth card, and browser QA.
 
 ## Goal
 

@@ -1,5 +1,7 @@
 # Bridge debug logging
 
+Status: Living — shared bridge debug logging.
+
 Enable **Settings → Save Logs for Debugging**, save, and restart Orkestrator
 with the updated build. The desktop log sink reads the setting at startup.
 The backend explicitly passes `ORKESTRATOR_BRIDGE_DEBUG=1` or `0` to every

@@ -1,6 +1,6 @@
 # Asynchronous coordinator — design and implementation plan
 
-Status: implemented, 2026-09-08. Branch `async-coordinator-a8316555eff1-r1`.
+Status: Done — implemented, 2026-09-08. Branch `async-coordinator-a8316555eff1-r1`.
 
 Phases 0–3 landed together. Where the implementation departed from the plan it
 is noted inline below; the one substantive change is that releasing held mail
@@ -393,7 +393,7 @@ composer open.
   through the existing `actions.steer` capability. It is already plumbed; the
   coordinator does not need to opt out, and it lets a user redirect a
   long-running inspection turn without cancelling. Claude, OpenCode and
-  Cursor keep queue-only, per `docs/todo/steer/consolidated.md`.
+  Cursor keep queue-only.
 
 ## Phase 4 — Provider matrix and conformance
 
@@ -453,7 +453,7 @@ when the read-only suite next runs; it is not a substitute for the above:
 | 4 | Phase 3 | Low: projection-only UI |
 | 5 | Phase 4 | Grows with each PR; the async scenario lands with PR 1 for Codex and is extended per platform |
 
-Documentation: update `docs/coordinator.md` "Worker delegation" to describe
+Documentation: update `docs/architecture/coordinator.md` "Worker delegation" to describe
 the asynchronous contract, the worker lifecycle notices, and the polling
 guard once PRs 1–3 land.
 

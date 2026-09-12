@@ -234,7 +234,7 @@ describe("the bridge process", () => {
  * offers no approval hook this bridge could park a call on. That is the same
  * answer every platform here gives locally (Grok's `--always-approve`, Pi's
  * default-off approval gate, Claude's local allow), and it is stated in
- * `docs/technical-architecture/agent-engines.md` rather than left implicit.
+ * `docs/architecture/agent-engines.md` rather than left implicit.
  * Plan 12 replaces it with a uniform backend-owned policy; until then, changing
  * this default is a documentation change too.
  */

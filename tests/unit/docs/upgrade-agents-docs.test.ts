@@ -45,7 +45,7 @@ describe("agent upgrade runbook contracts", () => {
     ]);
 
     for (const source of sources) {
-      expect(source).toContain("docs/upgrade-agents.md");
+      expect(source).toContain("docs/development/upgrade-agents.md");
     }
   });
 
@@ -53,7 +53,7 @@ describe("agent upgrade runbook contracts", () => {
     // Asserted as independent tokens inside the fenced blocks rather than as one
     // regex over exact line-continuation whitespace, so reflowing the markdown
     // does not fail the build for a cosmetic edit.
-    const runbook = await read("docs/upgrade-agents.md");
+    const runbook = await read("docs/development/upgrade-agents.md");
     const fences = [...runbook.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]);
 
     const generationBlock = fences.find((fence) => fence.includes("verify:codex:protocol"));
@@ -76,7 +76,7 @@ describe("agent upgrade runbook contracts", () => {
     // `bun run <script>` names the root manifest, which no longer declares
     // scripts at all, so it is always wrong and is banned repository-wide by
     // `tests/unit/mise-tasks.test.ts` rather than checked here.
-    const runbook = await read("docs/upgrade-agents.md");
+    const runbook = await read("docs/development/upgrade-agents.md");
 
     // `download:<claude|codex|opencode>` is a documented placeholder, not a
     // task name. Capture any trailing `<` so those are recognisable and drop
@@ -95,7 +95,7 @@ describe("agent upgrade runbook contracts", () => {
       seen.add(task);
       expect(
         config.tasks?.[task]?.run,
-        `docs/upgrade-agents.md runs \`mise run ${task}\``,
+        `docs/development/upgrade-agents.md runs \`mise run ${task}\``,
       ).toBeTruthy();
     }
 
@@ -108,7 +108,7 @@ describe("agent upgrade runbook contracts", () => {
       };
       expect(
         manifest.scripts?.[script],
-        `docs/upgrade-agents.md runs \`bun run --cwd ${workspace} ${script}\``,
+        `docs/development/upgrade-agents.md runs \`bun run --cwd ${workspace} ${script}\``,
       ).toBeTruthy();
     }
     // Without this the loop degrades into a no-op the first time somebody
@@ -117,7 +117,7 @@ describe("agent upgrade runbook contracts", () => {
   });
 
   test("every repository path the runbook cites exists", async () => {
-    const runbook = await read("docs/upgrade-agents.md");
+    const runbook = await read("docs/development/upgrade-agents.md");
     const cited = new Set(
       [...runbook.matchAll(/`((?:apps|bridges|config|docs|packages|scripts|tests)\/[\w./-]+)`/g)]
         .map((match) => match[1])
@@ -135,7 +135,7 @@ describe("agent upgrade runbook contracts", () => {
 
   test("documents full live artifact verification and the actual pin sources", async () => {
     const [runbook, dockerfile] = await Promise.all([
-      read("docs/upgrade-agents.md"),
+      read("docs/development/upgrade-agents.md"),
       read("docker/Dockerfile"),
     ]);
 

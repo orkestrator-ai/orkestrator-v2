@@ -87,7 +87,7 @@ export const temporaryDirectories = new Set<string>();
  * the child's health endpoint before a test body starts, and nearly every body
  * then polls with one or more further `waitFor` calls. Under aggregate-suite
  * spawn contention the health wait consumed the whole budget, which is the
- * flake recorded in `docs/flaky-tests.md`. Raise it once for the file rather
+ * flake recorded in `docs/development/flaky-tests.md`. Raise it once for the file rather
  * than per test, so the next case to hit that contention does not need its own
  * one-off timeout to be discovered first.
  */

@@ -1,10 +1,10 @@
 # TODO: client data-saving mode
 
-Status: deferred proposal; recommendation 5 from the remote-bandwidth review.
+Status: Deferred — proposal; recommendation 5 from the remote-bandwidth review.
 
-Related work: [remote-client efficiency plan](../efficiency-plan.md), covering
-conditional reads, incremental projections, history pages, and scoped
-invalidations. Complete and measure those changes before choosing new defaults.
+Related work already in tree: conditional reads, incremental projections,
+history pages, and scoped invalidations. Measure those before choosing new
+defaults.
 
 ## Problem
 

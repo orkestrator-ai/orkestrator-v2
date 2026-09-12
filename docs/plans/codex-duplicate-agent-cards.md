@@ -1,6 +1,6 @@
 # Fix duplicate Codex agent cards and failed spawns shown as active
 
-Status: implemented with automated verification on 2026-09-07; isolated browser QA remains pending.
+Status: Done — implemented with automated verification on 2026-09-07; isolated browser QA remains pending.
 Investigation date: 2026-09-07.
 
 ## Expected outcome

@@ -1,5 +1,7 @@
 # Agent engine architecture
 
+Status: Living — six-engine architecture; keep aligned with the tree.
+
 Orkestrator provisions six coding-agent platforms. They are listed once, in
 `packages/protocol/src/agent-platforms.ts`, and everything else keys off that
 list:
@@ -32,7 +34,8 @@ lists are the reason these engines are built the way they are. In short:
    an agent process.
 3. **Every child is authenticated.** The backend generates a 32-byte token per
    environment and passes it in as `CLAUDE_BRIDGE_TOKEN`, `CODEX_BRIDGE_TOKEN`,
-   `ACP_BRIDGE_TOKEN`, `PI_BRIDGE_TOKEN`, or `OPENCODE_SERVER_PASSWORD`. A missing or blank token
+   `CURSOR_BRIDGE_TOKEN`, `ACP_BRIDGE_TOKEN`, `PI_BRIDGE_TOKEN`, or
+   `OPENCODE_SERVER_PASSWORD`. A missing or blank token
    makes a bridge fall back to a random value nobody holds, so it fails closed
    rather than open. The Claude and Codex bridges delete the variable from
    `process.env` after reading it, so a spawned agent child cannot inherit the
@@ -46,7 +49,7 @@ lists are the reason these engines are built the way they are. In short:
 6. **Managed executables are pinned and hash-verified.** `apps/desktop/electron/toolchain-manifest.ts`
    pins each managed binary; the backend passes the resolved path down
    (`CLAUDE_CLI_PATH`, `CODEX_PATH`, `ACP_AGENT_PATH`) so a packaged app never
-   depends on a `PATH` lookup. See [`docs/upgrade-agents.md`](../upgrade-agents.md)
+   depends on a `PATH` lookup. See [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md)
    for the bump procedure.
 
 The renderer reaches a bridge over HTTP and SSE — directly on loopback when it
@@ -135,19 +138,43 @@ use a distinct `coordinator:` runtime namespace. Each conversation gets its own
 bridge so its scoped MCP/mail credential cannot be shared with a sibling tab.
 Unmounting the project page does not stop that backend-owned runtime.
 
-Coordinator currently qualifies Codex only. The bridge receives a trusted
-`coordinator-read-only` execution policy and selects a per-conversation Codex
-permission profile on restored sessions and every turn regardless of Plan/Build
-mode. That profile denies filesystem access by default, grants read access only
-to the project and the managed Codex runtime, and disables shell network access.
-The isolated Codex home contains only the provider credential, the checkout is
-pinned untrusted, and project hooks plus plugin/browser execution paths are
-disabled; the only injected MCP server is the scoped Orkestrator endpoint. The
-renderer stores pasted attachments outside the checkout and hides mode/permission
-controls, resume/fork, and file-rewinding actions; the backend independently
-rejects write-capable history actions. Other providers remain unavailable until
-their pinned runtimes can enforce the same boundary; there is no permissive
-fallback or provider substitution.
+Coordinator qualification lives in one table,
+`apps/backend/src/core/coordinator-providers.ts`. Every gate (workspace
+service, runtime resolver, bridge launcher, trusted session input) consults it.
+A conversation has no agent until the first prompt; that send binds the
+conversation to one platform.
+
+Default tiers:
+
+| Tier | Meaning | Platforms |
+| --- | --- | --- |
+| `enforced` | The provider or the OS blocks mutation whatever the agent attempts | Codex; Claude where its command sandbox can start; Pi |
+| `provider-configured` | The SDK is told to deny, with no independent verification | OpenCode; Cursor; Claude when the sandbox cannot start |
+| `advisory` | The agent is asked to request permission first; a tool that does not ask is not stopped | Grok |
+
+**Settings → Agent platforms → Coordinator safety level** chooses the weakest
+tier this install will offer. It defaults to `provider-configured`, so Grok
+stays opt-in. There is no silent fallback or provider substitution.
+
+Delegation is derived, not declared: the platform must have an MCP client
+*and* a mailbox that can inject replies. Native Pi has both (bridge-owned
+MCP client plus `{canPull,canSend,canInject}=true`), so delegation follows.
+Cursor and Grok already inject the Orkestrator MCP server at launch, but
+`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false until a live tool-call
+probe and an explicit flag flip, so they can inspect and plan but cannot
+launch workers.
+
+The conversation always receives a trusted `coordinator-read-only` execution
+policy. Codex additionally selects a per-conversation permission profile on
+restored sessions and every turn: filesystem denied except the project and
+managed Codex runtime, shell network off, isolated `CODEX_HOME` holding only
+the credential, project hooks and plugin/browser paths disabled. Claude uses
+the SDK command sandbox plus a read-only shell allowlist. Pi's gate runs
+inside the bridge on every tool call. The only injected MCP server is the
+scoped Orkestrator endpoint. The renderer stores pasted attachments outside
+the checkout and hides mode/permission controls, resume/fork, and
+file-rewinding actions; the backend independently rejects write-capable
+history actions.
 
 The working directory is the canonical `Project.localPath`. Bridge state and a
 fresh coordinator `CODEX_HOME` live under application data, and initialization
@@ -228,7 +255,7 @@ container sessions use the same bridge and HTTP routes.
 
 Cursor receives project-resource, sandbox and tool restrictions from the
 backend-owned execution policy. Its SDK and native runtime closure are vendored
-into the packaged bridge; see `docs/upgrade-agents.md` for the build and upgrade
+into the packaged bridge; see `docs/development/upgrade-agents.md` for the build and upgrade
 checks.
 
 The backend exports `ORKESTRATOR_AGENT_MCP_URL` and
@@ -253,7 +280,7 @@ launches Grok as `agent [--model M] [--reasoning-effort E] stdio`, adding
 Because these are command-line flags rather than a typed SDK, **the argv is a
 versioned contract that nothing in CI can check** — the bridge's own tests run
 against a fake agent that accepts anything, so a renamed upstream flag leaves the
-suite green and breaks every session at runtime. `docs/upgrade-agents.md` has the
+suite green and breaks every session at runtime. `docs/development/upgrade-agents.md` has the
 manual verification steps to run after a version bump.
 
 Protocol handling lives in `index.ts`. The bridge sends `initialize`,
@@ -433,8 +460,7 @@ count.
 
 | Topic | Document |
 | --- | --- |
-| Bumping any agent SDK, CLI, or pinned binary | [`docs/upgrade-agents.md`](../upgrade-agents.md) |
+| Bumping any agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md) |
 | Background-reliability and transport invariants | [`AGENTS.md`](../../AGENTS.md) |
-| Workflow result transport design record | [`docs/todo/json-to-tool-calls.md`](../todo/json-to-tool-calls.md) |
 | Agent-driven real-stack QA | [`docs/development/agent-testing.md`](../development/agent-testing.md) |
-| Known flakes and their root causes | [`docs/flaky-tests.md`](../flaky-tests.md) |
+| Known flakes and their root causes | [`docs/development/flaky-tests.md`](../development/flaky-tests.md) |

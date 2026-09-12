@@ -1,5 +1,7 @@
 # Upgrading agent SDKs and binaries
 
+Status: Living — SDK/CLI bump runbook; pins are test-enforced.
+
 This runbook covers the Claude, Codex, OpenCode, Cursor, Grok, and Pi versions
 used by Orkestrator. These integrations do not share one upgrade mechanism:
 
@@ -13,8 +15,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types; `@earendil-works/pi-server` completes the SDK's runtime closure | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.85.1` |
 
 All versions are exact pins. Do not change them to ranges or `latest`.
-Verified against upstream stable releases on 2026-09-08; see the
-[upgrade evidence and remaining manual smoke checks](agent-upgrades/2026-09-08.md).
+Verified against upstream stable releases on 2026-09-08.
 
 ## What is enforced, and what is not
 
@@ -489,7 +490,7 @@ hermetic `codex exec` exception.
    update them only when the assertion is intended to represent the current
    binary.
 
-See `docs/technical-architecture/agent-engines.md` for the architectural and
+See `docs/architecture/agent-engines.md` for the architectural and
 safety constraints behind this process. Upstream release source:
 [OpenAI Codex](https://github.com/openai/codex).
 
@@ -775,7 +776,7 @@ This section covers the `grok` CLI the ACP bridge spawns. It is pinned in
 SDK: the ACP bridge speaks ACP with the CLI over stdio. That makes its
 **command-line flags a versioned contract**, and it is the part of an upgrade
 nothing in CI can check. See
-`docs/technical-architecture/agent-engines.md` for the bridge architecture.
+`docs/architecture/agent-engines.md` for the bridge architecture.
 
 The bridge launches Grok with `--always-approve agent stdio`.
 

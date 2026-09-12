@@ -1,6 +1,9 @@
 # Orkestrator AI
 
-A desktop application for managing isolated Docker-based development environments for Claude Code, Codex, and OpenCode. Create multiple sandboxed environments per repository, each with its own terminal session, Git branch, and PR workflow.
+A desktop application for managing isolated Docker-based and local-worktree
+development environments for Claude Code, Codex, OpenCode, Cursor Agent, Grok
+Build, and Pi. Create multiple sandboxed environments per repository, each with
+its own terminal session, Git branch, and PR workflow.
 
 ## Features
 
@@ -42,7 +45,7 @@ A desktop application for managing isolated Docker-based development environment
 ```bash
 # Clone the repository
 git clone <repo-url>
-cd orkestrator-ai
+cd orkestrator-v2
 
 # Install the tool versions pinned in mise.toml
 mise install
@@ -108,7 +111,7 @@ docker tag ghcr.io/orkestrator-ai/orkestrator-v2:latest orkestrator-v2:latest
 ```
 
 Versioned images are also available, for example
-`ghcr.io/orkestrator-ai/orkestrator-v2:2.8.1`. Pin a version or digest when a
+`ghcr.io/orkestrator-ai/orkestrator-v2:2.15.4`. Pin a version or digest when a
 reproducible environment is more important than automatically receiving the
 latest release.
 
@@ -119,8 +122,8 @@ version tag is pushed. The tag must match the version in the root
 `package.json`:
 
 ```bash
-git tag v2.8.1
-git push origin v2.8.1
+git tag v2.15.4
+git push origin v2.15.4
 ```
 
 Stable releases receive full, major/minor, major, `latest`, and commit-SHA
@@ -146,10 +149,10 @@ made private again.
 1. Click on a project to expand it
 2. Click "Create New Environment"
 3. A new container is provisioned with:
-   - Your `~/.claude` credentials (read-only)
+   - Credentials for the agent platforms enabled on this install
    - SSH key for Git operations
    - Repository cloned to `/workspace`
-   - Claude Code CLI ready to use
+   - Pinned agent CLIs ready to use
 
 ### Working with Environments
 
@@ -226,7 +229,7 @@ If the connection fails:
 - **`Executable not found in $PATH: "tailscale"`:** Install Tailscale's CLI integration or set `ORKESTRATOR_TAILSCALE_BIN` to the executable's absolute path.
 - **Tailscale Serve fails to start:** Confirm the Tailscale app is connected and that HTTPS/Serve is enabled for the tailnet. The first Serve setup may require approval from a tailnet administrator.
 
-For custom ports, origins, service management, and more troubleshooting, see [Standalone Backend and Remote Gateway](docs/remote-gateway.md#vercel-hosted-public-client).
+For custom ports, origins, service management, and more troubleshooting, see [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md#vercel-hosted-public-client).
 
 ### Shared Backend And Web Access
 
@@ -262,9 +265,9 @@ By default the gateway listens on port `34121`. Look for a startup log like:
 [RemoteGateway] Auth token stored at /path/to/gateway-auth.json
 ```
 
-Open the logged URL from another browser on the same tailnet, then enter the token from the host machine. See [Standalone Backend and Remote Gateway](docs/remote-gateway.md) for service flags, environment variables, security notes, and troubleshooting.
+Open the logged URL from another browser on the same tailnet, then enter the token from the host machine. See [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md) for service flags, environment variables, security notes, and troubleshooting.
 
-To deploy a static frontend separately, use `apps/web-public`. Vercel only delivers its asset bundle; the browser connects directly to the selected HTTPS backend on the user's local or Tailscale network. The backend traffic is never routed through Vercel. See the public-client section in [Standalone Backend and Remote Gateway](docs/remote-gateway.md#vercel-hosted-public-client).
+To deploy a static frontend separately, use `apps/web-public`. Vercel only delivers its asset bundle; the browser connects directly to the selected HTTPS backend on the user's local or Tailscale network. The backend traffic is never routed through Vercel. See the public-client section in [Standalone Backend and Remote Gateway](docs/architecture/remote-gateway.md#vercel-hosted-public-client).
 
 The standalone backend can configure the tailnet-only HTTPS listener itself. The convenience script assumes the public client is hosted at `https://orkestrator.dev`:
 
@@ -311,7 +314,7 @@ cleanup, see [Isolated development and agent testing](docs/development/agent-tes
 mise run dev
 
 # Run tests
-bun test
+mise run test
 
 # Build for production
 mise run build
@@ -342,42 +345,51 @@ The web application is independently built. Electron loads it as its renderer wh
 │                    Docker Containers                     │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │ orkestrator-v2:latest                              │ │
-│  │ - Node.js 24 LTS + Claude Code CLI                 │ │
+│  │ - Node.js 24 LTS + pinned agent CLIs               │ │
 │  │ - Git + GitHub CLI                                 │ │
-│  │ - Network firewall (GitHub, npm, Anthropic only)   │ │
+│  │ - Network firewall (restricted allowlist)          │ │
 │  └────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Agent engines
 
-Orkestrator supports five coding agents — Claude Code, Codex, OpenCode, Cursor
-Agent, and Grok Build — and they do not share one integration mechanism. Each
-vendor exposes a different surface (a TypeScript SDK, a JSON-RPC app-server, an
-HTTP server, or a raw stdio protocol), so each gets its own adapter behind a
-common contract.
+Orkestrator supports six coding agents — Claude Code, Codex, OpenCode, Cursor
+Agent, Grok Build, and Pi — and they do not share one integration mechanism.
+Each vendor exposes a different surface (a TypeScript SDK, a JSON-RPC
+app-server, an HTTP server, or a raw stdio protocol), so each gets its own
+adapter behind a common contract.
 
-[**docs/technical-architecture/agent-engines.md**](docs/technical-architecture/agent-engines.md)
-explains how all five work: process topology, transport, session and approval
+[**docs/architecture/agent-engines.md**](docs/architecture/agent-engines.md)
+explains how all six work: process topology, transport, session and approval
 handling, and the invariants they share.
 
 | Related | Document |
 | --- | --- |
-| Bumping an agent SDK, CLI, or pinned binary | [`docs/upgrade-agents.md`](docs/upgrade-agents.md) |
+| Documentation catalog | [`docs/README.md`](docs/README.md) |
+| Bumping an agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | Contributing agent guidance and invariants | [`AGENTS.md`](AGENTS.md) |
 
 ## Network Security
 
 Containers have restricted network access via iptables firewall:
 
-**Allowed domains:**
-- GitHub (api.github.com, github.com)
-- npm registry (registry.npmjs.org)
-- Anthropic API (api.anthropic.com, statsig.anthropic.com)
-- VS Code marketplace (for extensions)
-- Sentry.io (error reporting)
+**Default allowlist** (`DEFAULT_ALLOWED_DOMAINS`):
+- GitHub (`github.com`, `api.github.com`)
+- npm (`registry.npmjs.org`) and Node (`nodejs.org`)
+- Bun (`bun.sh`) and mise (`mise.jdx.dev`, `mise-versions.jdx.dev`, `aube.jdx.dev`)
+- Anthropic API (`api.anthropic.com`, `statsig.anthropic.com`) plus `statsig.com`
+- Sentry (`sentry.io`)
+- VS Code marketplace and update hosts
+- Context7 (`mcp.context7.com`)
+- Playwright CDN (`cdn.playwright.dev`)
 
-All other outbound traffic is blocked.
+Enabled agent platforms also add the hosts those CLIs need (Cursor, Grok, Pi,
+and so on). Pi fronts the user's own model providers, so a self-hosted or
+regional endpoint belongs in the environment's `allowedDomains`. `full` network
+mode skips the firewall entirely.
+
+All other outbound traffic is blocked in the default `restricted` mode.
 
 The remote gateway binds only to Tailscale addresses by default and requires a gateway token before serving the app, backend API, event stream, or loopback proxy routes.
 
@@ -387,18 +399,19 @@ Application data is stored in:
 - **macOS**: `~/Library/Application Support/orkestrator-v2/`
 - **Linux**: `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
 
-On first launch, Orkestrator downloads the pinned Codex, OpenCode, and Claude Code
-executables into the versioned `toolchains/` directory under this location. Each
-archive and extracted executable is checked against hashes embedded in the signed
-desktop application before it is activated. The cache is shared by all local
-worktree environments and reused across application upgrades. Bun remains bundled
-with the desktop application so the backend can always start and report download
-or recovery errors.
+On first launch, Orkestrator downloads the pinned Claude Code, Codex, OpenCode,
+Grok, and Pi executables into the versioned `toolchains/` directory under this
+location. Cursor is SDK-only and has no managed CLI. Each archive and extracted
+executable is checked against hashes embedded in the signed desktop application
+before it is activated. The cache is shared by all local worktree environments
+and reused across application upgrades. Bun remains bundled with the desktop
+application so the backend can always start and report download or recovery
+errors.
 
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand, xterm.js
-- **Backend**: Electron, Node.js, TypeScript
+- **Backend**: Bun service (`apps/backend`); Electron is the desktop shell and supervisor
 - **Container**: Docker with custom base image
 
 ## License

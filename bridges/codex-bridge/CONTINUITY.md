@@ -1,3 +1,9 @@
+> **Stale session ledger.** This file is leftover `/help` notes. The bridge
+> lives in `bridges/codex-bridge/` and speaks JSON-RPC to
+> `codex app-server --stdio`. Current invariants are in
+> [`AGENTS.md`](../../AGENTS.md) and
+> [`docs/architecture/agent-engines.md`](../../docs/architecture/agent-engines.md).
+
 Goal (incl. success criteria):
 - Answer the current `/help` request with a concise, accurate summary of what this `codex-bridge` workspace does and how to use it.
 - Success criteria: help text reflects the current codebase and commands in this workspace.

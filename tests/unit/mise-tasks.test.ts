@@ -109,7 +109,7 @@ const SKIPPED_TREES = ["test-fixtures"];
  * Dated records of runs that already happened. They quote the commands exactly
  * as they were typed at the time, so rewriting them would falsify the record.
  */
-const HISTORICAL_TREES = ["docs/flaky-tests.md", "docs/agent-upgrades"];
+const HISTORICAL_TREES = ["docs/development/flaky-tests.md"];
 
 function markdownFiles(): string[] {
   const found: string[] = [];

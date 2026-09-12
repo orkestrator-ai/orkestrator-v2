@@ -17,7 +17,7 @@ import {
 describe("ACP bridge", () => {
   // The fake agent records its own argv, so these assert the exact command line
   // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/upgrade-agents.md` carries that as a manual step for version bumps.
+  // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
   async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
     const argsFile = resolve(await temporaryDirectory(), "args.log");
     const { base, headers } = await spawnBridge({
@@ -465,7 +465,7 @@ describe("ACP bridge", () => {
       agentState: "finished",
       toolArgs: {
         description: "Summarize two docs",
-        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md. Return one line each.",
+        prompt: "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md. Return one line each.",
         subagent_type: "explore",
         model: "composer-2.5",
         agentId: "bc-abc123",
@@ -574,7 +574,7 @@ describe("ACP bridge", () => {
       toolState: "success",
       toolArgs: {
         description: "Summarize two docs",
-        prompt: "Read docs/upgrade-agents.md and docs/flaky-tests.md.",
+        prompt: "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md.",
         subagent_type: "explore",
         model: "composer-2.5",
         agentId: "bc-wipe",

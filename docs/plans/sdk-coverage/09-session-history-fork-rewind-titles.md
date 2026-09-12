@@ -1,6 +1,10 @@
 # 09 — Session history: fork, rewind, revert and titles
 
-**Status:** ⬜ Not started · 0/18 tasks · Depends on: 02, 03
+**Status:** 🟨 In progress · ~45% · Depends on: 02, 03
+
+Refreshed 2026-09-11. Rewind exists on Codex and Cursor; Pi has fork/tree
+primitives. Still open: backend-owned titles (still Codex `session-titles.ts`),
+Pi `switch-branch`, Claude `resumeSessionAt`, and resume-tree UX.
 
 ## Goal
 

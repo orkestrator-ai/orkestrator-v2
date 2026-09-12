@@ -1,6 +1,13 @@
 # Cursor stall investigation
 
+Status: Historical — 2026-09-09 stall incident. Current logging is in bridge-diagnostics.md.
+
+> Historical incident record from 2026-09-09. The sandbox bootstrap barrier
+> described here is in `bridges/cursor-bridge/src/sandbox-bootstrap.ts`. For
+> current operator logging, use [shared bridge diagnostics](bridge-diagnostics.md).
+
 Cursor now uses the [shared bridge diagnostics](bridge-diagnostics.md).
+
 ## Investigation on 2026-09-09
 
 A Grok 4.6 review through Cursor SDK 1.0.31 stopped emitting persisted SDK

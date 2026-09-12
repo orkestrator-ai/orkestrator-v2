@@ -21,6 +21,7 @@ import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShell
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
+import { SystemUsageIndicator } from "./SystemUsageIndicator";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -29,6 +30,7 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
+  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const paneEnvironments = usePaneLayoutStore((state) => state.environments);
@@ -115,12 +117,21 @@ export function AppShell({ children }: AppShellProps) {
       ) : (
         <>
           <div
-            className="relative flex h-[var(--desktop-title-bar-height)] w-full shrink-0 items-center justify-center bg-chrome"
+            className="relative flex h-[var(--desktop-title-bar-height)] w-full shrink-0 items-center justify-start gap-2 border-b border-border/80 bg-chrome pl-[96px] pr-1.5"
             data-backend-drag-region
             onMouseDown={handleTitleBarMouseDown}
             style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
           >
-            <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
+            {/*
+              `pl-[96px]` clears the macOS traffic lights handed to us by
+              `titleBarStyle: "hiddenInset"` and leaves a comfortable gap
+              before the title. The bottom border matches the toolbar's own
+              edge so the two chrome rows read as one frame.
+            */}
+            <span
+              className="min-w-0 truncate text-xs font-medium text-muted-foreground"
+              data-backend-drag-region
+            >
               {windowTitle}
             </span>
             {/*
@@ -128,26 +139,34 @@ export function AppShell({ children }: AppShellProps) {
               `startDragging()`. A nested control inherits that, so without the
               `no-drag` app region *and* the mouse-down stop the info button
               would drag the window instead of opening. `MobileAppShellLayout`
-              wraps the same slot the same way.
+              wraps the same slot the same way. The slot is pushed right with
+              `ml-auto` rather than being absolutely positioned, so the extra
+              system meters always reserve their own space instead of
+              overlapping the title.
             */}
             <div
-              className="absolute right-1 top-1 flex items-center gap-1"
+              className="ml-auto flex shrink-0 items-center gap-1"
               data-testid="desktop-agent-info-slot"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
+              <SystemUsageIndicator />
               <AgentMailButton />
               <AgentInfoButton activeTab={activeTab} />
             </div>
           </div>
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
             {/* Sidebar Panel */}
-            <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
-              <Sidebar />
-            </ResizablePanel>
+            {sidebarOpen && (
+              <>
+                <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
+                  <Sidebar />
+                </ResizablePanel>
 
-            {/* Resize Handle */}
-            <ResizableHandle />
+                {/* Resize Handle */}
+                <ResizableHandle />
+              </>
+            )}
 
             {/* Main Content Panel */}
             <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>

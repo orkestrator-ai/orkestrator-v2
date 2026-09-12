@@ -47,6 +47,7 @@ import {
   ListChecks,
   Loader2,
   MessagesSquare,
+  PanelLeft,
   Play,
   Plus,
   Repeat2,
@@ -228,6 +229,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     filesPanelOpen,
     toggleFilesPanel,
     changes,
+    sidebarOpen,
+    toggleSidebar,
     setRepoSettingsProjectId,
     globalSettingsOpen,
     globalSettingsDefaultSection,
@@ -561,6 +564,28 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 isGrid ? "col-span-2 grid grid-cols-2 gap-2" : "flex shrink-0 items-center gap-2",
               )}
             >
+              {/*
+                The left projects/environments panel toggle leads the toolbar.
+                It is desktop-only: below the breakpoint that panel is a
+                drawer, and `MobileAppShellLayout` already owns its trigger.
+              */}
+              {!isGrid && (
+                <ToolbarTooltipTrigger
+                  tooltip={sidebarOpen ? "Hide left panel" : "Show left panel"}
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={toggleSidebar}
+                    aria-label={sidebarOpen ? "Hide left panel" : "Show left panel"}
+                    aria-pressed={sidebarOpen}
+                  >
+                    <PanelLeft className="h-4 w-4" />
+                  </Button>
+                </ToolbarTooltipTrigger>
+              )}
+
               <ToolbarTooltipTrigger tooltip="Global settings">
                 <Button
                   variant="ghost"

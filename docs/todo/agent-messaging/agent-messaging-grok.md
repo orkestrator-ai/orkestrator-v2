@@ -9,6 +9,9 @@
 | Intended repo path | `docs/todo/agent-messaging-grok.md` |
 | Audience | Senior engineers implementing the feature in Orkestrator |
 
+> Later note (2026-09-11): native Pi now has a bridge-owned MCP client and
+> on mail flags. The Pi row in the capability table below is historical.
+
 ---
 
 ## Overview
@@ -861,7 +864,8 @@ No extra renderer feature flag beyond the config snapshot already synced through
 2. **Per-tab tokens (v2).** Worth doing if we ever let Agent MCP tools mutate more than Kanban + mail. Not blocking. v1 send-spoof and sibling agent-kind inbox read stay documented.
 3. **Should a human-to-agent UI send with inject-off still appear in `check_inbox` only, or also as a client-only card?** Recommendation: native tabs get both; terminal/tmux/UI tabs get badge + popover only.
 4. **Retention vs. unread.** Should unread messages outlive `retentionDays`? Recommendation: no — 14 days is the cap; the badge can note truncation via `droppedUnread`.
-5. **Platform MCP coverage (settled for v1, confirm wiring in implementation, do not block on Pi send):**
+5. **Platform MCP coverage (updated 2026-09-11; authoritative table is
+   `agent-messaging-plan.md` §5.2):**
 
 | Surface | Send / pull (Agent MCP tools) | Idle inject | Human inbox |
 | --- | --- | --- | --- |
@@ -869,13 +873,15 @@ No extra renderer feature flag beyond the config snapshot already synced through
 | Codex native | yes (`codex-config.ts`) | yes | yes |
 | OpenCode native | yes (`configureOpenCodeAgentTools` in `commands-servers.ts`) | yes | yes |
 | Claude tmux | yes (`agentMcpConfigJson` in `tmux-shared.ts`) | yes (PR 6) | yes (popover, not NativeMessage) |
-| Pi native | **no** in v1 — Pi ships no MCP client (`AGENTS.md`); do not block the feature | yes | yes |
-| Cursor native | **unconfirmed** — host injects `ORKESTRATOR_AGENT_MCP_*` into the process env (`commands-servers.ts`) but `cursor-bridge` does not configure the Orkestrator HTTP MCP the way Claude/Codex do. Treat as receive-only until wiring is confirmed | yes | yes |
-| Grok (ACP) | **unconfirmed** — ACP sessions pass `mcpServers: []`; project MCPs are opt-in via `ACP_APPROVE_PROJECT_MCPS`. Host still exports the env vars into containers. Treat as receive-only until wiring is confirmed | yes | yes |
-| Terminal CLIs (non-tmux) | only if that CLI loads the env-configured Orkestrator MCP (Claude/Codex yes; others no) | no | yes (popover) |
+| Pi native | **no** — Pi ships no MCP client (`AGENTS.md`). Path is `pi.registerTool` on the existing `orkestrator` extension, not an MCP client. Flags stay off until those tools exist | no (flags off) | yes |
+| Cursor native | **wired, flags off** — `cursor-bridge/src/mcp.ts` sets `AgentOptions.mcpServers.orkestrator` from process env. `agentMailCapabilities()` is still all-false pending a live tool-call probe | no (flags off) | yes |
+| Grok (ACP) | **wired, flags off** — `configuredAcpMcpServers()` on `session/new` and `session/load`. Not `mcpServers: []`. Flags still all-false | no (flags off) | yes |
+| Terminal CLIs (non-tmux) | only if that CLI loads the env-configured Orkestrator MCP (Claude/Codex/OpenCode yes; cursor/grok/pi no) | no | yes (popover) |
 | browser / file | no (Agent MCP pull refused) | no | yes (popover) |
 
-An engineer must not assume every `agent-native` mailbox can `send_message`. Inject and the human inbox still work for receive-only platforms.
+An engineer must not assume every `agent-native` mailbox can `send_message`.
+Human inbox still works for receive-only platforms. Idle inject does **not**
+— `canInject` stays false until the recipient can pull and ack.
 
 ---
 

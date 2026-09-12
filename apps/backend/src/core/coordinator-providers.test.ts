@@ -87,13 +87,13 @@ describe("coordinator provider qualification", () => {
     expect(codex.reason).toContain("turned off in settings");
   });
 
-  test("Pi qualifies without delegation, so the caveat travels with it", () => {
+  test("Pi qualifies with delegation once the bridge owns an MCP client", () => {
     const pi = coordinatorProviderQualification("pi", {
       host: sandboxed,
       enabledPlatforms: everyPlatform,
     });
-    expect(pi).toMatchObject({ tier: "enforced", available: true, delegation: false });
-    expect(pi.reason).toContain("no MCP client");
+    expect(pi).toMatchObject({ tier: "enforced", available: true, delegation: true });
+    expect(pi.reason).toBeUndefined();
   });
 
   test("delegation follows the round trip, not just the outbound MCP call", () => {
@@ -101,7 +101,7 @@ describe("coordinator provider qualification", () => {
     // reachable — but their native mailboxes cannot be injected into, so the
     // worker's reply can never come back. Advertising delegation there produces
     // a coordinator that dispatches work and then waits for good.
-    for (const platform of ["cursor", "grok", "pi"] as const) {
+    for (const platform of ["cursor", "grok"] as const) {
       const qualification = coordinatorProviderQualification(platform, {
         tierSetting: "advisory",
         host: sandboxed,
@@ -111,7 +111,7 @@ describe("coordinator provider qualification", () => {
       expect(qualification.reason).toBeTruthy();
     }
     // The platforms whose mailboxes deliver keep it.
-    for (const platform of ["claude", "codex", "opencode"] as const) {
+    for (const platform of ["claude", "codex", "opencode", "pi"] as const) {
       expect(
         coordinatorProviderQualification(platform, {
           tierSetting: "advisory",

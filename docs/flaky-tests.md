@@ -10,6 +10,30 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `a throwing listener does not fail the mutation that succeeded` (`apps/backend/src/core/storage-resource-events.test.ts`)
+
+- **Status:** open; isolated owner passes.
+- **Date observed:** 2026-09-11.
+- **Original command:** `mise run test:changed`, default aggregate plan
+  (`scripts/test-all.ts` ran four groups concurrently; the backend workspace used
+  two Bun workers).
+- **Failure:** `expect(storage.addProject(...)).resolves.toMatchObject(...)` saw
+  the mutation reject with the listener's own `Error: client transport is
+  broken`, after the storage layer logged
+  `[Storage] Resource change listener threw`. The backend group reported 3061
+  passed, 1 skipped, 1 failed across 3063 tests in 199.38s; every other group
+  passed.
+- **Isolated rerun:** `mise run test:logged -- --name storage-resource-events --
+  bun --cwd=apps/backend test src/core/storage-resource-events.test.ts
+  --parallel=2 --only-failures` → passed (0.4s).
+- **Hypothesis:** the case deliberately throws from a listener, and the
+  background reject/trailing-error accounting that contains it is timing
+  sensitive under aggregate load. The change in flight (the parked-dispatch
+  reconcile grace window) touches only the native-agent projection and the
+  retry/discard card, not storage or resource events. A recurrence should
+  capture the `announce` rejection boundary before changing the handler or the
+  assertion.
+
 ## Missing-GitHub-CLI rollback fails in aggregate only (2026-09-10)
 
 - **Status:** open; isolated owner passes.

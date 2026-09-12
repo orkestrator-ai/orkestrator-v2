@@ -528,12 +528,12 @@ export function parsePiPackages(output: string): ExtensionItem[] {
 /**
  * Pi's extension surface is its packages.
  *
- * There is no MCP list to read: Pi ships no MCP client of its own — MCP is
- * something a package adds — so the servers list is empty rather than an error,
- * which would tell the user something is broken when nothing is. Packages are
- * read with `--no-approve`, because this discovery runs against whatever
- * repository happens to be open and a project-local package must not be
- * trusted just because someone opened a settings pane.
+ * Live MCP inventory is session-owned (`GET /session/:id/mcp` on the bridge).
+ * This settings-pane fallback still has no CLI list to read, so the servers
+ * list stays empty rather than an error. Packages are read with `--no-approve`,
+ * because this discovery runs against whatever repository happens to be open
+ * and a project-local package must not be trusted just because someone opened
+ * a settings pane.
  */
 async function discoverPi(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [packages] = await Promise.allSettled([run("pi", ["list", "--no-approve"])]);

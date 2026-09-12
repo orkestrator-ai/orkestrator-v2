@@ -347,6 +347,17 @@ describe("loading", () => {
   });
 });
 
+test("does not persist tab-scoped MCP credentials", async () => {
+  const state = newSessionState("mcp-key");
+  state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "do-not-persist" };
+  sessions.set(state.id, state);
+  schedulePersist();
+  await drainPersistence();
+  const raw = await readFile(join(directory, "state.json"), "utf8");
+  expect(raw).not.toContain("agentMcp");
+  expect(raw).not.toContain("do-not-persist");
+});
+
 test("preserves the read-only review restriction across bridge restart", async () => {
   const state = newSessionState("review-key");
   state.readOnly = true;

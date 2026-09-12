@@ -231,6 +231,15 @@ backend-owned execution policy. Its SDK and native runtime closure are vendored
 into the packaged bridge; see `docs/upgrade-agents.md` for the build and upgrade
 checks.
 
+The backend exports `ORKESTRATOR_AGENT_MCP_URL` and
+`ORKESTRATOR_AGENT_MCP_TOKEN` on the bridge process. `src/mcp.ts` turns those
+into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header). Project
+`.cursor/mcp.json` is read only when the execution policy opts into project
+settings (containers). That is launch wiring, not mailbox capability:
+`agentMailCapabilities("agent-native", "cursor")` is still all-false. The
+bridge does not consume per-tab `agentMcp` from create/prompt; Claude and
+Codex do.
+
 ## Grok Build
 
 **Bridge:** `bridges/acp-bridge/` · **Transport:** ACP JSON-RPC over stdio
@@ -249,7 +258,16 @@ manual verification steps to run after a version bump.
 
 Protocol handling lives in `index.ts`. The bridge sends `initialize`,
 `session/new`, `session/load`, `session/list`, and `session/prompt`, and
-notifies `session/cancel`. Inbound, it handles `session/update` notifications
+notifies `session/cancel`. `session/new` and `session/load` pass
+`configuredAcpMcpServers()`, which injects the Orkestrator HTTP MCP server
+from the same process env the other bridges receive. The initialize
+handshake's `_meta.mcpServers` is ignored because it is empty before the
+agent loads that list. Mailbox capability still follows the protocol table:
+native Grok is `{canPull,canSend,canInject}=false` until a live tool-call
+probe and an explicit flag flip. The bridge does not consume per-tab
+`agentMcp` from request bodies.
+
+Inbound, it handles `session/update` notifications
 (`agent_message_chunk`, `tool_call`, `tool_call_update`,
 `available_commands_update`, `model_changed`, and friends) and answers
 `session/request_permission` requests through the approval flow. Any *other*
@@ -320,6 +338,15 @@ session close and a malformed answer all deny, and a turn that ends with a call
 still parked denies it rather than leaving the turn awaiting a promise nobody
 will settle. The same policy controls project-local `.pi/` extensions, skills
 and prompt templates through Pi's resource loader and project-trust callback.
+
+Pi's vendor SDK has no MCP client. The bridge owns one (`bridges/pi-bridge/src/mcp.ts`)
+and loads it through `extensionFactories` next to the approval gate: Orkestrator
+from env / per-tab `agentMcp` (reserved name, HTTP only), user servers from
+`~/.pi/agent/mcp.json`, and project `.pi/mcp.json` only when
+`policy.projectResources` is on. Orkestrator tools keep their Agent MCP names;
+user/project tools are prefixed `mcp_<server>_<tool>`. `GET /session/:id/mcp`
+returns the live inventory. Native Pi mail flags are on; terminal `pi` stays
+off. A failed MCP connect is a notice, not a failed attach.
 
 The SDK and the `pi` binary a terminal tab runs are the same program published
 two ways, so they are pinned to one version and `tests/unit/version-drift.test.ts`

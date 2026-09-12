@@ -391,6 +391,8 @@ export interface NativeAgentServiceOptions {
   /** Disabled by default. Milestone 3 observes and never resolves. */
   interactionMonitorMode?: "disabled" | "observe-only";
   interactionMonitorAdoptionEnabled?: boolean;
+  /** Launch/queue sweep cadence. Injectable so tests do not sleep through 2 s. */
+  launchReconcileIntervalMs?: number;
   interactionMonitorIntervalMs?: number;
   interactionMonitorMaxConcurrency?: number;
   interactionMonitorMaxSessionsPerEnvironment?: number;
@@ -456,6 +458,19 @@ export const OPENCODE_RECOVERY_RETRY_CEILING_MS = 60_000;
 export const PARKED_DISPATCH_CONFLICT_MESSAGE =
   "An earlier message is still awaiting confirmation." +
   " Retry or discard it before sending another.";
+
+/**
+ * How long a parked dispatch gets to confirm itself before it becomes a choice.
+ *
+ * The common case is a lost acknowledgement, not a lost prompt: the provider
+ * accepted the turn and its own dispatch journal can prove it on the next
+ * projection read. Exposing the recovery card the instant the record exists
+ * flashed a banner that then vanished on its own. Inside this window the
+ * projection reports `reconciling` and the composer stays locked without an
+ * action card; once it elapses the record is a genuine final failure and the
+ * retry/discard choice is surfaced.
+ */
+export const PARKED_DISPATCH_RECONCILE_GRACE_MS = 15_000;
 
 export const OPENCODE_RECOVERY_MAX_CANDIDATES = 1_024;
 export const OPENCODE_MANUAL_PROMPT_CLAIM_MS = 2 * 60_000;

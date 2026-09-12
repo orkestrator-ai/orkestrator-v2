@@ -21,6 +21,11 @@ describe("agent mail protocol", () => {
       canInject: true,
     });
     expect(agentMailCapabilities("agent-native", "pi")).toEqual({
+      canPull: true,
+      canSend: true,
+      canInject: true,
+    });
+    expect(agentMailCapabilities("pi", null)).toEqual({
       canPull: false,
       canSend: false,
       canInject: false,

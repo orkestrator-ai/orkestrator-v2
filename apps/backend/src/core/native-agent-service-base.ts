@@ -514,11 +514,17 @@ export abstract class NativeAgentServiceBase {
       this.trackScan(this.drainPromptQueues()),
     ]);
     if (this.stopped) return;
-    this.launchTimer = setInterval(() => {
-      if (this.stopped) return;
-      void this.trackScan(this.reconcilePendingLaunches()).catch(() => undefined);
-      void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
-    }, 2_000);
+    const launchReconcileIntervalMs = this.options.launchReconcileIntervalMs;
+    this.launchTimer = setInterval(
+      () => {
+        if (this.stopped) return;
+        void this.trackScan(this.reconcilePendingLaunches()).catch(() => undefined);
+        void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
+      },
+      Number.isFinite(launchReconcileIntervalMs)
+        ? Math.max(20, launchReconcileIntervalMs as number)
+        : 2_000,
+    );
     this.launchTimer.unref?.();
     if (this.options.interactionMonitorMode === "observe-only") {
       await this.reconcileAgentInteractions().catch(() => undefined);

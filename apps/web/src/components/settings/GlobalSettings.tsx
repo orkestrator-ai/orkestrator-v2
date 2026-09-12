@@ -797,6 +797,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
       }
       setConfig(newConfig);
+      if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
+        // The Claude plan read goes unavailable when host credentials are off,
+        // so the card must re-read rather than serve the pre-toggle snapshot.
+        setPlanUsageRefreshToken((token) => token + 1);
+      }
 
       if (
         !window.orkestratorGateway?.enabled &&
@@ -975,6 +980,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     openCodeModelProviders,
     setOpenCodeModelProviders,
     planUsageRefreshToken,
+    setPlanUsageRefreshToken,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
     codexMaxConcurrentThreads,

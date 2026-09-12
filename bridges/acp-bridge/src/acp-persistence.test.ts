@@ -925,4 +925,36 @@ describe("ACP bridge", () => {
         ?.messages[1]?.parts.map((part) => part.type),
     ).toEqual(["thinking", "text"]);
   });
+
+  test("strips a tab MCP token from the persisted state file after attach", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({
+        clientSessionKey: "env-mcp-secret:tab-1",
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "do-not-persist" },
+      }),
+    }).then((response) => response.json())) as { id: string };
+    expect(
+      (
+        await nativeFetch(`${first.base}/session/${created.id}/attach`, {
+          method: "POST",
+          headers: first.headers,
+          body: JSON.stringify({
+            agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "do-not-persist" },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const raw = await waitFor(
+      () => fs.readFile(resolve(stateDirectory, "state.json"), "utf8").catch(() => ""),
+      (value) => value.includes(created.id),
+    );
+    expect(raw).not.toContain("agentMcp");
+    expect(raw).not.toContain("do-not-persist");
+    expect(raw).not.toContain("attachedMcpKey");
+  });
 });

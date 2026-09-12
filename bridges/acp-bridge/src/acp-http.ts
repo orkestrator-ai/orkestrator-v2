@@ -307,6 +307,12 @@ export async function route(
    * unambiguously empty: nothing was journaled and no prompt was written.
    */
   if (action === "attach" && request.method === "POST") {
+    // Rebuilding for a rotated token closes the child. Doing that mid-turn
+    // leaves status running with no process: onClose returns early once
+    // `state.child` is nulled. Leave the live child and credential alone.
+    if (state.status === "running" || state.dispatching) {
+      return json(response, 409, { error: "Session is already running" });
+    }
     const body = await readJson(request).catch(() => ({}) as JsonObject);
     storeAgentMcp(state, body.agentMcp);
     await ensureSessionProcess(state, clientSignal);

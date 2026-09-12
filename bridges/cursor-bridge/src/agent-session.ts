@@ -149,7 +149,7 @@ export async function createSession(
  * concurrency rather than a corner case.
  */
 export async function ensureAgent(state: SessionState): Promise<SDKAgent> {
-  if (state.agent && state.attachedMcpKey !== mcpConnectionKey(state.agentMcp)) {
+  if (state.agent && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
     await detachAgent(state);
   }
   if (state.agent) return state.agent;

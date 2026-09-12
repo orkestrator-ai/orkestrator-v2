@@ -54,5 +54,6 @@ describe("ACP Orkestrator MCP", () => {
     expect(mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "a" })).not.toBe(
       mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "b" }),
     );
+    expect(mcpConnectionKey()).toBe("");
   });
 });

@@ -387,6 +387,12 @@ async function routeSession(
     // bridge has no persisted one, so without this the warm-up would connect
     // the process-env identity and the prompt would have to rebuild the agent
     // to correct it.
+    //
+    // A rotated token detaches the live agent. Refuse that while a turn is
+    // in flight so a warm-up cannot destroy the work that is already running.
+    if (state.status === "running" || state.dispatching) {
+      throw new HttpError(409, "Session is already running");
+    }
     const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
     storeAgentMcp(state, isObject(body) ? body.agentMcp : undefined);
     await ensureAgent(state);

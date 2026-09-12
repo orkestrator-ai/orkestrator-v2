@@ -718,4 +718,105 @@ describe("ACP bridge", () => {
     );
     expect(session.composer.selectedModelId).toBe("grok-next");
   });
+
+  test("an environment-only session keeps its child across later attaches", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "env-only-attach.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_LIFECYCLE_FILE: lifecycleFile } });
+    const created = (await nativeFetch(`${bridge.base}/session/create`, {
+      method: "POST",
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { id: string };
+
+    const starts = async () =>
+      (await fs.readFile(lifecycleFile, "utf8").catch(() => "")).match(/^start:/gm)?.length ?? 0;
+    expect(await starts()).toBe(1);
+
+    for (let index = 0; index < 2; index += 1) {
+      const attach = await nativeFetch(`${bridge.base}/session/${created.id}/attach`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: "{}",
+      });
+      expect(attach.status).toBe(200);
+    }
+    expect(await starts()).toBe(1);
+  });
+
+  test("applies a racing resume's tab credential instead of inheriting the first", async () => {
+    const directory = await temporaryDirectory();
+    const requestFile = resolve(directory, "resume-race-mcp.log");
+    const bridge = await spawnBridge({
+      env: { FAKE_ACP_LOAD_DELAY_MS: "400", FAKE_ACP_SESSION_REQUEST_FILE: requestFile },
+    });
+    const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work");
+
+    const resume = (token: string) =>
+      nativeFetch(`${bridge.base}/session/resume`, {
+        method: "POST",
+        headers: bridge.headers,
+        body: JSON.stringify({
+          sessionId: external!.id,
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token },
+        }),
+      });
+
+    const first = resume("token-a");
+    await Bun.sleep(100);
+    const second = await resume("token-b");
+    const winner = await first;
+    expect([winner.status, second.status]).toEqual([201, 201]);
+    expect(((await second.json()) as { sessionId: string }).sessionId).toBe(
+      ((await winner.json()) as { sessionId: string }).sessionId,
+    );
+
+    const loads = (await fs.readFile(requestFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method?: string; mcpServers?: unknown[] })
+      .filter((entry) => entry.method === "session/load");
+    expect(JSON.stringify(loads.at(-1))).toContain("Bearer token-b");
+    expect(JSON.stringify(loads.at(-1))).not.toContain("Bearer token-a");
+  });
+
+  test("an already-loaded external session rebuilds with the later tab credential", async () => {
+    const directory = await temporaryDirectory();
+    const requestFile = resolve(directory, "resume-loaded-mcp.log");
+    const bridge = await spawnBridge({ env: { FAKE_ACP_SESSION_REQUEST_FILE: requestFile } });
+    const listed = (await nativeFetch(`${bridge.base}/session/list`, {
+      headers: bridge.headers,
+    }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
+    const external = listed.sessions.find((session) => session.title === "Previous ACP work");
+
+    const first = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({
+        sessionId: external!.id,
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-a" },
+      }),
+    });
+    expect(first.status).toBe(201);
+
+    const second = await nativeFetch(`${bridge.base}/session/resume`, {
+      method: "POST",
+      headers: bridge.headers,
+      body: JSON.stringify({
+        sessionId: external!.id,
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+      }),
+    });
+    expect(second.status).toBe(201);
+
+    const loads = (await fs.readFile(requestFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method?: string })
+      .filter((entry) => entry.method === "session/load");
+    expect(JSON.stringify(loads.at(-1))).toContain("Bearer token-b");
+    expect(JSON.stringify(loads.at(-1))).not.toContain("Bearer token-a");
+  });
 });

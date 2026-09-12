@@ -1108,4 +1108,71 @@ describe("ACP bridge", () => {
     );
     expect((await fs.readFile(blocksFile, "utf8")).trim().split("\n")).toHaveLength(1);
   });
+
+  test("refuses attach while a turn is running and leaves the child in place", async () => {
+    const directory = await temporaryDirectory();
+    const lifecycleFile = resolve(directory, "attach-busy-lifecycle.log");
+    const holdTurnFile = resolve(directory, "release-turn");
+    const { base, headers } = await spawnBridge({
+      env: {
+        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const startsBefore = (await fs.readFile(lifecycleFile, "utf8")).match(/^start:/gm)?.length ?? 0;
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORTASKHELD: run", requestId: "held-1" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string }>,
+      (session) => session.status === "running",
+    );
+
+    const attach = await nativeFetch(`${base}/session/${created.id}/attach`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+      }),
+    });
+    expect(attach.status).toBe(409);
+    expect(await attach.json()).toEqual({ error: "Session is already running" });
+    expect((await fs.readFile(lifecycleFile, "utf8")).match(/^start:/gm)?.length ?? 0).toBe(
+      startsBefore,
+    );
+
+    await fs.writeFile(holdTurnFile, "release\n");
+    await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string }>,
+      (session) => session.status === "idle",
+    );
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/attach`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "token-b" },
+          }),
+        })
+      ).status,
+    ).toBe(200);
+  });
 });

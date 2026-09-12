@@ -594,6 +594,16 @@ describe("ensureAgent", () => {
     });
   });
 
+  test("an environment-only agent survives a second ensureAgent", async () => {
+    const state = newSessionState();
+    const first = await ensureAgent(state);
+    expect(created).toHaveLength(1);
+    const second = await ensureAgent(state);
+    expect(second).toBe(first);
+    expect(created).toHaveLength(1);
+    expect(resumed).toHaveLength(0);
+  });
+
   /**
    * The id may name an agent the store no longer has. A new agent carrying the
    * transcript we already hold is a far better outcome than a tab that can

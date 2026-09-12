@@ -182,10 +182,15 @@ export async function resumeSession(
   const pending = sessionResumes.get(acpSessionId);
   if (pending) {
     const adopted = await pending;
-    return patch || policy ? resumeExistingSession(adopted, signal, patch, policy) : adopted;
+    // The in-flight adoption carries the first caller's MCP credential. A
+    // later tab must apply its own rather than keep reading or sending mail as
+    // the first identity — same rule as composer controls.
+    return patch || policy || agentMcp
+      ? resumeExistingSession(adopted, signal, patch, policy, agentMcp)
+      : adopted;
   }
   const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
-  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy);
+  if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch, policy, agentMcp);
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");
   const operation = resumeSessionReserved(acpSessionId, signal, patch, policy, agentMcp);
@@ -272,7 +277,8 @@ export async function resumeSessionReserved(
       dispatching: true,
       historyReplay: "hydrate",
       health: new RuntimeHealthRecorder(),
-      ...(agentMcp ? { agentMcp, attachedMcpKey: mcpConnectionKey(agentMcp) } : {}),
+      attachedMcpKey: mcpConnectionKey(agentMcp),
+      ...(agentMcp ? { agentMcp } : {}),
     };
     attachChild(state, child);
     sessions.set(state.id, state);
@@ -433,12 +439,8 @@ export async function createSessionReserved(
       sessionConfig,
       ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
       ...(typeof spawnOptions.readOnly === "boolean" ? { readOnly: spawnOptions.readOnly } : {}),
-      ...(spawnOptions.agentMcp
-        ? {
-            agentMcp: spawnOptions.agentMcp,
-            attachedMcpKey: mcpConnectionKey(spawnOptions.agentMcp),
-          }
-        : {}),
+      attachedMcpKey: mcpConnectionKey(spawnOptions.agentMcp),
+      ...(spawnOptions.agentMcp ? { agentMcp: spawnOptions.agentMcp } : {}),
       // The session is reachable from `sessions` before its initial
       // configuration finishes, so hold the same claim the config and prompt
       // routes take rather than leaving a window where both see it idle.
@@ -562,7 +564,7 @@ export async function ensureSessionProcess(
   if (state.attaching) {
     return signal ? raceAbort(state.attaching, signal) : state.attaching;
   }
-  if (state.child && state.attachedMcpKey !== mcpConnectionKey(state.agentMcp)) {
+  if (state.child && (state.attachedMcpKey ?? "") !== mcpConnectionKey(state.agentMcp)) {
     const previous = state.child;
     state.child = null;
     clearApprovals(state);

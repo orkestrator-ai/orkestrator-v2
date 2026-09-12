@@ -48,6 +48,11 @@ describe("agent mail protocol", () => {
       canSend: false,
       canInject: false,
     });
+    expect(agentMailCapabilities("grok", null)).toEqual({
+      canPull: false,
+      canSend: false,
+      canInject: false,
+    });
     expect(agentMailCapabilities("browser", null)).toEqual({
       canPull: false,
       canSend: false,

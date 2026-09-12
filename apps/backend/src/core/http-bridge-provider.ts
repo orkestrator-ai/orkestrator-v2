@@ -220,9 +220,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
       "attach",
     );
-    // 404 is an older bridge or a session this bridge no longer holds. Neither
-    // is worth failing on: the prompt request answers both authoritatively.
-    if (response.status === 404) return;
+    // 404 is an older bridge or a session this bridge no longer holds. 409
+    // means a turn is already in flight, so the live agent must stay put.
+    // Neither is worth failing on: the prompt request answers both
+    // authoritatively.
+    if (response.status === 404 || response.status === 409) return;
     await assertOkWithErrorDetail(response, `${this.agent} session attach`);
   }
 

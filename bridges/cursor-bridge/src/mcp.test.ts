@@ -73,9 +73,11 @@ describe("Cursor MCP inventory", () => {
   });
 
   test("ignores a malformed agentMcp override", () => {
-    expect(parseAgentMcpConnection({ url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) })).toBe(
-      undefined,
-    );
+    const malformed = {
+      url: "http://127.0.0.1:4567/mcp",
+      token: "x".repeat(1025),
+    };
+    expect(parseAgentMcpConnection(malformed)).toBeUndefined();
     expect(parseAgentMcpConnection({ url: "not-a-url", token: "tab-token" })).toBeUndefined();
     expect(mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "a" })).not.toBe(
       mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "b" }),

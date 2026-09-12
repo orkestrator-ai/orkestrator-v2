@@ -740,6 +740,191 @@ describe("resumeSession", () => {
     expect(assistant.planReview).toBeUndefined();
   });
 
+  test("replays steered historic user messages from the conversation record", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "original" },
+              userMessages: [{ text: "original" }, { text: "steer mid-turn" }],
+              steps: [{ type: "assistantMessage", message: { text: "done" } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(
+      state.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ).toEqual(["original", "steer mid-turn"]);
+  });
+
+  test("keeps two identical historic steer texts in order after resume", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "retry" },
+              userMessages: [{ text: "retry" }, { text: "retry" }],
+              steps: [
+                { type: "userMessage", message: { text: "retry" } },
+                { type: "assistantMessage", message: { text: "done" } },
+              ],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(
+      state.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ).toEqual(["retry", "retry"]);
+  });
+
+  test("leaves recoveringRun unset when resume finds no running run", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "done already" },
+              steps: [{ type: "assistantMessage", message: { text: "ok" } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(state.status).toBe("idle");
+    expect(state.recoveringRun).toBeUndefined();
+  });
+
+  test("applies live stream updates while recovering a still-running run", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let settled = false;
+    runs = {
+      items: [
+        {
+          id: "run-live",
+          status: "running",
+          createdAt: Date.now(),
+          supports: () => true,
+          async *stream() {
+            yield { type: "user-message-appended", userMessage: { text: "start" } };
+            yield { type: "text-delta", text: "before steer" };
+            yield {
+              type: "tool-call-completed",
+              callId: "read-1",
+              toolCall: {
+                type: "read",
+                args: { path: "a.ts" },
+                result: { status: "success", value: { content: "body" } },
+              },
+            };
+            yield { type: "user-message-appended", userMessage: { text: "redirect" } };
+            yield { type: "text-delta", text: "after steer" };
+            await hold;
+          },
+          wait: async () => {
+            await hold;
+            settled = true;
+            return { status: "finished" };
+          },
+          cancel: async () => undefined,
+          onDidChangeStatus: () => () => undefined,
+          conversation: async () => [
+            {
+              type: "conversationTurn",
+              turn: {
+                userMessage: { text: "start" },
+                userMessages: settled
+                  ? [{ text: "start" }, { text: "redirect" }]
+                  : [{ text: "start" }],
+                steps: [
+                  { type: "assistantMessage", message: { text: "before steer" } },
+                  {
+                    type: "toolCall",
+                    message: {
+                      type: "read",
+                      args: { path: "a.ts" },
+                      result: { status: "success", value: { content: "body" } },
+                    },
+                  },
+                  ...(settled
+                    ? [{ type: "assistantMessage", message: { text: "after steer" } }]
+                    : []),
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const count = (
+      state: {
+        messages: Array<{
+          content: string;
+          role: string;
+          parts: Array<{ type: string; content?: string; toolName?: string }>;
+        }>;
+      },
+      text: string,
+    ) => {
+      const users = state.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content);
+      const texts = state.messages
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) =>
+          message.parts.filter((part) => part.type === "text").map((part) => part.content),
+        );
+      return [...users, ...texts].filter((fragment) => fragment === text).length;
+    };
+    const toolCount = (state: {
+      messages: Array<{ parts: Array<{ type: string; toolName?: string }> }>;
+    }) =>
+      state.messages
+        .flatMap((message) => message.parts)
+        .filter((part) => part.type === "tool-invocation").length;
+
+    const state = await resumeSession("agent-1", undefined);
+    const deadline = Date.now() + 2_000;
+    while (!state.messages.some((message) => message.content === "after steer")) {
+      if (Date.now() > deadline) throw new Error("recovered stream did not render the steer");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(state.status).toBe("running");
+    expect(count(state, "start")).toBe(1);
+    expect(count(state, "before steer")).toBe(1);
+    expect(count(state, "redirect")).toBe(1);
+    expect(count(state, "after steer")).toBe(1);
+    expect(toolCount(state)).toBe(1);
+    const inFlightBytes = state.uncheckedTranscriptBytes;
+    expect(inFlightBytes).toBeGreaterThan(0);
+    release();
+    await state.recoveringRun;
+    expect(count(state, "start")).toBe(1);
+    expect(count(state, "before steer")).toBe(1);
+    expect(count(state, "redirect")).toBe(1);
+    expect(count(state, "after steer")).toBe(1);
+    expect(toolCount(state)).toBe(1);
+    expect(
+      state.messages.filter((message) => message.role === "user").map((message) => message.content),
+    ).toEqual(["start", "redirect"]);
+  });
+
   test("historic createPlan turns are marked for plan review", async () => {
     runs = {
       items: [

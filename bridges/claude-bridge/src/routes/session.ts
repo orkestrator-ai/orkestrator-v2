@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   createOrRecoverSession,
   getSession,
@@ -34,6 +35,7 @@ import {
   readSessionMcpServers,
   performSessionMcpAction,
   steerClaudeSession,
+  answerIdleSteerPrompt,
   readClaudeSteerDispatch,
   configureClaudeSession,
   gracefulInterruptClaudeSession,
@@ -452,7 +454,7 @@ session.post("/:id/steer", async (c) => {
   if (!text || !requestId || !expectedRunId) {
     return c.json({ error: "input, requestId, and expectedRunId are required" }, 400);
   }
-  const outcome = steerClaudeSession(c.req.param("id"), text, requestId, expectedRunId);
+  const outcome = await steerClaudeSession(c.req.param("id"), text, requestId, expectedRunId);
   return c.json({ outcome }, outcome === "unknown" ? 503 : 200);
 });
 
@@ -678,6 +680,7 @@ session.post("/:id/prompt", async (c) => {
     // refused as if it collided with somebody else's prompt.
     if (requestId) {
       const dispatchState = getPromptDispatchState(id, requestId);
+      const alreadyDurable = sessionData.dispatchedRequestIds?.has(requestId);
       if (dispatchState === "processing") {
         return c.json(
           {
@@ -689,9 +692,23 @@ session.post("/:id/prompt", async (c) => {
           202,
         );
       }
-      if (dispatchState === "already-processed") {
-        return c.json({ status: "already-processed", requestId, duplicate: true });
+      if (dispatchState === "already-processed" || alreadyDurable) {
+        const local = Boolean(idleSteerPromptReply(prompt, "Claude"));
+        return c.json({
+          status: "already-processed",
+          requestId,
+          duplicate: true,
+          ...(local ? { local: true } : {}),
+        });
       }
+    }
+
+    if (sessionData.status !== "running" && idleSteerPromptReply(prompt, "Claude")) {
+      if (outputSchema !== undefined) {
+        return c.json({ error: "/steer cannot be used with structured output" }, 400);
+      }
+      await answerIdleSteerPrompt(sessionData, prompt, requestId);
+      return c.json({ status: "accepted", requestId, local: true });
     }
     if (requestId && outputSchema === undefined) {
       const dispatchState = await claimPromptDispatch(id, requestId, () => {

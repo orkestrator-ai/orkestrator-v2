@@ -109,6 +109,40 @@ describe("session preferences", () => {
     expect(result?.dispatchedRequestIds).toEqual(validIds.slice(-MAX_DISPATCHED_REQUEST_IDS));
   });
 
+  test("keeps a well-formed steer journal and ignores malformed entries", async () => {
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    await writeFile(
+      preferencePath(),
+      JSON.stringify({
+        planMode: false,
+        steerJournal: [
+          { requestId: "bad" },
+          {
+            requestId: "steer-1",
+            inputDigest: "a".repeat(64),
+            expectedRunId: "7",
+            state: "dispatched",
+            createdAt: 1,
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({
+      planMode: false,
+      steerJournal: [
+        {
+          requestId: "steer-1",
+          inputDigest: "a".repeat(64),
+          expectedRunId: "7",
+          state: "dispatched",
+          createdAt: 1,
+        },
+      ],
+    });
+  });
+
   test("fails closed for an incorrectly typed plan mode", async () => {
     await mkdir(claudeSessionPreferencesDir(), { recursive: true });
     await writeFile(

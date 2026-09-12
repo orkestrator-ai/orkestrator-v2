@@ -258,6 +258,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
         requestId: journalEntry.requestId,
         state: readJournalState(journalEntry.state),
         acceptedAt: readCount(journalEntry.acceptedAt),
+        ...(journalEntry.local === true ? { local: true } : {}),
       });
     }
   }

@@ -48,6 +48,7 @@ import {
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -619,12 +620,11 @@ async function handlePrompt(
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or image attachment is required");
   }
-  if (state.subagentLimitExceeded) {
-    throw new HttpError(409, "Session exceeded the active sub-agent limit");
-  }
-
   if (requestId && state.promptJournal.has(requestId)) {
     const journaled = state.promptJournal.get(requestId)!;
+    if (journaled.local) {
+      return json(response, 200, { accepted: true, local: true, duplicate: true });
+    }
     if (journaled.state === "ambiguous") {
       // An earlier process accepted this id and died before recording its
       // outcome. Never re-dispatch at-most-once work: refuse plainly so the
@@ -638,6 +638,25 @@ async function handlePrompt(
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
+  }
+  const idleSteer = idleSteerPromptReply(prompt, "Cursor");
+  if (idleSteer) {
+    if (state.status === "running" || state.dispatching) {
+      throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+    }
+    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+    appendLocalExchange(state, prompt, idleSteer, requestId);
+    if (requestId) {
+      setPromptJournal(state, {
+        requestId,
+        state: "completed",
+        acceptedAt: Date.now(),
+        local: true,
+      });
+    }
+    state.revision += 1;
+    schedulePersist();
+    return json(response, 200, { accepted: true, local: true });
   }
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
@@ -733,12 +752,40 @@ async function handlePrompt(
   return json(response, 202, { accepted: true });
 }
 
+function appendLocalExchange(
+  state: SessionState,
+  prompt: string,
+  reply: string,
+  requestId?: string,
+): void {
+  const userId = requestId ? `idle-steer:${requestId}` : undefined;
+  if (userId && state.messages.some((message) => message.id === userId)) return;
+  const userMessageId = appendUserMessage(state, prompt, [], userId);
+  const messageId = requestId ? `idle-steer-reply:${requestId}` : randomBytes(12).toString("hex");
+  state.messages.push({
+    id: messageId,
+    role: "assistant",
+    content: reply,
+    parts: [
+      {
+        type: "text",
+        content: reply,
+        sourcePartId: `${messageId}:0`,
+        sourceMessageId: messageId,
+      },
+    ],
+    createdAt: new Date().toISOString(),
+  });
+  chargeTranscript(state, Buffer.byteLength(reply));
+  void userMessageId;
+}
+
 function appendUserMessage(
   state: SessionState,
   prompt: string,
   images: readonly CursorPromptImage[],
+  messageId = randomBytes(12).toString("hex"),
 ): string {
-  const messageId = randomBytes(12).toString("hex");
   state.messages.push({
     id: messageId,
     role: "user",

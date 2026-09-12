@@ -33,6 +33,7 @@ import {
 } from "./native-agent-service.js";
 import {
   mergeContextUsageTurns,
+  mergeNativeAgentQueueItems,
   withProviderContextWindow,
 } from "./native-agent-service-projection.js";
 
@@ -74,6 +75,36 @@ describe("usage projection history", () => {
       maximumTokens: 200_000,
       percentage: 25,
     });
+  });
+
+  test("keeps two backend queue rows that share text when the provider queue is empty", () => {
+    expect(
+      mergeNativeAgentQueueItems(
+        [],
+        [
+          { id: "backend-1", text: "retry this" },
+          { id: "backend-2", text: "retry this" },
+        ],
+      ),
+    ).toEqual([
+      { id: "backend-1", text: "retry this" },
+      { id: "backend-2", text: "retry this" },
+    ]);
+  });
+
+  test("consumes one backend counterpart per provider item and keeps the leftover", () => {
+    expect(
+      mergeNativeAgentQueueItems(
+        [{ id: "pi-1", text: "retry this", mode: "steer" }],
+        [
+          { id: "backend-1", text: "retry this" },
+          { id: "backend-2", text: "retry this" },
+        ],
+      ),
+    ).toEqual([
+      { id: "pi-1", text: "retry this", mode: "steer" },
+      { id: "backend-2", text: "retry this" },
+    ]);
   });
 
   test("prefers a provider-reported maximum and percentage", () => {
@@ -723,6 +754,105 @@ describe("NativeAgentService", () => {
         expect((await service.getProjection(identity))?.queue?.items).toEqual([
           { id: "pi-1", text: "Pi follow-up", mode: "follow-up" },
           expect.objectContaining({ id: "backend-1", text: "Backend queue" }),
+        ]);
+      },
+    );
+  });
+
+  test("drops a backend queue copy of a follow-up the provider already accepted", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        providerQueue: { items: [{ id: "pi-1", text: "Already queued", mode: "follow-up" }] },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-provider-queue-dedupe-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-provider-queue-dedupe",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue(`pi\0${identity.logicalSessionKey}`, "env-1", [
+          { id: "backend-1", text: "Already queued", planModeEnabled: false },
+          { id: "backend-2", text: "Still waiting", planModeEnabled: false },
+        ]);
+
+        expect((await service.getProjection(identity))?.queue?.items).toEqual([
+          { id: "pi-1", text: "Already queued", mode: "follow-up" },
+          expect.objectContaining({ id: "backend-2", text: "Still waiting" }),
+        ]);
+      },
+    );
+  });
+
+  test("keeps two backend queue rows that share text when the provider queue is empty", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        providerQueue: { items: [] },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-provider-queue-multi-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-provider-queue-multi",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue(`pi\0${identity.logicalSessionKey}`, "env-1", [
+          { id: "backend-1", text: "retry this", planModeEnabled: false },
+          { id: "backend-2", text: "retry this", planModeEnabled: false },
+        ]);
+
+        expect((await service.getProjection(identity))?.queue?.items).toEqual([
+          expect.objectContaining({ id: "backend-1", text: "retry this" }),
+          expect.objectContaining({ id: "backend-2", text: "retry this" }),
+        ]);
+      },
+    );
+  });
+
+  test("keeps a leftover backend follow-up after consuming one steer-mode counterpart", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        providerQueue: { items: [{ id: "pi-1", text: "retry this", mode: "steer" }] },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-provider-queue-steer-multi-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-provider-queue-steer-multi",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue(`pi\0${identity.logicalSessionKey}`, "env-1", [
+          { id: "backend-1", text: "retry this", planModeEnabled: false },
+          { id: "backend-2", text: "retry this", planModeEnabled: false },
+        ]);
+
+        expect((await service.getProjection(identity))?.queue?.items).toEqual([
+          { id: "pi-1", text: "retry this", mode: "steer" },
+          expect.objectContaining({ id: "backend-2", text: "retry this" }),
         ]);
       },
     );

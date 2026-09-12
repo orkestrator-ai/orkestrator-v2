@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  idleSteerPromptReply,
   isProviderSlashCommand,
   parseLeadingSlashCommand,
   resolveSessionActionCommand,
@@ -36,6 +37,22 @@ describe("parseLeadingSlashCommand", () => {
 
   test("reports a bare command with no arguments", () => {
     expect(parseLeadingSlashCommand("/init")).toEqual({ name: "/init" });
+  });
+});
+
+describe("idleSteerPromptReply", () => {
+  test("answers an idle /steer locally instead of starting a turn", () => {
+    expect(idleSteerPromptReply("/steer keep going", "Claude")).toBe(
+      "There is no active Claude turn to steer. Start a turn, then use /steer while it is running.",
+    );
+    expect(idleSteerPromptReply("/steer", "Cursor")).toBe(
+      "Usage: /steer <instructions>. Run it while a Cursor turn is active.",
+    );
+  });
+
+  test("leaves unrelated prompts alone", () => {
+    expect(idleSteerPromptReply("please /steer this", "Pi")).toBeNull();
+    expect(idleSteerPromptReply("/review the diff", "Pi")).toBeNull();
   });
 });
 

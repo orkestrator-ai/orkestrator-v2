@@ -400,6 +400,12 @@ export interface SessionState {
    */
   dispatchedRequestIds?: Set<string>;
   /**
+   * Local transcript rows that are not in the SDK rollout, such as an idle
+   * `/steer` exchange. Eviction and restart rehydrate from disk and then merge
+   * these back so the pair does not vanish.
+   */
+  localTranscript?: NormalizedMessage[];
+  /**
    * The durable request-id journal existed but could not be trusted.
    *
    * Stable-id prompts must remain blocked in this state: treating an unknown
@@ -515,6 +521,24 @@ export interface SessionState {
    * turn the user is actually waiting on.
    */
   latestTurnGeneration?: number;
+  /**
+   * At-most-once journal for `/steer`. Survives a bridge restart via session
+   * preferences so a retried request id cannot be pushed twice.
+   */
+  steerJournal?: Map<string, ClaudeSteerJournalEntry>;
+  /**
+   * Close the pre-steer assistant row so later deltas start a fresh message
+   * below the steered instruction, matching Codex and Pi.
+   */
+  splitAssistantAfterSteer?: () => void;
+}
+
+export interface ClaudeSteerJournalEntry {
+  requestId: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "prepared" | "dispatched" | "absent" | "unknown";
+  createdAt: number;
 }
 
 export interface SessionRateLimitWindow {

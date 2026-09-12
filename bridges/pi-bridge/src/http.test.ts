@@ -1813,6 +1813,52 @@ describe("approvals", () => {
 });
 
 describe("steering", () => {
+  test("answers an idle /steer prompt locally instead of starting a turn", async () => {
+    const state = seedSession();
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer keep going", requestId: "idle-steer" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ accepted: true, local: true });
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.get("idle-steer")).toMatchObject({
+      state: "completed",
+      local: true,
+    });
+    expect(state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(state.messages[1]?.content).toContain("no active Pi turn to steer");
+
+    const retry = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer keep going", requestId: "idle-steer" }),
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ accepted: true, local: true, duplicate: true });
+    expect(state.messages).toHaveLength(2);
+  });
+
+  test("refuses a /steer prompt while a turn is running instead of forwarding the slash command", async () => {
+    const state = seedSession();
+    const followUps: string[] = [];
+    state.session = fakeAgentSession({
+      followUp: async (text: string) => {
+        followUps.push(text);
+      },
+    });
+    state.status = "running";
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer narrow the scope", requestId: "busy-steer" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Use POST /session/:id/steer to steer the active turn",
+    });
+    expect(followUps).toEqual([]);
+  });
+
   test("answers idle when no turn is running instead of starting one", async () => {
     const state = seedSession();
     const response = await call(`/session/${state.id}/steer`, {

@@ -160,6 +160,8 @@ export interface PromptJournalEntry {
   requestId: string;
   state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
   acceptedAt: number;
+  /** Set when this id answered an idle `/steer` locally. */
+  local?: boolean;
 }
 
 export interface SteerJournalEntry {
@@ -266,6 +268,8 @@ export interface SessionState {
   cancelTurn?: () => Promise<void>;
   /** Current SDK run, retained only while it can accept steering. */
   activeRun?: Run;
+  /** In-flight re-attach of a run that survived a bridge restart. */
+  recoveringRun?: Promise<void>;
   /** MCP names only. Launch configuration can contain credentials and is never persisted. */
   mcpServerNames?: string[];
   /**

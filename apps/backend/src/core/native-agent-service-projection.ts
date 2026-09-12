@@ -234,6 +234,42 @@ export function mergeContextUsageTurns(
 }
 
 /**
+ * Provider-owned mid-turn items are already accepted. Keep those first and
+ * consume at most one backend-queue counterpart for each, so a Pi follow-up
+ * does not appear twice after both layers observed it. Distinct backend rows
+ * stay distinct even when they share text.
+ */
+export function mergeNativeAgentQueueItems(
+  providerItems: readonly unknown[],
+  backendItems: readonly unknown[],
+): unknown[] {
+  const fields = (item: unknown) => {
+    const record =
+      item && typeof item === "object" ? (item as { text?: unknown; id?: unknown }) : {};
+    return {
+      text: typeof record.text === "string" ? record.text.trim() : "",
+      id: typeof record.id === "string" ? record.id.trim() : "",
+    };
+  };
+  const remaining = [...backendItems];
+  const consumeCounterpart = (item: unknown) => {
+    const { text, id } = fields(item);
+    const index = remaining.findIndex((candidate) => {
+      const other = fields(candidate);
+      return (id !== "" && other.id === id) || (text !== "" && other.text === text);
+    });
+    if (index >= 0) remaining.splice(index, 1);
+  };
+  const merged: unknown[] = [];
+  for (const item of providerItems) {
+    merged.push(item);
+    consumeCounterpart(item);
+  }
+  merged.push(...remaining);
+  return merged;
+}
+
+/**
  * Fill the context-window denominator a provider omitted.
  *
  * Several providers report occupancy (`usedTokens`) without the model's context
@@ -1729,7 +1765,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(queue
         ? {
             queue: {
-              items: [...(stateSnapshot.providerQueue?.items ?? []), ...queue.messages],
+              items: mergeNativeAgentQueueItems(
+                stateSnapshot.providerQueue?.items ?? [],
+                queue.messages,
+              ),
               ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
               ...(queue.dispatchError
                 ? {
@@ -3248,7 +3287,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(queue
           ? {
               queue: {
-                items: [...(snapshot.providerQueue?.items ?? []), ...queue.messages],
+                items: mergeNativeAgentQueueItems(
+                  snapshot.providerQueue?.items ?? [],
+                  queue.messages,
+                ),
                 ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
                 ...(queue.dispatchError
                   ? {

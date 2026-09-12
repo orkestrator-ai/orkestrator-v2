@@ -576,6 +576,9 @@ export async function sendPrompt(
     flushIntervalMs: STREAM_EVENT_COALESCE_MS,
     maxBlockIndex: MAX_STREAM_CONTENT_BLOCK_INDEX,
   });
+  session.splitAssistantAfterSteer = () => {
+    stream.beginPostSteerScope();
+  };
   const streamUsage = new ClaudeStreamUsageAccumulator();
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
@@ -1949,10 +1952,11 @@ export async function sendPrompt(
         // assistant message per content block, all sharing `message.id`, so the
         // running finalized-block count gives each block its stream index.
         const apiMessageId = (message as SDKAssistantMessage).message?.id;
-        const messageKey =
+        const rawMessageKey =
           apiMessageId ??
           (message.uuid as string | undefined) ??
           `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
+        const messageKey = stream.resolveStreamMessageKey(rawMessageKey);
 
         const blocks = stream.getBlocksForMessage(messageKey);
         const blockIndexBase = stream.finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
@@ -2522,6 +2526,9 @@ export async function sendPrompt(
     closeSdkInput?.();
     if (session.finishTurnInputIfSettled === finishTurnInputForThisTurn) {
       session.finishTurnInputIfSettled = undefined;
+    }
+    if (session.splitAssistantAfterSteer) {
+      session.splitAssistantAfterSteer = undefined;
     }
     // Once the SDK accepted the query, a retry must replay the outcome rather
     // than risk running its side effects twice. Before that startup barrier,

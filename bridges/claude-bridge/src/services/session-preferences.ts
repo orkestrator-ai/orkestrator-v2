@@ -37,9 +37,52 @@ export interface SessionPreferences {
    * idempotent across bridge and application restarts.
    */
   dispatchedRequestIds?: string[];
+  /**
+   * Recently accepted or attempted steer request ids.
+   *
+   * In-memory only would let a restart lose the digest, so a retried id could
+   * be pushed into a later turn. Bounded and optional so a missing field is
+   * "never steered", not a preferences-file fault.
+   */
+  steerJournal?: ClaudeSteerPreferenceEntry[];
+  /**
+   * Local transcript overlay that is not present in the SDK rollout.
+   *
+   * Idle `/steer` replies never reach Claude, so they must live beside the
+   * preferences file or a remount / eviction would drop them.
+   */
+  localTranscript?: ClaudeLocalTranscriptEntry[];
+}
+
+export interface ClaudeSteerPreferenceEntry {
+  requestId: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "prepared" | "dispatched" | "absent" | "unknown";
+  createdAt: number;
+}
+
+export interface ClaudeLocalTranscriptEntry {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
 export const MAX_DISPATCHED_REQUEST_IDS = 64;
+export const MAX_STEER_JOURNAL_ENTRIES = 512;
+export const MAX_LOCAL_TRANSCRIPT_ENTRIES = 32;
+
+export function steerJournalMapFromPreferences(
+  entries: readonly ClaudeSteerPreferenceEntry[] | undefined,
+): Map<string, ClaudeSteerPreferenceEntry> | undefined {
+  if (!entries?.length) return undefined;
+  const journal = new Map<string, ClaudeSteerPreferenceEntry>();
+  for (const entry of entries.slice(-MAX_STEER_JOURNAL_ENTRIES)) {
+    journal.set(entry.requestId, { ...entry });
+  }
+  return journal;
+}
 
 /**
  * Only a canonical UUID may become a filename. The id normally comes from the
@@ -311,7 +354,75 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       preferences.dispatchedRequestIds = [...unique].slice(-MAX_DISPATCHED_REQUEST_IDS);
     }
   }
+  if (Array.isArray(record.steerJournal)) {
+    const journal: ClaudeSteerPreferenceEntry[] = [];
+    for (const value of record.steerJournal) {
+      const entry = parseSteerJournalEntry(value);
+      if (entry) journal.push(entry);
+    }
+    if (journal.length > 0) {
+      preferences.steerJournal = journal.slice(-MAX_STEER_JOURNAL_ENTRIES);
+    }
+  }
+  if (Array.isArray(record.localTranscript)) {
+    const overlay: ClaudeLocalTranscriptEntry[] = [];
+    for (const value of record.localTranscript) {
+      const entry = parseLocalTranscriptEntry(value);
+      if (entry) overlay.push(entry);
+    }
+    if (overlay.length > 0) {
+      preferences.localTranscript = overlay.slice(-MAX_LOCAL_TRANSCRIPT_ENTRIES);
+    }
+  }
   return preferences;
+}
+
+function parseSteerJournalEntry(value: unknown): ClaudeSteerPreferenceEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const requestId = typeof record.requestId === "string" ? record.requestId.trim() : "";
+  const inputDigest = typeof record.inputDigest === "string" ? record.inputDigest.trim() : "";
+  const expectedRunId = typeof record.expectedRunId === "string" ? record.expectedRunId.trim() : "";
+  const state = record.state;
+  if (
+    !requestId ||
+    requestId.length > 200 ||
+    !/^[a-f0-9]{64}$/.test(inputDigest) ||
+    !expectedRunId ||
+    expectedRunId.length > 512 ||
+    (state !== "prepared" && state !== "dispatched" && state !== "absent" && state !== "unknown") ||
+    typeof record.createdAt !== "number" ||
+    !Number.isFinite(record.createdAt)
+  ) {
+    return undefined;
+  }
+  return {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state,
+    createdAt: record.createdAt,
+  };
+}
+
+function parseLocalTranscriptEntry(value: unknown): ClaudeLocalTranscriptEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const role = record.role;
+  const content = typeof record.content === "string" ? record.content : "";
+  const createdAt = typeof record.createdAt === "string" ? record.createdAt : "";
+  if (
+    !id ||
+    id.length > 200 ||
+    (role !== "user" && role !== "assistant") ||
+    !content ||
+    content.length > 16_384 ||
+    !createdAt
+  ) {
+    return undefined;
+  }
+  return { id, role, content, createdAt };
 }
 
 /**

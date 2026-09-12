@@ -438,6 +438,151 @@ describe("useNativeAgentSession progressive view", () => {
     expect(remount.result.current.transcriptAvailability).toBe("cached");
   });
 
+  test("a state-only empty projection is not an authoritative empty transcript on remount", async () => {
+    /*
+     * A session-state snapshot materialises the projection's `messages` field
+     * before its paired transcript read resolves. Counting that empty array as
+     * proof of emptiness would let a remount present a clean new-conversation
+     * surface for a session that may still have history.
+     */
+    transcriptUpdates = [
+      () =>
+        new Promise<NativeAgentTranscriptUpdate<TestMessage>>(() => {
+          // Deliberately never settles: the state read must land first.
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.sessionStateAvailability).toBe("current"));
+    expect(first.result.current.projection?.messages).toEqual([]);
+    expect(first.result.current.transcriptAvailability).not.toBe("empty");
+    first.unmount();
+
+    let releaseTranscript: (() => void) | undefined;
+    let releaseState: (() => void) | undefined;
+    transcriptUpdates = [
+      () =>
+        new Promise<NativeAgentTranscriptUpdate<TestMessage>>((resolve) => {
+          releaseTranscript = () => resolve(transcriptSnapshot("transcript-2", [message("m1")]));
+        }),
+    ];
+    stateUpdates = [
+      () =>
+        new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+          releaseState = () => resolve(stateSnapshot("state-2"));
+        }),
+    ];
+
+    const remount = renderSession();
+    // No transcript token was ever minted for this session, so the shared
+    // projection is a state-only placeholder. It stays a cached read.
+    expect(remount.result.current.transcriptAvailability).toBe("cached");
+    expect(remount.result.current.transcriptRefreshing).toBe(true);
+
+    await waitFor(() => expect(releaseTranscript).toBeDefined());
+    await act(async () => {
+      releaseTranscript?.();
+      releaseState?.();
+    });
+    await waitFor(() => expect(remount.result.current.transcriptAvailability).toBe("current"));
+  });
+
+  test("a remount keeps an authoritative empty transcript empty", async () => {
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [])];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const first = renderSession();
+    await waitFor(() => expect(first.result.current.transcriptAvailability).toBe("empty"));
+    first.unmount();
+
+    let releaseTranscript: (() => void) | undefined;
+    transcriptUpdates = [
+      () =>
+        new Promise<NativeAgentTranscriptUpdate<TestMessage>>((resolve) => {
+          releaseTranscript = () => resolve(transcriptSnapshot("transcript-2", []));
+        }),
+    ];
+    stateUpdates = [];
+
+    const remount = renderSession();
+    // The transcript surface recorded the empty read, so the remount must not
+    // mistake it for an unread placeholder.
+    expect(remount.result.current.transcriptAvailability).toBe("empty");
+    await waitFor(() => expect(releaseTranscript).toBeDefined());
+    await act(async () => {
+      releaseTranscript?.();
+    });
+  });
+
+  test("an unchanged transcript does not turn a state-only projection into an empty transcript", async () => {
+    useNativeAgentProjectionStore.getState().setProgressiveCache(identity.logicalSessionKey, {
+      identity,
+      transcriptToken: "transcript-1",
+      transcriptAvailability: "current",
+      transcriptRefreshing: false,
+      stateAvailability: "unavailable",
+    });
+
+    let releaseTranscript: (() => void) | undefined;
+    transcriptUpdates = [
+      () =>
+        new Promise<NativeAgentTranscriptUpdate<TestMessage>>((resolve) => {
+          releaseTranscript = () =>
+            resolve({
+              viewVersion: 1,
+              status: "unchanged",
+              token: "transcript-1",
+              identity,
+            });
+        }),
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
+    expect(result.current.projection?.messages).toEqual([]);
+    expect(result.current.transcriptAvailability).toBe("unavailable");
+
+    await waitFor(() => expect(releaseTranscript).toBeDefined());
+    await act(async () => {
+      releaseTranscript?.();
+    });
+
+    await waitFor(() => expect(result.current.transcriptRefreshing).toBe(false));
+    expect(result.current.transcriptAvailability).toBe("unavailable");
+    expect(
+      useNativeAgentProjectionStore.getState().progressiveCaches.get(identity.logicalSessionKey)
+        ?.transcriptAvailability,
+    ).toBe("unavailable");
+  });
+
+  test("clears transcriptRefreshing when the transcript read fails", async () => {
+    transcriptUpdates = [
+      async () => {
+        throw new Error("bridge unavailable");
+      },
+    ];
+    stateUpdates = [() => stateSnapshot("state-1")];
+
+    const { result } = renderSession();
+    await waitFor(() => expect(result.current.transcriptError).toBe("bridge unavailable"));
+    expect(result.current.transcriptRefreshing).toBe(false);
+  });
+
+  test("clears transcriptRefreshing for an inactive tab that never read", async () => {
+    const { result } = renderHook(() =>
+      useNativeAgentSession<TestMessage>({
+        platform: "codex",
+        environmentId: "env-1",
+        tabId: "tab-1",
+        isActive: false,
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(result.current.transcriptRefreshing).toBe(false));
+  });
+
   test("keeps session state authoritative while a later refresh is in flight", async () => {
     transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
     stateUpdates = [

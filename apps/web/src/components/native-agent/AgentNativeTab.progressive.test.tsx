@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentDiscoveryUpdate,
+  NativeAgentSessionProjection,
   NativeAgentSessionStateUpdate,
   NativeAgentSessionStateView,
   NativeAgentTabData,
@@ -210,6 +211,41 @@ function stateSnapshot(
   return { viewVersion: 1, status: "snapshot", token, value: stateView(extras) };
 }
 
+function seedProjection(messages: TestMessage[]): NativeAgentSessionProjection<TestMessage> {
+  return {
+    platform: "codex",
+    environmentId: "env-1",
+    sessionId: identity.providerSessionId,
+    connection: "connected",
+    turn: { phase: "idle" },
+    messages,
+    interactions: [],
+    composerControls: [],
+    capabilities: nativeAgentCapabilities("codex"),
+    revision: 1,
+    generation: "generation-1",
+  };
+}
+
+function seedTranscriptCache(
+  transcriptAvailability: "unavailable" | "cached" | "current" | "empty",
+) {
+  useNativeAgentProjectionStore.getState().setProgressiveCache(identity.logicalSessionKey, {
+    identity,
+    transcriptAvailability,
+    transcriptRefreshing: true,
+    stateAvailability: "refreshing",
+  });
+}
+
+function neverSettlingTranscript(): () => Promise<NativeAgentTranscriptUpdate<TestMessage>> {
+  return () => new Promise<NativeAgentTranscriptUpdate<TestMessage>>(() => {});
+}
+
+function neverSettlingState(): () => Promise<NativeAgentSessionStateUpdate> {
+  return () => new Promise<NativeAgentSessionStateUpdate>(() => {});
+}
+
 const pendingApproval: NativeAgentSessionStateView["interactions"] = [
   {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -366,5 +402,35 @@ describe("AgentNativeTab progressive controller", () => {
 
     releaseState();
     await waitFor(() => expect(screen.getByText("Approve command")).toBeTruthy());
+  });
+
+  test("does not shimmer while session state connects over an authoritative empty transcript", async () => {
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(identity.logicalSessionKey, seedProjection([]));
+    seedTranscriptCache("empty");
+    transcriptUpdates = [neverSettlingTranscript()];
+    stateUpdates = [neverSettlingState()];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
+
+    // The transcript read already answered "empty", so `connecting` describes
+    // session state alone and must not raise a transcript-history shimmer.
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+  });
+
+  test("shimmers while a state-only empty projection's transcript is unproven", async () => {
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(identity.logicalSessionKey, seedProjection([]));
+    seedTranscriptCache("unavailable");
+    transcriptUpdates = [neverSettlingTranscript()];
+    stateUpdates = [neverSettlingState()];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Refreshing Codex session…")).toBeTruthy());
+    expect(screen.getByTestId("session-refresh-shimmer-transcript")).toBeTruthy();
   });
 });

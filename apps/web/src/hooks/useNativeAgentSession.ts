@@ -404,12 +404,24 @@ export function useNativeAgentSession<TMessage = unknown>({
   const [transcriptAvailability, setTranscriptAvailability] = useState<
     NativeAgentProgressiveCacheEntry["transcriptAvailability"]
   >(
+    // Emptiness has to come from the transcript surface, not from an empty
+    // message array. A session-state snapshot installs a projection with
+    // `messages: []` before its paired transcript read resolves, so counting
+    // messages would call a state-only placeholder an authoritative empty
+    // transcript and suppress the shimmer for a session that still has history.
     matchingSharedProjection
-      ? matchingProgressiveCache?.transcriptAvailability === "empty" ||
-        matchingSharedProjection.messages.length === 0
+      ? matchingProgressiveCache?.transcriptAvailability === "empty"
         ? "empty"
         : "cached"
       : "unavailable",
+  );
+  const transcriptAvailabilityRef = useRef(transcriptAvailability);
+  const markTranscriptAvailability = useCallback(
+    (availability: NativeAgentProgressiveCacheEntry["transcriptAvailability"]) => {
+      transcriptAvailabilityRef.current = availability;
+      setTranscriptAvailability(availability);
+    },
+    [],
   );
   const [transcriptRefreshing, setTranscriptRefreshing] = useState(enabled);
   const [transcriptError, setTranscriptError] = useState<string | null>(
@@ -1111,7 +1123,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveHistoryEvictionRef.current = evictionGeneration;
       progressiveIdentityRef.current = value.identity;
       const availability = value.freshness === "empty" ? "empty" : "current";
-      setTranscriptAvailability(availability);
+      markTranscriptAvailability(availability);
       setTranscriptRefreshing(false);
       setTranscriptError(null);
       applyProjection(next, {
@@ -1150,6 +1162,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identityBelongsToView,
       platform,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       sessionKey,
       updateProgressiveCache,
     ],
@@ -1162,7 +1175,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       const knownIdentity = progressiveIdentityRef.current;
       if (knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId) {
         applyProjection(null);
-        setTranscriptAvailability("unavailable");
+        markTranscriptAvailability("unavailable");
         progressiveTranscriptTokenRef.current = undefined;
         lastTranscriptViewRef.current = null;
         progressiveHistoryEpochRef.current = undefined;
@@ -1219,6 +1232,13 @@ export function useNativeAgentSession<TMessage = unknown>({
         stateToken: token,
         stateAvailability: "current",
         stateError: undefined,
+        ...(knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId
+          ? {
+              transcriptToken: undefined,
+              transcriptHistoryEpoch: undefined,
+              transcriptAvailability: "unavailable" as const,
+            }
+          : {}),
       });
       return next;
     },
@@ -1227,6 +1247,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       environmentId,
       identityBelongsToView,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       platform,
       updateProgressiveCache,
     ],
@@ -1434,16 +1455,20 @@ export function useNativeAgentSession<TMessage = unknown>({
                 lastTranscriptViewRef.current = null;
               } else if (update.status === "unchanged") {
                 progressiveTranscriptTokenRef.current = update.token;
-                setTranscriptAvailability((current) =>
-                  current === "empty" ? "empty" : projectionRef.current ? "current" : "unavailable",
-                );
+                const previousAvailability = transcriptAvailabilityRef.current;
+                const availability =
+                  previousAvailability === "empty" || previousAvailability === "unavailable"
+                    ? previousAvailability
+                    : projectionRef.current
+                      ? "current"
+                      : "unavailable";
+                markTranscriptAvailability(availability);
                 setTranscriptRefreshing(false);
                 setTranscriptError(null);
                 updateProgressiveCache({
                   identity: update.identity,
                   transcriptToken: update.token,
-                  transcriptAvailability:
-                    projectionRef.current?.messages.length === 0 ? "empty" : "current",
+                  transcriptAvailability: availability,
                   transcriptRefreshing: false,
                   transcriptError: undefined,
                 });
@@ -1539,7 +1564,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             establishingSessionRef.current === 0
           ) {
             applyProjection(null);
-            setTranscriptAvailability("unavailable");
+            markTranscriptAvailability("unavailable");
             setTranscriptRefreshing(false);
             updateProgressiveCache({
               transcriptAvailability: "unavailable",
@@ -1646,7 +1671,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           if (!syncLiveProjectionRef.current || !next) applyProjection(next);
           markSessionStateAvailability(next ? "current" : "unavailable");
           setSessionStateRefreshing(false);
-          setTranscriptAvailability(
+          markTranscriptAvailability(
             next ? (next.messages.length === 0 ? "empty" : "current") : "unavailable",
           );
           setTranscriptRefreshing(false);
@@ -1699,6 +1724,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       identity,
       messageLimit,
       markSessionStateAvailability,
+      markTranscriptAvailability,
       planSyncMaterialization,
       platform,
       resetSyncState,
@@ -1918,12 +1944,12 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
       progressiveDiscoveryRef.current = progressive.discovery;
-      setTranscriptAvailability(
-        projectionRef.current
-          ? projectionRef.current.messages.length === 0
-            ? "empty"
-            : "cached"
-          : "unavailable",
+      markTranscriptAvailability(
+        progressive.transcriptAvailability === "empty"
+          ? "empty"
+          : projectionRef.current
+            ? "cached"
+            : "unavailable",
       );
       setTranscriptError(progressive.transcriptError ?? null);
       markSessionStateAvailability("unavailable");
@@ -1935,13 +1961,10 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = undefined;
       progressiveDiscoveryRef.current = undefined;
-      setTranscriptAvailability(
-        projectionRef.current
-          ? projectionRef.current.messages.length === 0
-            ? "empty"
-            : "cached"
-          : "unavailable",
-      );
+      // No matching transcript metadata, so a retained or foreign projection is
+      // only ever `cached` here: its message count cannot prove the transcript
+      // read ever came back empty.
+      markTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
       setTranscriptError(null);
       markSessionStateAvailability("unavailable");
       setSessionStateError(null);
@@ -1952,6 +1975,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     identity,
     initialProviderSessionId,
     markSessionStateAvailability,
+    markTranscriptAvailability,
     platform,
     resetSyncState,
     sessionKey,

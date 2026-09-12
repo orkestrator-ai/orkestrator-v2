@@ -530,7 +530,8 @@ describe("NativeChatShell", () => {
     test("does not shimmer for an empty session whose transcript is already current", () => {
       // Session state may still be reconnecting after the transcript read has
       // authoritatively returned empty. That is a brand-new conversation, not
-      // missing transcript history, so the dock must stay clean.
+      // missing transcript history, so the dock must stay clean even though the
+      // refresh flag is set.
       const { rerender } = render(
         <NativeChatShell
           {...shellProps()}
@@ -538,6 +539,8 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
+          transcriptSettled
           onResumeClick={() => {}}
         />,
       );
@@ -554,12 +557,17 @@ describe("NativeChatShell", () => {
           {...shellProps()}
           agentLabel="Codex"
           centerCompose
-          connectionState="connected"
+          connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           onResumeClick={() => {}}
         />,
       );
 
+      // A refresh with no settled transcript is exactly what the shimmer is
+      // for, so the same flag stays visible until the read proves otherwise.
+      expect(screen.getByTestId("session-refresh-shimmer-pinned")).toBeTruthy();
+      expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
       expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
       expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
     });

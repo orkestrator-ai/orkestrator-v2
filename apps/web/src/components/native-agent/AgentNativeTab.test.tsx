@@ -3754,10 +3754,24 @@ describe("AgentNativeTab", () => {
 
   test("does not shimmer while rechecking a brand-new tab's authoritative empty transcript", async () => {
     const tabId = "tab-empty-transcript-cache";
+    const sessionKey = createSessionKey("env-1", tabId);
     const cached = await defaultProjection({ agent: "codex", environmentId: "env-1" });
-    useNativeAgentProjectionStore
-      .getState()
-      .setProjection(createSessionKey("env-1", tabId), cached);
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, cached);
+    // Emptiness has to be recorded by the transcript surface; an empty message
+    // array from a state-only snapshot is not proof of an empty transcript.
+    useNativeAgentProjectionStore.getState().setProgressiveCache(sessionKey, {
+      identity: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        platform: "codex",
+        logicalSessionKey: sessionKey,
+        providerSessionId: "codex-session",
+        sourceGeneration: "generation-1",
+      },
+      transcriptAvailability: "empty",
+      transcriptRefreshing: false,
+      stateAvailability: "unavailable",
+    });
 
     let settleRead: (() => void) | undefined;
     getNativeAgentProjectionMock.mockImplementation(
@@ -3776,6 +3790,47 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy();
     expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+
+    await act(async () => {
+      settleRead!();
+    });
+  });
+
+  test("shimmers while a state-only empty projection's transcript is still unproven", async () => {
+    const tabId = "tab-state-only-empty";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const cached = await defaultProjection({ agent: "codex", environmentId: "env-1" });
+    // A session-state read installs `messages: []` before the paired transcript
+    // read resolves. Mistaking that placeholder for authoritative emptiness
+    // would suppress the indicator while history may still be loading.
+    useNativeAgentProjectionStore.getState().setProjection(sessionKey, cached);
+    useNativeAgentProjectionStore.getState().setProgressiveCache(sessionKey, {
+      identity: {
+        backendInstanceId: "backend-1",
+        environmentId: "env-1",
+        platform: "codex",
+        logicalSessionKey: sessionKey,
+        providerSessionId: "codex-session",
+        sourceGeneration: "generation-1",
+      },
+      transcriptAvailability: "unavailable",
+      transcriptRefreshing: true,
+      stateAvailability: "current",
+    });
+
+    let settleRead: (() => void) | undefined;
+    getNativeAgentProjectionMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settleRead = () => resolve(cached);
+        }),
+    );
+
+    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+
+    expect(screen.getByText("Refreshing Codex session…")).toBeTruthy();
+    expect(screen.getByTestId("session-refresh-shimmer-transcript")).toBeTruthy();
 
     await act(async () => {
       settleRead!();

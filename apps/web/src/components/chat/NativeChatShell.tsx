@@ -62,6 +62,15 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    */
   transcriptRefreshing?: boolean;
   /**
+   * The transcript read has authoritatively settled on current or empty.
+   *
+   * A session-state read can still report `connecting` after the transcript
+   * has proved it is current. `transcriptRefreshing` may be set by that state
+   * work, but there is no missing history for the shimmer to represent, so the
+   * shell suppresses it while this is set.
+   */
+  transcriptSettled?: boolean;
+  /**
    * Whether a provider session already existed before the current connect.
    * Connecting is then a refresh, and cached content stays readable behind a
    * notice. A tab still creating its first session has no conversation to
@@ -181,6 +190,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   connectionState,
   displayAvailable = false,
   transcriptRefreshing = false,
+  transcriptSettled = false,
   sessionEstablished = true,
   errorMessage,
   desynced = false,
@@ -332,7 +342,11 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    */
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
   const refreshingTranscript =
-    displayAvailable && connectionState !== "error" && sessionEstablished && transcriptRefreshing;
+    displayAvailable &&
+    connectionState !== "error" &&
+    sessionEstablished &&
+    transcriptRefreshing &&
+    !transcriptSettled;
   const composerCentered = centerCompose && !hasTranscriptCards;
   /*
    * The transcript-end skeleton is the primary indicator, but the centered

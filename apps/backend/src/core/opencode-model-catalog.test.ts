@@ -43,4 +43,11 @@ describe("openCodeSessionCreateModel", () => {
       variant: "high",
     });
   });
+
+  test("does not invent a session.create model for an unqualified id", () => {
+    expect(openCodeSessionCreateModel("sonnet")).toBeUndefined();
+    expect(openCodeSessionCreateModel("gpt-5", "high")).toBeUndefined();
+    expect(openCodeSessionCreateModel("", "high")).toBeUndefined();
+    expect(openCodeSessionCreateModel(undefined, "high")).toBeUndefined();
+  });
 });

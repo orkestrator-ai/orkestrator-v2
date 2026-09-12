@@ -1285,6 +1285,44 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("initializes an inferred composer selection only when no model is stored", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const inferred = await first.initializeNativeAgentSessionInferredComposerIfAbsent(
+        input.key,
+        "provider-session",
+        { modelId: "opencode-go/deepseek-v4-flash", reasoningId: "default" },
+      );
+      expect(inferred.inferredComposerSelection).toEqual({
+        modelId: "opencode-go/deepseek-v4-flash",
+        reasoningId: "default",
+      });
+      expect(inferred.controls?.modelId).toBeUndefined();
+
+      const unchanged = await first.initializeNativeAgentSessionInferredComposerIfAbsent(
+        input.key,
+        "provider-session",
+        { modelId: "opencode/nemotron-ultra-free" },
+      );
+      expect(unchanged.inferredComposerSelection).toEqual(inferred.inferredComposerSelection);
+      expect(unchanged.updatedAt).toBe(inferred.updatedAt);
+
+      const chosen = await first.updateNativeAgentSessionControls(input.key, "provider-session", {
+        modelId: "opencode-go/deepseek-v4-pro",
+      });
+      expect(chosen.controls?.modelId).toBe("opencode-go/deepseek-v4-pro");
+      expect(chosen.inferredComposerSelection).toBeUndefined();
+
+      const ignored = await first.initializeNativeAgentSessionInferredComposerIfAbsent(
+        input.key,
+        "provider-session",
+        { modelId: "opencode/nemotron-ultra-free" },
+      );
+      expect(ignored.controls?.modelId).toBe("opencode-go/deepseek-v4-pro");
+      expect(ignored.inferredComposerSelection).toBeUndefined();
+    });
+  });
+
   test("rejects a replacement expectation when no mapping exists", async () => {
     await withStorage(async (first) => {
       await expect(

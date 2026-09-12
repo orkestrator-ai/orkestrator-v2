@@ -155,7 +155,10 @@ export interface OpenCodeDiscoveryDeps {
       sessionModelId?: string;
       sessionReasoningId?: string;
     },
-  >(sessionId: string, metadata: T): T;
+  >(
+    sessionId: string,
+    metadata: T,
+  ): T;
   /** Insert under the provider's own session-count bound. */
   store(sessionId: string, entry: OpenCodeDiscoveryCacheEntry): void;
   now(): number;

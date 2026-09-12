@@ -238,10 +238,10 @@ export class OpenCodeStreamState {
         return { sessionId, status: "running" };
       }
       if (status === "retry") {
-        const attempt = typeof statusRecord?.attempt === "number" ? statusRecord.attempt : undefined;
+        const attempt =
+          typeof statusRecord?.attempt === "number" ? statusRecord.attempt : undefined;
         const detail =
-          nonEmptyString(statusRecord?.message) ??
-          "The model request failed and is being retried.";
+          nonEmptyString(statusRecord?.message) ?? "The model request failed and is being retried.";
         const headline =
           attempt !== undefined
             ? `OpenCode is retrying the model request (attempt ${attempt}). ${detail}`

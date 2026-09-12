@@ -56,6 +56,32 @@ async function createReviewerSession(
 }
 
 describe("OpenCode reviewer shell permissions", () => {
+  test("forwards the selected model and non-default reasoning to session.create", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setCreateResponse({ data: { id: "review-session" } });
+      await provider.createSession("review", "Independent reviewer", {
+        mode: "plan",
+        readOnly: true,
+        reviewerSession: true,
+        policy,
+        model: "opencode-go/deepseek-v4-flash",
+        effort: "high",
+      });
+      expect(fake.createCalls[0]).toMatchObject({
+        title: "Independent reviewer",
+        model: {
+          providerID: "opencode-go",
+          id: "deepseek-v4-flash",
+          variant: "high",
+        },
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("makes shell available without enabling editing or dropping environment policy", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

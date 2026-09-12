@@ -204,6 +204,39 @@ describe("AgentModelPicker", () => {
     ).toHaveLength(1);
   });
 
+  test("hides an OpenCode-tagged row inside a locked Pi catalog", () => {
+    setMobileViewport(false);
+    renderPicker({
+      models: [
+        {
+          platform: "pi",
+          id: "anthropic/claude-opus-4-5",
+          label: "claude-opus-4-5",
+          providerLabel: "anthropic",
+        },
+        {
+          platform: "opencode",
+          id: "openai-codex/gpt-5.4",
+          label: "gpt-5.4",
+          providerLabel: "openai-codex",
+        },
+      ],
+      enabledPlatforms: ["pi"],
+      selectedPlatform: "pi",
+      platformSelectionLocked: true,
+      selectedModelId: "anthropic/claude-opus-4-5",
+      selectedModelLabel: "claude-opus-4-5",
+      reasoningOptions: [],
+      fastModeAvailable: false,
+    });
+
+    fireEvent.pointerDown(screen.getByTitle(/Choose model/));
+    expect(screen.getByRole("menuitemradio", { name: /claude-opus-4-5/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /gpt-5.4/ })).toBeNull();
+    expect(document.querySelector('[data-native-model-row-platform="opencode"]')).toBeNull();
+    expect(document.querySelector('[data-native-model-row-platform="pi"]')).toBeTruthy();
+  });
+
   test("shows the selected platform icon before the model name", () => {
     setMobileViewport(false);
     renderPicker({ selectedPlatform: "codex" });

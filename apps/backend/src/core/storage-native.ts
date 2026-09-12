@@ -621,6 +621,55 @@ export abstract class StorageNative extends StorageReviews {
         controls,
         updatedAt: nowIso(),
       };
+      if (update.modelId !== undefined) delete updated.inferredComposerSelection;
+      sessions[key] = updated;
+      await this.saveNativeAgentSessions(sessions, opaque);
+      this.announceNativeAgentRecord(updated);
+      return updated;
+    });
+  }
+
+  /**
+   * Persist an observed OpenCode model only when the current record still has
+   * no user-chosen or previously inferred selection. Reloads under the session
+   * mutation lock so a later stale projection cannot overwrite an explicit
+   * choice that landed while that projection was in flight.
+   */
+  async initializeNativeAgentSessionInferredComposerIfAbsent(
+    key: string,
+    expectedProviderSessionId: string,
+    selection: { modelId: string; reasoningId?: string },
+  ): Promise<PersistedNativeAgentSession> {
+    if (!isNonBlankString(key) || !isNonBlankString(expectedProviderSessionId)) {
+      throw new Error("Native agent control update identity is invalid");
+    }
+    if (!isNonBlankString(selection.modelId)) {
+      throw new Error("Native agent inferred composer selection is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const existing = sessions[key];
+      if (!existing || existing.providerSessionId !== expectedProviderSessionId) {
+        throw new Error("Native agent control update target is stale");
+      }
+      if (
+        isNonBlankString(existing.controls?.modelId) ||
+        isNonBlankString(existing.inferredComposerSelection?.modelId)
+      ) {
+        return existing;
+      }
+      const updated: PersistedNativeAgentSession = {
+        ...existing,
+        inferredComposerSelection: {
+          modelId: selection.modelId,
+          ...(isNonBlankString(selection.reasoningId)
+            ? { reasoningId: selection.reasoningId }
+            : {}),
+        },
+        updatedAt: nowIso(),
+      };
       sessions[key] = updated;
       await this.saveNativeAgentSessions(sessions, opaque);
       this.announceNativeAgentRecord(updated);

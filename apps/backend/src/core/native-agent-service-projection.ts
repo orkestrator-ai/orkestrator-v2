@@ -1704,6 +1704,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           composer,
           stateSnapshot.status === "running" || blocked,
           capabilities,
+          input.agent,
         ),
       ),
       composer,
@@ -2322,18 +2323,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         }
       }
     }
+    const openCodeHints = input.agent === "opencode";
     const selectedModelId = resolveNativeComposerModelId({
       providerControlsModelId: providerControls?.modelId,
       sessionControlsModelId: session.controls?.modelId,
-      lastAssistantModelId: hints.lastAssistantModelId,
-      sessionModelId: hints.sessionModelId,
+      ...(openCodeHints
+        ? {
+            lastAssistantModelId: hints.lastAssistantModelId,
+            sessionModelId: hints.sessionModelId,
+            inferredModelId: session.inferredComposerSelection?.modelId,
+          }
+        : {}),
       catalogDefaultModelId: providerComposer?.selectedModelId,
       firstCatalogModelId: models[0]?.id,
     });
-    const resolvedSelection = withResolvedNativeComposerModel(models, selectedModelId);
+    const resolvedSelection = withResolvedNativeComposerModel(models, selectedModelId, input.agent);
     models = resolvedSelection.models;
     const selectedModel = resolvedSelection.selectedModel;
-    if (hints.persistSelection && input.agent === "opencode") {
+    if (hints.persistSelection && openCodeHints) {
       const persist = openCodeComposerSelectionToPersist({
         sessionControlsModelId: session.controls?.modelId,
         lastAssistantModelId: hints.lastAssistantModelId,
@@ -2343,15 +2350,22 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       });
       if (persist) {
         void this.storage
-          .updateNativeAgentSessionControls(session.key, session.providerSessionId, persist)
+          .initializeNativeAgentSessionInferredComposerIfAbsent(
+            session.key,
+            session.providerSessionId,
+            persist,
+          )
           .catch(() => undefined);
       }
     }
     const selectedReasoningId =
       providerControls?.reasoningId ??
       session.controls?.reasoningId ??
-      hints.lastAssistantReasoningId ??
-      hints.sessionReasoningId ??
+      (openCodeHints
+        ? (hints.lastAssistantReasoningId ??
+          hints.sessionReasoningId ??
+          session.inferredComposerSelection?.reasoningId)
+        : undefined) ??
       providerComposer?.selectedReasoningId ??
       // The advertised default matters for Cursor/Grok, where it carries the
       // agent's own current effort rather than a static catalog value.
@@ -3205,7 +3219,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         // hidden on this path cannot reappear on the progressive one.
         composerControls: withoutSuppressedComposerControls(
           input.agent,
-          nativeComposerControls(composer, snapshot.status === "running" || blocked, capabilities),
+          nativeComposerControls(
+            composer,
+            snapshot.status === "running" || blocked,
+            capabilities,
+            input.agent,
+          ),
         ),
         composer,
         ...(snapshot.readiness ? { readiness: snapshot.readiness } : {}),

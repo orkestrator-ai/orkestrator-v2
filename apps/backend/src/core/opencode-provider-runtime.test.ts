@@ -648,7 +648,12 @@ describe("OpenCode provider runtime", () => {
       selectedModelId: catalog.selectedModelId,
       selectedReasoningId: catalog.selectedReasoningId,
     };
-    const controls = nativeComposerControls(composer, false, nativeCapabilities("opencode"));
+    const controls = nativeComposerControls(
+      composer,
+      false,
+      nativeCapabilities("opencode"),
+      "opencode",
+    );
 
     expect(controls.map((control) => control.id)).toEqual(["model", "reasoning"]);
     expect(controls.filter((control) => control.label === "Reasoning")).toHaveLength(1);

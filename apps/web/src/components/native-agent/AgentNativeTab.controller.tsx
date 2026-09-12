@@ -733,8 +733,9 @@ export function SharedNativeAgentController({
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
   const resolvedComposer = useMemo(
-    () => withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId),
-    [composer?.models, composer?.selectedModelId],
+    () =>
+      withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
+    [composer?.models, composer?.selectedModelId, platform],
   );
   const selectedModel = resolvedComposer.selectedModel;
   const selectedReasoningId = composer?.selectedReasoningId ?? selectedModel?.defaultReasoningId;

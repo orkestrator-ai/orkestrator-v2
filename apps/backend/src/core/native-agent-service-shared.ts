@@ -582,11 +582,13 @@ export function nativeComposerControls(
   composer: NativeAgentComposerState | undefined,
   disabled: boolean,
   capabilities: NativeAgentCapabilities,
+  platform?: AgentPlatform,
 ): NativeAgentComposerControl[] {
   if (!composer) return [];
   const resolvedModels = withResolvedNativeComposerModel(
     composer.models,
     composer.selectedModelId,
+    platform,
   );
   const selectedModel = resolvedModels.selectedModel;
   const models = resolvedModels.models;

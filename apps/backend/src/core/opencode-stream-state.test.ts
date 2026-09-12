@@ -109,6 +109,68 @@ describe("OpenCodeStreamState turn clock", () => {
     ]);
   });
 
+  test("retry status falls back when attempt or message is omitted", () => {
+    const state = new OpenCodeStreamState();
+    state.apply(
+      {
+        type: "session.status",
+        properties: { sessionID: "session", status: { type: "retry" } },
+      } as never,
+      9_000,
+    );
+    expect(state.notices("session")).toEqual([
+      {
+        kind: "advisory",
+        severity: "warning",
+        message:
+          "OpenCode is retrying the model request. The model request failed and is being retried.",
+      },
+    ]);
+
+    state.apply(
+      {
+        type: "session.status",
+        properties: {
+          sessionID: "session",
+          status: { type: "retry", message: "Provider timed out" },
+        },
+      } as never,
+      9_500,
+    );
+    expect(state.notices("session")).toEqual([
+      {
+        kind: "advisory",
+        severity: "warning",
+        message: "OpenCode is retrying the model request. Provider timed out",
+      },
+    ]);
+  });
+
+  test("clears the retry advisory once the retried request is busy again", () => {
+    const state = new OpenCodeStreamState();
+    state.apply(
+      {
+        type: "session.status",
+        properties: {
+          sessionID: "session",
+          status: { type: "retry", attempt: 1, message: "Provider timed out" },
+        },
+      } as never,
+      9_000,
+    );
+    expect(state.notices("session")).toHaveLength(1);
+
+    state.apply(
+      {
+        type: "session.status",
+        properties: { sessionID: "session", status: { type: "busy" } },
+      } as never,
+      9_500,
+    );
+    expect(state.notices("session")).toEqual([]);
+    expect(state.turnStartedAt("session")).toBe(9_000);
+  });
+
   test("session.updated records the provider session model", () => {
     const state = new OpenCodeStreamState();
     state.apply({

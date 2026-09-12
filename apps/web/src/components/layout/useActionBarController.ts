@@ -73,6 +73,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const isGrid = presentation === "grid";
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectProject = useUIStore((state) => state.selectProject);
+  const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectEnvironment = useUIStore((state) => state.selectEnvironment);
   const projectBoardTab = useUIStore((state) => state.projectBoardTab);
   const setProjectBoardTab = useUIStore((state) => state.setProjectBoardTab);
@@ -1845,11 +1847,23 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [handleResolveConflicts, resolveDialogTarget, resolveEligibilityError, resolveLaunchInFlight],
   );
 
+  const activateProjectForCleanup = useCallback(
+    (environmentId: string) => {
+      if (selectedEnvironmentIdRef.current !== environmentId) return;
+      const projectId = selectedEnvironment?.projectId ?? selectedProjectId;
+      if (!projectId) return;
+      setProjectCollapsed(projectId, false);
+      selectProject(projectId);
+    },
+    [selectProject, selectedEnvironment?.projectId, selectedProjectId, setProjectCollapsed],
+  );
+
   // Handler for cleaning up (deleting) an environment after PR is merged/closed
   const handleCleanup = useCallback(async () => {
     const operationEnvironmentId = cleanupTarget?.environmentId ?? selectedEnvironmentId;
     if (!operationEnvironmentId || deletingEnvironmentId === operationEnvironmentId) return;
 
+    activateProjectForCleanup(operationEnvironmentId);
     setDeletingEnvironmentId(operationEnvironmentId);
     setCleanupError(null);
     try {
@@ -1864,6 +1878,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setDeletingEnvironmentId((current) => (current === operationEnvironmentId ? null : current));
     }
   }, [
+    activateProjectForCleanup,
     cleanupTarget?.environmentId,
     deletingEnvironmentId,
     selectedEnvironmentId,
@@ -1907,6 +1922,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           id: `branch-merged-${operationEnvironmentId}`,
         });
 
+        if (cleanupAfterMerge && mergeResult.cleanupOutcome !== "failed") {
+          activateProjectForCleanup(operationEnvironmentId);
+        }
+
         if (mergeResult.cleanupOutcome === "failed") {
           setCleanupError(mergeResult.cleanupError ?? "An unexpected error occurred");
           setCleanupTarget({
@@ -1931,7 +1950,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         setMergingEnvironmentId((current) => (current === operationEnvironmentId ? null : current));
       }
     },
-    [selectedEnvironment?.branch, selectedEnvironment?.name, selectedEnvironmentId, prUrl],
+    [
+      activateProjectForCleanup,
+      selectedEnvironment?.branch,
+      selectedEnvironment?.name,
+      selectedEnvironmentId,
+      prUrl,
+    ],
   );
 
   // Get target branch for PR dialog

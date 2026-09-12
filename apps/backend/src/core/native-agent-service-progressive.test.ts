@@ -79,6 +79,54 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("does not treat a part-trimmed live head as pageable history", async () => {
+    const parts = Array.from({ length: 40 }, (_, index) => ({
+      type: "text",
+      content: `${index}:${"x".repeat(20 * 1024)}`,
+    }));
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: [
+          {
+            id: "turn",
+            role: "assistant",
+            content: "done",
+            parts,
+            createdAt: "2026-09-09T00:01:00.000Z",
+          },
+        ],
+        complete: true,
+        freshness: "current" as const,
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-omitted-parts-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-omitted-parts",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.historyComplete).toBe(true);
+        expect(preview.value.messageWindow).toMatchObject({
+          truncated: true,
+          truncationReason: "bytes",
+          canLoadEarlier: false,
+        });
+        expect(preview.value.messageWindow?.omittedParts).toBeGreaterThan(0);
+        expect(preview.value.messages).toHaveLength(1);
+      },
+    );
+  });
+
   test("shares one legacy interactive snapshot between transcript and state", async () => {
     const interactiveSnapshot = mock(async () => ({
       status: "idle" as const,

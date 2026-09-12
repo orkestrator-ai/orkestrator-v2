@@ -89,6 +89,30 @@ function encodedBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
+function messagePartCount(message: unknown): number {
+  const parts = (message as { parts?: unknown })?.parts;
+  return Array.isArray(parts) ? parts.length : 0;
+}
+
+/**
+ * The live tail may omit leading parts of its first message to fit the byte
+ * window. If this client already holds a more complete copy of that same row,
+ * keep the local parts so the cut cannot open a hole in the middle of a turn
+ * the tab has already rendered.
+ */
+function preferCompleteLiveHead<TMessage>(
+  held: readonly TMessage[] | undefined,
+  incoming: readonly TMessage[],
+): TMessage[] {
+  if (!held?.length || incoming.length === 0) return [...incoming];
+  const head = incoming[0]!;
+  const headId = (head as { id?: unknown })?.id;
+  if (typeof headId !== "string") return [...incoming];
+  const local = held.find((message) => (message as { id?: unknown })?.id === headId);
+  if (!local || messagePartCount(local) <= messagePartCount(head)) return [...incoming];
+  return [local, ...incoming.slice(1)];
+}
+
 /**
  * A revision the projection on screen cannot mistake for an older read.
  *
@@ -767,6 +791,27 @@ export function useNativeAgentSession<TMessage = unknown>({
         (message) => !liveIds.has(messageId(message) as string),
       );
 
+      const displayLive = preferCompleteLiveHead(
+        previousLive?.messages ?? projectionRef.current?.messages,
+        live.messages,
+      );
+      const keptLocalHead =
+        displayLive.length > 0 &&
+        live.messages.length > 0 &&
+        displayLive[0] !== live.messages[0];
+      const omittedParts = live.messageWindow?.omittedParts ?? 0;
+      /*
+       * A part-trimmed live head sits at the start of the overlapping row. If
+       * this client has no fuller copy, stitching retained pages in front of it
+       * opens a hole in the middle of the timeline. Collapse to the contiguous
+       * tail instead; an explicit page (`params.retained`) still wins because
+       * the user asked to see that range.
+       */
+      if (omittedParts > 0 && !keptLocalHead && !params.retained) {
+        retainedMessages = [];
+        retainedCursor = boundaryCursor;
+      }
+
       const otherHistoryBytes = Array.from(store.syncCaches.entries()).reduce(
         (total, [key, cache]) => total + (key === sessionKey ? 0 : cache.historyBytes),
         0,
@@ -774,7 +819,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       let retainedHistoryBytes = encodedBytes(retainedMessages);
       let settledCursor = retainedCursor;
       if (
-        retainedMessages.length + live.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
+        retainedMessages.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
         retainedHistoryBytes > CLIENT_HISTORY_MAX_BYTES ||
         retainedHistoryBytes + otherHistoryBytes > CLIENT_HISTORY_TOTAL_MAX_BYTES
       ) {
@@ -786,7 +831,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       }
 
       const seen = new Set<string>();
-      const messages = [...retainedMessages, ...live.messages].filter((message) => {
+      const messages = [...retainedMessages, ...displayLive].filter((message) => {
         const id = messageId(message);
         if (typeof id !== "string" || seen.has(id)) return false;
         seen.add(id);
@@ -951,11 +996,37 @@ export function useNativeAgentSession<TMessage = unknown>({
               (message) => (message as { id?: unknown })?.id === firstLiveId.id,
             )
           : -1;
-      // Ageing out is a suffix window: keep the prefix before the live tail.
-      // A rewind or other prefix window starts at an earlier message we already
-      // hold, so that prefix is empty and the omitted suffix must drop.
+      const displayLive = preferCompleteLiveHead(current?.messages, value.messages);
+      const keptLocalHead =
+        displayLive.length > 0 &&
+        value.messages.length > 0 &&
+        displayLive[0] !== value.messages[0];
+      const omittedParts = value.messageWindow?.omittedParts ?? 0;
+      const partTruncatedHead =
+        omittedParts > 0 ||
+        keptLocalHead ||
+        (firstLiveIndex >= 0 &&
+          current !== null &&
+          messagePartCount(current.messages[firstLiveIndex]) > messagePartCount(value.messages[0]));
+      /*
+       * Ageing out is a suffix window: keep the prefix before the live tail.
+       * A rewind or other prefix window starts at an earlier message we already
+       * hold, so that prefix is empty and the omitted suffix must drop.
+       *
+       * A part-trimmed live head is different. The omitted content sits at the
+       * start of the overlapping row, which becomes the middle of the stitched
+       * timeline if we keep the prefix. Keep the prefix only when this client
+       * already holds the fuller row; otherwise collapse to the contiguous tail.
+       */
+      const collapsedForPartTruncation =
+        partTruncatedHead && !keptLocalHead && firstLiveIndex > 0;
       let retained =
-        current && !identityChanged && !historyEpochChanged && !evicted && firstLiveIndex > 0
+        current &&
+        !identityChanged &&
+        !historyEpochChanged &&
+        !evicted &&
+        firstLiveIndex > 0 &&
+        !collapsedForPartTruncation
           ? current.messages.slice(0, firstLiveIndex).filter((message) => {
               const id = (message as { id?: unknown })?.id;
               if (typeof id !== "string") return true;
@@ -977,14 +1048,19 @@ export function useNativeAgentSession<TMessage = unknown>({
       let retainedBytes = retained.length > 0 ? encodedBytes(retained) : 0;
       const retentionCollapsed =
         retained.length > 0 &&
-        (retained.length + value.messages.length > CLIENT_HISTORY_MAX_MESSAGES ||
+        (retained.length + displayLive.length > CLIENT_HISTORY_MAX_MESSAGES ||
           retainedBytes > CLIENT_HISTORY_MAX_BYTES);
       if (retentionCollapsed) {
         retained = [];
         retainedBytes = 0;
       }
-      const messages = [...retained, ...value.messages];
-      const serverCanLoadEarlier = value.messageWindow?.canLoadEarlier === true;
+      const messages = [...retained, ...displayLive];
+      const partOnlyTruncation =
+        omittedParts > 0 &&
+        (value.messageWindow?.omittedMessages ?? 0) === 0 &&
+        value.messageWindow?.truncationReason === "bytes";
+      const serverCanLoadEarlier =
+        value.messageWindow?.canLoadEarlier === true && !partOnlyTruncation;
       /*
        * Whether the paging state this hook holds still describes this
        * transcript. Paging lives in the sync-v1 namespace — its cursors, its

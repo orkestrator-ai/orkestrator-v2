@@ -32,8 +32,8 @@ export function FilesPanel() {
   } = useFilesPanel();
 
   const moveFileInTree = useCallback(
-    (sourcePath: string, destinationDirectory: string) => {
-      void moveFile(sourcePath, destinationDirectory).catch(() => undefined);
+    (sourcePaths: string[], destinationDirectory: string) => {
+      void moveFile(sourcePaths, destinationDirectory).catch(() => undefined);
     },
     [moveFile],
   );
@@ -42,9 +42,10 @@ export function FilesPanel() {
     setPendingAction(null);
   }, [environmentId]);
 
-  const requestFileAction = (kind: PendingFileAction["kind"], path: string) => {
-    if (!environmentId) return;
-    setPendingAction({ environmentId, kind, path });
+  const requestFileAction = (kind: PendingFileAction["kind"], path: string | string[]) => {
+    const paths = Array.isArray(path) ? path : [path];
+    if (!environmentId || paths.length === 0) return;
+    setPendingAction({ environmentId, kind, paths });
   };
 
   const revealFile = useCallback(
@@ -66,9 +67,9 @@ export function FilesPanel() {
     }
     try {
       if (pendingAction.kind === "revert") {
-        await revertFile(pendingAction.path);
+        await revertFile(pendingAction.paths[0]!);
       } else {
-        await deleteFile(pendingAction.path);
+        await deleteFile(pendingAction.paths);
       }
       setPendingAction(null);
     } catch {

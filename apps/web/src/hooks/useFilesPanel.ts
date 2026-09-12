@@ -351,23 +351,39 @@ export function useFilesPanel() {
   );
 
   const deleteFile = useCallback(
-    async (filePath: string) => {
+    async (filePath: string | string[]) => {
       if (!isAvailable || !selectedEnvironmentId) {
         throw new Error("The selected environment is not available");
       }
 
-      setFileActionPending(filePath);
+      const paths = Array.isArray(filePath) ? [...new Set(filePath)] : [filePath];
+      if (paths.length === 0) return;
+
+      setFileActionPending(paths[0]!);
+      let completed = 0;
       try {
-        if (isLocalEnvironment && worktreePath) {
-          await backend.deleteLocalFile(selectedEnvironmentId, filePath);
-        } else if (containerId) {
-          await backend.deleteContainerFile(selectedEnvironmentId, filePath);
+        for (const path of paths) {
+          if (isLocalEnvironment && worktreePath) {
+            await backend.deleteLocalFile(selectedEnvironmentId, path);
+          } else if (containerId) {
+            await backend.deleteContainerFile(selectedEnvironmentId, path);
+          }
+          completed += 1;
         }
         await refreshAllFilesData();
-        toast.success("File deleted", { description: filePath });
+        if (paths.length === 1) {
+          toast.success("File deleted", { description: paths[0] });
+        } else {
+          toast.success("Files deleted", { description: `${paths.length} files` });
+        }
       } catch (error) {
+        if (completed > 0) {
+          await refreshAllFilesData();
+        }
         const message = error instanceof Error ? error.message : String(error);
-        toast.error("Failed to delete file", { description: message });
+        toast.error(paths.length === 1 ? "Failed to delete file" : "Failed to delete files", {
+          description: message,
+        });
         throw error;
       } finally {
         setFileActionPending(null);
@@ -384,36 +400,59 @@ export function useFilesPanel() {
   );
 
   const moveFile = useCallback(
-    async (sourcePath: string, destinationDirectory: string) => {
+    async (sourcePath: string | string[], destinationDirectory: string) => {
       if (!isAvailable || !selectedEnvironmentId) {
         throw new Error("The selected environment is not available");
       }
 
-      const isOpenInEditor = usePaneLayoutStore
-        .getState()
-        .getAllTabs(selectedEnvironmentId)
-        .some((tab) => tab.type === "file" && tab.fileData?.filePath === sourcePath);
-      if (isOpenInEditor) {
-        const error = new Error("Close the file's editor tab before moving it");
-        toast.error("Cannot move an open file", { description: error.message });
+      const sourcePaths = Array.isArray(sourcePath) ? [...new Set(sourcePath)] : [sourcePath];
+      if (sourcePaths.length === 0) return;
+
+      const openTabs = usePaneLayoutStore.getState().getAllTabs(selectedEnvironmentId);
+      const openPaths = sourcePaths.filter((path) =>
+        openTabs.some((tab) => tab.type === "file" && tab.fileData?.filePath === path),
+      );
+      if (openPaths.length > 0) {
+        const error = new Error(
+          openPaths.length === 1
+            ? "Close the file's editor tab before moving it"
+            : "Close the selected files' editor tabs before moving them",
+        );
+        toast.error(
+          openPaths.length === 1 ? "Cannot move an open file" : "Cannot move open files",
+          {
+            description: error.message,
+          },
+        );
         throw error;
       }
 
-      setFileActionPending(sourcePath);
+      setFileActionPending(sourcePaths[0]!);
+      let completed = 0;
       try {
-        const destination =
-          isLocalEnvironment && worktreePath
-            ? await backend.moveLocalFile(selectedEnvironmentId, sourcePath, destinationDirectory)
-            : await backend.moveContainerFile(
-                selectedEnvironmentId,
-                sourcePath,
-                destinationDirectory,
-              );
+        const destinations: string[] = [];
+        for (const path of sourcePaths) {
+          const destination =
+            isLocalEnvironment && worktreePath
+              ? await backend.moveLocalFile(selectedEnvironmentId, path, destinationDirectory)
+              : await backend.moveContainerFile(selectedEnvironmentId, path, destinationDirectory);
+          destinations.push(destination);
+          completed += 1;
+        }
         await refreshAllFilesData();
-        toast.success("File moved", { description: destination });
+        if (sourcePaths.length === 1) {
+          toast.success("File moved", { description: destinations[0] });
+        } else {
+          toast.success("Files moved", { description: `${sourcePaths.length} files` });
+        }
       } catch (error) {
+        if (completed > 0) {
+          await refreshAllFilesData();
+        }
         const message = error instanceof Error ? error.message : String(error);
-        toast.error("Failed to move file", { description: message });
+        toast.error(sourcePaths.length === 1 ? "Failed to move file" : "Failed to move files", {
+          description: message,
+        });
         throw error;
       } finally {
         setFileActionPending(null);

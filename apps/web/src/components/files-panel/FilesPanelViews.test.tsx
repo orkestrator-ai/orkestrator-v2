@@ -63,6 +63,26 @@ const fileTree: FileNode[] = [
   },
 ];
 
+const multiFileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    isDirectory: true,
+    children: [
+      { name: "App.tsx", path: "src/App.tsx", isDirectory: false },
+      { name: "main.ts", path: "src/main.ts", isDirectory: false },
+      { name: "utils.ts", path: "src/utils.ts", isDirectory: false },
+    ],
+  },
+  {
+    name: "archive",
+    path: "archive",
+    isDirectory: true,
+    children: [],
+  },
+  { name: "README.md", path: "README.md", isDirectory: false },
+];
+
 function createDataTransfer(): DataTransfer {
   const values = new Map<string, string>();
   return {
@@ -235,7 +255,7 @@ describe("files panel views", () => {
     expect(onRevert).toHaveBeenCalledWith("src/App.tsx");
     fireEvent.contextMenu(fileButton);
     fireEvent.click(await screen.findByText("Delete file"));
-    expect(onDelete).toHaveBeenCalledWith("src/App.tsx");
+    expect(onDelete).toHaveBeenCalledWith(["src/App.tsx"]);
   });
 
   test("FileTreeNode drags a file onto a destination folder", async () => {
@@ -254,7 +274,7 @@ describe("files panel views", () => {
     expect(destination.className).toContain("ring-primary/60");
     fireDrag(destination, "drop", dataTransfer);
 
-    expect(onMove).toHaveBeenCalledWith("src/App.tsx", "archive");
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], "archive");
     expect(useFilesPanelStore.getState().expandedFolders).toContain("archive");
   });
 
@@ -266,13 +286,13 @@ describe("files panel views", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Move App.tsx to another folder" }));
     expect(await screen.findByRole("dialog", { name: "Move file" })).toBeTruthy();
     fireEvent.click(screen.getByRole("option", { name: "archive" }));
-    expect(onMove).toHaveBeenCalledWith("src/App.tsx", "archive");
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], "archive");
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
     fireEvent.click(await screen.findByText("Move to…"));
     expect(screen.getByRole("option", { name: "src" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("option", { name: "Workspace root" }));
-    expect(onMove).toHaveBeenLastCalledWith("src/App.tsx", ".");
+    expect(onMove).toHaveBeenLastCalledWith(["src/App.tsx"], ".");
   });
 
   test("moves nested files to the root and suppresses same-parent drops", async () => {
@@ -293,7 +313,7 @@ describe("files panel views", () => {
     fireDrag(rootTarget, "dragover", rootTransfer);
     expect(rootTarget.className).toContain("ring-primary/60");
     fireDrag(rootTarget, "drop", rootTransfer);
-    expect(onMove).toHaveBeenCalledWith("src/App.tsx", ".");
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], ".");
   });
 
   test("ignores foreign drags, clears hover state, and disables moves while pending", async () => {
@@ -334,6 +354,114 @@ describe("files panel views", () => {
     ).toBe(true);
     fireDrag(screen.getByRole("button", { name: "archive" }), "drop", workspaceTransfer);
     expect(onMove).not.toHaveBeenCalled();
+  });
+
+  test("Shift-click selects a visible file range without opening files", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView />);
+
+    const app = await screen.findByRole("button", { name: "App.tsx" });
+    const utils = screen.getByRole("button", { name: "utils.ts" });
+    fireEvent.click(app);
+    expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
+    createFileTab.mockClear();
+
+    fireEvent.click(utils, { shiftKey: true });
+    expect(createFileTab).not.toHaveBeenCalled();
+    expect(app.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(utils.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
+  });
+
+  test("Command-click and Control-click add files to the selection", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView />);
+
+    const app = await screen.findByRole("button", { name: "App.tsx" });
+    const readme = screen.getByRole("button", { name: "README.md" });
+    fireEvent.click(app);
+    createFileTab.mockClear();
+    fireEvent.click(readme, { metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "main.ts" }), { ctrlKey: true });
+
+    expect(createFileTab).not.toHaveBeenCalled();
+    expect(app.getAttribute("aria-selected")).toBe("true");
+    expect(readme.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  test("dragging a selected file moves the whole selection", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onMove={onMove} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+    const dataTransfer = createDataTransfer();
+    fireDrag(screen.getByRole("button", { name: "App.tsx" }), "dragstart", dataTransfer);
+    fireDrag(screen.getByRole("button", { name: "archive" }), "drop", dataTransfer);
+
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx", "README.md"], "archive");
+  });
+
+  test("right-click delete and Move to apply to the selected files", async () => {
+    const onMove = mock(() => undefined);
+    const onDelete = mock(() => undefined);
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onMove={onMove} onDelete={onDelete} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(await screen.findByText("Delete 2 files"));
+    expect(onDelete).toHaveBeenCalledWith(["src/App.tsx", "README.md"]);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Move 2 files to another folder" })[0]!);
+    expect(await screen.findByRole("dialog", { name: "Move files" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "archive" }));
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx", "README.md"], "archive");
+  });
+
+  test("right-clicking an unselected file acts on that file only", async () => {
+    const onDelete = mock(() => undefined);
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onDelete={onDelete} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "main.ts" }));
+    fireEvent.click(await screen.findByText("Delete file"));
+
+    expect(onDelete).toHaveBeenCalledWith(["src/main.ts"]);
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
   });
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {

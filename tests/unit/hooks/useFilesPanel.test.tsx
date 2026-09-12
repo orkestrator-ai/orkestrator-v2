@@ -1241,6 +1241,40 @@ describe("useFilesPanel", () => {
     expect(mockDeleteContainerFile).not.toHaveBeenCalled();
   });
 
+  test("deletes and moves multiple files with a single refresh", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile(["src/App.tsx", "README.md"]);
+    });
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx");
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "README.md");
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Files deleted", { description: "2 files" });
+
+    mockGetGitStatus.mockClear();
+    mockGetFileTree.mockClear();
+    mockMoveContainerFile.mockResolvedValueOnce("App.tsx");
+    mockMoveContainerFile.mockResolvedValueOnce("README.md");
+    await act(async () => {
+      await result.current.moveFile(["src/App.tsx", "README.md"], "archive");
+    });
+    expect(mockMoveContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx", "archive");
+    expect(mockMoveContainerFile).toHaveBeenCalledWith("env-container", "README.md", "archive");
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Files moved", { description: "2 files" });
+  });
+
   test("silent auto-refresh reloads the active tab without toggling loading state", async () => {
     const originalSetInterval = globalThis.setInterval;
     const originalClearInterval = globalThis.clearInterval;

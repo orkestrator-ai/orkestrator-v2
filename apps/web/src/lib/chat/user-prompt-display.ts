@@ -209,17 +209,18 @@ export function userPromptPresentation(
   // system-instructions frame. Once it is removed, whatever remains is exactly
   // what the user wrote, so it is shown without any structural reconstruction.
   const strippedSystemInstructions = stripSystemInstructions(displaySource);
-  if (strippedSystemInstructions !== displaySource) {
-    const presentation = boundedPromptDisplay(strippedSystemInstructions);
-    return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
-  }
+  const evidenceSource =
+    strippedSystemInstructions === displaySource ? displaySource : strippedSystemInstructions;
+  // Try the evidence contracts against the stripped prompt too: a producer that
+  // frames only part of a consolidation prompt must still have its unframed
+  // evidence hidden, not rendered as raw JSON by the bounded fallback.
   for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
-    const presentation = presentationForContract(displaySource, contract);
+    const presentation = presentationForContract(evidenceSource, contract);
     if (presentation !== null) {
       return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
     }
   }
-  const presentation = boundedPromptDisplay(displaySource);
+  const presentation = boundedPromptDisplay(evidenceSource);
   return delegation ? withCoordinatorDelegationNotice(presentation) : presentation;
 }
 

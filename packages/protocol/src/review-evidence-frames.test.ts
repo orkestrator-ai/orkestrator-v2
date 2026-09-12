@@ -42,4 +42,18 @@ describe("system instructions frame", () => {
     expect(stripSystemInstructions(ordinary)).toBe(ordinary);
     expect(stripSystemInstructions(incomplete)).toBe(incomplete);
   });
+
+  test("keeps an unmatched open when it precedes a complete frame", () => {
+    const source = `${SYSTEM_INSTRUCTIONS_FRAME_OPEN} keep this\n${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\nbackend\n${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}`;
+
+    expect(stripSystemInstructions(source)).toBe(`${SYSTEM_INSTRUCTIONS_FRAME_OPEN} keep this`);
+  });
+
+  test("pairs each close with its nearest unmatched open rather than the first one", () => {
+    const source = `Fix the ${SYSTEM_INSTRUCTIONS_FRAME_OPEN} handling\n\n${wrapSystemInstructions("backend")}`;
+
+    expect(stripSystemInstructions(source)).toBe(
+      "Fix the <orkestrator-system-instructions> handling",
+    );
+  });
 });

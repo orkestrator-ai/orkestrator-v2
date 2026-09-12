@@ -13,6 +13,11 @@ import {
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
+import {
+  buildReviewHandoffPrompt,
+  prependReviewHandoff,
+} from "../../apps/backend/src/core/build-pipeline-handoff";
+import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
@@ -146,5 +151,39 @@ describe("backend prompt display contract", () => {
     expect(presentation.evidencePayload?.source).toBe(
       JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT, null, 2),
     );
+  });
+
+  test("hides the injected review handoff and keeps only the address instruction", () => {
+    const session: PipelineSession = {
+      phase: "review",
+      agent: "codex",
+      iteration: 0,
+      sessionKey: "pipeline:review:0:session-key",
+      sdkSessionId: "review-session",
+      status: "idle",
+      startedAt: "2026-08-07T10:00:00.000Z",
+      label: "Review Session",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Review the range boundary.",
+          createdAt: "2026-08-07T10:01:00.000Z",
+        },
+      ],
+    };
+    const handoff = buildReviewHandoffPrompt({
+      environmentId: "env-1",
+      sourceAgent: "codex",
+      destinationAgent: "claude",
+      sourceSession: session,
+    });
+    const source = prependReviewHandoff(handoff, addressPrompt(report));
+    const presentation = userPromptPresentation(source);
+
+    expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
+    expect(presentation.displayText).not.toContain("Review the range boundary.");
+    expect(presentation.displayText).not.toContain("orkestrator-handoff");
+    expect(presentation.evidencePayload).toBeNull();
   });
 });

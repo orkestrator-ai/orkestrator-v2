@@ -32,6 +32,7 @@ export function collectAllFilePaths(nodes: FileNode[]): string[] {
 export type FileSelectionResult =
   | { type: "single"; path: string }
   | { type: "add"; path: string }
+  | { type: "remove"; path: string }
   | { type: "range"; paths: string[] };
 
 export function resolveFileSelection(
@@ -39,6 +40,7 @@ export function resolveFileSelection(
   modifiers: { shiftKey?: boolean; metaKey?: boolean },
   visiblePaths: readonly string[],
   anchorPath: string | null,
+  selectedPaths: readonly string[] = [],
 ): FileSelectionResult {
   if (modifiers.shiftKey) {
     const clickedIndex = visiblePaths.indexOf(path);
@@ -58,7 +60,10 @@ export function resolveFileSelection(
   }
 
   if (modifiers.metaKey) {
-    return { type: "add", path };
+    // Additive click toggles: a second Command/Control click removes the file
+    // so the user can correct a mis-click without opening or rebuilding the
+    // whole selection.
+    return selectedPaths.includes(path) ? { type: "remove", path } : { type: "add", path };
   }
 
   return { type: "single", path };

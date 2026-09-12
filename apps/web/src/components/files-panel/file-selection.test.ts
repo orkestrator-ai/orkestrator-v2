@@ -74,6 +74,24 @@ describe("file selection helpers", () => {
     });
   });
 
+  test("toggles an already-selected path on a modifier click", () => {
+    const visible = ["src/App.tsx", "src/main.ts", "README.md"];
+    const selected = ["src/App.tsx", "README.md"];
+
+    expect(
+      resolveFileSelection("README.md", { metaKey: true }, visible, "src/App.tsx", selected),
+    ).toEqual({ type: "remove", path: "README.md" });
+    expect(
+      resolveFileSelection("src/main.ts", { metaKey: true }, visible, "src/App.tsx", selected),
+    ).toEqual({ type: "add", path: "src/main.ts" });
+    // A modifier click that is not selected still adds, preserving the
+    // append-only behavior for genuinely new paths.
+    expect(resolveFileSelection("README.md", { metaKey: true }, visible, "src/App.tsx")).toEqual({
+      type: "add",
+      path: "README.md",
+    });
+  });
+
   test("range selection falls back when the anchor is missing", () => {
     const visible = ["src/App.tsx", "src/main.ts"];
     expect(resolveFileSelection("src/main.ts", { shiftKey: true }, visible, null)).toEqual({

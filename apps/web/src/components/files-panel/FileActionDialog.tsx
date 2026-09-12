@@ -8,6 +8,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { BoundedPathList } from "./BoundedPathList";
 
 export interface PendingFileAction {
   environmentId: string;
@@ -59,7 +60,7 @@ export function FileActionDialog({
                 Delete <strong className="text-foreground">{paths.length} files</strong> from this
                 workspace. Git will stage the deletion when the files are tracked. Untracked files
                 cannot be recovered from Git.
-                <span className="mt-2 block break-all text-foreground">{paths.join(", ")}</span>
+                <BoundedPathList paths={paths} />
               </>
             ) : (
               <>

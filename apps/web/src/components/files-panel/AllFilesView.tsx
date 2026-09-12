@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import type { FileNode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { BoundedPathList } from "./BoundedPathList";
 import {
   collectAllFilePaths,
   collectVisibleFilePaths,
@@ -83,6 +84,7 @@ export function AllFilesView({
       },
       visibleFilePaths,
       anchorPath,
+      selectedPaths,
     );
 
     if (result.type === "range") {
@@ -96,6 +98,13 @@ export function AllFilesView({
       event.preventDefault();
       setSelectedPaths((current) => (current.includes(path) ? current : [...current, path]));
       if (!anchorPath) setAnchorPath(path);
+      return;
+    }
+
+    if (result.type === "remove") {
+      event.preventDefault();
+      setSelectedPaths((current) => current.filter((selected) => selected !== path));
+      setAnchorPath((current) => (current === path ? null : current));
       return;
     }
 
@@ -214,7 +223,10 @@ export function AllFilesView({
         <DialogContent className="max-h-[min(32rem,calc(100vh-2rem))] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{moveCount > 1 ? "Move files" : "Move file"}</DialogTitle>
-            <DialogDescription>Choose a destination for {moveSubject}.</DialogDescription>
+            <DialogDescription>
+              Choose a destination for {moveSubject}.
+              {moveCount > 1 && <BoundedPathList paths={moveSourcePaths ?? []} />}
+            </DialogDescription>
           </DialogHeader>
           <div
             className="max-h-80 space-y-1 overflow-y-auto"

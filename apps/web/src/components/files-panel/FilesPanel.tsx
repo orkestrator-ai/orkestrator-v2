@@ -5,7 +5,7 @@ import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { useFilesPanelStore } from "@/stores";
-import { useFilesPanel } from "@/hooks";
+import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFileManager } from "@/lib/backend";
 
@@ -72,8 +72,15 @@ export function FilesPanel() {
         await deleteFile(pendingAction.paths);
       }
       setPendingAction(null);
-    } catch {
-      // The hook reports the failure and leaves the dialog open for retry or cancellation.
+    } catch (error) {
+      // The hook reports the failure. A partial batch narrows the pending
+      // action to the paths that still need to run so a retry cannot get stuck
+      // re-applying already-processed paths.
+      if (error instanceof FileBatchActionError && error.remainingPaths.length > 0) {
+        setPendingAction((current) =>
+          current ? { ...current, paths: error.remainingPaths } : current,
+        );
+      }
     }
   };
 

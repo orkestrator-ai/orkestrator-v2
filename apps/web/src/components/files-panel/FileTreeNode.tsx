@@ -168,7 +168,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   const fileRow = (
     <div className="group flex min-w-0 items-center">
       <button
-        aria-selected={isSelected}
+        aria-pressed={isSelected}
         onClick={(event) => onFileClick?.(item.path, event)}
         onMouseDown={(event) => {
           if (event.shiftKey) event.preventDefault();

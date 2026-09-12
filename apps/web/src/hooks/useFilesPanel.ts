@@ -10,6 +10,57 @@ import { resolveComparisonRef } from "@/lib/diff-baseline";
 const AUTO_REFRESH_INTERVAL = 5000;
 
 /**
+ * Raised when a batch file action could only be applied to part of its inputs.
+ * `remainingPaths` are the paths that still need to be retried; callers use
+ * them to narrow the pending action instead of re-running already-applied work.
+ */
+export class FileBatchActionError extends Error {
+  readonly remainingPaths: string[];
+  readonly completedPaths: string[];
+
+  constructor(message: string, options: { remainingPaths: string[]; completedPaths: string[] }) {
+    super(message);
+    this.name = "FileBatchActionError";
+    this.remainingPaths = options.remainingPaths;
+    this.completedPaths = options.completedPaths;
+  }
+}
+
+function workspaceBasename(filePath: string): string {
+  return filePath.split("/").at(-1) ?? filePath;
+}
+
+/**
+ * Mirror the backend's `resolveWorkspaceFileMove`
+ * (`path.posix.join(directory, basename(source))`) so a batch that maps two
+ * sources onto one destination fails closed before the first backend call. The
+ * backend renames with RENAME_NOREPLACE, so the first move would otherwise
+ * succeed and leave the user with a half-applied selection.
+ */
+export function findWorkspaceMoveConflicts(
+  sourcePaths: readonly string[],
+  destinationDirectory: string,
+): string[] {
+  const prefix = destinationDirectory === "." ? "" : `${destinationDirectory.replace(/\/+$/, "")}/`;
+  const sourceSet = new Set(sourcePaths);
+  const seen = new Set<string>();
+  const conflicts = new Set<string>();
+  for (const source of sourcePaths) {
+    const destination = `${prefix}${workspaceBasename(source)}`;
+    if (seen.has(destination) || (sourceSet.has(destination) && destination !== source)) {
+      conflicts.add(destination);
+    }
+    seen.add(destination);
+  }
+  return [...conflicts];
+}
+
+function formatBatchFailure(completed: number, total: number, message: string): string {
+  if (completed <= 0) return message;
+  return `${completed} of ${total} files were changed before the failure: ${message}`;
+}
+
+/**
  * Hook for managing files panel data loading.
  * Loads git changes and file tree data from the active environment.
  * Supports both containerized (Docker) and local (worktree) environments.
@@ -360,31 +411,53 @@ export function useFilesPanel() {
       if (paths.length === 0) return;
 
       setFileActionPending(paths[0]!);
-      let completed = 0;
+      const completedPaths: string[] = [];
+      const failures: Array<{ path: string; message: string }> = [];
       try {
+        // Attempt every path even if one fails, so a single collision cannot
+        // abandon the rest of the selection and a retry only has to target the
+        // paths that actually failed.
         for (const path of paths) {
-          if (isLocalEnvironment && worktreePath) {
-            await backend.deleteLocalFile(selectedEnvironmentId, path);
-          } else if (containerId) {
-            await backend.deleteContainerFile(selectedEnvironmentId, path);
+          try {
+            if (isLocalEnvironment && worktreePath) {
+              await backend.deleteLocalFile(selectedEnvironmentId, path);
+            } else if (containerId) {
+              await backend.deleteContainerFile(selectedEnvironmentId, path);
+            }
+            completedPaths.push(path);
+          } catch (error) {
+            failures.push({
+              path,
+              message: error instanceof Error ? error.message : String(error),
+            });
           }
-          completed += 1;
         }
-        await refreshAllFilesData();
-        if (paths.length === 1) {
-          toast.success("File deleted", { description: paths[0] });
-        } else {
-          toast.success("Files deleted", { description: `${paths.length} files` });
-        }
-      } catch (error) {
-        if (completed > 0) {
+
+        if (completedPaths.length > 0) {
           await refreshAllFilesData();
         }
-        const message = error instanceof Error ? error.message : String(error);
+
+        if (failures.length === 0) {
+          if (paths.length === 1) {
+            toast.success("File deleted", { description: paths[0] });
+          } else {
+            toast.success("Files deleted", { description: `${paths.length} files` });
+          }
+          return;
+        }
+
+        const message = formatBatchFailure(
+          completedPaths.length,
+          paths.length,
+          failures[0]!.message,
+        );
         toast.error(paths.length === 1 ? "Failed to delete file" : "Failed to delete files", {
           description: message,
         });
-        throw error;
+        throw new FileBatchActionError(message, {
+          remainingPaths: failures.map((failure) => failure.path),
+          completedPaths,
+        });
       } finally {
         setFileActionPending(null);
       }
@@ -427,33 +500,67 @@ export function useFilesPanel() {
         throw error;
       }
 
+      const conflicts = findWorkspaceMoveConflicts(sourcePaths, destinationDirectory);
+      if (conflicts.length > 0) {
+        const error = new Error(
+          `Two or more selected files would be moved to ${conflicts.join(", ")}. Rename or deselect one before moving.`,
+        );
+        toast.error("Cannot move files", { description: error.message });
+        throw error;
+      }
+
       setFileActionPending(sourcePaths[0]!);
-      let completed = 0;
+      const destinations: string[] = [];
+      const completedPaths: string[] = [];
+      const failures: Array<{ path: string; message: string }> = [];
       try {
-        const destinations: string[] = [];
+        // Attempt every path even if one fails so a retry targets only the
+        // paths that did not move.
         for (const path of sourcePaths) {
-          const destination =
-            isLocalEnvironment && worktreePath
-              ? await backend.moveLocalFile(selectedEnvironmentId, path, destinationDirectory)
-              : await backend.moveContainerFile(selectedEnvironmentId, path, destinationDirectory);
-          destinations.push(destination);
-          completed += 1;
+          try {
+            const destination =
+              isLocalEnvironment && worktreePath
+                ? await backend.moveLocalFile(selectedEnvironmentId, path, destinationDirectory)
+                : await backend.moveContainerFile(
+                    selectedEnvironmentId,
+                    path,
+                    destinationDirectory,
+                  );
+            destinations.push(destination);
+            completedPaths.push(path);
+          } catch (error) {
+            failures.push({
+              path,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
-        await refreshAllFilesData();
-        if (sourcePaths.length === 1) {
-          toast.success("File moved", { description: destinations[0] });
-        } else {
-          toast.success("Files moved", { description: `${sourcePaths.length} files` });
-        }
-      } catch (error) {
-        if (completed > 0) {
+
+        if (completedPaths.length > 0) {
           await refreshAllFilesData();
         }
-        const message = error instanceof Error ? error.message : String(error);
+
+        if (failures.length === 0) {
+          if (sourcePaths.length === 1) {
+            toast.success("File moved", { description: destinations[0] });
+          } else {
+            toast.success("Files moved", { description: `${sourcePaths.length} files` });
+          }
+          return;
+        }
+
+        const message = formatBatchFailure(
+          completedPaths.length,
+          sourcePaths.length,
+          failures[0]!.message,
+        );
         toast.error(sourcePaths.length === 1 ? "Failed to move file" : "Failed to move files", {
           description: message,
         });
-        throw error;
+        throw new FileBatchActionError(message, {
+          remainingPaths: failures.map((failure) => failure.path),
+          completedPaths,
+        });
       } finally {
         setFileActionPending(null);
       }

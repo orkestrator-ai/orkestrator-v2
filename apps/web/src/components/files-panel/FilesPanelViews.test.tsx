@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { TerminalProvider, useTerminalContext } from "@/contexts";
 import { useFilesPanelStore } from "@/stores";
@@ -371,12 +371,12 @@ describe("files panel views", () => {
 
     fireEvent.click(utils, { shiftKey: true });
     expect(createFileTab).not.toHaveBeenCalled();
-    expect(app.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+    expect(app.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
-    expect(utils.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-selected")).toBe(
+    expect(utils.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-pressed")).toBe(
       "false",
     );
   });
@@ -396,11 +396,31 @@ describe("files panel views", () => {
     fireEvent.click(screen.getByRole("button", { name: "main.ts" }), { ctrlKey: true });
 
     expect(createFileTab).not.toHaveBeenCalled();
-    expect(app.getAttribute("aria-selected")).toBe("true");
-    expect(readme.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+    expect(app.getAttribute("aria-pressed")).toBe("true");
+    expect(readme.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
+  });
+
+  test("a second Command-click removes an already-selected file without opening it", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView />);
+
+    const app = await screen.findByRole("button", { name: "App.tsx" });
+    const readme = screen.getByRole("button", { name: "README.md" });
+    fireEvent.click(app);
+    createFileTab.mockClear();
+    fireEvent.click(readme, { metaKey: true });
+    expect(readme.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(readme, { metaKey: true });
+    expect(readme.getAttribute("aria-pressed")).toBe("false");
+    expect(app.getAttribute("aria-pressed")).toBe("true");
+    expect(createFileTab).not.toHaveBeenCalled();
   });
 
   test("dragging a selected file moves the whole selection", async () => {
@@ -456,12 +476,115 @@ describe("files panel views", () => {
     fireEvent.click(await screen.findByText("Delete file"));
 
     expect(onDelete).toHaveBeenCalledWith(["src/main.ts"]);
-    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-selected")).toBe(
+    expect(screen.getByRole("button", { name: "main.ts" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
-    expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("aria-selected")).toBe(
+    expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("aria-pressed")).toBe(
       "false",
     );
+  });
+
+  test("Shift-click falls back when the anchor is no longer visible", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
+    expect(screen.queryByRole("button", { name: "App.tsx" })).toBeNull();
+
+    const readme = screen.getByRole("button", { name: "README.md" });
+    fireEvent.click(readme, { shiftKey: true });
+
+    expect(readme.getAttribute("aria-pressed")).toBe("true");
+    expect(createFileTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("prunes selection when the tree no longer contains a selected path", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+
+    act(() =>
+      useFilesPanelStore.setState({
+        fileTree: [{ name: "archive", path: "archive", isDirectory: true, children: [] }],
+        expandedFolders: [],
+      }),
+    );
+    act(() => useFilesPanelStore.setState({ fileTree: multiFileTree, expandedFolders: ["src"] }));
+
+    expect(screen.getByRole("button", { name: "App.tsx" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "README.md" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  test("move dialog names selected files hidden inside a collapsed folder", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onMove={onMove} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+
+    act(() => useFilesPanelStore.setState({ expandedFolders: [] }));
+    expect(screen.queryByRole("button", { name: "App.tsx" })).toBeNull();
+    expect(screen.getByRole("button", { name: "README.md" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move 2 files to another folder" }));
+    const dialog = await screen.findByRole("dialog", { name: "Move files" });
+    expect(within(dialog).getByText("src/App.tsx")).toBeTruthy();
+    expect(within(dialog).getByText("README.md")).toBeTruthy();
+  });
+
+  test("moveTo filters out sources already in the destination", async () => {
+    const onMove = mock(() => undefined);
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onMove={onMove} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }), { metaKey: true });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Move 2 files to another folder" })[0]!);
+    await screen.findByRole("dialog", { name: "Move files" });
+    fireEvent.click(screen.getByRole("option", { name: "Workspace root" }));
+
+    expect(onMove).toHaveBeenCalledWith(["src/App.tsx"], ".");
+  });
+
+  test("destinationDisabled reflects the sources that would actually move", async () => {
+    useFilesPanelStore.setState({
+      fileTree: multiFileTree,
+      expandedFolders: ["src"],
+    });
+    renderWithTerminal(<AllFilesView onMove={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move README.md to another folder" }));
+    await screen.findByRole("dialog", { name: "Move file" });
+
+    expect(screen.getByRole("option", { name: "Workspace root" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(screen.getByRole("option", { name: "src" }).hasAttribute("disabled")).toBe(false);
   });
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {

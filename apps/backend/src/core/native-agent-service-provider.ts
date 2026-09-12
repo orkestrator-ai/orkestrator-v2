@@ -401,7 +401,11 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       ? input.logicalSessionKey.slice(prefix.length)
       : "";
     const agentMcp =
-      (input.agent === "claude" || input.agent === "codex" || input.agent === "pi") &&
+      (input.agent === "claude" ||
+        input.agent === "codex" ||
+        input.agent === "pi" ||
+        input.agent === "cursor" ||
+        input.agent === "grok") &&
       input.owner?.kind === "environment" &&
       tabId &&
       environment &&

@@ -321,6 +321,13 @@ export interface SessionState {
    */
   dispatching: boolean;
   /**
+   * Tab-scoped Orkestrator MCP connection. Memory only — persistence must never
+   * write the bearer token. Env is the fallback when this is absent.
+   */
+  agentMcp?: AgentMcpConnection;
+  /** Fingerprint of the MCP connection the live child was started with. */
+  attachedMcpKey?: string;
+  /**
    * The in-flight `ensureSessionProcess` call, shared by every caller that
    * wants this session attached.
    *
@@ -509,18 +516,43 @@ export const agentRuntime: {
     : never;
 } = {};
 
+export interface AgentMcpConnection {
+  url: string;
+  token: string;
+}
+
 export interface AcpSpawnOptions {
   model?: string;
   effort?: string;
   policy?: NativeAgentExecutionPolicy;
   /** Review boundary recorded before the first child is spawned. */
   readOnly?: boolean;
+  /** Per-tab Orkestrator MCP connection; process env is the fallback. */
+  agentMcp?: AgentMcpConnection;
 }
 
-/** MCP launch configuration shared by every ACP session in this environment. */
-export function configuredAcpMcpServers(): JsonObject[] {
-  const url = process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
-  const token = process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
+export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | undefined {
+  if (!isObject(value)) return undefined;
+  const url = typeof value.url === "string" ? value.url.trim() : "";
+  const token = typeof value.token === "string" ? value.token.trim() : "";
+  if (!url || !token || Buffer.byteLength(token, "utf8") > 1024) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return { url, token };
+  } catch {
+    return undefined;
+  }
+}
+
+export function mcpConnectionKey(connection?: AgentMcpConnection): string {
+  return connection ? `${connection.url}\u0000${connection.token}` : "";
+}
+
+/** MCP launch configuration for one ACP session. */
+export function configuredAcpMcpServers(connection?: AgentMcpConnection): JsonObject[] {
+  const url = connection?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
+  const token = connection?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (!url || !token) return [];
   agentRuntime.mcp ??= [
     {

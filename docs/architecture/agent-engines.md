@@ -157,12 +157,10 @@ tier this install will offer. It defaults to `provider-configured`, so Grok
 stays opt-in. There is no silent fallback or provider substitution.
 
 Delegation is derived, not declared: the platform must have an MCP client
-*and* a mailbox that can inject replies. Native Pi has both (bridge-owned
-MCP client plus `{canPull,canSend,canInject}=true`), so delegation follows.
-Cursor and Grok already inject the Orkestrator MCP server at launch, but
-`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false until a live tool-call
-probe and an explicit flag flip, so they can inspect and plan but cannot
-launch workers.
+*and* a mailbox that can inject replies. Native Claude, Codex, OpenCode, Pi,
+Cursor, and Grok all have both, so delegation follows. Cursor and Grok
+receive a per-tab `agentMcp` on create/prompt like Claude and Pi; the
+process-env token is only the fallback.
 
 The conversation always receives a trusted `coordinator-read-only` execution
 policy. Codex additionally selects a per-conversation permission profile on
@@ -260,12 +258,12 @@ checks.
 
 The backend exports `ORKESTRATOR_AGENT_MCP_URL` and
 `ORKESTRATOR_AGENT_MCP_TOKEN` on the bridge process. `src/mcp.ts` turns those
-into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header). Project
-`.cursor/mcp.json` is read only when the execution policy opts into project
-settings (containers). That is launch wiring, not mailbox capability:
-`agentMailCapabilities("agent-native", "cursor")` is still all-false. The
-bridge does not consume per-tab `agentMcp` from create/prompt; Claude and
-Codex do.
+into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header). A per-tab
+`agentMcp` on create/prompt/attach wins over the process env; the token is
+never persisted. Project `.cursor/mcp.json` is read only when the execution
+policy opts into project settings (containers). Native Cursor mail is on:
+`agentMailCapabilities("agent-native", "cursor")` is
+`{canPull,canSend,canInject}=true`.
 
 ## Grok Build
 
@@ -286,13 +284,14 @@ manual verification steps to run after a version bump.
 Protocol handling lives in `index.ts`. The bridge sends `initialize`,
 `session/new`, `session/load`, `session/list`, and `session/prompt`, and
 notifies `session/cancel`. `session/new` and `session/load` pass
-`configuredAcpMcpServers()`, which injects the Orkestrator HTTP MCP server
-from the same process env the other bridges receive. The initialize
-handshake's `_meta.mcpServers` is ignored because it is empty before the
-agent loads that list. Mailbox capability still follows the protocol table:
-native Grok is `{canPull,canSend,canInject}=false` until a live tool-call
-probe and an explicit flag flip. The bridge does not consume per-tab
-`agentMcp` from request bodies.
+`configuredAcpMcpServers(state.agentMcp)`, which injects the Orkestrator
+HTTP MCP server from a per-tab `agentMcp` body or, as fallback, the same
+process env the other bridges receive. The initialize handshake's
+`_meta.mcpServers` is ignored because it is empty before the agent loads
+that list. Native Grok mail is on:
+`agentMailCapabilities("agent-native", "grok")` is
+`{canPull,canSend,canInject}=true`. A rotated tab token closes that
+session's CLI child and reloads it; it is never written into process env.
 
 Inbound, it handles `session/update` notifications
 (`agent_message_chunk`, `tool_call`, `tool_call_update`,
@@ -460,6 +459,7 @@ count.
 
 | Topic | Document |
 | --- | --- |
+| Agent-to-agent mail, inject, and provider flags | [`docs/architecture/agent-messaging.md`](./agent-messaging.md) |
 | Bumping any agent SDK, CLI, or pinned binary | [`docs/development/upgrade-agents.md`](../development/upgrade-agents.md) |
 | Background-reliability and transport invariants | [`AGENTS.md`](../../AGENTS.md) |
 | Agent-driven real-stack QA | [`docs/development/agent-testing.md`](../development/agent-testing.md) |

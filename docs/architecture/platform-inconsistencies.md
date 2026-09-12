@@ -2,16 +2,16 @@
 
 Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note.
 
-> **Current (2026-09-11).** Cursor runs only through `bridges/cursor-bridge/`
+> **Current (2026-09-12).** Cursor runs only through `bridges/cursor-bridge/`
 > and `@cursor/sdk`. Grok remains on `bridges/acp-bridge/`. Steer is shipped
 > for Codex, Claude, Pi, and Cursor (`nativeAgentCapabilities().actions.steer`).
 > Grok and OpenCode still have no production steer. Cursor also exposes
-> `rewindMessages`. Native Pi has a bridge-owned MCP client and mail
-> pull/send/inject, so coordinator delegation is available there. Cursor and
-> Grok inject the Orkestrator MCP server at launch but mail flags stay off.
-> Plan 05 in `docs/plans/sdk-coverage/` is the living steer backlog. Tables
-> below that still say Cursor is ACP or steer is Codex-only are the
-> 2026-08-16 snapshot.
+> `rewindMessages`. Native Claude, Codex, OpenCode, Pi, Cursor, and Grok all
+> have mail pull/send/inject and therefore coordinator delegation. Cursor
+> and Grok consume per-tab `agentMcp` the same way Claude and Pi do. Plan 05
+> in `docs/plans/sdk-coverage/` is the living steer backlog. Tables below
+> that still say Cursor is ACP or steer is Codex-only are the 2026-08-16
+> snapshot.
 
 > Historical note (2026-08-26): Cursor's ACP/CLI interface described below has
 > been removed. Cursor now runs only through `bridges/cursor-bridge/` and
@@ -22,8 +22,9 @@ Status: Historical — 2026-08-16 inventory plus a 2026-09-11 current-state note
 > `mcpServers: []`. Grok receives `configuredAcpMcpServers()` (the Orkestrator
 > HTTP server from process env). Cursor is not on ACP; its SDK bridge sets
 > `AgentOptions.mcpServers` the same way. Native mail capabilities for both
-> are still all-false in `agentMailCapabilities()`. Native Pi later gained a
-> bridge-owned MCP client and on mail flags.
+> were still all-false then. Native Pi later gained a bridge-owned MCP
+> client and on mail flags. On 2026-09-12 Cursor and Grok gained per-tab
+> `agentMcp` and `{canPull,canSend,canInject}=true`.
 
 The six surfaces compared:
 

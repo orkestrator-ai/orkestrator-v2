@@ -180,6 +180,22 @@ describe("session creation", () => {
     });
   });
 
+  test("stores a per-tab agentMcp and ignores a malformed one", async () => {
+    const state = await createSession({
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+    });
+    expect(state.agentMcp).toEqual({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "tab-secret",
+    });
+
+    const rejected = await createSession({
+      clientSessionKey: "malformed-mcp",
+      agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) },
+    });
+    expect(rejected.agentMcp).toBeUndefined();
+  });
+
   test("records the read-only boundary before the session is attached", async () => {
     const state = await createSession({ mode: "plan", readOnly: true });
 

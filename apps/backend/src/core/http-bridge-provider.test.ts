@@ -40,9 +40,15 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
-  test("forwards tab-scoped MCP credentials in Claude, Codex, and Pi request bodies", async () => {
+  test("forwards tab-scoped MCP credentials in Claude, Codex, Pi, Cursor, and Grok request bodies", async () => {
     const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
-    for (const connection of [claudeConnection, codexConnection, piConnection]) {
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      piConnection,
+      cursorConnection,
+      grokConnection,
+    ]) {
       const created = httpProvider(() => Response.json({ sessionId: "session-1" }), connection);
       await created.provider.createSession("build", "Scoped", { agentMcp });
       expect(JSON.parse(String(created.requests[0]!.init.body)).agentMcp).toEqual(agentMcp);

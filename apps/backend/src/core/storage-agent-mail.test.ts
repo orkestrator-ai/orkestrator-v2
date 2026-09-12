@@ -1280,47 +1280,44 @@ describe("StorageService agent mail", () => {
   test("promotion refuses a mailbox that cannot receive, and an unknown one", async () => {
     const { storage, dataDir } = await fixture();
     try {
-      const now = new Date(0).toISOString();
-      // Cursor's native mailbox cannot be injected into, so a coordinator
-      // assigned to it must not have mail moved into a queue that will never
-      // drain.
-      await storage.mutateCoordinatorWorkspace("p1", () => ({
-        version: COORDINATOR_WORKSPACE_VERSION,
-        id: "coordinator-2",
-        projectId: "p1",
-        executionPolicy: COORDINATOR_EXECUTION_POLICY,
-        lifecycleState: "ready",
-        conversations: [
-          {
-            id: "conversation-1",
-            tabId: "coordinator-tab",
-            logicalSessionKey: "coordinator-coordinator-2:conversation-1",
-            agent: "cursor",
-            title: "Coordinator",
-            createdAt: now,
-            mailboxIncarnationId: "coordinator-incarnation-2",
+      const current = await storage.getPaneLayout("e1");
+      if (!current) throw new Error("layout missing");
+      // Terminal claude can pull and send but cannot be woken. Mail must stay
+      // stored, not move into a queue that will never drain.
+      await storage.savePaneLayout(
+        "e1",
+        {
+          version: current.version,
+          containerId: null,
+          activePaneId: "pane",
+          root: {
+            kind: "leaf",
+            id: "pane",
+            tabs: [
+              {
+                id: "agent",
+                type: "agent-native",
+                nativeAgentData: { environmentId: "e1", platform: "claude" },
+              },
+              { id: "term", type: "claude", displayTitle: "Terminal" },
+            ],
+            activeTabId: "agent",
           },
-        ],
-        selectedConversationId: "conversation-1",
-        repositoryContextRevision: 0,
-        createdAt: now,
-        updatedAt: now,
-      }));
+        },
+        current.revision,
+      );
       await storage.synchronizeAgentMailboxes();
-      const environmentId = coordinatorRuntimeId("coordinator-2", "conversation-1");
       const stored = await storage.sendAgentMail(
         { kind: "user" },
         {
-          requestId: "cursor-stored",
-          toEnvironmentId: environmentId,
-          toTabId: "coordinator-tab",
+          requestId: "terminal-stored",
+          toEnvironmentId: "e1",
+          toTabId: "term",
           body: "Nothing here can deliver this.",
         },
       );
       expect(stored.placement).toBe("stored");
-      expect(await storage.promoteStoredAgentMailForMailbox(environmentId, "coordinator-tab")).toBe(
-        0,
-      );
+      expect(await storage.promoteStoredAgentMailForMailbox("e1", "term")).toBe(0);
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
       // A mailbox that does not exist is a no-op, not a throw: assignment is
       // best-effort and must not strand the conversation.

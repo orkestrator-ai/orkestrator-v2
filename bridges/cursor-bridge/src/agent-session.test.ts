@@ -566,6 +566,34 @@ describe("ensureAgent", () => {
     expect(created).toHaveLength(0);
   });
 
+  test("a rotated tab MCP token detaches and resumes the same agent", async () => {
+    const state = newSessionState();
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-a" };
+    await ensureAgent(state);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      mcpServers: {
+        orkestrator: {
+          type: "http",
+          url: "http://127.0.0.1:4567/mcp",
+          headers: { Authorization: "Bearer tab-a" },
+        },
+      },
+    });
+    const agentId = state.agentId;
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-b" };
+    await ensureAgent(state);
+    expect(state.agentId).toBe(agentId);
+    expect(resumed).toEqual([agentId]);
+    expect(resumedOptions[0]).toMatchObject({
+      mcpServers: {
+        orkestrator: {
+          headers: { Authorization: "Bearer tab-b" },
+        },
+      },
+    });
+  });
+
   /**
    * The id may name an agent the store no longer has. A new agent carrying the
    * transcript we already hold is a far better outcome than a tab that can

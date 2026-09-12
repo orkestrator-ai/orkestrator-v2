@@ -102,14 +102,11 @@ over MCP, and the worker's result comes back as agent mail — so a platform nee
 both an MCP client and a native mailbox that can pull, ack, and be injected
 into.
 
-**Delegation is available on Claude, Codex, OpenCode, and native Pi.** Pi has a
-bridge-owned MCP client and `{canPull,canSend,canInject}=true`. Cursor and Grok
-already inject the `orkestrator` HTTP MCP server from
-`ORKESTRATOR_AGENT_MCP_URL` / `ORKESTRATOR_AGENT_MCP_TOKEN`, but
-`NATIVE_AGENT_MAIL_CAPABILITIES` stays all-false until a live tool-call probe
-and an explicit flag flip. On those two platforms the coordinator prompt says
-worker controls are unavailable rather than offering a tool whose answer never
-arrives; inspection and planning work normally.
+**Delegation is available on every native platform** that has an MCP client
+and `{canPull,canSend,canInject}=true`: Claude, Codex, OpenCode, Pi, Cursor,
+and Grok. Cursor and Grok receive a per-tab `agentMcp` on create/prompt;
+the process-env token is only the fallback. Grok still needs the host
+safety setting to admit `advisory`.
 
 A platform's caveat is carried on its qualification `reason` and shown in the
 picker, so the limitation is readable when the platform is chosen rather than

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
   agentMailCapabilities,
   agentMailboxId,
@@ -15,17 +16,34 @@ describe("agent mail protocol", () => {
   });
 
   test("has explicit platform capabilities", () => {
-    expect(agentMailCapabilities("agent-native", "claude")).toEqual({
+    for (const agent of AGENT_PLATFORMS) {
+      expect(agentMailCapabilities("agent-native", agent)).toEqual({
+        canPull: true,
+        canSend: true,
+        canInject: true,
+      });
+    }
+    expect(agentMailCapabilities("agent-native", "claude", false)).toEqual({
+      canPull: false,
+      canSend: false,
+      canInject: false,
+    });
+    expect(agentMailCapabilities("claude-tmux", "claude")).toEqual({
       canPull: true,
       canSend: true,
       canInject: true,
     });
-    expect(agentMailCapabilities("agent-native", "pi")).toEqual({
+    expect(agentMailCapabilities("claude", null)).toEqual({
       canPull: true,
       canSend: true,
-      canInject: true,
+      canInject: false,
     });
     expect(agentMailCapabilities("pi", null)).toEqual({
+      canPull: false,
+      canSend: false,
+      canInject: false,
+    });
+    expect(agentMailCapabilities("cursor", null)).toEqual({
       canPull: false,
       canSend: false,
       canInject: false,

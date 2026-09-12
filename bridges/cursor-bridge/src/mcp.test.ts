@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { newSessionState } from "./agent-session.js";
 import { MAX_MESSAGES } from "./config.js";
-import { cursorMcpServers, publicCursorMcpServers, seedObservedMcpTools } from "./mcp.js";
+import {
+  cursorMcpServers,
+  mcpConnectionKey,
+  parseAgentMcpConnection,
+  publicCursorMcpServers,
+  seedObservedMcpTools,
+} from "./mcp.js";
 import type { SessionState } from "./state.js";
 import { boundTranscript } from "./transcript.js";
 import { applyInteractionUpdate } from "./translate.js";
@@ -51,6 +57,29 @@ describe("Cursor MCP inventory", () => {
       },
     ]);
     expect(published).not.toContain("private-test-token");
+  });
+
+  test("a per-tab agentMcp wins over the process environment", async () => {
+    process.env.ORKESTRATOR_AGENT_MCP_URL = "http://127.0.0.1:4321/mcp";
+    process.env.ORKESTRATOR_AGENT_MCP_TOKEN = "env-token";
+    const configured = await cursorMcpServers({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "tab-token",
+    });
+    expect(configured.orkestrator).toMatchObject({
+      url: "http://127.0.0.1:4567/mcp",
+      headers: { Authorization: "Bearer tab-token" },
+    });
+  });
+
+  test("ignores a malformed agentMcp override", () => {
+    expect(parseAgentMcpConnection({ url: "http://127.0.0.1:4567/mcp", token: "x".repeat(1025) })).toBe(
+      undefined,
+    );
+    expect(parseAgentMcpConnection({ url: "not-a-url", token: "tab-token" })).toBeUndefined();
+    expect(mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "a" })).not.toBe(
+      mcpConnectionKey({ url: "http://127.0.0.1/mcp", token: "b" }),
+    );
   });
 
   test("includes servers Cursor loaded from its own settings once their tools are observed", () => {

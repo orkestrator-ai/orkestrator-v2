@@ -16,10 +16,12 @@ reports back, the coordinator is woken by that message as a fresh turn, on
 every platform that can delegate (Claude, Codex, OpenCode, Pi).
 
 Non-goals: changing the read-only boundary, changing which platforms may
-delegate (Cursor and Grok remain inspection-only while their mail
-capabilities stay off — they already receive the Orkestrator MCP server;
-native Pi now has a bridge-owned MCP client and injectable mailbox), or
-migrating any bridge to a different provider protocol.
+delegate, or migrating any bridge to a different provider protocol.
+
+Later note (2026-09-12): native Cursor and Grok now have
+`{canPull,canSend,canInject}=true` and per-tab `agentMcp`, so they
+delegate on the same mail path. Grok still needs the host safety setting
+to admit `advisory`.
 
 ## Where things stand
 
@@ -403,8 +405,8 @@ composer open.
 | Codex (`codex-bridge`) | `turn/completed`; bridge status idle | same path → `turn/start` on the thread | yes, plus steer | mailbox tools and `sleep` | Phase 0, Phase 1 contract and guard, optional argv0 deny |
 | OpenCode (backend provider) | `session.idle` event; `promptAsync` returns 409 while busy, which the fence maps to `held: busy` | same path → `promptAsync` on the session | yes | mailbox tools only | Phase 0, Phase 1 contract and guard |
 | Pi | in-process | bridge-owned MCP client + native mailbox (`canInject`); delegation available | yes, plus steer | mailbox tools only | native mail flags on; coordinator `mcpClient` true |
-| Cursor | SDK run end | MCP server already injected (`cursor-bridge/src/mcp.ts`); `canInject` still false so no wake | yes | n/a | unchanged until mail flags flip |
-| Grok (`acp-bridge`) | ACP prompt end | MCP server already injected (`configuredAcpMcpServers`); `canInject` still false so no wake | yes | n/a | unchanged until mail flags flip |
+| Cursor | SDK run end | per-tab `agentMcp` into `cursor-bridge/src/mcp.ts`; native mail on (`canInject`) | yes | n/a | later (2026-09-12): flags + per-tab MCP |
+| Grok (`acp-bridge`) | ACP prompt end | `configuredAcpMcpServers(state.agentMcp)`; native mail on (`canInject`) | yes | n/a | later (2026-09-12): flags + per-tab MCP |
 
 ### Conformance suite
 

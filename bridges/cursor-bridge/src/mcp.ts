@@ -16,6 +16,29 @@ const MAX_MCP_QUALIFIED_NAME_LENGTH =
 /** Distinct call names retained per session. Names only, so this is small. */
 const MAX_OBSERVED_MCP_TOOLS = 512;
 
+export interface AgentMcpConnection {
+  url: string;
+  token: string;
+}
+
+export function parseAgentMcpConnection(value: unknown): AgentMcpConnection | undefined {
+  if (!isObject(value)) return undefined;
+  const url = typeof value.url === "string" ? value.url.trim() : "";
+  const token = typeof value.token === "string" ? value.token.trim() : "";
+  if (!url || !token || Buffer.byteLength(token, "utf8") > 1024) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return { url, token };
+  } catch {
+    return undefined;
+  }
+}
+
+export function mcpConnectionKey(connection?: AgentMcpConnection): string {
+  return connection ? `${connection.url}\u0000${connection.token}` : "";
+}
+
 /**
  * Resolve the MCP launch set handed to Cursor's SDK.
  *
@@ -23,12 +46,15 @@ const MAX_OBSERVED_MCP_TOOLS = 512;
  * into Cursor's project settings (containers). A cloned repository therefore
  * cannot make the host bridge execute a command merely by containing
  * `.cursor/mcp.json`. The Orkestrator server is supplied by the backend in
- * private environment variables and wins a name collision.
+ * private environment variables or a per-tab `agentMcp` body and wins a name
+ * collision.
  */
-export async function cursorMcpServers(): Promise<Record<string, McpServerConfig>> {
+export async function cursorMcpServers(
+  agentMcp?: AgentMcpConnection,
+): Promise<Record<string, McpServerConfig>> {
   const servers = settingSources.includes("project") ? await readProjectMcpServers() : {};
-  const url = process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
-  const token = process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
+  const url = agentMcp?.url.trim() || process.env.ORKESTRATOR_AGENT_MCP_URL?.trim();
+  const token = agentMcp?.token.trim() || process.env.ORKESTRATOR_AGENT_MCP_TOKEN?.trim();
   if (url && token) {
     servers.orkestrator = {
       type: "http",

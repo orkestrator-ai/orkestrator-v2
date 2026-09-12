@@ -570,7 +570,7 @@ export async function reconcileCursorToolMetadata(
     await replayChild.request("session/load", {
       cwd: workingDirectory,
       additionalDirectories: [],
-      mcpServers: configuredAcpMcpServers(),
+      mcpServers: configuredAcpMcpServers(state.agentMcp),
       sessionId: state.acpSessionId,
     });
     // A turn dispatched while this replay was loading may already have been

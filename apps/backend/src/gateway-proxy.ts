@@ -8,7 +8,7 @@ import http, {
 } from "node:http";
 import { pipeline, type Readable } from "node:stream";
 import path from "node:path";
-import { constants as zlibConstants, createGzip } from "node:zlib";
+import { constants as zlibConstants, createGzip, type Gzip } from "node:zlib";
 import {
   MAX_BROWSER_PREVIEW_BODY_BYTES,
   IMMUTABLE_ASSET_CACHE_CONTROL,
@@ -57,6 +57,61 @@ import {
   rewriteBrowserPreviewBody,
 } from "./gateway-internals.js";
 import type { StaticContentEncoding } from "./gateway-internals.js";
+
+export function createSseGzipCompressor(): Gzip {
+  return createGzip({
+    level: DYNAMIC_GZIP_LEVEL,
+    flush: zlibConstants.Z_SYNC_FLUSH,
+    finishFlush: zlibConstants.Z_SYNC_FLUSH,
+    chunkSize: SSE_COMPRESSION_CHUNK_BYTES,
+  });
+}
+
+export function startProxiedEventStreamGzip(options: {
+  proxyResponse: Readable;
+  response: ServerResponse;
+  responseStatus: number;
+  responseHeaders: OutgoingHttpHeaders;
+  recordSourceBytes: (bytes: number) => void;
+  recordEncodedBytes: (bytes: number) => void;
+  recordFailure: () => void;
+  releaseLease: () => void;
+  onError: (error: Error) => void;
+  onFinish: () => void;
+  compressor?: Gzip;
+}): Gzip {
+  const compressor = options.compressor ?? createSseGzipCompressor();
+  try {
+    delete options.responseHeaders["content-length"];
+    stripTransformedRepresentationHeaders(options.responseHeaders);
+    options.responseHeaders["content-encoding"] = "gzip";
+    options.response.writeHead(options.responseStatus, options.responseHeaders);
+  } catch (error) {
+    compressor.destroy();
+    throw error;
+  }
+  options.proxyResponse.on("data", (chunk: Buffer) => options.recordSourceBytes(chunk.byteLength));
+  compressor.on("data", (chunk: Buffer) => options.recordEncodedBytes(chunk.byteLength));
+  // Codec faults only. Client disconnects destroy the response and finish the
+  // pipeline with a non-null error; those must not look like compression
+  // failures.
+  compressor.once("error", () => options.recordFailure());
+  const destroyCompressor = () => {
+    options.releaseLease();
+    compressor.destroy();
+  };
+  options.response.once("close", destroyCompressor);
+  pipeline(options.proxyResponse, compressor, options.response, (error) => {
+    options.response.removeListener("close", destroyCompressor);
+    options.releaseLease();
+    if (error) {
+      options.onError(error);
+      return;
+    }
+    options.onFinish();
+  });
+  return compressor;
+}
 
 export class GatewayProxy extends GatewayHandlers {
   protected async proxyToTarget(
@@ -324,18 +379,24 @@ export class GatewayProxy extends GatewayHandlers {
                 // Compression is optional. Preserve a usable identity stream
                 // when every bounded zlib slot is occupied.
               } else {
-                let compressor;
                 try {
-                  compressor = createGzip({
-                    level: DYNAMIC_GZIP_LEVEL,
-                    flush: zlibConstants.Z_SYNC_FLUSH,
-                    finishFlush: zlibConstants.Z_SYNC_FLUSH,
-                    chunkSize: SSE_COMPRESSION_CHUNK_BYTES,
+                  startProxiedEventStreamGzip({
+                    proxyResponse,
+                    response,
+                    responseStatus,
+                    responseHeaders,
+                    recordSourceBytes: (bytes) =>
+                      this.metrics.recordStreamingCompressionSourceBytes(bytes),
+                    recordEncodedBytes: (bytes) =>
+                      this.metrics.recordStreamingCompressionEncodedBytes(bytes),
+                    recordFailure: () => this.metrics.recordStreamingCompressionFailure(),
+                    releaseLease: releaseStreamingCompression,
+                    onError: (error) => {
+                      proxyRequest.destroy(error);
+                      fail(error);
+                    },
+                    onFinish: finish,
                   });
-                  delete responseHeaders["content-length"];
-                  stripTransformedRepresentationHeaders(responseHeaders);
-                  responseHeaders["content-encoding"] = "gzip";
-                  response.writeHead(responseStatus, responseHeaders);
                 } catch (error) {
                   const streamError =
                     error instanceof Error
@@ -347,28 +408,6 @@ export class GatewayProxy extends GatewayHandlers {
                   fail(streamError);
                   return;
                 }
-                proxyResponse.on("data", (chunk: Buffer) =>
-                  this.metrics.recordStreamingCompressionSourceBytes(chunk.byteLength),
-                );
-                compressor.on("data", (chunk: Buffer) =>
-                  this.metrics.recordStreamingCompressionEncodedBytes(chunk.byteLength),
-                );
-                const destroyCompressor = () => {
-                  releaseStreamingCompression();
-                  compressor.destroy();
-                };
-                response.once("close", destroyCompressor);
-                pipeline(proxyResponse, compressor, response, (error) => {
-                  response.removeListener("close", destroyCompressor);
-                  releaseStreamingCompression();
-                  if (error) {
-                    this.metrics.recordStreamingCompressionFailure();
-                    proxyRequest.destroy(error);
-                    fail(error);
-                    return;
-                  }
-                  finish();
-                });
                 return;
               }
             }

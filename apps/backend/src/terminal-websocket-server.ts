@@ -196,9 +196,16 @@ export class TerminalWebSocketGateway {
   private channelCount = 0;
   private readonly encoder = new TextEncoder();
   private readonly authTimeoutMs: number;
+  private readonly maxSockets: number;
+  private readonly maxChannelsPerSocket: number;
+  private readonly maxChannels: number;
 
   constructor(private readonly options: TerminalWebSocketServerOptions) {
     this.authTimeoutMs = options.authTimeoutMs ?? 5_000;
+    this.maxSockets = options.maxSockets ?? TERMINAL_WEBSOCKET_MAX_SOCKETS;
+    this.maxChannelsPerSocket =
+      options.maxChannelsPerSocket ?? TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET;
+    this.maxChannels = options.maxChannels ?? TERMINAL_WEBSOCKET_MAX_CHANNELS;
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
@@ -229,10 +236,7 @@ export class TerminalWebSocketGateway {
       });
       return true;
     }
-    if (
-      this.sockets.size + this.upgradeSockets.size >=
-      (this.options.maxSockets ?? TERMINAL_WEBSOCKET_MAX_SOCKETS)
-    ) {
+    if (this.sockets.size + this.upgradeSockets.size >= this.maxSockets) {
       this.rejectUpgrade(socket, 503, "Terminal WebSocket capacity reached");
       return true;
     }
@@ -569,11 +573,7 @@ export class TerminalWebSocketGateway {
       });
       return;
     }
-    if (
-      state.channels.size >=
-        (this.options.maxChannelsPerSocket ?? TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET) ||
-      this.channelCount >= (this.options.maxChannels ?? TERMINAL_WEBSOCKET_MAX_CHANNELS)
-    ) {
+    if (state.channels.size >= this.maxChannelsPerSocket || this.channelCount >= this.maxChannels) {
       this.sendControl(state, {
         type: "error",
         code: "subscription-denied",

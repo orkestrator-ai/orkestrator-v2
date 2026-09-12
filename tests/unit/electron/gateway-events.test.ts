@@ -23,7 +23,12 @@ import {
   GatewayEventReplay,
   parseGatewayCursor,
 } from "../../../apps/backend/src/gateway-event-replay";
-import { TerminalWebSocketGateway } from "../../../apps/backend/src/terminal-websocket-server";
+import {
+  TerminalWebSocketGateway,
+  TERMINAL_WEBSOCKET_MAX_CHANNELS,
+  TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET,
+  TERMINAL_WEBSOCKET_MAX_SOCKETS,
+} from "../../../apps/backend/src/terminal-websocket-server";
 import {
   decodeTerminalBinaryFrame,
   encodeTerminalBinaryFrame,
@@ -234,6 +239,26 @@ describe("gateway terminal WebSocket", () => {
       channelsOpened: 1,
       channelsClosed: 1,
     });
+  });
+
+  test("enforces the exported terminal WebSocket admission defaults without overrides", async () => {
+    const { gateway } = await startGateway();
+    const terminalWebSocket = (
+      gateway as unknown as {
+        terminalWebSocket: {
+          maxSockets: number;
+          maxChannelsPerSocket: number;
+          maxChannels: number;
+        };
+      }
+    ).terminalWebSocket;
+
+    expect(TERMINAL_WEBSOCKET_MAX_SOCKETS).toBe(64);
+    expect(TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET).toBe(256);
+    expect(TERMINAL_WEBSOCKET_MAX_CHANNELS).toBe(4096);
+    expect(terminalWebSocket.maxSockets).toBe(TERMINAL_WEBSOCKET_MAX_SOCKETS);
+    expect(terminalWebSocket.maxChannelsPerSocket).toBe(TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET);
+    expect(terminalWebSocket.maxChannels).toBe(TERMINAL_WEBSOCKET_MAX_CHANNELS);
   });
 
   test("reports terminal WebSocket payload, ACK, queue, and transport telemetry", async () => {

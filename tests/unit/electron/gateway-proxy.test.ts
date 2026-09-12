@@ -15,7 +15,9 @@ import {
   isDynamicCompressionSizeEligible,
   MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
   MAX_BUFFERED_BODY_CHUNKS,
+  GatewayMetricsStore,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+  MAX_CONCURRENT_STREAMING_COMPRESSIONS,
   MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES,
   MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
   OrkestratorGateway,
@@ -24,11 +26,19 @@ import {
   responseStatusCanHaveBody,
   settleRewrittenProxyBodyResponse,
   shouldAbandonBufferedProxyBody,
+  startProxiedEventStreamGzip,
 } from "../../../apps/backend/src/gateway";
 import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { PassThrough } from "node:stream";
+import {
+  constants as zlibConstants,
+  createGunzip,
+  createGzip,
+  gunzipSync,
+  gzipSync,
+} from "node:zlib";
 
 import {
   auxiliaryServers,
@@ -36,6 +46,8 @@ import {
   createTempDir,
   decodeResponseBody,
   gateways,
+  openCompressedEventStream,
+  readGatewayMetrics,
   requestUrl,
   startGateway,
   waitUntil,
@@ -1461,5 +1473,234 @@ describe("remote gateway", () => {
       target.closeAllConnections();
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
+  });
+
+  test("destroys the SSE compressor when writeHead fails and releases its lease", () => {
+    const metrics = new GatewayMetricsStore("on");
+    const releaseLease = metrics.tryStartStreamingCompression();
+    expect(releaseLease).toBeFunction();
+    const compressor = createGzip();
+    const recordedFailures: number[] = [];
+
+    expect(() =>
+      startProxiedEventStreamGzip({
+        proxyResponse: new PassThrough(),
+        response: {
+          writeHead: () => {
+            throw new Error("writeHead failed");
+          },
+        } as unknown as ServerResponse,
+        responseStatus: 200,
+        responseHeaders: { etag: '"identity"' },
+        recordSourceBytes: () => undefined,
+        recordEncodedBytes: () => undefined,
+        recordFailure: () => recordedFailures.push(1),
+        releaseLease: releaseLease!,
+        onError: () => undefined,
+        onFinish: () => undefined,
+        compressor,
+      }),
+    ).toThrow("writeHead failed");
+
+    expect(compressor.destroyed).toBe(true);
+    expect(recordedFailures).toEqual([]);
+    releaseLease?.();
+    expect(metrics.snapshot().compression).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 0,
+    });
+  });
+
+  test("counts only codec faults as proxied SSE compression failures", async () => {
+    const metrics = new GatewayMetricsStore("on");
+    const source = new PassThrough();
+    const downstream = new PassThrough();
+    source.on("error", () => undefined);
+    downstream.on("error", () => undefined);
+    Object.assign(downstream, { writeHead: () => undefined });
+    const failures: Error[] = [];
+    const pipelineErrors: Error[] = [];
+
+    const compressor = startProxiedEventStreamGzip({
+      proxyResponse: source,
+      response: downstream as unknown as ServerResponse,
+      responseStatus: 200,
+      responseHeaders: {},
+      recordSourceBytes: (bytes) => metrics.recordStreamingCompressionSourceBytes(bytes),
+      recordEncodedBytes: (bytes) => metrics.recordStreamingCompressionEncodedBytes(bytes),
+      recordFailure: () => metrics.recordStreamingCompressionFailure(),
+      releaseLease: metrics.tryStartStreamingCompression() ?? (() => undefined),
+      onError: (error) => pipelineErrors.push(error),
+      onFinish: () => undefined,
+    });
+
+    source.write("data: hello\n\n");
+    await waitUntil(
+      () =>
+        metrics.snapshot().compression.streamingSourceBytes > 0 &&
+        metrics.snapshot().compression.streamingEncodedBytes > 0,
+      "Proxied SSE compression bytes were not recorded",
+    );
+    expect(metrics.snapshot().compression.streamingFailures).toBe(0);
+
+    downstream.destroy();
+    await waitUntil(
+      () => pipelineErrors.length === 1,
+      "Client disconnect did not finish the pipeline",
+    );
+    expect(metrics.snapshot().compression).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 0,
+    });
+    expect(compressor.destroyed).toBe(true);
+
+    const failingSource = new PassThrough();
+    const failingDownstream = new PassThrough();
+    failingSource.on("error", () => undefined);
+    failingDownstream.on("error", () => undefined);
+    Object.assign(failingDownstream, { writeHead: () => undefined });
+    const failingCompressor = startProxiedEventStreamGzip({
+      proxyResponse: failingSource,
+      response: failingDownstream as unknown as ServerResponse,
+      responseStatus: 200,
+      responseHeaders: {},
+      recordSourceBytes: () => undefined,
+      recordEncodedBytes: () => undefined,
+      recordFailure: () => metrics.recordStreamingCompressionFailure(),
+      releaseLease: metrics.tryStartStreamingCompression() ?? (() => undefined),
+      onError: (error) => failures.push(error),
+      onFinish: () => undefined,
+    });
+    failingCompressor.destroy(new Error("codec failed"));
+    await waitUntil(
+      () => metrics.snapshot().compression.streamingFailures === 1,
+      "Codec failure was not recorded",
+    );
+    await waitUntil(() => failures.length === 1, "Codec failure did not fail the proxy");
+    expect(failingCompressor.destroyed).toBe(true);
+    expect(metrics.snapshot().compression.streamingActive).toBe(0);
+  });
+
+  test("compresses a proxied event stream, records bytes, and ignores client disconnects", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        etag: '"sse"',
+      });
+      response.write("data: first\n\n");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { gateway, info } = await startGateway({ compression: "on" });
+    const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/events`);
+
+    let downstream: ReturnType<typeof httpRequest> | null = null;
+    const firstFrame = new Promise<string>((resolve, reject) => {
+      downstream = httpRequest(
+        {
+          hostname: endpoint.hostname,
+          port: endpoint.port,
+          path: endpoint.pathname,
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "accept-encoding": "gzip",
+          },
+        },
+        (response) => {
+          expect(response.headers["content-encoding"]).toBe("gzip");
+          expect(response.headers.etag).toBeUndefined();
+          const decoder = createGunzip({ finishFlush: zlibConstants.Z_SYNC_FLUSH });
+          response.pipe(decoder);
+          decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
+          decoder.once("error", reject);
+        },
+      );
+      downstream.once("error", reject);
+      downstream.end();
+    });
+
+    await expect(firstFrame).resolves.toContain("data: first");
+    const openMetrics = await readGatewayMetrics(info);
+    expect(openMetrics.compression).toMatchObject({
+      streamingActive: 1,
+      streamingStarted: 1,
+      streamingDeclined: 0,
+      streamingFailures: 0,
+    });
+    expect(openMetrics.compression.streamingSourceBytes).toBeGreaterThan(0);
+    expect(openMetrics.compression.streamingEncodedBytes).toBeGreaterThan(0);
+
+    downstream?.destroy();
+    await waitUntil(
+      () =>
+        (
+          gateway as unknown as {
+            metrics: { snapshot(): { compression: { streamingActive: number } } };
+          }
+        ).metrics.snapshot().compression.streamingActive === 0,
+      "Proxied SSE lease was not released after disconnect",
+    );
+    expect((await readGatewayMetrics(info)).compression).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 0,
+    });
+  });
+
+  test("falls back to identity for proxied SSE when the streaming compression pool is full", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+      });
+      response.write("data: identity-fallback\n\n");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { gateway, info } = await startGateway({ compression: "on" });
+    const occupied = [];
+    for (let index = 0; index < MAX_CONCURRENT_STREAMING_COMPRESSIONS; index += 1) {
+      occupied.push(await openCompressedEventStream(gateway, info));
+    }
+
+    const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/events`);
+    const identity = await new Promise<{ encoding: string | undefined; body: string }>(
+      (resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: endpoint.hostname,
+            port: endpoint.port,
+            path: endpoint.pathname,
+            headers: {
+              authorization: `Bearer ${info.token}`,
+              "accept-encoding": "gzip",
+            },
+          },
+          (response) => {
+            response.once("data", (chunk) => {
+              resolve({
+                encoding: response.headers["content-encoding"],
+                body: Buffer.from(chunk).toString("utf8"),
+              });
+              request.destroy();
+            });
+            response.once("error", reject);
+          },
+        );
+        request.on("error", reject);
+        request.end();
+      },
+    );
+
+    expect(identity.encoding).toBeUndefined();
+    expect(identity.body).toContain("data: identity-fallback");
+    expect((await readGatewayMetrics(info)).compression).toMatchObject({
+      streamingActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingDeclined: 1,
+    });
+    for (const stream of occupied) stream.close();
   });
 });

@@ -318,6 +318,123 @@ describe("TerminalWebSocketClient", () => {
     ]);
   });
 
+  test("flushes a pending acknowledgement before unsubscribe on recovery and removal", async () => {
+    const { client, sockets } = createHarness({ acknowledgementDelayMs: 10_000 });
+    const unsubscribe = client.subscribe("session-a", () => undefined);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("pending-ack"),
+      }),
+    );
+    await tick();
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+
+    client.observeSnapshot("session-a", { generation: 2, revision: 0 });
+    await tick();
+    const recoveryControls = sentControls(socket);
+    const recoveryAck = recoveryControls.findIndex((frame) => frame.type === "ack");
+    const recoveryUnsubscribe = recoveryControls.findIndex((frame) => frame.type === "unsubscribe");
+    expect(recoveryAck).toBeGreaterThanOrEqual(0);
+    expect(recoveryUnsubscribe).toBeGreaterThan(recoveryAck);
+    expect(recoveryControls[recoveryAck]).toEqual({
+      type: "ack",
+      channelId: 11,
+      generation: 1,
+      revision: 1,
+    });
+
+    acceptSubscription(socket, "session-a", 12, 2, 0);
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 12,
+        generation: 2,
+        revision: 1,
+        bytes: new TextEncoder().encode("second-ack"),
+      }),
+    );
+    await tick();
+    unsubscribe();
+    const removalControls = sentControls(socket);
+    const removalAck = removalControls.findIndex(
+      (frame) => frame.type === "ack" && frame.channelId === 12,
+    );
+    const removalUnsubscribe = removalControls.findIndex(
+      (frame) => frame.type === "unsubscribe" && frame.channelId === 12,
+    );
+    expect(removalAck).toBeGreaterThanOrEqual(0);
+    expect(removalUnsubscribe).toBeGreaterThan(removalAck);
+    expect(removalControls[removalAck]).toEqual({
+      type: "ack",
+      channelId: 12,
+      generation: 2,
+      revision: 1,
+    });
+  });
+
+  test("clears a delayed acknowledgement on reconnect instead of sending it later", async () => {
+    const { client, sockets } = createHarness({ acknowledgementDelayMs: 10_000 });
+    client.subscribe("session-a", () => undefined);
+    const first = sockets[0]!;
+    openAndReady(first);
+    acceptSubscription(first, "session-a", 11, 1, 0);
+
+    first.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("stale-ack"),
+      }),
+    );
+    await tick();
+    expect(sentControls(first).some((frame) => frame.type === "ack")).toBe(false);
+
+    first.close(1006, "network lost");
+    await tick();
+    expect(sentControls(first).some((frame) => frame.type === "ack")).toBe(false);
+
+    const second = sockets[1]!;
+    openAndReady(second, "socket-two");
+    expect(sentControls(second).some((frame) => frame.type === "ack")).toBe(false);
+    acceptSubscription(second, "session-a", 22, 1, 1);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(sentControls(second).some((frame) => frame.type === "ack")).toBe(false);
+  });
+
+  test("discards a pending acknowledgement when the socket is no longer open", async () => {
+    const { client, sockets } = createHarness({ acknowledgementDelayMs: 10_000 });
+    const unsubscribe = client.subscribe("session-a", () => undefined);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("closed-socket-ack"),
+      }),
+    );
+    await tick();
+    socket.readyState = MockWebSocket.CLOSING;
+    unsubscribe();
+
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+    expect(sentControls(socket).some((frame) => frame.type === "unsubscribe")).toBe(false);
+  });
+
   test("resubscribes for snapshot recovery when the renderer rejects output", async () => {
     const { client, sockets, channelUnavailable } = createHarness();
     client.subscribe("session-a", () => Promise.reject(new Error("renderer write failed")));

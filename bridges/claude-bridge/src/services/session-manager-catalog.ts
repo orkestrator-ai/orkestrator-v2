@@ -19,12 +19,15 @@ import {
   claudeExecutableOptions,
   generateMessageId,
   getStructuredUsageWithTimeout,
+  persistSessionMetadata,
   rateLimitsFromStructuredUsage,
+  sdkSessionIdFromBridgeId,
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
 import { eventEmitter } from "./event-emitter.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
+import { recordPromptDispatch } from "./session-manager-lifecycle.js";
 import type {
   ClaudeSteerJournalEntry,
   ClaudeQueryControl,
@@ -73,6 +76,22 @@ function rethrowUnlessClosedTransport(error: unknown): void {
   if (!isClosedTransportError(error)) throw error;
 }
 
+export type ClaudeSteerTestHooks = {
+  beforePersistPrepared?: () => Promise<void>;
+  afterPersistPrepared?: () => Promise<void>;
+  beforePushInput?: () => Promise<void>;
+  afterPushInput?: () => Promise<void>;
+  beforePersistDispatched?: () => Promise<void>;
+  failPersistPrepared?: boolean;
+  failPersistDispatched?: boolean;
+};
+
+let steerTestHooks: ClaudeSteerTestHooks | undefined;
+
+export function setClaudeSteerTestHooks(hooks?: ClaudeSteerTestHooks): void {
+  steerTestHooks = hooks;
+}
+
 function rememberSteer(session: SessionState, entry: ClaudeSteerJournalEntry): void {
   const journal = session.steerJournal ?? new Map<string, ClaudeSteerJournalEntry>();
   journal.delete(entry.requestId);
@@ -83,11 +102,23 @@ function rememberSteer(session: SessionState, entry: ClaudeSteerJournalEntry): v
     journal.delete(oldest);
   }
   session.steerJournal = journal;
-  const sdkSessionId = session.sdkSessionId;
-  if (!sdkSessionId) return;
-  void updateSessionPreferences(sdkSessionId, {
-    steerJournal: Array.from(journal.values()),
-  }).catch(() => undefined);
+}
+
+function durableClaudeSessionId(session: SessionState): string | null {
+  return session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+}
+
+async function persistSteerJournal(session: SessionState): Promise<boolean> {
+  const sdkSessionId = durableClaudeSessionId(session);
+  if (!sdkSessionId || !session.steerJournal) return false;
+  try {
+    await updateSessionPreferences(sdkSessionId, {
+      steerJournal: Array.from(session.steerJournal.values()),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readClaudeSteerDispatch(
@@ -121,35 +152,60 @@ function appendSteerUserMessage(session: SessionState, text: string, requestId: 
   });
 }
 
-export function answerIdleSteerPrompt(session: SessionState, prompt: string): string | null {
+function idleSteerMessageIds(requestId?: string): { userId: string; assistantId: string } {
+  if (!requestId) {
+    return { userId: generateMessageId(), assistantId: generateMessageId() };
+  }
+  return { userId: `idle-steer:${requestId}`, assistantId: `idle-steer-reply:${requestId}` };
+}
+
+export async function answerIdleSteerPrompt(
+  session: SessionState,
+  prompt: string,
+  requestId?: string,
+): Promise<string | null> {
   const reply = idleSteerPromptReply(prompt, "Claude");
   if (!reply) return null;
-  const userMessage = {
-    id: generateMessageId(),
-    role: "user" as const,
-    content: prompt,
-    parts: [{ type: "text" as const, content: prompt }],
-    createdAt: new Date().toISOString(),
-  };
-  const assistantMessage = {
-    id: generateMessageId(),
-    role: "assistant" as const,
-    content: reply,
-    parts: [{ type: "text" as const, content: reply }],
-    createdAt: new Date().toISOString(),
-  };
-  session.messages.push(userMessage, assistantMessage);
-  session.lastActivity = new Date();
-  eventEmitter.emit({
-    type: "message.updated",
-    sessionId: session.id,
-    data: { message: userMessage },
-  });
-  eventEmitter.emit({
-    type: "message.updated",
-    sessionId: session.id,
-    data: { message: assistantMessage },
-  });
+  const { userId, assistantId } = idleSteerMessageIds(requestId);
+  if (!session.messages.some((message) => message.id === userId)) {
+    const userMessage = {
+      id: userId,
+      role: "user" as const,
+      content: prompt,
+      parts: [{ type: "text" as const, content: prompt }],
+      createdAt: new Date().toISOString(),
+    };
+    const assistantMessage = {
+      id: assistantId,
+      role: "assistant" as const,
+      content: reply,
+      parts: [{ type: "text" as const, content: reply }],
+      createdAt: new Date().toISOString(),
+    };
+    session.messages.push(userMessage, assistantMessage);
+    session.localTranscript = [...(session.localTranscript ?? []), userMessage, assistantMessage];
+    session.lastActivity = new Date();
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: session.id,
+      data: { message: userMessage },
+    });
+    eventEmitter.emit({
+      type: "message.updated",
+      sessionId: session.id,
+      data: { message: assistantMessage },
+    });
+  }
+  if (requestId) {
+    session.dispatchedRequestIds ??= new Set();
+    session.dispatchedRequestIds.add(requestId);
+    recordPromptDispatch(session.id, requestId, "already-processed");
+  }
+  try {
+    await persistSessionMetadata(session);
+  } catch {
+    // The in-memory pair is still visible; the next durable write retries.
+  }
   return reply;
 }
 
@@ -449,12 +505,12 @@ export async function readClaudePlanUsage(): Promise<NativeAgentAccountUsageWind
   }
 }
 
-export function steerClaudeSession(
+export async function steerClaudeSession(
   sessionId: string,
   text: string,
   requestId: string,
   expectedRunId: string,
-): "applied" | "idle" | "mismatch" | "unknown" {
+): Promise<"applied" | "idle" | "mismatch" | "unknown"> {
   const session = sessions.get(sessionId);
   const inputDigest = createHash("sha256").update(text).digest("hex");
   const previous = session?.steerJournal?.get(requestId);
@@ -475,10 +531,27 @@ export function steerClaudeSession(
         state: "absent",
         createdAt: Date.now(),
       });
+      await persistSteerJournal(session);
     }
     return "idle";
   }
   if (String(session.latestTurnGeneration ?? "") !== expectedRunId) return "mismatch";
+  if (!durableClaudeSessionId(session)) return "unknown";
+
+  rememberSteer(session, {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state: "prepared",
+    createdAt: Date.now(),
+  });
+  await steerTestHooks?.beforePersistPrepared?.();
+  const preparedOk = steerTestHooks?.failPersistPrepared
+    ? false
+    : await persistSteerJournal(session);
+  await steerTestHooks?.afterPersistPrepared?.();
+  if (!preparedOk) return "unknown";
+
   const message: SDKUserMessage = {
     type: "user",
     message: { role: "user", content: [{ type: "text", text }] },
@@ -487,15 +560,42 @@ export function steerClaudeSession(
     uuid: requestId as SDKUserMessage["uuid"],
     session_id: session.sdkSessionId,
   };
+  await steerTestHooks?.beforePushInput?.();
   const pushed = session.queryControl.pushInput(message);
+  await steerTestHooks?.afterPushInput?.();
+  if (!pushed) {
+    rememberSteer(session, {
+      requestId,
+      inputDigest,
+      expectedRunId,
+      state: "unknown",
+      createdAt: Date.now(),
+    });
+    await persistSteerJournal(session);
+    return "unknown";
+  }
+
   rememberSteer(session, {
     requestId,
     inputDigest,
     expectedRunId,
-    state: pushed ? "dispatched" : "unknown",
+    state: "dispatched",
     createdAt: Date.now(),
   });
-  if (!pushed) return "unknown";
+  await steerTestHooks?.beforePersistDispatched?.();
+  const dispatchedOk = steerTestHooks?.failPersistDispatched
+    ? false
+    : await persistSteerJournal(session);
+  if (!dispatchedOk) {
+    rememberSteer(session, {
+      requestId,
+      inputDigest,
+      expectedRunId,
+      state: "prepared",
+      createdAt: Date.now(),
+    });
+    return "unknown";
+  }
   appendSteerUserMessage(session, text, requestId);
   return "applied";
 }

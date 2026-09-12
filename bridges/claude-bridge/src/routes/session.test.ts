@@ -95,8 +95,8 @@ const mockGracefulInterruptClaudeSession = mock(async () => ({
 const mockReadSessionCommands = mock(async () => []);
 const mockReadSessionMcpServers = mock(async () => []);
 const mockPerformSessionMcpAction = mock(async () => ({ ok: true }));
-const mockSteerClaudeSession = mock(() => "applied" as const);
-const mockAnswerIdleSteerPrompt = mock(() => "There is no active Claude turn to steer.");
+const mockSteerClaudeSession = mock(async () => "applied" as const);
+const mockAnswerIdleSteerPrompt = mock(async () => "There is no active Claude turn to steer.");
 const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
 const mockConfigureClaudeSession = mock(async () => undefined);
 const mockRefreshClaudeContextUsage = mock(async () => ({
@@ -304,9 +304,9 @@ describe("session routes", () => {
     }));
     mockRefreshClaudeContextUsage.mockClear();
     mockSteerClaudeSession.mockReset();
-    mockSteerClaudeSession.mockReturnValue("applied");
+    mockSteerClaudeSession.mockResolvedValue("applied");
     mockAnswerIdleSteerPrompt.mockReset();
-    mockAnswerIdleSteerPrompt.mockReturnValue("There is no active Claude turn to steer.");
+    mockAnswerIdleSteerPrompt.mockResolvedValue("There is no active Claude turn to steer.");
     mockDeleteSession.mockClear();
     mockReconcilePersistedSessions.mockClear();
     mockEnsurePersistedSession.mockClear();
@@ -869,6 +869,20 @@ describe("session routes", () => {
       });
       expect(mockAnswerIdleSteerPrompt).toHaveBeenCalled();
       expect(mockSendPrompt).not.toHaveBeenCalled();
+
+      mockGetPromptDispatchState.mockReturnValueOnce("already-processed");
+      const retry = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/steer keep the diff small",
+        requestId: "idle-steer",
+      });
+      expect(retry.status).toBe(200);
+      expect(await jsonBody(retry)).toEqual({
+        status: "already-processed",
+        requestId: "idle-steer",
+        duplicate: true,
+        local: true,
+      });
+      expect(mockAnswerIdleSteerPrompt).toHaveBeenCalledTimes(1);
     });
 
     test("refuses a structured idle /steer instead of starting a turn", async () => {
@@ -1549,7 +1563,7 @@ describe("session routes", () => {
     });
 
     test("reports an idle session without starting a turn", async () => {
-      mockSteerClaudeSession.mockReturnValueOnce("idle");
+      mockSteerClaudeSession.mockResolvedValueOnce("idle");
       const res = await jsonRequest("POST", "/session/s-1/steer", {
         input: "Follow up",
         requestId: "steer-idle",

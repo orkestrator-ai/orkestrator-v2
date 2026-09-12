@@ -801,17 +801,11 @@ async function handlePrompt(
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or attachment is required");
   }
-  const idleSteer = idleSteerPromptReply(prompt, "Pi");
-  if (idleSteer && state.status !== "running" && !state.dispatching && !state.compacting) {
-    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
-    appendLocalExchange(state, prompt, idleSteer);
-    state.revision += 1;
-    schedulePersist();
-    return json(response, 200, { accepted: true, local: true });
-  }
-
   if (requestId && state.promptJournal.has(requestId)) {
     const journaled = state.promptJournal.get(requestId)!;
+    if (journaled.local) {
+      return json(response, 200, { accepted: true, local: true, duplicate: true });
+    }
     if (journaled.state === "ambiguous") {
       // An earlier process accepted this id and died before recording its
       // outcome. Never re-dispatch at-most-once work: refuse plainly so the
@@ -825,6 +819,25 @@ async function handlePrompt(
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
+  }
+  const idleSteer = idleSteerPromptReply(prompt, "Pi");
+  if (idleSteer) {
+    if (state.status === "running" || state.dispatching || state.compacting) {
+      throw new HttpError(409, "Use POST /session/:id/steer to steer the active turn");
+    }
+    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+    appendLocalExchange(state, prompt, idleSteer, requestId);
+    if (requestId) {
+      setPromptJournal(state, {
+        requestId,
+        state: "completed",
+        acceptedAt: Date.now(),
+        local: true,
+      });
+    }
+    state.revision += 1;
+    schedulePersist();
+    return json(response, 200, { accepted: true, local: true });
   }
   // A second ordinary prompt is a provider-owned follow-up. Pi keeps this
   // queue with the live run, and its state events rehydrate `/queue` even when
@@ -953,9 +966,16 @@ async function handlePrompt(
   return json(response, 202, { accepted: true });
 }
 
-function appendLocalExchange(state: SessionState, prompt: string, reply: string): void {
-  appendUserMessage(state, prompt, [], []);
-  const messageId = randomBytes(12).toString("hex");
+function appendLocalExchange(
+  state: SessionState,
+  prompt: string,
+  reply: string,
+  requestId?: string,
+): void {
+  const userId = requestId ? `idle-steer:${requestId}` : undefined;
+  if (userId && state.messages.some((message) => message.id === userId)) return;
+  appendUserMessage(state, prompt, [], [], userId);
+  const messageId = requestId ? `idle-steer-reply:${requestId}` : randomBytes(12).toString("hex");
   state.messages.push({
     id: messageId,
     role: "assistant",
@@ -978,8 +998,8 @@ function appendUserMessage(
   prompt: string,
   images: readonly PiPromptImage[],
   files: readonly PiPromptFile[],
+  messageId = randomBytes(12).toString("hex"),
 ): void {
-  const messageId = randomBytes(12).toString("hex");
   const attachments = [...images, ...files];
   state.messages.push({
     id: messageId,

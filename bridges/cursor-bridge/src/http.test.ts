@@ -509,9 +509,20 @@ describe("prompt dispatch", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ accepted: true, local: true });
     expect(state.status).toBe("idle");
-    expect(state.promptJournal.has("idle-steer")).toBe(false);
+    expect(state.promptJournal.get("idle-steer")).toMatchObject({
+      state: "completed",
+      local: true,
+    });
     expect(state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(state.messages[1]?.content).toContain("no active Cursor turn to steer");
+
+    const retry = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer keep going", requestId: "idle-steer" }),
+    });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ accepted: true, local: true, duplicate: true });
+    expect(state.messages).toHaveLength(2);
   });
 
   test("an empty prompt with no attachment is a caller error", async () => {

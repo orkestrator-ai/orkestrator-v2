@@ -160,6 +160,8 @@ export interface PromptJournalEntry {
   requestId: string;
   state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
   acceptedAt: number;
+  /** Set when this id answered an idle `/steer` locally. */
+  local?: boolean;
 }
 
 export interface SteerJournalEntry {

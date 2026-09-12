@@ -1345,6 +1345,22 @@ export async function persistSessionMetadata(
   if (CLIENT_SESSION_ID_PATTERN.test(session.id)) {
     update.clientSessionBridgeId = session.id;
   }
+  if (session.steerJournal?.size) {
+    update.steerJournal = Array.from(session.steerJournal.values());
+  }
+  if (session.localTranscript?.length) {
+    update.localTranscript = session.localTranscript.map((message) => ({
+      id: message.id,
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: message.content,
+      createdAt: message.createdAt,
+    }));
+  }
+  if (session.dispatchedRequestIds?.size) {
+    update.dispatchedRequestIds = [...session.dispatchedRequestIds].slice(
+      -MAX_DISPATCHED_REQUEST_IDS,
+    );
+  }
   if (Object.keys(update).length === 0) return;
   await updateSessionPreferences(sdkSessionId, update);
 }

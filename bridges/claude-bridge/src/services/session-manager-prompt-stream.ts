@@ -38,6 +38,8 @@ export interface PromptStreamState {
   pendingApiRetryMessageId?: string;
   flushStreamedAssistantMessage: () => void;
   applyPartialAssistantMessage: (partialMessage: any) => boolean;
+  resolveStreamMessageKey: (raw: string) => string;
+  beginPostSteerScope: () => void;
   clearFlushTimer: () => void;
 }
 
@@ -93,6 +95,12 @@ export function createPromptStreamState(
   let currentStreamApiMessageId: string | null = null;
   // Fallback keys for messages that carry neither an API message id nor a uuid.
   let syntheticMessageKeyCounter = 0;
+  // After a mid-turn steer, later blocks of the same API message must land on a
+  // fresh assistant row rather than replaying the pre-steer parts under a new
+  // user instruction.
+  const remappedApiMessageIds = new Map<string, string>();
+
+  const resolveStreamMessageKey = (raw: string): string => remappedApiMessageIds.get(raw) ?? raw;
 
   // Flattened view of `blocksByApiMessage`, in message order then block order.
   let accumulatedOrderedParts: OrderedPartEntry[] = [];
@@ -341,12 +349,13 @@ export function createPromptStreamState(
 
     // Only fall back to the event uuid when no `message_start` was seen, which
     // real SDK streams always send before any block event.
-    const messageKey =
+    const rawMessageKey =
       currentStreamApiMessageId ??
       (typeof partialMessage.uuid === "string" ? partialMessage.uuid : undefined);
-    if (!messageKey) {
+    if (!rawMessageKey) {
       return false;
     }
+    const messageKey = resolveStreamMessageKey(rawMessageKey);
     const parentTaskUseId = explicitParentTaskUseId ?? parentTaskByApiMessage.get(messageKey);
     if (explicitParentTaskUseId) {
       parentTaskByApiMessage.set(messageKey, explicitParentTaskUseId);
@@ -464,6 +473,23 @@ export function createPromptStreamState(
     },
     flushStreamedAssistantMessage,
     applyPartialAssistantMessage,
+    resolveStreamMessageKey,
+    beginPostSteerScope: () => {
+      flushStreamedAssistantMessage();
+      const previousKey = lastStreamMessageKey ?? currentStreamApiMessageId;
+      const newKey = `steer-split-${(syntheticMessageKeyCounter += 1)}`;
+      if (previousKey) remappedApiMessageIds.set(previousKey, newKey);
+      if (currentStreamApiMessageId) remappedApiMessageIds.set(currentStreamApiMessageId, newKey);
+      blocksByApiMessage.clear();
+      parentTaskByApiMessage.clear();
+      finalizedBlockCountByApiMessage.clear();
+      accumulatedOrderedParts = [];
+      currentAssistantMessage = null;
+      publishedMessageId = null;
+      publishedParts = [];
+      lastStreamMessageKey = newKey;
+      lastStreamModelId = undefined;
+    },
     clearFlushTimer: () => {
       if (streamEventFlushTimer) {
         clearTimeout(streamEventFlushTimer);

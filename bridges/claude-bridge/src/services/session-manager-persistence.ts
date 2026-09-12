@@ -43,7 +43,7 @@ import {
 import { eventEmitter } from "./event-emitter.js";
 import {
   deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
+  MAX_LOCAL_TRANSCRIPT_ENTRIES,
   readSessionPreferences,
   sessionPreferencesUnavailable,
   steerJournalMapFromPreferences,
@@ -96,6 +96,29 @@ type BackgroundTaskSystemMessage = messageParts.BackgroundTaskSystemMessage;
 type BackgroundTaskLaunch = messageParts.BackgroundTaskLaunch;
 type CorrelatedBashToolResult = messageParts.CorrelatedBashToolResult;
 type BashToolResultOutcome = messageParts.BashToolResultOutcome;
+
+function localTranscriptFromPreferences(
+  entries: NonNullable<SessionPreferences["localTranscript"]>,
+): NormalizedMessage[] {
+  return entries.slice(-MAX_LOCAL_TRANSCRIPT_ENTRIES).map((entry) => ({
+    id: entry.id,
+    role: entry.role,
+    content: entry.content,
+    parts: [{ type: "text" as const, content: entry.content }],
+    createdAt: entry.createdAt,
+  }));
+}
+
+export function applyLocalTranscriptOverlay(session: SessionState): void {
+  const overlay = session.localTranscript;
+  if (!overlay?.length) return;
+  const existing = new Set(session.messages.map((message) => message.id));
+  for (const message of overlay) {
+    if (existing.has(message.id)) continue;
+    session.messages.push(message);
+    existing.add(message.id);
+  }
+}
 export let sessionDeletionTick = 0;
 
 /** How many recent deletions are remembered; each only has to outlast one read. */
@@ -229,6 +252,9 @@ export async function reconcilePersistedSessions(): Promise<void> {
       ...(storedPreferences?.steerJournal?.length
         ? { steerJournal: steerJournalMapFromPreferences(storedPreferences.steerJournal) }
         : {}),
+      ...(storedPreferences?.localTranscript?.length
+        ? { localTranscript: localTranscriptFromPreferences(storedPreferences.localTranscript) }
+        : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
         ? { dispatchJournalUnavailable: true }
         : {}),
@@ -286,6 +312,9 @@ export async function materializePersistedSessionState(
       : {}),
     ...(preferences?.steerJournal?.length
       ? { steerJournal: steerJournalMapFromPreferences(preferences.steerJournal) }
+      : {}),
+    ...(preferences?.localTranscript?.length
+      ? { localTranscript: localTranscriptFromPreferences(preferences.localTranscript) }
       : {}),
     ...(sessionPreferencesUnavailable(preferences) ? { dispatchJournalUnavailable: true } : {}),
   };
@@ -401,6 +430,7 @@ export async function hydratePersistedSessionMessages(
       session.taskRegistry = hydrated.taskRegistry;
       session.backgroundTasks = hydrated.backgroundTasks;
     }
+    applyLocalTranscriptOverlay(session);
     session.persistedMessagesLoaded = true;
     touchSession(session);
   }

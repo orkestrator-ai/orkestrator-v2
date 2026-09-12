@@ -122,6 +122,7 @@ export const {
   getPromptDispatchState,
   getPromptDispatchRecordCountForTesting,
   seedSettledPromptDispatchForTesting,
+  persistSessionMetadata,
   sanitizeSessionTitle,
   buildSessionTitlePrompt,
   runClaudeTitleCommand,

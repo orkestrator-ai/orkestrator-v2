@@ -400,6 +400,12 @@ export interface SessionState {
    */
   dispatchedRequestIds?: Set<string>;
   /**
+   * Local transcript rows that are not in the SDK rollout, such as an idle
+   * `/steer` exchange. Eviction and restart rehydrate from disk and then merge
+   * these back so the pair does not vanish.
+   */
+  localTranscript?: NormalizedMessage[];
+  /**
    * The durable request-id journal existed but could not be trusted.
    *
    * Stable-id prompts must remain blocked in this state: treating an unknown
@@ -531,7 +537,7 @@ export interface ClaudeSteerJournalEntry {
   requestId: string;
   inputDigest: string;
   expectedRunId: string;
-  state: "dispatched" | "absent" | "unknown";
+  state: "prepared" | "dispatched" | "absent" | "unknown";
   createdAt: number;
 }
 

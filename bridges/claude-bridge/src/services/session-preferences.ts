@@ -45,18 +45,33 @@ export interface SessionPreferences {
    * "never steered", not a preferences-file fault.
    */
   steerJournal?: ClaudeSteerPreferenceEntry[];
+  /**
+   * Local transcript overlay that is not present in the SDK rollout.
+   *
+   * Idle `/steer` replies never reach Claude, so they must live beside the
+   * preferences file or a remount / eviction would drop them.
+   */
+  localTranscript?: ClaudeLocalTranscriptEntry[];
 }
 
 export interface ClaudeSteerPreferenceEntry {
   requestId: string;
   inputDigest: string;
   expectedRunId: string;
-  state: "dispatched" | "absent" | "unknown";
+  state: "prepared" | "dispatched" | "absent" | "unknown";
   createdAt: number;
+}
+
+export interface ClaudeLocalTranscriptEntry {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
 export const MAX_DISPATCHED_REQUEST_IDS = 64;
 export const MAX_STEER_JOURNAL_ENTRIES = 512;
+export const MAX_LOCAL_TRANSCRIPT_ENTRIES = 32;
 
 export function steerJournalMapFromPreferences(
   entries: readonly ClaudeSteerPreferenceEntry[] | undefined,
@@ -349,6 +364,16 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       preferences.steerJournal = journal.slice(-MAX_STEER_JOURNAL_ENTRIES);
     }
   }
+  if (Array.isArray(record.localTranscript)) {
+    const overlay: ClaudeLocalTranscriptEntry[] = [];
+    for (const value of record.localTranscript) {
+      const entry = parseLocalTranscriptEntry(value);
+      if (entry) overlay.push(entry);
+    }
+    if (overlay.length > 0) {
+      preferences.localTranscript = overlay.slice(-MAX_LOCAL_TRANSCRIPT_ENTRIES);
+    }
+  }
   return preferences;
 }
 
@@ -365,7 +390,7 @@ function parseSteerJournalEntry(value: unknown): ClaudeSteerPreferenceEntry | un
     !/^[a-f0-9]{64}$/.test(inputDigest) ||
     !expectedRunId ||
     expectedRunId.length > 512 ||
-    (state !== "dispatched" && state !== "absent" && state !== "unknown") ||
+    (state !== "prepared" && state !== "dispatched" && state !== "absent" && state !== "unknown") ||
     typeof record.createdAt !== "number" ||
     !Number.isFinite(record.createdAt)
   ) {
@@ -378,6 +403,26 @@ function parseSteerJournalEntry(value: unknown): ClaudeSteerPreferenceEntry | un
     state,
     createdAt: record.createdAt,
   };
+}
+
+function parseLocalTranscriptEntry(value: unknown): ClaudeLocalTranscriptEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const role = record.role;
+  const content = typeof record.content === "string" ? record.content : "";
+  const createdAt = typeof record.createdAt === "string" ? record.createdAt : "";
+  if (
+    !id ||
+    id.length > 200 ||
+    (role !== "user" && role !== "assistant") ||
+    !content ||
+    content.length > 16_384 ||
+    !createdAt
+  ) {
+    return undefined;
+  }
+  return { id, role, content, createdAt };
 }
 
 /**

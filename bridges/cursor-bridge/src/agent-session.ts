@@ -658,9 +658,11 @@ export async function resumeSession(
   state.agentId = agentId;
   applyComposerPatch(state, patch);
   state.composer = await hydrateComposer(state.composer);
-  await hydrateHistory(state).catch(() => undefined);
+  await hydrateHistory(state, { skipRunning: true }).catch(() => undefined);
   sessions.set(state.id, state);
-  state.recoveringRun = recoverActiveRun(state);
+  // Attach a surviving run before returning so `recoveringRun` is only set when
+  // a live stream is actually being rebuilt — not a permanently settled dummy.
+  await recoverActiveRun(state);
   return state;
 }
 
@@ -672,10 +674,16 @@ export async function resumeSession(
  * resumed session. A run's conversation carries the full step list, and its
  * tool calls are the same shape a live turn emits, so they render identically.
  */
-async function hydrateHistory(state: SessionState): Promise<void> {
+async function hydrateHistory(
+  state: SessionState,
+  options?: { skipRunning?: boolean },
+): Promise<void> {
   if (!state.agentId) return;
   const runs = await listAllRuns(state.agentId);
   for (const run of runs) {
+    // A still-running run is rebuilt from its replay-and-tail stream. Hydrating
+    // it here and then replaying the same events would duplicate every row.
+    if (options?.skipRunning && run.status === "running") continue;
     if (!run.supports("conversation")) continue;
     const turns = await run.conversation().catch(() => []);
     for (const turn of turns) appendHistoricTurn(state, turn, run.id);
@@ -717,7 +725,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   const unsubscribe = active.onDidChangeStatus(() => {
     state.revision += 1;
   });
-  return (async () => {
+  state.recoveringRun = (async () => {
     try {
       for await (const event of active.stream()) {
         applyRecoveredStreamEvent(state, event);
@@ -735,7 +743,7 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       unsubscribe();
       if (state.activeRun === active) state.activeRun = undefined;
       state.cancelTurn = undefined;
-      if (state.recoveringRun) state.recoveringRun = undefined;
+      state.recoveringRun = undefined;
       state.revision += 1;
     }
   })();
@@ -812,27 +820,43 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
 }
 
 function historicUserTexts(body: Record<string, unknown>): string[] {
-  const texts: string[] = [];
-  const seen = new Set<string>();
-  const add = (value: unknown) => {
-    const text =
-      typeof value === "string"
-        ? value
-        : isObject(value) && nonBlank(value.text)
-          ? value.text
-          : undefined;
-    if (!text || seen.has(text)) return;
-    seen.add(text);
-    texts.push(text);
+  const extract = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value;
+    if (isObject(value) && nonBlank(value.text)) return value.text;
+    return undefined;
   };
-  add(isObject(body.userMessage) ? body.userMessage : undefined);
+
+  const texts: string[] = [];
+  const remaining = new Map<string, number>();
   if (Array.isArray(body.userMessages)) {
-    for (const message of body.userMessages) add(message);
+    for (const message of body.userMessages) {
+      const text = extract(message);
+      if (!text) continue;
+      texts.push(text);
+      remaining.set(text, (remaining.get(text) ?? 0) + 1);
+    }
   }
+
+  const consume = (text: string | undefined): boolean => {
+    if (!text) return false;
+    const count = remaining.get(text) ?? 0;
+    if (count <= 0) return false;
+    remaining.set(text, count - 1);
+    return true;
+  };
+
+  const alias = extract(isObject(body.userMessage) ? body.userMessage : undefined);
+  if (alias && !consume(alias) && texts.length === 0) {
+    texts.push(alias);
+  }
+
   if (Array.isArray(body.steps)) {
     for (const step of body.steps) {
       if (!isObject(step) || step.type !== "userMessage") continue;
-      add(step.message);
+      const text = extract(step.message);
+      if (!text) continue;
+      if (consume(text)) continue;
+      texts.push(text);
     }
   }
   return texts;

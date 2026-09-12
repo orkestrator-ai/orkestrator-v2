@@ -216,45 +216,6 @@ export type NativeAgentServiceLayerTypes = [
  * id also moves a corrected row to the newest position while retaining the
  * strict twenty-row bound.
  */
-/**
- * Provider-owned mid-turn items are already accepted. Keep those first and
- * drop backend-queue copies of the same text so a Pi follow-up does not appear
- * twice after the bridge and the durable queue both observed it.
- */
-export function mergeNativeAgentQueueItems(
-  providerItems: readonly unknown[],
-  backendItems: readonly unknown[],
-): unknown[] {
-  const seen = new Set<string>();
-  const merged: unknown[] = [];
-  const fields = (item: unknown) => {
-    const record = item && typeof item === "object" ? (item as { text?: unknown; id?: unknown }) : {};
-    return {
-      text: typeof record.text === "string" ? record.text.trim() : "",
-      id: typeof record.id === "string" ? record.id.trim() : "",
-    };
-  };
-  const remember = (item: unknown) => {
-    const { text, id } = fields(item);
-    if (text) seen.add(`text:${text}`);
-    if (id) seen.add(`id:${id}`);
-  };
-  const alreadySeen = (item: unknown) => {
-    const { text, id } = fields(item);
-    return (text !== "" && seen.has(`text:${text}`)) || (id !== "" && seen.has(`id:${id}`));
-  };
-  for (const item of providerItems) {
-    merged.push(item);
-    remember(item);
-  }
-  for (const item of backendItems) {
-    if (alreadySeen(item)) continue;
-    merged.push(item);
-    remember(item);
-  }
-  return merged;
-}
-
 export function mergeContextUsageTurns(
   previous: NativeAgentContextUsage | undefined,
   current: NativeAgentContextUsage | undefined,
@@ -270,6 +231,42 @@ export function mergeContextUsageTurns(
     ...current,
     ...(mergedTurns.length > 0 ? { turns: mergedTurns } : {}),
   };
+}
+
+/**
+ * Provider-owned mid-turn items are already accepted. Keep those first and
+ * consume at most one backend-queue counterpart for each, so a Pi follow-up
+ * does not appear twice after both layers observed it. Distinct backend rows
+ * stay distinct even when they share text.
+ */
+export function mergeNativeAgentQueueItems(
+  providerItems: readonly unknown[],
+  backendItems: readonly unknown[],
+): unknown[] {
+  const fields = (item: unknown) => {
+    const record =
+      item && typeof item === "object" ? (item as { text?: unknown; id?: unknown }) : {};
+    return {
+      text: typeof record.text === "string" ? record.text.trim() : "",
+      id: typeof record.id === "string" ? record.id.trim() : "",
+    };
+  };
+  const remaining = [...backendItems];
+  const consumeCounterpart = (item: unknown) => {
+    const { text, id } = fields(item);
+    const index = remaining.findIndex((candidate) => {
+      const other = fields(candidate);
+      return (id !== "" && other.id === id) || (text !== "" && other.text === text);
+    });
+    if (index >= 0) remaining.splice(index, 1);
+  };
+  const merged: unknown[] = [];
+  for (const item of providerItems) {
+    merged.push(item);
+    consumeCounterpart(item);
+  }
+  merged.push(...remaining);
+  return merged;
 }
 
 /**

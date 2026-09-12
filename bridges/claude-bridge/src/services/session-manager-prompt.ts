@@ -577,9 +577,7 @@ export async function sendPrompt(
     maxBlockIndex: MAX_STREAM_CONTENT_BLOCK_INDEX,
   });
   session.splitAssistantAfterSteer = () => {
-    stream.flushStreamedAssistantMessage();
-    stream.currentAssistantMessage = null;
-    stream.accumulatedOrderedParts = [];
+    stream.beginPostSteerScope();
   };
   const streamUsage = new ClaudeStreamUsageAccumulator();
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
@@ -1954,10 +1952,11 @@ export async function sendPrompt(
         // assistant message per content block, all sharing `message.id`, so the
         // running finalized-block count gives each block its stream index.
         const apiMessageId = (message as SDKAssistantMessage).message?.id;
-        const messageKey =
+        const rawMessageKey =
           apiMessageId ??
           (message.uuid as string | undefined) ??
           `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
+        const messageKey = stream.resolveStreamMessageKey(rawMessageKey);
 
         const blocks = stream.getBlocksForMessage(messageKey);
         const blockIndexBase = stream.finalizedBlockCountByApiMessage.get(messageKey) ?? 0;

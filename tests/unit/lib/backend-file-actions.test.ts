@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
   browseForDirectory,
+  createContainerFolder,
+  createLocalFolder,
   deleteContainerFile,
   deleteLocalFile,
   getEnvironmentDiffStats,
@@ -35,6 +37,9 @@ describe("file action backend wrappers", () => {
     await expect(moveContainerFile("env-container", "src/App.tsx", "archive")).resolves.toBe(
       "src/App.tsx",
     );
+    await expect(createContainerFolder("env-container", "src", "hooks")).resolves.toBe(
+      "src/App.tsx",
+    );
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "revert_container_file", {
       environmentId: "env-container",
@@ -50,6 +55,11 @@ describe("file action backend wrappers", () => {
       sourcePath: "src/App.tsx",
       destinationDirectory: "archive",
     });
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "create_container_folder", {
+      environmentId: "env-container",
+      parentDirectory: "src",
+      folderName: "hooks",
+    });
   });
 
   test("binds local mutations to an environment id", async () => {
@@ -58,6 +68,7 @@ describe("file action backend wrappers", () => {
     );
     await expect(deleteLocalFile("env-local", "src/App.tsx")).resolves.toBe("src/App.tsx");
     await expect(moveLocalFile("env-local", "src/App.tsx", ".")).resolves.toBe("src/App.tsx");
+    await expect(createLocalFolder("env-local", ".", "docs")).resolves.toBe("src/App.tsx");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "revert_local_file", {
       environmentId: "env-local",
@@ -72,6 +83,11 @@ describe("file action backend wrappers", () => {
       environmentId: "env-local",
       sourcePath: "src/App.tsx",
       destinationDirectory: ".",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "create_local_folder", {
+      environmentId: "env-local",
+      parentDirectory: ".",
+      folderName: "docs",
     });
   });
 

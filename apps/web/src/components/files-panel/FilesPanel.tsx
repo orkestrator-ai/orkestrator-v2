@@ -25,6 +25,7 @@ export function FilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    createFolder,
     fileActionPending,
     environmentId,
     isLocalEnvironment,
@@ -92,6 +93,7 @@ export function FilesPanel() {
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
             onMove={moveFileInTree}
+            onCreateFolder={createFolder}
             movePending={fileActionPending !== null}
           />
         )}

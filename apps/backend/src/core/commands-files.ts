@@ -1094,6 +1094,116 @@ export async function moveLocalFile(
   return move.destination;
 }
 
+const MAX_FOLDER_NAME_LENGTH = 255;
+
+/**
+ * Resolve a single-segment folder name against an existing parent directory.
+ *
+ * The name is a leaf only: separators are rejected so a right-click location
+ * cannot be used to create a nested path elsewhere in the workspace.
+ */
+export function resolveWorkspaceFolderCreate(
+  parentDirectory: string,
+  folderName: string,
+): { directory: string; folderPath: string } {
+  const name = folderName.trim();
+  if (name.length === 0) {
+    throw new Error("Invalid folderName: name is required");
+  }
+  if (name.length > MAX_FOLDER_NAME_LENGTH) {
+    throw new Error(`Invalid folderName: name exceeds ${MAX_FOLDER_NAME_LENGTH} characters`);
+  }
+  if (name === "." || name === "..") {
+    throw new Error("Invalid folderName: path must stay inside the workspace");
+  }
+  if (name === ".git") {
+    throw new Error("Invalid folderName: Git metadata cannot be modified");
+  }
+  if (name.includes("/") || name.includes("\\")) {
+    throw new Error("Invalid folderName: path separators are not allowed");
+  }
+
+  const directory =
+    parentDirectory === "."
+      ? "."
+      : validateWorkspaceMutationPath(parentDirectory, "parentDirectory");
+  const folderPath = validateWorkspaceMutationPath(
+    directory === "." ? name : path.posix.join(directory, name),
+    "folderPath",
+  );
+  if (path.posix.basename(folderPath) !== name) {
+    throw new Error("Invalid folderName: path must stay inside the workspace");
+  }
+  return { directory, folderPath };
+}
+
+/** Create one empty directory without replacing an existing path. */
+export async function createLocalFolder(
+  worktreePath: string,
+  parentDirectory: string,
+  folderName: string,
+): Promise<string> {
+  const created = resolveWorkspaceFolderCreate(parentDirectory, folderName);
+  await assertNoLocalSymlinkAncestors(worktreePath, created.folderPath);
+
+  const absoluteFolder = path.join(worktreePath, created.folderPath);
+  const absoluteParent = path.dirname(absoluteFolder);
+  try {
+    const parentStats = await fs.lstat(absoluteParent);
+    if (parentStats.isSymbolicLink()) {
+      throw new Error(`Invalid filePath: symlink ancestor is not allowed: ${created.folderPath}`);
+    }
+    if (!parentStats.isDirectory()) {
+      throw new Error(`Invalid filePath: ancestor is not a directory: ${created.folderPath}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        created.directory === "."
+          ? "Workspace root is not available"
+          : `Parent directory does not exist: ${created.directory}`,
+      );
+    }
+    throw error;
+  }
+
+  try {
+    await fs.mkdir(absoluteFolder);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`A file or folder already exists at ${created.folderPath}`);
+    }
+    throw error;
+  }
+  return created.folderPath;
+}
+
+export function containerCreateFolderCommand(directory: string, folderPath: string): string {
+  return `
+    set -euo pipefail
+    cd /workspace
+    directory=${quoteShell(directory)}
+    folderPath=${quoteShell(folderPath)}
+    ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
+    assert_safe_path "$folderPath"
+    if [ "$directory" != "." ]; then
+      if [ ! -e "$directory" ]; then
+        echo "Parent directory does not exist: $directory" >&2
+        exit 1
+      fi
+      if [ -L "$directory" ] || [ ! -d "$directory" ]; then
+        echo "Parent directory is not a directory: $directory" >&2
+        exit 1
+      fi
+    fi
+    if [ -e "$folderPath" ]; then
+      echo "A file or folder already exists at $folderPath" >&2
+      exit 1
+    fi
+    mkdir -- "$folderPath"
+  `;
+}
+
 export async function requireLocalMutationEnvironment(
   storage: StorageService,
   environmentId: string,

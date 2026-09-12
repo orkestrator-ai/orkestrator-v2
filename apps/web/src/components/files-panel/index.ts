@@ -6,3 +6,4 @@ export { AllFilesView } from "./AllFilesView";
 export { FileTreeNode } from "./FileTreeNode";
 export { FileIcon } from "./FileIcon";
 export { FileActionDialog } from "./FileActionDialog";
+export { CreateFolderDialog } from "./CreateFolderDialog";

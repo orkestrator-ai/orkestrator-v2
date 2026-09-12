@@ -8,6 +8,7 @@ import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks
 import { AllFilesView } from "./AllFilesView";
 import { ChangedFileItem } from "./ChangedFileItem";
 import { ChangesView } from "./ChangesView";
+import { CreateFolderDialog, DEFAULT_NEW_FOLDER_NAME } from "./CreateFolderDialog";
 import { FileTreeNode } from "./FileTreeNode";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
@@ -334,6 +335,69 @@ describe("files panel views", () => {
     ).toBe(true);
     fireDrag(screen.getByRole("button", { name: "archive" }), "drop", workspaceTransfer);
     expect(onMove).not.toHaveBeenCalled();
+  });
+
+  test("creates a folder from a folder, file, or empty workspace location", async () => {
+    const onCreateFolder = mock(async (parentDirectory: string, folderName: string) =>
+      parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`,
+    );
+    useFilesPanelStore.setState({ fileTree, expandedFolders: ["src"] });
+    renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "src" }));
+    fireEvent.click(await screen.findByText("New folder"));
+    expect(await screen.findByRole("dialog", { name: "New folder" })).toBeTruthy();
+    expect(screen.queryByText(/workspace root/)).toBeNull();
+    expect(screen.getByText(/Create a folder in/).textContent).toContain("src");
+
+    const nameInput = screen.getByLabelText("Folder name") as HTMLInputElement;
+    expect(nameInput.value).toBe(DEFAULT_NEW_FOLDER_NAME);
+    fireEvent.change(nameInput, { target: { value: "hooks" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "hooks"));
+    expect(useFilesPanelStore.getState().expandedFolders).toContain("src");
+    expect(screen.queryByRole("dialog", { name: "New folder" })).toBeNull();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    const fileMenuItems = await screen.findAllByText("New folder");
+    fireEvent.click(fileMenuItems.at(-1)!);
+    fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "legacy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith("src", "legacy"));
+  });
+
+  test("creates a folder at the workspace root from empty space", async () => {
+    const onCreateFolder = mock(async (_parent: string, folderName: string) => folderName);
+    useFilesPanelStore.setState({ fileTree: [], isLoadingTree: false });
+    renderWithTerminal(<AllFilesView onCreateFolder={onCreateFolder} />);
+
+    fireEvent.contextMenu(screen.getByText("No files found"));
+    fireEvent.click(await screen.findByText("New folder"));
+    expect(await screen.findByRole("dialog", { name: "New folder" })).toBeTruthy();
+    expect(screen.getByText(/workspace root/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(onCreateFolder).toHaveBeenCalledWith(".", "docs"));
+  });
+
+  test("CreateFolderDialog keeps the dialog open when creation fails", async () => {
+    const onCreate = mock(async () => {
+      throw new Error("already exists");
+    });
+    render(
+      <CreateFolderDialog
+        parentDirectory="src"
+        isPending={false}
+        onCancel={() => undefined}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Folder name"), { target: { value: "hooks" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await waitFor(() => expect(screen.getByText("already exists")).toBeTruthy());
+    expect(screen.getByRole("dialog", { name: "New folder" })).toBeTruthy();
   });
 
   test("FilesPanelHeader switches tabs, reports count, refreshes, and closes", () => {

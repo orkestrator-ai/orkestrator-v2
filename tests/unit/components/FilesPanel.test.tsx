@@ -118,6 +118,8 @@ const { AllFilesView } = await import("../../../apps/web/src/components/files-pa
 const { ChangesView } = await import("../../../apps/web/src/components/files-panel/ChangesView");
 const { FileActionDialog } =
   await import("../../../apps/web/src/components/files-panel/FileActionDialog");
+const { CreateFolderDialog } =
+  await import("../../../apps/web/src/components/files-panel/CreateFolderDialog");
 const filesPanelExports = await import("../../../apps/web/src/components/files-panel");
 
 const change: GitFileChange = {
@@ -724,5 +726,6 @@ describe("Files panel components", () => {
     expect(filesPanelExports.AllFilesView).toBe(AllFilesView);
     expect(filesPanelExports.ChangesView).toBe(ChangesView);
     expect(filesPanelExports.FileActionDialog).toBe(FileActionDialog);
+    expect(filesPanelExports.CreateFolderDialog).toBe(CreateFolderDialog);
   });
 });

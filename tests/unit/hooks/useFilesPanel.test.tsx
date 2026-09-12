@@ -91,6 +91,16 @@ const mockMoveLocalFile = mock<
 >((_environmentId, sourcePath, destinationDirectory) =>
   Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
 );
+const mockCreateContainerFolder = mock<
+  (environmentId: string, parentDirectory: string, folderName: string) => Promise<string>
+>((_environmentId, parentDirectory, folderName) =>
+  Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
+);
+const mockCreateLocalFolder = mock<
+  (environmentId: string, parentDirectory: string, folderName: string) => Promise<string>
+>((_environmentId, parentDirectory, folderName) =>
+  Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -108,6 +118,8 @@ mock.module("@/lib/backend", () => ({
   deleteLocalFile: mockDeleteLocalFile,
   moveContainerFile: mockMoveContainerFile,
   moveLocalFile: mockMoveLocalFile,
+  createContainerFolder: mockCreateContainerFolder,
+  createLocalFolder: mockCreateLocalFolder,
 }));
 
 const { useFilesPanel } = await import("../../../apps/web/src/hooks/useFilesPanel");
@@ -219,6 +231,8 @@ describe("useFilesPanel", () => {
     mockDeleteLocalFile.mockClear();
     mockMoveContainerFile.mockClear();
     mockMoveLocalFile.mockClear();
+    mockCreateContainerFolder.mockClear();
+    mockCreateLocalFolder.mockClear();
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
     mockGetGitStatus.mockImplementation(() => Promise.resolve([]));
@@ -250,6 +264,12 @@ describe("useFilesPanel", () => {
     );
     mockMoveLocalFile.mockImplementation((_environmentId, sourcePath, destinationDirectory) =>
       Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+    );
+    mockCreateContainerFolder.mockImplementation((_environmentId, parentDirectory, folderName) =>
+      Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
+    );
+    mockCreateLocalFolder.mockImplementation((_environmentId, parentDirectory, folderName) =>
+      Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
     );
   });
 
@@ -1085,6 +1105,81 @@ describe("useFilesPanel", () => {
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
   });
 
+  test("routes local and container folder creation and refreshes authoritative snapshots", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(containerEnvironment);
+    const containerHook = renderHook(() => useFilesPanel());
+    mockCreateContainerFolder.mockResolvedValueOnce("src/hooks");
+    await act(async () => {
+      await expect(containerHook.result.current.createFolder("src", "hooks")).resolves.toBe(
+        "src/hooks",
+      );
+    });
+    expect(mockCreateContainerFolder).toHaveBeenCalledWith("env-container", "src", "hooks");
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(mockToastSuccess).toHaveBeenCalledWith("Folder created", { description: "src/hooks" });
+    expect(containerHook.result.current.fileActionPending).toBeNull();
+    containerHook.unmount();
+
+    const localEnvironment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(localEnvironment);
+    const localHook = renderHook(() => useFilesPanel());
+    await act(async () => {
+      await localHook.result.current.createFolder(".", "docs");
+    });
+    expect(mockCreateLocalFolder).toHaveBeenCalledWith("env-local", ".", "docs");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
+    expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+  });
+
+  test("clears create-folder pending state after failure and does not refresh stale data", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    let rejectCreate: (error: Error) => void = () => {};
+    mockCreateContainerFolder.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectCreate = reject;
+        }),
+    );
+    const { result } = renderHook(() => useFilesPanel());
+
+    let mutation: Promise<string>;
+    act(() => {
+      mutation = result.current.createFolder("src", "hooks");
+    });
+    await waitFor(() => expect(result.current.fileActionPending).toBe("src\0hooks"));
+    await act(async () => {
+      rejectCreate(new Error("mkdir failed"));
+      await expect(mutation).rejects.toThrow("mkdir failed");
+    });
+    expect(result.current.fileActionPending).toBeNull();
+    expect(mockGetGitStatus).not.toHaveBeenCalled();
+    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to create folder", {
+      description: "mkdir failed",
+    });
+  });
+
   test("clears move pending state after failure and does not refresh stale data", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
@@ -1237,8 +1332,12 @@ describe("useFilesPanel", () => {
     await expect(result.current.moveFile("src/App.tsx", "archive")).rejects.toThrow(
       "The selected environment is not available",
     );
+    await expect(result.current.createFolder("src", "hooks")).rejects.toThrow(
+      "The selected environment is not available",
+    );
     expect(mockRevertContainerFile).not.toHaveBeenCalled();
     expect(mockDeleteContainerFile).not.toHaveBeenCalled();
+    expect(mockCreateContainerFolder).not.toHaveBeenCalled();
   });
 
   test("silent auto-refresh reloads the active tab without toggling loading state", async () => {

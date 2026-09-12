@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from "react";
+import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import {
@@ -7,7 +7,8 @@ import {
   isWorkspaceFileDrag,
   workspaceParentDirectory,
 } from "./FileTreeNode";
-import { Loader2, Folder, FolderTree } from "lucide-react";
+import { CreateFolderDialog } from "./CreateFolderDialog";
+import { Loader2, Folder, FolderPlus, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 import {
   Dialog,
@@ -16,6 +17,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import type { FileNode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
@@ -30,7 +37,31 @@ interface AllFilesViewProps {
   onRevert?: (path: string) => void;
   onDelete?: (path: string) => void;
   onMove?: (sourcePath: string, destinationDirectory: string) => void;
+  onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
   movePending?: boolean;
+}
+
+function WorkspaceCreateFolderMenu({
+  disabled,
+  onRequest,
+  children,
+}: {
+  disabled: boolean;
+  onRequest?: (parentDirectory: string) => void;
+  children: ReactNode;
+}) {
+  if (!onRequest) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem disabled={disabled} onSelect={() => onRequest(".")}>
+          <FolderPlus />
+          New folder
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 export function AllFilesView({
@@ -38,15 +69,18 @@ export function AllFilesView({
   onRevert,
   onDelete,
   onMove,
+  onCreateFolder,
   movePending = false,
 }: AllFilesViewProps = {}) {
   const fileTree = useFilesPanelStore((state) => state.fileTree);
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
   const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [moveSourcePath, setMoveSourcePath] = useState<string | null>(null);
+  const [createParentDirectory, setCreateParentDirectory] = useState<string | null>(null);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const changedPaths = useMemo(() => new Set(changes.map((change) => change.path)), [changes]);
   const directories = useMemo(() => collectDirectories(fileTree), [fileTree]);
@@ -64,6 +98,17 @@ export function AllFilesView({
       return;
     }
     onMove(sourcePath, destinationDirectory);
+  };
+
+  const requestCreateFolder = onCreateFolder ? setCreateParentDirectory : undefined;
+
+  const handleCreateFolder = async (parentDirectory: string, folderName: string) => {
+    if (!onCreateFolder) return;
+    await onCreateFolder(parentDirectory, folderName);
+    if (parentDirectory !== ".") {
+      setFolderExpanded(parentDirectory, true);
+    }
+    setCreateParentDirectory(null);
   };
 
   const handleRootDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -86,57 +131,76 @@ export function AllFilesView({
 
   if (fileTree.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderTree className="mb-2 h-8 w-8 opacity-50" />
-        <p className="text-sm">No files found</p>
-      </div>
+      <>
+        <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+          <div className="flex min-h-40 flex-col items-center justify-center py-8 text-muted-foreground">
+            <FolderTree className="mb-2 h-8 w-8 opacity-50" />
+            <p className="text-sm">No files found</p>
+          </div>
+        </WorkspaceCreateFolderMenu>
+        <CreateFolderDialog
+          parentDirectory={createParentDirectory}
+          isPending={movePending}
+          onCancel={() => setCreateParentDirectory(null)}
+          onCreate={handleCreateFolder}
+        />
+      </>
     );
   }
 
   return (
     <>
-      <div className="p-2">
-        {onMove && (
-          <div
-            aria-label="Workspace root drop target"
-            onDragEnter={(event) => {
-              if (movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              setIsRootDragOver(true);
-            }}
-            onDragOver={(event) => {
-              if (movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              setIsRootDragOver(true);
-            }}
-            onDragLeave={() => setIsRootDragOver(false)}
-            onDrop={handleRootDrop}
-            className={cn(
-              "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
-              isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
-            )}
-          >
-            <Folder className="h-3.5 w-3.5" />
-            Workspace root
-          </div>
-        )}
-        {fileTree.map((node) => (
-          <FileTreeNode
-            key={node.path}
-            item={node}
-            depth={0}
-            onFileClick={handleFileClick}
-            onReveal={onReveal}
-            changedPaths={changedPaths}
-            onRevert={onRevert}
-            onDelete={onDelete}
-            onMove={onMove}
-            onRequestMove={onMove ? setMoveSourcePath : undefined}
-            movePending={movePending}
-          />
-        ))}
-      </div>
+      <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+        <div className="min-h-40 p-2">
+          {onMove && (
+            <div
+              aria-label="Workspace root drop target"
+              onDragEnter={(event) => {
+                if (movePending || !isWorkspaceFileDrag(event)) return;
+                event.preventDefault();
+                setIsRootDragOver(true);
+              }}
+              onDragOver={(event) => {
+                if (movePending || !isWorkspaceFileDrag(event)) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setIsRootDragOver(true);
+              }}
+              onDragLeave={() => setIsRootDragOver(false)}
+              onDrop={handleRootDrop}
+              className={cn(
+                "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
+                isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+              )}
+            >
+              <Folder className="h-3.5 w-3.5" />
+              Workspace root
+            </div>
+          )}
+          {fileTree.map((node) => (
+            <FileTreeNode
+              key={node.path}
+              item={node}
+              depth={0}
+              onFileClick={handleFileClick}
+              onReveal={onReveal}
+              changedPaths={changedPaths}
+              onRevert={onRevert}
+              onDelete={onDelete}
+              onMove={onMove}
+              onRequestMove={onMove ? setMoveSourcePath : undefined}
+              onCreateFolder={requestCreateFolder}
+              movePending={movePending}
+            />
+          ))}
+        </div>
+      </WorkspaceCreateFolderMenu>
+      <CreateFolderDialog
+        parentDirectory={createParentDirectory}
+        isPending={movePending}
+        onCancel={() => setCreateParentDirectory(null)}
+        onCreate={handleCreateFolder}
+      />
       <Dialog
         open={moveSourcePath !== null}
         onOpenChange={(open) => !open && setMoveSourcePath(null)}

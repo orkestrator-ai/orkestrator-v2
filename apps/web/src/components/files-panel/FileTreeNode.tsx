@@ -5,6 +5,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  FolderPlus,
   RotateCcw,
   Trash2,
 } from "lucide-react";
@@ -43,6 +44,7 @@ interface FileTreeNodeProps {
   onDelete?: (path: string) => void;
   onMove?: (sourcePath: string, destinationDirectory: string) => void;
   onRequestMove?: (sourcePath: string) => void;
+  onCreateFolder?: (parentDirectory: string) => void;
   movePending?: boolean;
 }
 
@@ -56,6 +58,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onDelete,
   onMove,
   onRequestMove,
+  onCreateFolder,
   movePending = false,
 }: FileTreeNodeProps) {
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
@@ -67,8 +70,20 @@ export const FileTreeNode = memo(function FileTreeNode({
 
   const paddingLeft = depth * 12 + 8; // Indentation based on depth
 
+  const childProps = {
+    onFileClick,
+    onReveal,
+    changedPaths,
+    onRevert,
+    onDelete,
+    onMove,
+    onRequestMove,
+    onCreateFolder,
+    movePending,
+  };
+
   if (isFolder) {
-    return (
+    const folderTree = (
       <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
         <CollapsibleTrigger asChild>
           <button
@@ -123,22 +138,32 @@ export const FileTreeNode = memo(function FileTreeNode({
         </CollapsibleTrigger>
         <CollapsibleContent>
           {item.children?.map((child) => (
-            <FileTreeNode
-              key={child.path}
-              item={child}
-              depth={depth + 1}
-              onFileClick={onFileClick}
-              onReveal={onReveal}
-              changedPaths={changedPaths}
-              onRevert={onRevert}
-              onDelete={onDelete}
-              onMove={onMove}
-              onRequestMove={onRequestMove}
-              movePending={movePending}
-            />
+            <FileTreeNode key={child.path} item={child} depth={depth + 1} {...childProps} />
           ))}
         </CollapsibleContent>
       </Collapsible>
+    );
+
+    if (!onCreateFolder) {
+      return folderTree;
+    }
+
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div>{folderTree}</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={movePending} onSelect={() => onCreateFolder(item.path)}>
+            <FolderPlus />
+            New folder
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
+            <Copy />
+            Copy path
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     );
   }
 
@@ -187,6 +212,15 @@ export const FileTreeNode = memo(function FileTreeNode({
     <ContextMenu>
       <ContextMenuTrigger asChild>{fileRow}</ContextMenuTrigger>
       <ContextMenuContent>
+        {onCreateFolder && (
+          <ContextMenuItem
+            disabled={movePending}
+            onSelect={() => onCreateFolder(workspaceParentDirectory(item.path))}
+          >
+            <FolderPlus />
+            New folder
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={() => void copyFilePath(item.path)}>
           <Copy />
           Copy path

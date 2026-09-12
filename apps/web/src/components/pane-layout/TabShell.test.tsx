@@ -37,7 +37,9 @@ describe("TabShell", () => {
     );
 
     const close = screen.getByRole("button", { name: "Close First" });
-    expect(close.className).toContain("md:focus-visible:opacity-100");
+    expect(close.className).toContain("text-muted-foreground");
+    expect(close.className).toContain("md:hover-fine:opacity-0");
+    expect(close.className).toContain("md:hover-fine:focus-visible:opacity-100");
     expect(close.className).toContain("focus-visible:ring-2");
     expect(screen.getByText("Trailing control")).toBeTruthy();
 

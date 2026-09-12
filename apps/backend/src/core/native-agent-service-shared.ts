@@ -60,6 +60,7 @@ import {
   isFallbackExecutionProfileId,
   nativeAgentCapabilities,
   resolveReasoningId,
+  withResolvedNativeComposerModel,
 } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
@@ -581,18 +582,24 @@ export function nativeComposerControls(
   composer: NativeAgentComposerState | undefined,
   disabled: boolean,
   capabilities: NativeAgentCapabilities,
+  platform?: AgentPlatform,
 ): NativeAgentComposerControl[] {
   if (!composer) return [];
-  const selectedModel =
-    composer.models.find((model) => model.id === composer.selectedModelId) ?? composer.models[0];
+  const resolvedModels = withResolvedNativeComposerModel(
+    composer.models,
+    composer.selectedModelId,
+    platform,
+  );
+  const selectedModel = resolvedModels.selectedModel;
+  const models = resolvedModels.models;
   const controls: NativeAgentComposerControl[] = [];
-  if (composer.models.length > 0) {
+  if (models.length > 0) {
     controls.push({
       kind: "select",
       id: "model",
       label: "Model",
-      value: selectedModel?.id,
-      options: composer.models.map((model) => ({ id: model.id, label: model.label })),
+      value: selectedModel?.id ?? resolvedModels.selectedModelId,
+      options: models.map((model) => ({ id: model.id, label: model.label })),
       disabled,
     });
   }

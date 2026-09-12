@@ -18,7 +18,11 @@ import {
   openCodeModelLocalId,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  synthesizedNativeAgentModel,
   synthesizedOpenCodeAgentModel,
+  resolveNativeComposerModelId,
+  resolveNativeComposerSelectedModel,
+  withResolvedNativeComposerModel,
   nativeAgentCapabilities,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
@@ -493,6 +497,108 @@ describe("opencode model provider allowlist", () => {
       supportsMode: false,
     });
     expect(synthesizedOpenCodeAgentModel("not-a-model")).toBeNull();
+  });
+
+  test("keeps a stored OpenCode model ahead of the catalog default", () => {
+    expect(
+      resolveNativeComposerModelId({
+        sessionControlsModelId: "opencode-go/deepseek-v4-flash",
+        lastAssistantModelId: "opencode-go/deepseek-v4-flash",
+        sessionModelId: "opencode/nemotron-ultra-free",
+        catalogDefaultModelId: "opencode/nemotron-ultra-free",
+        firstCatalogModelId: "opencode/nemotron-ultra-free",
+      }),
+    ).toBe("opencode-go/deepseek-v4-flash");
+    expect(
+      resolveNativeComposerModelId({
+        lastAssistantModelId: "opencode-go/deepseek-v4-flash",
+        catalogDefaultModelId: "opencode/nemotron-ultra-free",
+        firstCatalogModelId: "opencode/nemotron-ultra-free",
+      }),
+    ).toBe("opencode-go/deepseek-v4-flash");
+    expect(
+      resolveNativeComposerModelId({
+        sessionModelId: "opencode-go/deepseek-v4-pro",
+        inferredModelId: "opencode-go/deepseek-v4-flash",
+        catalogDefaultModelId: "opencode/nemotron-ultra-free",
+      }),
+    ).toBe("opencode-go/deepseek-v4-pro");
+  });
+
+  test("synthesizes a missing OpenCode selection instead of substituting models[0]", () => {
+    const catalog = [
+      {
+        platform: "opencode" as const,
+        id: "opencode/nemotron-ultra-free",
+        label: "Nemotron Ultra Free",
+      },
+    ];
+    const synthesized = synthesizedOpenCodeAgentModel("opencode-go/deepseek-v4-flash");
+    expect(synthesized).not.toBeNull();
+    const resolved = withResolvedNativeComposerModel(
+      catalog,
+      "opencode-go/deepseek-v4-flash",
+      "opencode",
+    );
+    expect(resolved.selectedModelId).toBe("opencode-go/deepseek-v4-flash");
+    expect(resolved.selectedModel).toEqual(synthesized!);
+    expect(resolved.models.map((model) => model.id)).toEqual([
+      "opencode/nemotron-ultra-free",
+      "opencode-go/deepseek-v4-flash",
+    ]);
+    expect(
+      resolveNativeComposerSelectedModel(catalog, "opencode-go/deepseek-v4-flash", "opencode")?.id,
+    ).toBe("opencode-go/deepseek-v4-flash");
+  });
+
+  test("synthesizes a missing Pi slash-id as Pi, never as OpenCode", () => {
+    const catalog = [
+      {
+        platform: "pi" as const,
+        id: "google/gemini-3-flash",
+        label: "Gemini 3 Flash",
+      },
+    ];
+    const synthesized = synthesizedNativeAgentModel("anthropic/claude-opus-4-5", "pi");
+    expect(synthesized).not.toBeNull();
+    expect(synthesized?.platform).toBe("pi");
+    const resolved = withResolvedNativeComposerModel(catalog, "anthropic/claude-opus-4-5", "pi");
+    expect(resolved.selectedModel).toEqual(synthesized!);
+    expect(resolved.models.map((model) => `${model.platform}:${model.id}`)).toEqual([
+      "pi:google/gemini-3-flash",
+      "pi:anthropic/claude-opus-4-5",
+    ]);
+    const emptyCatalog = synthesizedNativeAgentModel("openai-codex/gpt-5.4", "pi");
+    expect(emptyCatalog).not.toBeNull();
+    expect(withResolvedNativeComposerModel([], "openai-codex/gpt-5.4", "pi").selectedModel).toEqual(
+      emptyCatalog!,
+    );
+    expect(withResolvedNativeComposerModel(catalog, "openai-codex/gpt-5.4").selectedModel?.id).toBe(
+      "google/gemini-3-flash",
+    );
+  });
+
+  test("falls back to the first catalogue model when a selection cannot be synthesized", () => {
+    const catalog = [
+      {
+        platform: "claude" as const,
+        id: "opus",
+        label: "Opus",
+        reasoning: [{ id: "high", label: "High" }],
+      },
+    ];
+    const resolved = withResolvedNativeComposerModel(catalog, "sonnet", "claude");
+    expect(resolved.selectedModelId).toBe("opus");
+    expect(resolved.selectedModel).toEqual(catalog[0]);
+    expect(resolved.models).toEqual(catalog);
+    expect(withResolvedNativeComposerModel([], "sonnet", "claude")).toEqual({
+      models: [],
+      selectedModelId: "sonnet",
+    });
+    expect(withResolvedNativeComposerModel([], "gpt-5", "codex")).toEqual({
+      models: [],
+      selectedModelId: "gpt-5",
+    });
   });
 
   test("strips the provider prefix regardless of its casing", () => {

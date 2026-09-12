@@ -13,6 +13,7 @@ import {
   effectiveOpenCodePolicy,
   openCodePermissionRules,
   openCodeReviewPermissionRules,
+  openCodeSessionCreateModel,
 } from "./opencode-provider-helpers.js";
 
 const REVIEW_SESSION_METADATA_KEY = "orkestrator.reviewSession";
@@ -81,9 +82,11 @@ export class OpenCodeReviewSessionPermissions {
       throw new Error("OpenCode reviewer sessions require an execution policy");
     }
     const permission = policy ? openCodePermissionRules(policy) : undefined;
+    const model = openCodeSessionCreateModel(options.model, options.effort);
     const response = await this.client.session.create(
       {
         title: label,
+        ...(model ? { model } : {}),
         ...(options.reviewerSession && policy
           ? { metadata: openCodeReviewSessionMetadata(policy) }
           : {}),

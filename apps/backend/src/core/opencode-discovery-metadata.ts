@@ -25,6 +25,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { openCodeExecutionProfiles } from "./opencode-execution-profiles.js";
+import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
 import {
   asRecord,
   INTERACTIVE_RUNTIME_METADATA_TTL_MS,
@@ -39,6 +40,9 @@ export interface OpenCodeDiscoveryMetadata {
   models: AgentModel[];
   selectedModelId?: string;
   selectedReasoningId?: string;
+  /** OpenCode `Session.model`, distinct from the catalog default. */
+  sessionModelId?: string;
+  sessionReasoningId?: string;
   title?: string;
   shareUrl?: string | null;
 }
@@ -115,6 +119,7 @@ export async function readOpenCodeDiscoveryFanOut(
     sessionResult?.status === "fulfilled"
       ? (nonEmptyString(asRecord(sessionData?.share)?.url) ?? null)
       : undefined;
+  const sessionModel = openCodeSessionModelRef(sessionData);
   const catalogResult = results[8];
   const catalog = catalogResult?.status === "fulfilled" ? catalogResult.value : { models: [] };
   return {
@@ -127,6 +132,8 @@ export async function readOpenCodeDiscoveryFanOut(
     ...(shareUrl === undefined ? {} : { shareUrl }),
     ...(catalog.selectedModelId ? { selectedModelId: catalog.selectedModelId } : {}),
     ...(catalog.selectedReasoningId ? { selectedReasoningId: catalog.selectedReasoningId } : {}),
+    ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
+    ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
   };
 }
 
@@ -141,7 +148,14 @@ export interface OpenCodeDiscoveryDeps {
   allowedProviders(): Promise<readonly string[]>;
   cacheKey(allowedProviders: readonly string[]): string;
   /** Overlays live stream state (title, runtime drift) onto a cached entry. */
-  applyStreamState<T extends { runtime: NativeAgentRuntimeSummary; title?: string }>(
+  applyStreamState<
+    T extends {
+      runtime: NativeAgentRuntimeSummary;
+      title?: string;
+      sessionModelId?: string;
+      sessionReasoningId?: string;
+    },
+  >(
     sessionId: string,
     metadata: T,
   ): T;

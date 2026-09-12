@@ -181,6 +181,33 @@ export function openCodeModelDisplayLabel(modelId: string, name?: string | null)
 }
 
 /**
+ * A picker row for a `provider/model` id that is not yet in a live or cached
+ * catalogue.
+ *
+ * The platform is explicit so a Pi or Cursor slash-id cannot be tagged as
+ * OpenCode and then filtered out of a platform-locked picker.
+ */
+export function synthesizedNativeAgentModel(
+  modelId: string,
+  platform: AgentPlatform,
+): AgentModel | null {
+  const trimmed = modelId.trim();
+  const providerId = openCodeModelProviderId(trimmed);
+  const localId = openCodeModelLocalId(trimmed);
+  if (!providerId || !localId) return null;
+  return {
+    platform,
+    id: trimmed,
+    label: openCodeModelDisplayLabel(trimmed),
+    providerLabel: providerId,
+    reasoning: [{ id: DEFAULT_REASONING_ID, label: "Default" }],
+    defaultReasoningId: DEFAULT_REASONING_ID,
+    supportsSpeed: false,
+    supportsMode: false,
+  };
+}
+
+/**
  * A picker row for an OpenCode id that is not yet in a live or cached catalogue.
  *
  * Favourites and TUI recents have to be selectable before an OpenCode server
@@ -189,19 +216,87 @@ export function openCodeModelDisplayLabel(modelId: string, name?: string | null)
  * platform name.
  */
 export function synthesizedOpenCodeAgentModel(modelId: string): AgentModel | null {
-  const trimmed = modelId.trim();
-  const providerId = openCodeModelProviderId(trimmed);
-  const localId = openCodeModelLocalId(trimmed);
-  if (!providerId || !localId) return null;
+  return synthesizedNativeAgentModel(modelId, "opencode");
+}
+
+function nonBlankModelId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Host-authoritative composer model id.
+ *
+ * Catalog default and `models[0]` are last resorts. A stored or last-used id
+ * must survive a connected-catalog refresh that temporarily omits it — that
+ * refresh is what used to snap OpenCode sessions onto Nemotron Ultra Free.
+ */
+export function resolveNativeComposerModelId(input: {
+  providerControlsModelId?: string;
+  sessionControlsModelId?: string;
+  lastAssistantModelId?: string;
+  sessionModelId?: string;
+  inferredModelId?: string;
+  catalogDefaultModelId?: string;
+  firstCatalogModelId?: string;
+}): string | undefined {
+  return (
+    nonBlankModelId(input.providerControlsModelId) ??
+    nonBlankModelId(input.sessionControlsModelId) ??
+    nonBlankModelId(input.lastAssistantModelId) ??
+    nonBlankModelId(input.sessionModelId) ??
+    nonBlankModelId(input.inferredModelId) ??
+    nonBlankModelId(input.catalogDefaultModelId) ??
+    nonBlankModelId(input.firstCatalogModelId)
+  );
+}
+
+/**
+ * Resolve the picker row for a selected id without substituting another model.
+ *
+ * A known `provider/model` id that is missing from the live catalogue is
+ * synthesized for the given platform. Synthesis never invents an OpenCode row
+ * for another agent. An id that cannot be synthesized falls back to
+ * `models[0]` so reasoning updates still have a catalogue row to validate.
+ */
+export function resolveNativeComposerSelectedModel(
+  models: readonly AgentModel[],
+  selectedModelId?: string,
+  platform?: AgentPlatform,
+): AgentModel | undefined {
+  const id = nonBlankModelId(selectedModelId);
+  if (id) {
+    const found = models.find((model) => model.id === id);
+    if (found) return found;
+    if (platform) {
+      const synthesized = synthesizedNativeAgentModel(id, platform);
+      if (synthesized) return synthesized;
+    }
+    return models[0];
+  }
+  return models[0];
+}
+
+/** Include a synthesized current selection in the catalogue the picker renders. */
+export function withResolvedNativeComposerModel(
+  models: readonly AgentModel[],
+  selectedModelId?: string,
+  platform?: AgentPlatform,
+): { models: AgentModel[]; selectedModel?: AgentModel; selectedModelId?: string } {
+  const id = nonBlankModelId(selectedModelId);
+  const selectedModel = resolveNativeComposerSelectedModel(models, id, platform);
+  if (selectedModel) {
+    return {
+      models: models.some((model) => model.id === selectedModel.id)
+        ? [...models]
+        : [...models, selectedModel],
+      selectedModel,
+      selectedModelId: selectedModel.id,
+    };
+  }
   return {
-    platform: "opencode",
-    id: trimmed,
-    label: openCodeModelDisplayLabel(trimmed),
-    providerLabel: providerId,
-    reasoning: [{ id: DEFAULT_REASONING_ID, label: "Default" }],
-    defaultReasoningId: DEFAULT_REASONING_ID,
-    supportsSpeed: false,
-    supportsMode: false,
+    models: [...models],
+    ...(id ? { selectedModelId: id } : {}),
   };
 }
 

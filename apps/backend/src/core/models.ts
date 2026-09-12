@@ -541,6 +541,11 @@ export interface PersistedNativeAgentSession {
   interactionPolicy: AgentInteractionPolicy;
   /** Provider-neutral interactive choices that survive renderer/backend restarts. */
   controls?: import("@orkestrator/protocol/native-agent").NativeAgentControlUpdate;
+  /**
+   * Observed OpenCode model written only when host controls have no modelId.
+   * Ranks below a live provider session model so a later TUI change can win.
+   */
+  inferredComposerSelection?: { modelId: string; reasoningId?: string };
   /** Exact backend-authored frame that may be hidden on the first matching user echo. */
   initialPromptPresentation?: TrustedUserPromptPresentation;
   dispatchedRequestIds?: string[];

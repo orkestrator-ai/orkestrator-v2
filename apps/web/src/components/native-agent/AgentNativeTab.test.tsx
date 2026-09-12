@@ -5529,6 +5529,33 @@ describe("AgentNativeTab", () => {
       }));
     }
 
+    test("keeps a catalog-omitted Pi selection visible on the locked Pi picker", async () => {
+      seedProjection({
+        composer: {
+          models: [
+            {
+              platform: "pi",
+              id: "google/gemini-3-flash",
+              label: "Gemini 3 Flash",
+              reasoning: [{ id: "high", label: "High" }],
+              defaultReasoningId: "high",
+            },
+          ],
+          selectedModelId: "anthropic/claude-opus-4-5",
+          selectedReasoningId: "default",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-pi-omitted-model" data={identity("pi")} isActive />);
+
+      const trigger = await screen.findByTitle(/Choose model/);
+      expect(trigger.textContent).toContain("claude-opus-4-5");
+      fireEvent.pointerDown(trigger);
+      expect(screen.getByRole("menuitemradio", { name: /claude-opus-4-5/ })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "opencode models" })).toBeNull();
+      expect(document.querySelector('[data-native-model-row-platform="opencode"]')).toBeNull();
+      expect(document.querySelector('[data-native-model-row-platform="pi"]')).toBeTruthy();
+    });
+
     test("deduplicates a projection-recovered background Agent and rehydrates it", async () => {
       seedProjection({
         backgroundTasks: [

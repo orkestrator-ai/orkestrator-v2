@@ -878,9 +878,10 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     }
     if (input.update.reasoningId !== undefined) {
       const modelId = input.update.modelId ?? composer?.selectedModelId;
-      const model = composer?.models.find(
-        (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
-      );
+      const model =
+        composer?.models.find(
+          (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
+        ) ?? composer?.models[0];
       if (
         !model?.reasoning?.some(
           (option: NonNullable<NativeAgentComposerState["models"][number]["reasoning"]>[number]) =>
@@ -892,9 +893,10 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     }
     if (input.update.parameterValues !== undefined) {
       const modelId = input.update.modelId ?? composer?.selectedModelId;
-      const model = composer?.models.find(
-        (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
-      );
+      const model =
+        composer?.models.find(
+          (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
+        ) ?? composer?.models[0];
       for (const [parameterId, value] of Object.entries(input.update.parameterValues)) {
         const parameter = model?.parameters?.find((candidate) => candidate.id === parameterId);
         if (!parameter || typeof value !== (parameter.kind === "toggle" ? "boolean" : "string")) {

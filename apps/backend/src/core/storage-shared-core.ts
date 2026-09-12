@@ -872,6 +872,14 @@ export function isPersistedNativeAgentSession(
       value.origin === "build-pipeline" ||
       value.origin === "looped-review") &&
     isAgentInteractionPolicy(value.interactionPolicy) &&
+    (value.inferredComposerSelection === undefined ||
+      (isRecord(value.inferredComposerSelection) &&
+        Object.keys(value.inferredComposerSelection).every(
+          (key) => key === "modelId" || key === "reasoningId",
+        ) &&
+        isNonBlankString(value.inferredComposerSelection.modelId) &&
+        (value.inferredComposerSelection.reasoningId === undefined ||
+          isNonBlankString(value.inferredComposerSelection.reasoningId)))) &&
     (value.controls === undefined ||
       (isRecord(value.controls) &&
         Object.keys(value.controls).every(

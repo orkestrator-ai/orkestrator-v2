@@ -1080,6 +1080,48 @@ describe("OpenCode provider", () => {
     }
   });
 
+  test("creates an OpenCode session with the selected model", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.createSession("build", "Build task", {
+          model: "opencode-go/deepseek-v4-flash",
+          effort: "default",
+        }),
+      ).resolves.toBe("owned-session");
+      expect(fake.createCalls).toEqual([
+        {
+          title: "Build task",
+          model: { providerID: "opencode-go", id: "deepseek-v4-flash" },
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("rejects session.create when OpenCode does not know the provider or model", async () => {
+    const fake = openCodeFake();
+    fake.setCreateResponse({ error: { message: "Unknown provider or model" } });
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.createSession("build", "Build task", {
+          model: "unknown-provider/missing-model",
+        }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.createCalls).toEqual([
+        {
+          title: "Build task",
+          model: { providerID: "unknown-provider", id: "missing-model" },
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("answers only owned-session events and denies unexpected permissions", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

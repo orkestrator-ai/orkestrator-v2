@@ -405,7 +405,8 @@ export function useNativeAgentSession<TMessage = unknown>({
     NativeAgentProgressiveCacheEntry["transcriptAvailability"]
   >(
     matchingSharedProjection
-      ? matchingProgressiveCache?.transcriptAvailability === "empty"
+      ? matchingProgressiveCache?.transcriptAvailability === "empty" ||
+        matchingSharedProjection.messages.length === 0
         ? "empty"
         : "cached"
       : "unavailable",
@@ -1378,9 +1379,9 @@ export function useNativeAgentSession<TMessage = unknown>({
       const sequence = ++refreshSequenceRef.current;
       const operationEpoch = projectionOperationEpochRef.current;
       setIsRefreshing(true);
+      setTranscriptRefreshing(true);
       try {
         if (await nativeAgentProgressiveSupported()) {
-          setTranscriptRefreshing(true);
           setTranscriptError(null);
           const retainedStateAvailability = beginSessionStateRefresh();
           setSessionStateError(null);
@@ -1664,6 +1665,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           operationEpoch === projectionOperationEpochRef.current
         ) {
           setRuntimeError(error instanceof Error ? error.message : String(error));
+          setTranscriptRefreshing(false);
         }
         return null;
       } finally {
@@ -1916,7 +1918,13 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
       progressiveDiscoveryRef.current = progressive.discovery;
-      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      setTranscriptAvailability(
+        projectionRef.current
+          ? projectionRef.current.messages.length === 0
+            ? "empty"
+            : "cached"
+          : "unavailable",
+      );
       setTranscriptError(progressive.transcriptError ?? null);
       markSessionStateAvailability("unavailable");
       setSessionStateError(null);
@@ -1927,7 +1935,13 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = undefined;
       progressiveDiscoveryRef.current = undefined;
-      setTranscriptAvailability(projectionRef.current ? "cached" : "unavailable");
+      setTranscriptAvailability(
+        projectionRef.current
+          ? projectionRef.current.messages.length === 0
+            ? "empty"
+            : "cached"
+          : "unavailable",
+      );
       setTranscriptError(null);
       markSessionStateAvailability("unavailable");
       setSessionStateError(null);
@@ -1946,6 +1960,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   useEffect(() => {
     if (!enabled || !isActive) {
       setIsRefreshing(false);
+      setTranscriptRefreshing(false);
       return;
     }
     void connect().then(() => undefined);

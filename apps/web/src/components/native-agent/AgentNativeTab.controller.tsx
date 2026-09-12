@@ -1936,6 +1936,11 @@ export function SharedNativeAgentController({
       containerId={data.containerId}
       connectionState={connectionState}
       sessionEstablished={hasEstablishedSession}
+      transcriptRefreshing={
+        transcriptRefreshing &&
+        transcriptAvailability !== "current" &&
+        transcriptAvailability !== "empty"
+      }
       displayAvailable={
         Boolean(projection?.messages.length) ||
         (connectionState !== "error" &&

@@ -54,6 +54,14 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   /** Cached or authoritative transcript content can render before transport settles. */
   displayAvailable?: boolean;
   /**
+   * The transcript itself is being rehydrated from a stale or absent copy.
+   *
+   * This is deliberately separate from `connectionState`: session state can
+   * still report `connecting` after the transcript has proved it is current,
+   * and that is not transcript work the shimmer should represent.
+   */
+  transcriptRefreshing?: boolean;
+  /**
    * Whether a provider session already existed before the current connect.
    * Connecting is then a refresh, and cached content stays readable behind a
    * notice. A tab still creating its first session has no conversation to
@@ -172,6 +180,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentExpansionScope,
   connectionState,
   displayAvailable = false,
+  transcriptRefreshing = false,
   sessionEstablished = true,
   errorMessage,
   desynced = false,
@@ -322,8 +331,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    * invisible card, so its presence ends the centered state.
    */
   const hasTranscriptCards = Children.count(transcriptCards) > 0;
-  const refreshingSession =
-    displayAvailable && connectionState === "connecting" && sessionEstablished;
+  const refreshingTranscript =
+    displayAvailable && connectionState !== "error" && sessionEstablished && transcriptRefreshing;
   const composerCentered = centerCompose && !hasTranscriptCards;
   /*
    * The transcript-end skeleton is the primary indicator, but the centered
@@ -331,7 +340,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    * bottom never reaches its footer. The dock's notice row is visible in both
    * layouts and at any scroll position, so it carries the fallback.
    */
-  const pinRefreshShimmer = refreshingSession && (composerCentered || !isAtBottom);
+  const pinRefreshShimmer = refreshingTranscript && (composerCentered || !isAtBottom);
   const connectionNotice =
     displayAvailable && connectionState === "error" ? (
       <div
@@ -402,12 +411,12 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         stray status node.
       */}
       <span
-        role={refreshingSession ? "status" : undefined}
+        role={refreshingTranscript ? "status" : undefined}
         aria-live="polite"
         aria-atomic="true"
         className="sr-only"
       >
-        {refreshingSession ? `Refreshing ${agentLabel} session…` : null}
+        {refreshingTranscript ? `Refreshing ${agentLabel} session…` : null}
       </span>
       <div
         className={cn(
@@ -490,7 +499,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 layout fades it out, and a skeleton animating behind `opacity-0`
                 is work nobody sees.
               */}
-              <SessionRefreshShimmer active={refreshingSession && !composerCentered} />
+              <SessionRefreshShimmer active={refreshingTranscript && !composerCentered} />
               {/*
                 The dock floats over the transcript, so its full live height must
                 be reserved here. That keeps a growing composer — plus any pinned

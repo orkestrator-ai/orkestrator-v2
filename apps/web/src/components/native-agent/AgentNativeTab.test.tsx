@@ -3752,8 +3752,38 @@ describe("AgentNativeTab", () => {
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  test("does not shimmer while rechecking a brand-new tab's authoritative empty transcript", async () => {
+    const tabId = "tab-empty-transcript-cache";
+    const cached = await defaultProjection({ agent: "codex", environmentId: "env-1" });
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(createSessionKey("env-1", tabId), cached);
+
+    let settleRead: (() => void) | undefined;
+    getNativeAgentProjectionMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settleRead = () => resolve(cached);
+        }),
+    );
+
+    render(<AgentNativeTab tabId={tabId} data={identity("codex")} isActive />);
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+
+    // The pending read is only verifying an already-authoritative empty
+    // transcript. No conversation has occurred, so the centered composer must
+    // not grow a transcript-history shimmer above it.
+    expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy();
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+
+    await act(async () => {
+      settleRead!();
+    });
+  });
+
   test.each(["codex", "cursor"] as const)(
-    "shows an inactive %s tab as connecting rather than failed",
+    "does not report an inactive %s tab as failed or refreshing before reading",
     async (platform) => {
       render(
         <AgentNativeTab
@@ -3763,11 +3793,11 @@ describe("AgentNativeTab", () => {
         />,
       );
       await new Promise((resolve) => setTimeout(resolve, 25));
-      // Never asked, so never refused. A tab that has not been allowed to read
-      // has no failure to report, and the destructive state would be a lie the
-      // user cannot act on.
+      // Never asked, so never refused or started a transcript read. Neither a
+      // failure nor a shimmer would describe work this inactive tab performed.
       const label = platform === "cursor" ? "Cursor Agent" : "Codex";
-      expect(screen.getByText(`Refreshing ${label} session…`)).toBeTruthy();
+      expect(screen.queryByText(`Refreshing ${label} session…`) === null).toBe(true);
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
       expect(screen.queryByText("Connection Failed") === null).toBe(true);
       expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     },
@@ -3794,7 +3824,12 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Refreshing Pi session…")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
+    // The joined read already supplied the authoritative empty transcript.
+    // `connecting` now describes session state alone, so it must not keep a
+    // transcript-loading shimmer alive above a brand-new composer.
+    expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
@@ -3834,7 +3869,7 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connecting to Pi...") === null).toBe(true);
   });
 
-  test("leaves the connecting overlay when the session comes back", async () => {
+  test("does not shimmer once an empty transcript is authoritative during recovery", async () => {
     // `recovering` polls at the active cadence, so the tab has to pick the
     // recovery up on its own. A reconnect the user has to click through would
     // defeat the point of holding the overlay in the first place.
@@ -3849,10 +3884,11 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
 
-    await waitFor(() => expect(screen.getByText("Refreshing Pi session…")).toBeTruthy());
-    await waitFor(() => expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true), {
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2), {
       timeout: 5_000,
     });
+    expect(screen.queryByText("Refreshing Pi session…") === null).toBe(true);
+    expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
   });
 
@@ -4185,7 +4221,7 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
 
-  test("keeps refresh copy on a created tab that has connected once with a transcript", async () => {
+  test("removes refresh copy once a created tab's transcript is authoritative", async () => {
     // Once the created tab has produced conversation there is a transcript to
     // protect, so a subsequent connect is a refresh and keeps it reachable.
     // Nothing in the props tells this reconnect apart from the first one, which
@@ -4217,8 +4253,11 @@ describe("AgentNativeTab", () => {
       });
     });
 
-    await waitFor(() => expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy());
-    expect(screen.getByText("Already answered")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Already answered")).toBeTruthy());
+    expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
+    expect(
+      screen.getByTestId("session-refresh-shimmer-transcript").getAttribute("data-active"),
+    ).toBe("false");
     expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
@@ -4603,9 +4642,10 @@ describe("AgentNativeTab", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    // Retry starts work immediately. Staying on Connection Failed would leave
-    // the only recovery control on screen for the whole reconnect.
-    await waitFor(() => expect(screen.getByText("Refreshing Cursor Agent session…")).toBeTruthy());
+    // Retry starts adoption immediately, but transcript loading has not begun
+    // yet. Clear the stale failure without claiming that history is loading.
+    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {
@@ -4637,7 +4677,8 @@ describe("AgentNativeTab", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(screen.getByText("Refreshing Codex session…")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByText("bridge refused the session") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
@@ -4666,7 +4707,8 @@ describe("AgentNativeTab", () => {
 
     // The cursor read answered "no session". That must not keep vouching for
     // OpenCode, which has not been asked yet.
-    await waitFor(() => expect(screen.getByText("Refreshing OpenCode session…")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText("Connection Failed") === null).toBe(true));
+    expect(screen.queryByText("Refreshing OpenCode session…") === null).toBe(true);
     expect(screen.queryByText("Connection Failed") === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
     await act(async () => {

@@ -504,6 +504,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           messages={[
             {
               id: "assistant-1",
@@ -526,10 +527,10 @@ describe("NativeChatShell", () => {
       expect(screen.queryByTestId("compose-dock-notice") === null).toBe(true);
     });
 
-    test("leaves the composer centered while an empty established session refreshes", () => {
-      // A refresh is transient. Sending the dock to the bottom and animating it
-      // back is visible churn, and it swaps which "Resume Session" control the
-      // centered layout puts in front of the user mid-reconnect.
+    test("does not shimmer for an empty session whose transcript is already current", () => {
+      // Session state may still be reconnecting after the transcript read has
+      // authoritatively returned empty. That is a brand-new conversation, not
+      // missing transcript history, so the dock must stay clean.
       const { rerender } = render(
         <NativeChatShell
           {...shellProps()}
@@ -543,6 +544,8 @@ describe("NativeChatShell", () => {
 
       const dock = screen.getByTestId("compose-dock");
       expect(dock.className).toContain("top-1/2");
+      expect(screen.queryByTestId("session-refresh-shimmer-pinned") === null).toBe(true);
+      expect(screen.queryByText("Refreshing Codex session…") === null).toBe(true);
       // Exactly one reachable entry point, the centered one, throughout.
       expect(screen.getAllByRole("button", { name: /Resume Session/ })).toHaveLength(1);
 
@@ -569,6 +572,7 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
         />,
       );
 
@@ -588,6 +592,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           isAtBottom={false}
         />,
       );
@@ -605,6 +610,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           isAtBottom
         />,
       );
@@ -626,6 +632,7 @@ describe("NativeChatShell", () => {
           centerCompose
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
           desynced
         />,
       );
@@ -651,6 +658,7 @@ describe("NativeChatShell", () => {
           agentLabel="Codex"
           connectionState="connecting"
           displayAvailable
+          transcriptRefreshing
         />,
       );
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_LEDGER_MESSAGES,
   createOpenCodeUsageLedger,
   openCodeContextUsage,
   openCodeContextUsageFromLedger,
@@ -154,12 +155,85 @@ describe("openCodeContextUsage", () => {
     recordOpenCodeUsageMessages(ledger, [
       assistantMessage("a", { input: 80, cacheRead: 20, cost: 0.4 }),
     ]);
-    recordOpenCodeUsageMessages(ledger, [assistantMessage("a", { input: 0, cacheRead: 0, cost: 0 })]);
+    recordOpenCodeUsageMessages(ledger, [
+      assistantMessage("a", { input: 0, cacheRead: 0, cost: 0 }),
+    ]);
 
     expect(openCodeContextUsageFromLedger(ledger, [])).toMatchObject({
       inputTokens: 80,
       cacheReadTokens: 20,
       sessionTokens: 100,
     });
+  });
+
+  test("replaying more than the ledger bound does not double-count retired ids", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES + 8 }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 1 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, messages);
+    const second = openCodeContextUsageFromLedger(ledger, []);
+
+    expect(first).toMatchObject({
+      inputTokens: MAX_LEDGER_MESSAGES + 8,
+      sessionTokens: MAX_LEDGER_MESSAGES + 8,
+    });
+    expect(second).toEqual(first);
+  });
+
+  test("a late update to a retired message id does not charge it again", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES + 1 }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 1 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, [assistantMessage("message-0", { input: 9, cost: 1 })]);
+
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(first);
+  });
+
+  test("keeps incremental totals after filling the live ledger window", () => {
+    const ledger = createOpenCodeUsageLedger();
+    const messages = Array.from({ length: MAX_LEDGER_MESSAGES }, (_, index) =>
+      assistantMessage(`message-${index}`, { input: 2, cacheRead: 1, cost: 0.01 }),
+    );
+    recordOpenCodeUsageMessages(ledger, messages);
+    const first = openCodeContextUsageFromLedger(ledger, []);
+    recordOpenCodeUsageMessages(ledger, messages);
+
+    expect(first).toMatchObject({
+      inputTokens: MAX_LEDGER_MESSAGES * 2,
+      cacheReadTokens: MAX_LEDGER_MESSAGES,
+      sessionTokens: MAX_LEDGER_MESSAGES * 3,
+    });
+    expect(first?.costUsd).toBeCloseTo(MAX_LEDGER_MESSAGES * 0.01);
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(first);
+  });
+
+  test("omits updatedAt instead of throwing when a timestamp is outside the Date range", () => {
+    const ledger = createOpenCodeUsageLedger();
+    recordOpenCodeUsageMessages(ledger, [
+      {
+        info: {
+          id: "assistant-1",
+          role: "assistant",
+          tokens: { input: 7, output: 3 },
+          time: { created: 1, completed: 1e18 },
+        },
+        parts: [],
+      },
+    ]);
+
+    const usage = openCodeContextUsageFromLedger(ledger, []);
+    expect(usage).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 3,
+      sessionTokens: 10,
+    });
+    expect(usage?.updatedAt).toBeUndefined();
+    expect(openCodeContextUsageFromLedger(ledger, [])).toEqual(usage);
   });
 });

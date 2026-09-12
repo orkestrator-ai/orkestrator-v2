@@ -20,7 +20,7 @@ import {
 } from "./opencode-usage.js";
 
 const MAX_STREAM_SESSIONS = 1_024;
-const MAX_STREAM_MESSAGES = 1_025;
+export const MAX_STREAM_MESSAGES = 1_025;
 const MAX_STREAM_PARTS = 2_048;
 const MAX_STREAM_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 
@@ -374,20 +374,26 @@ export class OpenCodeStreamState {
       return { sessionId };
     }
 
-    if (!state.messagesCurrent || !state.messages) return { sessionId };
     if (event.type === "message.updated") {
       const info = asRecord(properties?.info);
       const messageId = nonEmptyString(info?.id);
-      if (!messageId) return this.invalidate(state, sessionId);
+      if (!messageId) {
+        return state.messagesCurrent && state.messages
+          ? this.invalidate(state, sessionId)
+          : { sessionId };
+      }
+      this.recordUsage(sessionId, [{ info, parts: [] }]);
+      if (!state.messagesCurrent || !state.messages) return { sessionId };
       const index = this.messageIndex(state.messages, messageId);
       const previous = index >= 0 ? asRecord(state.messages[index]) : undefined;
       const next = { info, parts: Array.isArray(previous?.parts) ? previous.parts : [] };
       if (index >= 0) state.messages[index] = next;
       else state.messages.push(next);
-      this.recordUsage(sessionId, [next]);
       this.finishMessageMutation(state);
       return { sessionId };
     }
+
+    if (!state.messagesCurrent || !state.messages) return { sessionId };
     if (event.type === "message.removed") {
       const messageId = nonEmptyString(properties?.messageID);
       if (!messageId) return this.invalidate(state, sessionId);

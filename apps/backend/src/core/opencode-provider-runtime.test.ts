@@ -388,6 +388,77 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("usageFromMessages falls back when the transcript has no session id", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake);
+    try {
+      provider.registerSession?.("owned-session");
+      expect(
+        provider.usageFromMessages?.([
+          {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              tokens: { input: 10, output: 2, cache: { read: 0, write: 0 } },
+              cost: 0.1,
+              time: { created: 1, completed: 2 },
+            },
+            parts: [],
+          },
+        ]),
+      ).toMatchObject({
+        inputTokens: 10,
+        sessionTokens: 12,
+        source: "opencode",
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("usageFromMessages accumulates prior session ids from a windowed tail", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake);
+    try {
+      provider.registerSession?.("owned-session");
+      const earlier = {
+        info: {
+          id: "assistant-1",
+          sessionID: "owned-session",
+          role: "assistant",
+          tokens: { input: 100, output: 0, cache: { read: 0, write: 0 } },
+          cost: 0.2,
+          time: { created: 1, completed: 2 },
+        },
+        parts: [],
+      };
+      const later = {
+        info: {
+          id: "assistant-2",
+          sessionID: "owned-session",
+          role: "assistant",
+          tokens: { input: 10, output: 0, cache: { read: 0, write: 0 } },
+          cost: 0.05,
+          time: { created: 3, completed: 4 },
+        },
+        parts: [],
+      };
+      expect(provider.usageFromMessages?.([earlier, later])).toMatchObject({
+        inputTokens: 110,
+        sessionTokens: 110,
+      });
+      const firstTail = provider.usageFromMessages?.([later]);
+      expect(firstTail).toMatchObject({
+        inputTokens: 110,
+        sessionTokens: 110,
+        usedTokens: 10,
+      });
+      expect(provider.usageFromMessages?.([later])).toEqual(firstTail);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("projects a transcript that outgrew the history window", async () => {
     const fake = openCodeFake();
     const messages = Array.from({ length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 }, (_, index) => ({

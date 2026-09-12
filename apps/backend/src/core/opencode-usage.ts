@@ -1,7 +1,10 @@
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import { asRecord, nonEmptyString } from "./agent-provider-runtime.js";
 
-const MAX_LEDGER_MESSAGES = 8_192;
+export const MAX_LEDGER_MESSAGES = 8_192;
+/** Replay-safe tombstones for ids folded out of `byMessageId`. */
+export const MAX_RETIRED_MESSAGE_IDS = 16_384;
+const MAX_USABLE_TIMESTAMP_MS = 8.64e15;
 
 export type OpenCodeUsageContribution = {
   inputTokens: number;
@@ -14,8 +17,9 @@ export type OpenCodeUsageContribution = {
 };
 
 export type OpenCodeUsageLedger = {
-  retired: OpenCodeUsageContribution;
+  totals: OpenCodeUsageContribution;
   byMessageId: Map<string, OpenCodeUsageContribution>;
+  retiredIds: Set<string>;
   latest?: {
     usedTokens: number;
     modelId?: string;
@@ -41,11 +45,28 @@ const emptyContribution = (): OpenCodeUsageContribution => ({
 });
 
 export function createOpenCodeUsageLedger(): OpenCodeUsageLedger {
-  return { retired: emptyContribution(), byMessageId: new Map() };
+  return { totals: emptyContribution(), byMessageId: new Map(), retiredIds: new Set() };
 }
 
 function nonNegative(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function usableTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= MAX_USABLE_TIMESTAMP_MS
+    ? value
+    : undefined;
+}
+
+function isoFromTimestamp(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const usable = usableTimestamp(value);
+  if (usable === undefined) return undefined;
+  const date = new Date(usable);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function optionalNonNegative(value: unknown): number | undefined {
@@ -74,6 +95,21 @@ function addContribution(
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
     costUsd: left.costUsd + right.costUsd,
     durationMs: left.durationMs + right.durationMs,
+  };
+}
+
+function subtractContribution(
+  left: OpenCodeUsageContribution,
+  right: OpenCodeUsageContribution,
+): OpenCodeUsageContribution {
+  return {
+    inputTokens: left.inputTokens - right.inputTokens,
+    outputTokens: left.outputTokens - right.outputTokens,
+    reasoningTokens: left.reasoningTokens - right.reasoningTokens,
+    cacheReadTokens: left.cacheReadTokens - right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens - right.cacheWriteTokens,
+    costUsd: left.costUsd - right.costUsd,
+    durationMs: left.durationMs - right.durationMs,
   };
 }
 
@@ -107,8 +143,10 @@ function extractOpenCodeMessageUsage(message: unknown): OpenCodeMessageUsage | u
   const usedTokens =
     reportedTotal > 0 ? reportedTotal : inputTokens + outputTokens + cacheReadTokens;
   const time = asRecord(info?.time);
-  const created = nonNegative(time?.created);
-  const completed = nonNegative(time?.completed);
+  const created = usableTimestamp(time?.created);
+  const completed = usableTimestamp(time?.completed);
+  const completedWasUnusable =
+    time?.completed != null && usableTimestamp(time.completed) === undefined;
   const providerId = nonEmptyString(info?.providerID);
   const modelId = nonEmptyString(info?.modelID);
   return {
@@ -120,8 +158,18 @@ function extractOpenCodeMessageUsage(message: unknown): OpenCodeMessageUsage | u
     cacheReadTokens,
     cacheWriteTokens,
     costUsd: nonNegative(info?.cost),
-    durationMs: completed >= created ? completed - created : 0,
-    timestamp: completed > 0 ? completed : created > 0 ? created : undefined,
+    durationMs:
+      created !== undefined && completed !== undefined && completed >= created
+        ? completed - created
+        : 0,
+    timestamp:
+      completed !== undefined && completed > 0
+        ? completed
+        : completedWasUnusable
+          ? undefined
+          : created !== undefined && created > 0
+            ? created
+            : undefined,
     ...(modelId ? { modelId: providerId ? `${providerId}/${modelId}` : modelId } : {}),
   };
 }
@@ -129,11 +177,15 @@ function extractOpenCodeMessageUsage(message: unknown): OpenCodeMessageUsage | u
 function retireOldestIfNeeded(ledger: OpenCodeUsageLedger): void {
   const overflow = ledger.byMessageId.size - MAX_LEDGER_MESSAGES;
   if (overflow <= 0) return;
-  const retiredIds = [...ledger.byMessageId.keys()].slice(0, overflow);
-  for (const messageId of retiredIds) {
-    const usage = ledger.byMessageId.get(messageId);
-    if (usage) ledger.retired = addContribution(ledger.retired, usage);
+  const retiring = [...ledger.byMessageId.keys()].slice(0, overflow);
+  for (const messageId of retiring) {
     ledger.byMessageId.delete(messageId);
+    ledger.retiredIds.add(messageId);
+  }
+  const retiredOverflow = ledger.retiredIds.size - MAX_RETIRED_MESSAGE_IDS;
+  if (retiredOverflow <= 0) return;
+  for (const messageId of [...ledger.retiredIds].slice(0, retiredOverflow)) {
+    ledger.retiredIds.delete(messageId);
   }
 }
 
@@ -144,18 +196,20 @@ export function recordOpenCodeUsageMessages(
   for (const message of messages) {
     const extracted = extractOpenCodeMessageUsage(message);
     if (!extracted?.messageId) continue;
+    if (ledger.retiredIds.has(extracted.messageId)) continue;
     const previous = ledger.byMessageId.get(extracted.messageId);
     if (contributionTotal(extracted) <= 0 && extracted.costUsd <= 0) {
       continue;
     }
-    ledger.byMessageId.set(
-      extracted.messageId,
-      previous ? maxContribution(previous, extracted) : extracted,
+    const next = previous ? maxContribution(previous, extracted) : extracted;
+    ledger.byMessageId.set(extracted.messageId, next);
+    ledger.totals = addContribution(
+      previous ? subtractContribution(ledger.totals, previous) : ledger.totals,
+      next,
     );
     if (
       extracted.usedTokens > 0 &&
-      (ledger.latest === undefined ||
-        (extracted.timestamp ?? 0) >= (ledger.latest.timestamp ?? 0))
+      (ledger.latest === undefined || (extracted.timestamp ?? 0) >= (ledger.latest.timestamp ?? 0))
     ) {
       ledger.latest = {
         usedTokens: extracted.usedTokens,
@@ -165,14 +219,6 @@ export function recordOpenCodeUsageMessages(
     }
   }
   retireOldestIfNeeded(ledger);
-}
-
-function sumLedger(ledger: OpenCodeUsageLedger): OpenCodeUsageContribution {
-  let totals = ledger.retired;
-  for (const usage of ledger.byMessageId.values()) {
-    totals = addContribution(totals, usage);
-  }
-  return totals;
 }
 
 function stepFinishTurns(rawMessages: readonly unknown[]): NativeAgentContextUsage["turns"] {
@@ -235,6 +281,7 @@ function usageFromTotals(
   latest: OpenCodeMessageUsage | OpenCodeUsageLedger["latest"],
   turns: NativeAgentContextUsage["turns"],
 ): NativeAgentContextUsage {
+  const updatedAt = isoFromTimestamp(latest?.timestamp);
   return {
     usedTokens: latest?.usedTokens ?? 0,
     lastTurnTokens: latest?.usedTokens,
@@ -250,9 +297,7 @@ function usageFromTotals(
     estimated: false,
     source: "opencode",
     ...(latest && "modelId" in latest && latest.modelId ? { modelId: latest.modelId } : {}),
-    ...(latest?.timestamp === undefined
-      ? {}
-      : { updatedAt: new Date(latest.timestamp).toISOString() }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
     ...(turns ? { turns } : {}),
   };
 }
@@ -262,7 +307,7 @@ export function openCodeContextUsageFromLedger(
   rawMessages: readonly unknown[] = [],
 ): NativeAgentContextUsage | undefined {
   const windowed = openCodeContextUsage(rawMessages);
-  const totals = sumLedger(ledger);
+  const totals = ledger.totals;
   const sessionTokens =
     totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
   if (sessionTokens <= 0 && totals.costUsd <= 0 && !windowed) return undefined;
@@ -271,7 +316,9 @@ export function openCodeContextUsageFromLedger(
         usedTokens: windowed.usedTokens,
         ...(windowed.modelId ? { modelId: windowed.modelId } : {}),
         timestamp:
-          windowed.updatedAt !== undefined ? Date.parse(windowed.updatedAt) : ledger.latest?.timestamp,
+          windowed.updatedAt !== undefined
+            ? Date.parse(windowed.updatedAt)
+            : ledger.latest?.timestamp,
       }
     : ledger.latest;
   return usageFromTotals(totals, latest, windowed?.turns ?? stepFinishTurns(rawMessages));
@@ -288,6 +335,7 @@ export function openCodeContextUsage(
   const latestTurn = usageTurns.at(-1);
   if (!latestTurn) return undefined;
   const turns = stepFinishTurns(rawMessages);
+  const updatedAt = isoFromTimestamp(latestTurn.timestamp);
   return usageTurns.reduce<NativeAgentContextUsage>(
     (usage, turn) => ({
       ...usage,
@@ -317,9 +365,7 @@ export function openCodeContextUsage(
       // would keep changing for an unchanged session and force the renderer to
       // apply a full snapshot on every poll. The latest turn's completion time
       // is stable while the transcript is.
-      ...(latestTurn.timestamp === undefined
-        ? {}
-        : { updatedAt: new Date(latestTurn.timestamp).toISOString() }),
+      ...(updatedAt === undefined ? {} : { updatedAt }),
       ...(turns ? { turns } : {}),
     },
   );

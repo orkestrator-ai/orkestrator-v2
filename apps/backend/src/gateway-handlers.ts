@@ -124,9 +124,13 @@ export abstract class GatewayHandlers extends GatewayAuth {
 
     this.metrics.recordStreamConnecting();
     const compressionContext = responseCompressionContexts.get(response);
-    const useGzip =
+    const wantsGzip =
       compressionContext?.mode === "on" &&
       negotiateEncoding(compressionContext.acceptEncoding, ["gzip", "identity"]) === "gzip";
+    const releaseStreamingCompression = wantsGzip
+      ? this.metrics.tryStartStreamingCompression()
+      : null;
+    const useGzip = releaseStreamingCompression !== null;
     const headers: OutgoingHttpHeaders = {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store, no-transform",
@@ -141,9 +145,21 @@ export abstract class GatewayHandlers extends GatewayAuth {
     let client: DrainAwareEventClientWriter;
     try {
       response.writeHead(200, headers);
+      const writerMetrics = {
+        sourceBytes: (bytes: number) => {
+          this.metrics.recordStreamSourceBytes(bytes);
+          if (useGzip) this.metrics.recordStreamingCompressionSourceBytes(bytes);
+        },
+        encodedBytes: (bytes: number) => {
+          this.metrics.recordStreamEncodedBodyBytes(bytes);
+          if (useGzip) this.metrics.recordStreamingCompressionEncodedBytes(bytes);
+        },
+        compressionFailure: () => this.metrics.recordStreamingCompressionFailure(),
+        closed: () => releaseStreamingCompression?.(),
+      };
       client = useGzip
-        ? new GzipEventClientWriter(response)
-        : new IdentityEventClientWriter(response);
+        ? new GzipEventClientWriter(response, writerMetrics)
+        : new IdentityEventClientWriter(response, writerMetrics);
       if (useGzip) {
         // Prime the compressor independently so a quiet stream's connected
         // frame is emitted in a sync-flushed gzip block immediately instead of
@@ -151,6 +167,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
         client.write(": compression-priming\n\n");
       }
     } catch (error) {
+      releaseStreamingCompression?.();
       // A handshake that never reaches `open` still has to release the gauge,
       // otherwise `connecting` climbs for the lifetime of the process.
       this.metrics.recordStreamConnectFailed();

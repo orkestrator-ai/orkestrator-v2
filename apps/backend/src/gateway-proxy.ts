@@ -319,28 +319,58 @@ export class GatewayProxy extends GatewayHandlers {
             if (
               negotiateEncoding(compressionContext.acceptEncoding, ["gzip", "identity"]) === "gzip"
             ) {
-              delete responseHeaders["content-length"];
-              stripTransformedRepresentationHeaders(responseHeaders);
-              responseHeaders["content-encoding"] = "gzip";
-              response.writeHead(responseStatus, responseHeaders);
-              const compressor = createGzip({
-                level: DYNAMIC_GZIP_LEVEL,
-                flush: zlibConstants.Z_SYNC_FLUSH,
-                finishFlush: zlibConstants.Z_SYNC_FLUSH,
-                chunkSize: SSE_COMPRESSION_CHUNK_BYTES,
-              });
-              const destroyCompressor = () => compressor.destroy();
-              response.once("close", destroyCompressor);
-              pipeline(proxyResponse, compressor, response, (error) => {
-                response.removeListener("close", destroyCompressor);
-                if (error) {
-                  proxyRequest.destroy(error);
-                  fail(error);
+              const releaseStreamingCompression = this.metrics.tryStartStreamingCompression();
+              if (!releaseStreamingCompression) {
+                // Compression is optional. Preserve a usable identity stream
+                // when every bounded zlib slot is occupied.
+              } else {
+                let compressor;
+                try {
+                  compressor = createGzip({
+                    level: DYNAMIC_GZIP_LEVEL,
+                    flush: zlibConstants.Z_SYNC_FLUSH,
+                    finishFlush: zlibConstants.Z_SYNC_FLUSH,
+                    chunkSize: SSE_COMPRESSION_CHUNK_BYTES,
+                  });
+                  delete responseHeaders["content-length"];
+                  stripTransformedRepresentationHeaders(responseHeaders);
+                  responseHeaders["content-encoding"] = "gzip";
+                  response.writeHead(responseStatus, responseHeaders);
+                } catch (error) {
+                  const streamError =
+                    error instanceof Error
+                      ? error
+                      : new Error("Unable to initialize SSE compression");
+                  releaseStreamingCompression();
+                  this.metrics.recordStreamingCompressionFailure();
+                  proxyRequest.destroy(streamError);
+                  fail(streamError);
                   return;
                 }
-                finish();
-              });
-              return;
+                proxyResponse.on("data", (chunk: Buffer) =>
+                  this.metrics.recordStreamingCompressionSourceBytes(chunk.byteLength),
+                );
+                compressor.on("data", (chunk: Buffer) =>
+                  this.metrics.recordStreamingCompressionEncodedBytes(chunk.byteLength),
+                );
+                const destroyCompressor = () => {
+                  releaseStreamingCompression();
+                  compressor.destroy();
+                };
+                response.once("close", destroyCompressor);
+                pipeline(proxyResponse, compressor, response, (error) => {
+                  response.removeListener("close", destroyCompressor);
+                  releaseStreamingCompression();
+                  if (error) {
+                    this.metrics.recordStreamingCompressionFailure();
+                    proxyRequest.destroy(error);
+                    fail(error);
+                    return;
+                  }
+                  finish();
+                });
+                return;
+              }
             }
           }
 

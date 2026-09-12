@@ -82,6 +82,7 @@ function createHarness(overrides: Partial<TerminalWebSocketClientOptions> = {}):
     reconnectDelayMs: 0,
     maxReconnectDelayMs: 0,
     subscriptionRetryDelayMs: 0,
+    acknowledgementDelayMs: 0,
     createSocket: (url, protocols) => {
       const socket = new MockWebSocket(url, protocols);
       sockets.push(socket);
@@ -288,6 +289,33 @@ describe("TerminalWebSocketClient", () => {
       generation: 1,
       revision: 1,
     });
+  });
+
+  test("coalesces output acknowledgements to the latest applied revision", async () => {
+    const { client, sockets } = createHarness({ acknowledgementDelayMs: 20 });
+    client.subscribe("session-a", () => undefined);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 11, 1, 0);
+
+    for (const revision of [1, 2, 3]) {
+      socket.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 11,
+          generation: 1,
+          revision,
+          bytes: new TextEncoder().encode(`frame-${revision}`),
+        }),
+      );
+    }
+    await tick();
+    expect(sentControls(socket).some((frame) => frame.type === "ack")).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(sentControls(socket).filter((frame) => frame.type === "ack")).toEqual([
+      { type: "ack", channelId: 11, generation: 1, revision: 3 },
+    ]);
   });
 
   test("resubscribes for snapshot recovery when the renderer rejects output", async () => {

@@ -13,6 +13,7 @@ import {
   GatewayMetricsStore,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
   MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+  MAX_CONCURRENT_STREAMING_COMPRESSIONS,
   normalizeAcceptEncoding,
   normalizeCacheControl,
   normalizeContentEncoding,
@@ -653,6 +654,31 @@ describe("remote gateway", () => {
     expect(stream()).toMatchObject({ connecting: 0, open: 1, dropped: 1 });
     metrics.recordStreamClosed();
     expect(stream()).toMatchObject({ connecting: 0, open: 0, dropped: 1 });
+  });
+
+  test("bounds streaming compression contexts and records byte outcomes", () => {
+    const metrics = new GatewayMetricsStore("on");
+    const releases = Array.from({ length: MAX_CONCURRENT_STREAMING_COMPRESSIONS }, () =>
+      metrics.tryStartStreamingCompression(),
+    );
+    expect(releases.every(Boolean)).toBe(true);
+    expect(metrics.tryStartStreamingCompression()).toBeNull();
+    metrics.recordStreamingCompressionSourceBytes(4_096);
+    metrics.recordStreamingCompressionEncodedBytes(1_024);
+    metrics.recordStreamingCompressionFailure();
+
+    releases[0]?.();
+    releases[0]?.();
+    expect(metrics.tryStartStreamingCompression()).toBeFunction();
+    expect(metrics.snapshot().compression).toMatchObject({
+      streamingActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingPeakActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingStarted: MAX_CONCURRENT_STREAMING_COMPRESSIONS + 1,
+      streamingDeclined: 1,
+      streamingFailures: 1,
+      streamingSourceBytes: 4_096,
+      streamingEncodedBytes: 1_024,
+    });
   });
 
   test("sizes the command label budget to hold the whole backend registry", () => {

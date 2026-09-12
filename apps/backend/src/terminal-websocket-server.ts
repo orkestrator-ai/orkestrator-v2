@@ -45,7 +45,7 @@ export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION = 1024 *
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS = 4_096;
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES = 8 * 1024 * 1024;
 
-type QueuedFrame = { data: string | Uint8Array; bytes: number };
+type QueuedFrame = { data: string | Uint8Array; bytes: number; outputBytes?: number };
 
 /** Header bytes charged to a buffered event when projecting queue growth. */
 const FRAME_OVERHEAD_BYTES = 16;
@@ -99,7 +99,33 @@ export type TerminalWebSocketServerOptions = {
   originAllowed(request: IncomingMessage): boolean;
   logger: Pick<Console, "debug" | "warn" | "error">;
   authTimeoutMs?: number;
+  maxSockets?: number;
+  maxChannelsPerSocket?: number;
+  maxChannels?: number;
+  metrics?: {
+    recordTerminalWebSocketOpened(): void;
+    recordTerminalWebSocketClosed(): void;
+    recordTerminalWebSocketFramedBytes(receivedBytes: number, sentBytes: number): void;
+    recordTerminalWebSocketRejected(): void;
+    recordTerminalWebSocketChannelOpened(): void;
+    recordTerminalWebSocketChannelClosed(): void;
+    recordTerminalWebSocketReceived(bytes: number, acknowledgement: boolean): void;
+    recordTerminalWebSocketSent(bytes: number, outputBytes?: number): void;
+    recordTerminalWebSocketDesync(): void;
+    recordTerminalWebSocketQueuedBytes(bytes: number): void;
+  };
 };
+
+export const TERMINAL_WEBSOCKET_MAX_SOCKETS = 64;
+export const TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET = 256;
+export const TERMINAL_WEBSOCKET_MAX_CHANNELS = 4_096;
+
+function webSocketFrameBytes(payloadBytes: number, masked: boolean): number {
+  const maskBytes = masked ? 4 : 0;
+  if (payloadBytes < 126) return payloadBytes + 2 + maskBytes;
+  if (payloadBytes <= 0xffff) return payloadBytes + 4 + maskBytes;
+  return payloadBytes + 10 + maskBytes;
+}
 
 function rawDataBytes(data: RawData): Uint8Array {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -167,6 +193,7 @@ export class TerminalWebSocketGateway {
   private readonly sessionOperations = new Map<string, OperationSequence>();
   private pendingOperationCount = 0;
   private pendingOperationBytes = 0;
+  private channelCount = 0;
   private readonly encoder = new TextEncoder();
   private readonly authTimeoutMs: number;
 
@@ -202,10 +229,18 @@ export class TerminalWebSocketGateway {
       });
       return true;
     }
+    if (
+      this.sockets.size + this.upgradeSockets.size >=
+      (this.options.maxSockets ?? TERMINAL_WEBSOCKET_MAX_SOCKETS)
+    ) {
+      this.rejectUpgrade(socket, 503, "Terminal WebSocket capacity reached");
+      return true;
+    }
     this.upgradeSockets.add(socket);
     socket.once("close", () => this.upgradeSockets.delete(socket));
     try {
       this.server.handleUpgrade(request, socket, head, (ws) => {
+        this.upgradeSockets.delete(socket);
         this.accept(ws, request);
       });
     } catch {
@@ -285,6 +320,7 @@ export class TerminalWebSocketGateway {
       invalidChannelFrames: 0,
     };
     this.sockets.add(state);
+    this.options.metrics?.recordTerminalWebSocketOpened();
     ws.binaryType = "arraybuffer";
     ws.on("message", (data, isBinary) => this.onMessage(state, request, data, isBinary));
     ws.on("error", (error) => this.options.logger.debug("[TerminalWebSocket] Socket error", error));
@@ -311,7 +347,16 @@ export class TerminalWebSocketGateway {
     isBinary: boolean,
   ): void {
     if (state.ws.readyState !== WebSocket.OPEN) return;
+    const bytes = rawDataBytes(data);
+    // Client messages are masked. The protocol client sends each bounded
+    // application message as one WebSocket frame, so this includes its exact
+    // frame header without relying on runtime-specific socket counters.
+    this.options.metrics?.recordTerminalWebSocketFramedBytes(
+      webSocketFrameBytes(bytes.byteLength, true),
+      0,
+    );
     if (isBinary) {
+      this.options.metrics?.recordTerminalWebSocketReceived(bytes.byteLength, false);
       if (!state.authenticated) {
         this.fatal(
           state,
@@ -321,11 +366,11 @@ export class TerminalWebSocketGateway {
         );
         return;
       }
-      this.onBinary(state, rawDataBytes(data));
+      this.onBinary(state, bytes);
       return;
     }
-    const bytes = rawDataBytes(data);
     if (bytes.byteLength > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) {
+      this.options.metrics?.recordTerminalWebSocketReceived(bytes.byteLength, false);
       this.fatal(
         state,
         "frame-too-large",
@@ -340,6 +385,7 @@ export class TerminalWebSocketGateway {
         new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       );
     } catch (error) {
+      this.options.metrics?.recordTerminalWebSocketReceived(bytes.byteLength, false);
       const code =
         error instanceof TerminalWebSocketControlFrameError ? error.code : "malformed-frame";
       const closeCode =
@@ -351,6 +397,7 @@ export class TerminalWebSocketGateway {
       this.fatal(state, code, "Invalid terminal control frame", closeCode);
       return;
     }
+    this.options.metrics?.recordTerminalWebSocketReceived(bytes.byteLength, frame.type === "ack");
     if (!state.authenticated) {
       if (frame.type !== "authenticate" || !this.options.tokenMatches(request, frame.token)) {
         this.fatal(
@@ -522,6 +569,19 @@ export class TerminalWebSocketGateway {
       });
       return;
     }
+    if (
+      state.channels.size >=
+        (this.options.maxChannelsPerSocket ?? TERMINAL_WEBSOCKET_MAX_CHANNELS_PER_SOCKET) ||
+      this.channelCount >= (this.options.maxChannels ?? TERMINAL_WEBSOCKET_MAX_CHANNELS)
+    ) {
+      this.sendControl(state, {
+        type: "error",
+        code: "subscription-denied",
+        message: "Terminal WebSocket channel capacity reached",
+        requestId: frame.requestId,
+      });
+      return;
+    }
     const channelId = this.allocateChannelId(state);
     if (channelId === null) {
       this.sendControl(state, {
@@ -550,6 +610,8 @@ export class TerminalWebSocketGateway {
     // buffered and can never fall between reconciliation and live delivery.
     state.channels.set(channel.id, channel);
     state.sessions.set(channel.sessionId, channel);
+    this.channelCount += 1;
+    this.options.metrics?.recordTerminalWebSocketChannelOpened();
     try {
       const [statusValue, snapshotValue] = await Promise.all([
         this.options.backend.invoke("get_terminal_session", { sessionId: frame.sessionId }),
@@ -698,7 +760,11 @@ export class TerminalWebSocketGateway {
       revision: output.revision,
       bytes: output.bytes,
     });
-    const queued: QueuedFrame = { data, bytes: data.byteLength };
+    const queued: QueuedFrame = {
+      data,
+      bytes: data.byteLength,
+      outputBytes: output.bytes.byteLength,
+    };
     const channelProjected = channel.queuedBytes + queued.bytes;
     const socketProjected = state.queuedBytes + state.ws.bufferedAmount + queued.bytes;
     if (
@@ -722,6 +788,9 @@ export class TerminalWebSocketGateway {
     channel.queue.push(queued);
     channel.queuedBytes += queued.bytes;
     state.queuedBytes += queued.bytes;
+    this.options.metrics?.recordTerminalWebSocketQueuedBytes(
+      state.queuedBytes + state.ws.bufferedAmount,
+    );
     channel.revision = output.revision;
     this.scheduleFlush(state);
   }
@@ -735,6 +804,7 @@ export class TerminalWebSocketGateway {
   ): void {
     if (channel.desynced) return;
     channel.desynced = true;
+    this.options.metrics?.recordTerminalWebSocketDesync();
     for (const queued of channel.queue) state.queuedBytes -= queued.bytes;
     channel.queue = [];
     channel.queuedBytes = 0;
@@ -772,6 +842,9 @@ export class TerminalWebSocketGateway {
     }
     state.controlQueue.push(queued);
     state.queuedBytes += queued.bytes;
+    this.options.metrics?.recordTerminalWebSocketQueuedBytes(
+      state.queuedBytes + state.ws.bufferedAmount,
+    );
     this.scheduleFlush(state);
   }
 
@@ -789,7 +862,14 @@ export class TerminalWebSocketGateway {
       const frame = state.controlQueue.shift()!;
       state.queuedBytes -= frame.bytes;
       budget -= frame.bytes;
-      state.ws.send(frame.data, (error) => error && state.ws.terminate());
+      this.options.metrics?.recordTerminalWebSocketSent(frame.bytes);
+      this.options.metrics?.recordTerminalWebSocketFramedBytes(
+        0,
+        webSocketFrameBytes(frame.bytes, false),
+      );
+      state.ws.send(frame.data, (error) => {
+        if (error) state.ws.terminate();
+      });
     }
     const channels = [...state.channels.values()];
     if (channels.length > 0) {
@@ -803,7 +883,14 @@ export class TerminalWebSocketGateway {
           state.queuedBytes -= frame.bytes;
           channelBudget -= frame.bytes;
           budget -= frame.bytes;
-          state.ws.send(frame.data, { binary: true }, (error) => error && state.ws.terminate());
+          this.options.metrics?.recordTerminalWebSocketSent(frame.bytes, frame.outputBytes ?? 0);
+          this.options.metrics?.recordTerminalWebSocketFramedBytes(
+            0,
+            webSocketFrameBytes(frame.bytes, false),
+          );
+          state.ws.send(frame.data, { binary: true }, (error) => {
+            if (error) state.ws.terminate();
+          });
         }
       }
       state.roundRobinCursor = (state.roundRobinCursor + 1) % channels.length;
@@ -849,6 +936,8 @@ export class TerminalWebSocketGateway {
     if (state.channels.get(channel.id) !== channel) return;
     state.channels.delete(channel.id);
     state.sessions.delete(channel.sessionId);
+    this.channelCount = Math.max(0, this.channelCount - 1);
+    this.options.metrics?.recordTerminalWebSocketChannelClosed();
     for (const queued of channel.queue) state.queuedBytes -= queued.bytes;
     channel.queue = [];
     channel.queuedBytes = 0;
@@ -980,14 +1069,19 @@ export class TerminalWebSocketGateway {
   ): void {
     if (state.ws.readyState !== WebSocket.OPEN) return;
     try {
-      state.ws.send(
-        JSON.stringify({
-          type: "error",
-          code,
-          message,
-          fatal: true,
-        } satisfies TerminalWebSocketServerControlFrame),
+      const data = JSON.stringify({
+        type: "error",
+        code,
+        message,
+        fatal: true,
+      } satisfies TerminalWebSocketServerControlFrame);
+      const bytes = Buffer.byteLength(data);
+      this.options.metrics?.recordTerminalWebSocketSent(bytes);
+      this.options.metrics?.recordTerminalWebSocketFramedBytes(
+        0,
+        webSocketFrameBytes(bytes, false),
       );
+      state.ws.send(data);
       this.closeSocket(state, closeCode, message);
     } catch {
       state.ws.terminate();
@@ -1017,11 +1111,17 @@ export class TerminalWebSocketGateway {
     state.authTimer = null;
     state.credentialExpiryTimer = null;
     state.closeTimer = null;
+    const channelCount = state.channels.size;
     state.channels.clear();
     state.sessions.clear();
     state.controlQueue = [];
     state.queuedBytes = 0;
     this.sockets.delete(state);
+    this.channelCount = Math.max(0, this.channelCount - channelCount);
+    for (let index = 0; index < channelCount; index += 1) {
+      this.options.metrics?.recordTerminalWebSocketChannelClosed();
+    }
+    this.options.metrics?.recordTerminalWebSocketClosed();
   }
 
   private scheduleCredentialExpiry(
@@ -1057,6 +1157,7 @@ export class TerminalWebSocketGateway {
     message: string,
     headers: Record<string, string> = {},
   ): void {
+    this.options.metrics?.recordTerminalWebSocketRejected();
     const body = `${message}\n`;
     const headerLines = Object.entries(headers)
       .map(([key, value]) => `${key}: ${value}\r\n`)

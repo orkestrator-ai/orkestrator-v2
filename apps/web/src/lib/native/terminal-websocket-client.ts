@@ -43,6 +43,8 @@ type DesiredChannel = {
   /** Consecutive failed subscription attempts, used to back off the retry. */
   subscribeAttempts: number;
   applicationTail: Promise<void>;
+  pendingAcknowledgement: { generation: number; revision: number } | null;
+  acknowledgementTimer: ReturnType<typeof setTimeout> | null;
 };
 
 type PendingOperation = {
@@ -66,6 +68,8 @@ export type TerminalWebSocketClientOptions = {
   maxPendingOperations?: number;
   maxPendingOperationBytes?: number;
   operationTimeoutMs?: number;
+  /** Maximum time to coalesce cumulative terminal-output acknowledgements. */
+  acknowledgementDelayMs?: number;
   createSocket?: (url: string, protocols: string | string[]) => WebSocket;
   onFallbackRequired(): void;
   onSocketReady(): void;
@@ -77,6 +81,7 @@ const DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES = 1_024;
 const DEFAULT_MAX_PENDING_OPERATIONS = 1_024;
 const DEFAULT_MAX_PENDING_OPERATION_BYTES = 2 * 1024 * 1024;
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000;
+export const DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS = 50;
 
 export class TerminalWebSocketClient {
   private readonly desired = new Map<string, DesiredChannel>();
@@ -125,6 +130,8 @@ export class TerminalWebSocketClient {
         retryTimer: null,
         subscribeAttempts: 0,
         applicationTail: Promise.resolve(),
+        pendingAcknowledgement: null,
+        acknowledgementTimer: null,
       };
       this.desired.set(sessionId, channel);
       this.ensureSocket();
@@ -292,6 +299,7 @@ export class TerminalWebSocketClient {
     this.reconnectTimer = null;
     for (const channel of this.desired.values()) {
       if (channel.retryTimer) clearTimeout(channel.retryTimer);
+      this.flushAcknowledgement(channel);
       this.resolveReady(channel);
     }
     this.rejectAllOperations(new Error("Terminal WebSocket client was disposed"));
@@ -569,13 +577,7 @@ export class TerminalWebSocketClient {
     )
       return;
     channel.revision = payload.revision;
-    if (channel.channelId !== null)
-      this.send({
-        type: "ack",
-        channelId: channel.channelId,
-        generation: payload.generation,
-        revision: payload.revision,
-      });
+    this.scheduleAcknowledgement(channel, payload.generation, payload.revision);
   }
 
   private flushBuffered(channel: DesiredChannel): void {
@@ -717,6 +719,7 @@ export class TerminalWebSocketClient {
   }
 
   private unsubscribeForRecovery(channel: DesiredChannel): void {
+    this.flushAcknowledgement(channel);
     if (channel.channelId !== null) {
       try {
         this.send({ type: "unsubscribe", channelId: channel.channelId });
@@ -732,6 +735,7 @@ export class TerminalWebSocketClient {
   }
 
   private removeChannel(channel: DesiredChannel): void {
+    this.flushAcknowledgement(channel);
     this.desired.delete(channel.sessionId);
     if (channel.retryTimer) clearTimeout(channel.retryTimer);
     channel.retryTimer = null;
@@ -757,6 +761,7 @@ export class TerminalWebSocketClient {
     this.pendingRequests.clear();
     this.rejectAllOperations(error);
     for (const channel of this.desired.values()) {
+      this.clearAcknowledgement(channel);
       if (channel.retryTimer) clearTimeout(channel.retryTimer);
       channel.retryTimer = null;
       channel.channelId = null;
@@ -783,6 +788,55 @@ export class TerminalWebSocketClient {
   private clearBuffered(channel: DesiredChannel): void {
     channel.buffered = [];
     channel.bufferedBytes = 0;
+  }
+
+  private scheduleAcknowledgement(
+    channel: DesiredChannel,
+    generation: number,
+    revision: number,
+  ): void {
+    channel.pendingAcknowledgement = { generation, revision };
+    if (channel.acknowledgementTimer) return;
+    const delay = Math.max(
+      0,
+      this.options.acknowledgementDelayMs ?? DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS,
+    );
+    if (delay === 0) {
+      this.flushAcknowledgement(channel);
+      return;
+    }
+    channel.acknowledgementTimer = setTimeout(() => this.flushAcknowledgement(channel), delay);
+  }
+
+  private flushAcknowledgement(channel: DesiredChannel): void {
+    if (channel.acknowledgementTimer) clearTimeout(channel.acknowledgementTimer);
+    channel.acknowledgementTimer = null;
+    const acknowledgement = channel.pendingAcknowledgement;
+    channel.pendingAcknowledgement = null;
+    if (
+      !acknowledgement ||
+      channel.channelId === null ||
+      this.desired.get(channel.sessionId) !== channel ||
+      this.socket?.readyState !== WebSocket.OPEN
+    )
+      return;
+    try {
+      this.send({
+        type: "ack",
+        channelId: channel.channelId,
+        generation: acknowledgement.generation,
+        revision: acknowledgement.revision,
+      });
+    } catch {
+      // ACKs are cumulative and advisory. A concurrent socket close will
+      // reconcile from the authoritative snapshot after reconnect.
+    }
+  }
+
+  private clearAcknowledgement(channel: DesiredChannel): void {
+    if (channel.acknowledgementTimer) clearTimeout(channel.acknowledgementTimer);
+    channel.acknowledgementTimer = null;
+    channel.pendingAcknowledgement = null;
   }
 
   private splitUtf8(bytes: Uint8Array, maxPayload: number): Uint8Array[] {

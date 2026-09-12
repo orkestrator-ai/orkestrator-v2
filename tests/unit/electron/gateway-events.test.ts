@@ -11,6 +11,7 @@ import {
   isCompressibleContentType,
   isTailscaleAddress,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+  MAX_CONCURRENT_STREAMING_COMPRESSIONS,
   MAX_STATIC_FALLBACK_SOURCE_BYTES,
   negotiateEncoding,
   OrkestratorGateway,
@@ -171,6 +172,135 @@ describe("gateway terminal WebSocket", () => {
       version: 1,
     });
     cookieAuthenticated.socket.terminate();
+  });
+
+  test("bounds terminal WebSocket sockets and subscriptions", async () => {
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        return undefined;
+      }),
+    };
+    const { info } = await startGateway({
+      backend,
+      terminalWebSocket: { maxSockets: 2, maxChannelsPerSocket: 1, maxChannels: 1 },
+    });
+    const first = await openTerminalSocket(info);
+    const second = await openTerminalSocket(info);
+
+    first.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "first" }));
+    expect(await nextTerminalControl(first.inbox, "subscribed")).toMatchObject({ requestId: 1 });
+    first.socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "second" }));
+    expect(await nextTerminalControl(first.inbox, "error")).toMatchObject({
+      code: "subscription-denied",
+      requestId: 2,
+    });
+    second.socket.send(JSON.stringify({ type: "subscribe", requestId: 3, sessionId: "third" }));
+    expect(await nextTerminalControl(second.inbox, "error")).toMatchObject({
+      code: "subscription-denied",
+      requestId: 3,
+    });
+
+    const third = new WebSocket(
+      `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
+      TERMINAL_WEBSOCKET_SUBPROTOCOL,
+    );
+    const rejectedStatus = new Promise<number>((resolve, reject) => {
+      third.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      third.once("open", () => reject(new Error("Capacity-limited socket unexpectedly opened")));
+      third.once("error", () => undefined);
+    });
+    expect(await rejectedStatus).toBe(503);
+
+    const firstClosed = new Promise<void>((resolve) => first.socket.once("close", () => resolve()));
+    const secondClosed = new Promise<void>((resolve) =>
+      second.socket.once("close", () => resolve()),
+    );
+    first.socket.terminate();
+    second.socket.terminate();
+    await Promise.all([firstClosed, secondClosed]);
+    expect((await readGatewayMetrics(info)).terminalWebSocket).toMatchObject({
+      open: 0,
+      opened: 2,
+      closed: 2,
+      rejected: 1,
+      channelsOpen: 0,
+      channelsOpened: 1,
+      channelsClosed: 1,
+    });
+  });
+
+  test("reports terminal WebSocket payload, ACK, queue, and transport telemetry", async () => {
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "get_terminal_session") return { id: "metrics", running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "metrics" }));
+    const subscribed = await nextTerminalControl(inbox, "subscribed");
+    if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    gateway.emit("terminal-output-metrics", { text: "hello", generation: 1, revision: 1 });
+    let output;
+    do {
+      const message = await inbox.next();
+      if (message.binary) output = decodeTerminalBinaryFrame(message.data);
+    } while (!output);
+    expect(new TextDecoder().decode(output.bytes)).toBe("hello");
+    socket.send(
+      JSON.stringify({
+        type: "ack",
+        channelId: subscribed.channelId,
+        generation: 1,
+        revision: 1,
+      }),
+    );
+    await waitUntil(
+      () =>
+        (
+          gateway as unknown as {
+            metrics: { snapshot(): { terminalWebSocket: { acknowledgementFrames: number } } };
+          }
+        ).metrics.snapshot().terminalWebSocket.acknowledgementFrames === 1,
+      "terminal WebSocket ACK was not observed",
+    );
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.close();
+    await closed;
+
+    const metrics = (await readGatewayMetrics(info)).terminalWebSocket;
+    expect(metrics).toMatchObject({
+      open: 0,
+      opened: 1,
+      closed: 1,
+      channelsOpen: 0,
+      channelsOpened: 1,
+      channelsClosed: 1,
+      outputFrames: 1,
+      outputPayloadBytes: 5,
+      acknowledgementFrames: 1,
+      desyncs: 0,
+    });
+    expect(metrics.receivedFrames).toBeGreaterThanOrEqual(3);
+    expect(metrics.receivedPayloadBytes).toBeGreaterThan(5);
+    expect(metrics.sentFrames).toBeGreaterThanOrEqual(3);
+    expect(metrics.sentPayloadBytes).toBeGreaterThan(5);
+    expect(metrics.acknowledgementPayloadBytes).toBeGreaterThan(0);
+    expect(metrics.peakQueuedBytes).toBeGreaterThan(0);
+    expect(metrics.framedReceivedBytes).toBeGreaterThan(metrics.receivedPayloadBytes);
+    expect(metrics.framedSentBytes).toBeGreaterThan(metrics.sentPayloadBytes);
   });
 
   test("closes a cookie-authenticated terminal socket when its agent-test session expires", async () => {
@@ -1577,6 +1707,17 @@ describe("remote gateway", () => {
       () => stream.received().includes("environment-changed"),
       "Compressed application frame was buffered",
     );
+    const openMetrics = await readGatewayMetrics(info);
+    expect(openMetrics.compression).toMatchObject({
+      streamingActive: 1,
+      streamingStarted: 1,
+      streamingDeclined: 0,
+      streamingFailures: 0,
+    });
+    expect(openMetrics.stream.sourceBytes).toBeGreaterThan(0);
+    expect(openMetrics.stream.encodedBodyBytes).toBeGreaterThan(0);
+    expect(openMetrics.compression.streamingSourceBytes).toBe(openMetrics.stream.sourceBytes);
+    expect(openMetrics.compression.streamingEncodedBytes).toBe(openMetrics.stream.encodedBodyBytes);
 
     const writer = stream.response as unknown as {
       compressor: { destroyed: boolean };
@@ -1589,6 +1730,7 @@ describe("remote gateway", () => {
       "Compressed event writer was not unregistered",
     );
     expect(writer.compressor.destroyed).toBe(true);
+    expect((await readGatewayMetrics(info)).compression.streamingActive).toBe(0);
   });
 
   test("destroys a compressed SSE response and clears pending bytes on codec failure", async () => {
@@ -1610,7 +1752,39 @@ describe("remote gateway", () => {
     expect(writer.compressor.destroyed).toBe(true);
     expect(writer.writableLength).toBe(0);
     await waitUntil(() => stream.aborted(), "Failed compressed response was not aborted");
+    expect((await readGatewayMetrics(info)).compression).toMatchObject({
+      streamingActive: 0,
+      streamingFailures: 1,
+    });
     stream.close();
+  });
+
+  test("falls back to identity when the streaming compression pool is full", async () => {
+    const { gateway, info } = await startGateway({ compression: "on" });
+    const compressed = [];
+    for (let index = 0; index < MAX_CONCURRENT_STREAMING_COMPRESSIONS; index += 1) {
+      compressed.push(await openCompressedEventStream(gateway, info));
+    }
+    const identity = await openEventStream(gateway, info, "", { "accept-encoding": "gzip" });
+
+    expect((identity.response as unknown as { compressor?: unknown }).compressor).toBeUndefined();
+    expect((await readGatewayMetrics(info)).compression).toMatchObject({
+      streamingActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingPeakActive: MAX_CONCURRENT_STREAMING_COMPRESSIONS,
+      streamingDeclined: 1,
+    });
+
+    identity.close();
+    for (const stream of compressed) stream.close();
+    await waitUntil(
+      () =>
+        (
+          gateway as unknown as {
+            metrics: { snapshot(): { compression: { streamingActive: number } } };
+          }
+        ).metrics.snapshot().compression.streamingActive === 0,
+      "Streaming compression leases were not released",
+    );
   });
 
   test("keeps SSE identity in off and body modes", async () => {
@@ -1763,6 +1937,7 @@ describe("remote gateway", () => {
     expect(receivedBytes).toBe(expectedFrameBytes * 2);
     expect(metrics.events["environment-renamed"]).toEqual({
       frames: 2,
+      serializedBytes: expectedFrameBytes * 2,
       wireBytes: expectedFrameBytes * 2,
       droppedFrames: 0,
       droppedClients: 0,

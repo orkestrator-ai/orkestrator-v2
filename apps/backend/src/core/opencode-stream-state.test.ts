@@ -86,4 +86,45 @@ describe("OpenCodeStreamState turn clock", () => {
     );
     expect(state.turnStartedAt("session")).toBe(7_000);
   });
+
+  test("retry status keeps the turn running and publishes an advisory", () => {
+    const state = new OpenCodeStreamState();
+    state.apply(
+      {
+        type: "session.status",
+        properties: {
+          sessionID: "session",
+          status: { type: "retry", attempt: 2, message: "Provider timed out" },
+        },
+      } as never,
+      9_000,
+    );
+    expect(state.turnStartedAt("session")).toBe(9_000);
+    expect(state.notices("session")).toEqual([
+      {
+        kind: "advisory",
+        severity: "warning",
+        message: "OpenCode is retrying the model request (attempt 2). Provider timed out",
+      },
+    ]);
+  });
+
+  test("session.updated records the provider session model", () => {
+    const state = new OpenCodeStreamState();
+    state.apply({
+      type: "session.updated",
+      properties: {
+        sessionID: "session",
+        info: {
+          id: "session",
+          title: "Investigation",
+          model: { providerID: "opencode-go", id: "deepseek-v4-flash", variant: "default" },
+        },
+      },
+    } as never);
+    expect(state.sessionModel("session")).toEqual({
+      modelId: "opencode-go/deepseek-v4-flash",
+      reasoningId: "default",
+    });
+  });
 });

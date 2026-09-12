@@ -4,6 +4,7 @@ import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   nativeAsyncQuestionRequestId,
+  withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
   type NativeAgentNotice,
@@ -731,8 +732,11 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
-  const selectedModel =
-    composer?.models.find((model) => model.id === composer.selectedModelId) ?? composer?.models[0];
+  const resolvedComposer = useMemo(
+    () => withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId),
+    [composer?.models, composer?.selectedModelId],
+  );
+  const selectedModel = resolvedComposer.selectedModel;
   const selectedReasoningId = composer?.selectedReasoningId ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel = selectedModel?.reasoning?.find(
     (option) => option.id === selectedReasoningId,
@@ -741,23 +745,23 @@ export function SharedNativeAgentController({
     (modelId: string) =>
       resolveCatalogModelLabel(
         modelId,
-        (composer?.models ?? []).map((model) => ({
+        resolvedComposer.models.map((model) => ({
           id: model.id,
           name: model.label,
         })),
       ),
-    [composer?.models],
+    [resolvedComposer.models],
   );
   /** Neutral reasoning label, from whichever model advertised the option. */
   const reasoningLabel = useCallback(
     (reasoningId: string) => {
-      for (const model of composer?.models ?? []) {
+      for (const model of resolvedComposer.models) {
         const option = model.reasoning?.find((candidate) => candidate.id === reasoningId);
         if (option) return option.label;
       }
       return reasoningId;
     },
-    [composer?.models],
+    [resolvedComposer.models],
   );
   const updateControlsSafely = useCallback(
     async (update: Parameters<typeof updateControls>[0]) => {
@@ -2185,7 +2189,7 @@ export function SharedNativeAgentController({
                   />
                 ) : null}
                 <AgentModelPicker
-                  models={composer.models}
+                  models={resolvedComposer.models}
                   favorites={favorites}
                   enabledPlatforms={[platform]}
                   selectedPlatform={platform}
@@ -2202,7 +2206,7 @@ export function SharedNativeAgentController({
                     );
                   }}
                   onModelChange={(modelId) => {
-                    const nextModel = composer.models.find((model) => model.id === modelId);
+                    const nextModel = resolvedComposer.models.find((model) => model.id === modelId);
                     const supportedReasoning = nextModel?.reasoning ?? [];
                     const nextReasoningId =
                       resolveReasoningId(

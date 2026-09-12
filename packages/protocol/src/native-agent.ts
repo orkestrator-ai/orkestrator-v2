@@ -205,6 +205,76 @@ export function synthesizedOpenCodeAgentModel(modelId: string): AgentModel | nul
   };
 }
 
+function nonBlankModelId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Host-authoritative composer model id.
+ *
+ * Catalog default and `models[0]` are last resorts. A stored or last-used id
+ * must survive a connected-catalog refresh that temporarily omits it — that
+ * refresh is what used to snap OpenCode sessions onto Nemotron Ultra Free.
+ */
+export function resolveNativeComposerModelId(input: {
+  providerControlsModelId?: string;
+  sessionControlsModelId?: string;
+  lastAssistantModelId?: string;
+  sessionModelId?: string;
+  catalogDefaultModelId?: string;
+  firstCatalogModelId?: string;
+}): string | undefined {
+  return (
+    nonBlankModelId(input.providerControlsModelId) ??
+    nonBlankModelId(input.sessionControlsModelId) ??
+    nonBlankModelId(input.lastAssistantModelId) ??
+    nonBlankModelId(input.sessionModelId) ??
+    nonBlankModelId(input.catalogDefaultModelId) ??
+    nonBlankModelId(input.firstCatalogModelId)
+  );
+}
+
+/**
+ * Resolve the picker row for a selected id without substituting another model.
+ *
+ * A known id that is missing from the live catalogue is synthesized when it is
+ * an OpenCode `provider/model` id. An unrecognised id is kept rather than
+ * replaced with `models[0]`.
+ */
+export function resolveNativeComposerSelectedModel(
+  models: readonly AgentModel[],
+  selectedModelId?: string,
+): AgentModel | undefined {
+  const id = nonBlankModelId(selectedModelId);
+  if (id) {
+    return models.find((model) => model.id === id) ?? synthesizedOpenCodeAgentModel(id) ?? undefined;
+  }
+  return models[0];
+}
+
+/** Include a synthesized current selection in the catalogue the picker renders. */
+export function withResolvedNativeComposerModel(
+  models: readonly AgentModel[],
+  selectedModelId?: string,
+): { models: AgentModel[]; selectedModel?: AgentModel; selectedModelId?: string } {
+  const id = nonBlankModelId(selectedModelId);
+  const selectedModel = resolveNativeComposerSelectedModel(models, id);
+  if (selectedModel) {
+    return {
+      models: models.some((model) => model.id === selectedModel.id)
+        ? [...models]
+        : [...models, selectedModel],
+      selectedModel,
+      selectedModelId: selectedModel.id,
+    };
+  }
+  return {
+    models: [...models],
+    ...(id ? { selectedModelId: id } : {}),
+  };
+}
+
 /**
  * Coerce a stored/user-supplied allowlist into canonical form. An absent or
  * unusable value falls back to the default pair; an explicitly empty list is

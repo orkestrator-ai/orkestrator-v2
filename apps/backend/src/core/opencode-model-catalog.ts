@@ -414,6 +414,42 @@ export function openCodeModelDispatchability(
 }
 
 /**
+ * Session.model / session.updated info.model → `providerID/modelID`.
+ *
+ * OpenCode stores `{ id, providerID, variant }` on the session. Prompt payloads
+ * use `modelID` instead of `id`. Both have to parse, because a fill-in from
+ * `session.get` is what keeps a created DeepSeek session from looking like the
+ * catalog default.
+ */
+export function openCodeSessionModelRef(value: unknown): {
+  modelId?: string;
+  reasoningId?: string;
+} {
+  const record = asRecord(value);
+  const model = asRecord(record?.model) ?? record;
+  if (!model) return {};
+  const providerId = nonEmptyString(model.providerID);
+  const localId = nonEmptyString(model.id) ?? nonEmptyString(model.modelID);
+  // OpenRouter (and similar) ids already contain slashes. Prefix providerID
+  // unless the local id is already `providerID/...`; treating any slash as
+  // fully qualified dropped the provider and stored `anthropic/claude-sonnet`.
+  const prefix = providerId ? `${providerId}/` : "";
+  const qualified =
+    providerId && localId
+      ? localId.toLowerCase().startsWith(prefix.toLowerCase())
+        ? localId
+        : `${providerId}/${localId}`
+      : localId?.includes("/")
+        ? localId
+        : undefined;
+  const reasoningId = nonEmptyString(model.variant);
+  return {
+    ...(qualified ? { modelId: qualified } : {}),
+    ...(reasoningId ? { reasoningId } : {}),
+  };
+}
+
+/**
  * Cache key identifying the inputs one normalized catalogue was built from.
  *
  * The connectivity filter has to be part of the key. An allowlist configured

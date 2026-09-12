@@ -1109,6 +1109,116 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps a stored OpenCode model when the connected catalog only has the default", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [
+            {
+              platform: "opencode",
+              id: "opencode/nemotron-ultra-free",
+              label: "Nemotron Ultra Free",
+            },
+          ],
+          selectedModelId: "opencode/nemotron-ultra-free",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-keep-model-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-keep-model",
+        };
+        await service.ensureSession({
+          ...identity,
+          model: "opencode-go/deepseek-v4-flash",
+        });
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.selectedModelId).toBe("opencode-go/deepseek-v4-flash");
+        expect(projection?.composer?.models.map((model) => model.id)).toEqual([
+          "opencode/nemotron-ultra-free",
+          "opencode-go/deepseek-v4-flash",
+        ]);
+
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.controls?.modelId).toBe(
+          "opencode-go/deepseek-v4-flash",
+        );
+      },
+    );
+  });
+
+  test("fills empty OpenCode controls from the last assistant model", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [
+          {
+            id: "message-1",
+            role: "assistant",
+            modelId: "opencode-go/deepseek-v4-flash",
+            content: "done",
+            parts: [{ type: "text", text: "done" }],
+            createdAt: "2026-09-12T10:00:00.000Z",
+          },
+        ],
+        composer: {
+          models: [
+            {
+              platform: "opencode",
+              id: "opencode/nemotron-ultra-free",
+              label: "Nemotron Ultra Free",
+            },
+          ],
+          selectedModelId: "opencode/nemotron-ultra-free",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+        },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-persist-last-model-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-persist-last-model",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.selectedModelId).toBe("opencode-go/deepseek-v4-flash");
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        await waitForCondition(async () => {
+          const session = await storage.getNativeAgentSession(key);
+          return session?.controls?.modelId === "opencode-go/deepseek-v4-flash";
+        });
+      },
+    );
+  });
+
   test("projects an initial OpenCode execution profile before the first prompt", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({

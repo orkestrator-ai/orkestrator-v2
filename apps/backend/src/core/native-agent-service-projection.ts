@@ -4,6 +4,8 @@ import {
   NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   nativeAsyncQuestionItemId,
   recoverBackgroundTaskLaunchId,
+  resolveNativeComposerModelId,
+  withResolvedNativeComposerModel,
   withoutSuppressedComposerControls,
   type NativeAgentDiscoverySection,
   type NativeAgentDiscoverySectionState,
@@ -64,6 +66,10 @@ import {
   resolveReasoningId,
   withSessionActionSlashCommands,
 } from "./native-agent-service-shared.js";
+import {
+  lastAssistantModelRef,
+  openCodeComposerSelectionToPersist,
+} from "./native-agent-composer-selection.js";
 import {
   createNativeAgentDisplayTail,
   NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS,
@@ -1565,12 +1571,24 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       capabilities = { ...capabilities, actions: { ...capabilities.actions, steer: false } };
     }
     const stateSnapshot = snapshot as ProviderSessionStateSnapshot;
+    const lastAssistant = lastAssistantModelRef(
+      "messages" in stateSnapshot && Array.isArray(stateSnapshot.messages)
+        ? stateSnapshot.messages
+        : [],
+    );
     const composer = await this.projectionComposer(
       input,
       resolved.session,
       stateSnapshot.composer,
       stateSnapshot.controls,
       true,
+      {
+        lastAssistantModelId: lastAssistant.modelId,
+        lastAssistantReasoningId: lastAssistant.reasoningId,
+        sessionModelId: stateSnapshot.sessionModelId,
+        sessionReasoningId: stateSnapshot.sessionReasoningId,
+        persistSelection: true,
+      },
     );
     const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
     // A provider that reports no composer (OpenCode) resolves its model window
@@ -2249,6 +2267,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     providerComposer?: NativeAgentComposerState,
     providerControls?: NativeAgentControlUpdate,
     discoveryInBackground = false,
+    hints: {
+      lastAssistantModelId?: string;
+      lastAssistantReasoningId?: string;
+      sessionModelId?: string;
+      sessionReasoningId?: string;
+      persistSelection?: boolean;
+    } = {},
   ): Promise<NativeAgentComposerState> {
     let models = providerComposer?.models ?? [];
     if (models.length === 0) {
@@ -2297,15 +2322,36 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         }
       }
     }
-    const selectedModelId =
-      providerControls?.modelId ??
-      session.controls?.modelId ??
-      providerComposer?.selectedModelId ??
-      models[0]?.id;
-    const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0];
+    const selectedModelId = resolveNativeComposerModelId({
+      providerControlsModelId: providerControls?.modelId,
+      sessionControlsModelId: session.controls?.modelId,
+      lastAssistantModelId: hints.lastAssistantModelId,
+      sessionModelId: hints.sessionModelId,
+      catalogDefaultModelId: providerComposer?.selectedModelId,
+      firstCatalogModelId: models[0]?.id,
+    });
+    const resolvedSelection = withResolvedNativeComposerModel(models, selectedModelId);
+    models = resolvedSelection.models;
+    const selectedModel = resolvedSelection.selectedModel;
+    if (hints.persistSelection && input.agent === "opencode") {
+      const persist = openCodeComposerSelectionToPersist({
+        sessionControlsModelId: session.controls?.modelId,
+        lastAssistantModelId: hints.lastAssistantModelId,
+        lastAssistantReasoningId: hints.lastAssistantReasoningId,
+        sessionModelId: hints.sessionModelId,
+        sessionReasoningId: hints.sessionReasoningId,
+      });
+      if (persist) {
+        void this.storage
+          .updateNativeAgentSessionControls(session.key, session.providerSessionId, persist)
+          .catch(() => undefined);
+      }
+    }
     const selectedReasoningId =
       providerControls?.reasoningId ??
       session.controls?.reasoningId ??
+      hints.lastAssistantReasoningId ??
+      hints.sessionReasoningId ??
       providerComposer?.selectedReasoningId ??
       // The advertised default matters for Cursor/Grok, where it carries the
       // agent's own current effort rather than a static catalog value.
@@ -2354,7 +2400,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : undefined;
     return {
       models,
-      ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
+      ...(resolvedSelection.selectedModelId
+        ? { selectedModelId: resolvedSelection.selectedModelId }
+        : selectedModel
+          ? { selectedModelId: selectedModel.id }
+          : {}),
       ...(selectedReasoningId
         ? {
             selectedReasoningId,
@@ -2896,11 +2946,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // reconnect that is still in its first moment as a failure.
       this.projectionMissingSince.delete(key);
       const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
+      const lastAssistant = lastAssistantModelRef(snapshot.messages);
       const composer = await this.projectionComposer(
         input,
         resolved.session,
         snapshot.composer,
         snapshot.controls,
+        false,
+        {
+          lastAssistantModelId: lastAssistant.modelId,
+          lastAssistantReasoningId: lastAssistant.reasoningId,
+          sessionModelId: snapshot.sessionModelId,
+          sessionReasoningId: snapshot.sessionReasoningId,
+          persistSelection: !transient,
+        },
       );
       const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
       const previousContextUsage =

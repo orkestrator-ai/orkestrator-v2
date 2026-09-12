@@ -589,6 +589,41 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  test("reports the OpenCode session model separately from the catalog default", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                models: { "nemotron-ultra-free": { name: "Nemotron Ultra Free" } },
+              },
+            ],
+            default: { providerID: "opencode", modelID: "nemotron-ultra-free" },
+          },
+        })),
+      },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: {
+        id: "owned-session",
+        directory: "/workspace",
+        title: "DeepSeek session",
+        model: { providerID: "opencode-go", id: "deepseek-v4-flash" },
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.composer?.selectedModelId).toBe("opencode/nemotron-ultra-free");
+      expect(snapshot?.sessionModelId).toBe("opencode-go/deepseek-v4-flash");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   // The composer renders the model's `reasoning` list as its own control and
   // renders every model parameter as another. A catalog that advertised both a
   // `reasoning` list and a `reasoning` parameter therefore produced two

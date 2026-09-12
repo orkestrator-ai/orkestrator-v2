@@ -19,6 +19,9 @@ import {
   openCodeModelProviderId,
   openCodeModelProvidersKey,
   synthesizedOpenCodeAgentModel,
+  resolveNativeComposerModelId,
+  resolveNativeComposerSelectedModel,
+  withResolvedNativeComposerModel,
   nativeAgentCapabilities,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
@@ -493,6 +496,50 @@ describe("opencode model provider allowlist", () => {
       supportsMode: false,
     });
     expect(synthesizedOpenCodeAgentModel("not-a-model")).toBeNull();
+  });
+
+  test("keeps a stored OpenCode model ahead of the catalog default", () => {
+    expect(
+      resolveNativeComposerModelId({
+        sessionControlsModelId: "opencode-go/deepseek-v4-flash",
+        lastAssistantModelId: "opencode-go/deepseek-v4-flash",
+        sessionModelId: "opencode/nemotron-ultra-free",
+        catalogDefaultModelId: "opencode/nemotron-ultra-free",
+        firstCatalogModelId: "opencode/nemotron-ultra-free",
+      }),
+    ).toBe("opencode-go/deepseek-v4-flash");
+    expect(
+      resolveNativeComposerModelId({
+        lastAssistantModelId: "opencode-go/deepseek-v4-flash",
+        catalogDefaultModelId: "opencode/nemotron-ultra-free",
+        firstCatalogModelId: "opencode/nemotron-ultra-free",
+      }),
+    ).toBe("opencode-go/deepseek-v4-flash");
+  });
+
+  test("synthesizes a missing OpenCode selection instead of substituting models[0]", () => {
+    const catalog = [
+      {
+        platform: "opencode" as const,
+        id: "opencode/nemotron-ultra-free",
+        label: "Nemotron Ultra Free",
+      },
+    ];
+    const resolved = withResolvedNativeComposerModel(
+      catalog,
+      "opencode-go/deepseek-v4-flash",
+    );
+    expect(resolved.selectedModelId).toBe("opencode-go/deepseek-v4-flash");
+    expect(resolved.selectedModel).toEqual(
+      synthesizedOpenCodeAgentModel("opencode-go/deepseek-v4-flash"),
+    );
+    expect(resolved.models.map((model) => model.id)).toEqual([
+      "opencode/nemotron-ultra-free",
+      "opencode-go/deepseek-v4-flash",
+    ]);
+    expect(
+      resolveNativeComposerSelectedModel(catalog, "opencode-go/deepseek-v4-flash")?.id,
+    ).toBe("opencode-go/deepseek-v4-flash");
   });
 
   test("strips the provider prefix regardless of its casing", () => {

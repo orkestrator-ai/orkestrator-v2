@@ -9,6 +9,7 @@ import {
   serializedByteLength,
   setBoundedMapEntry,
 } from "./agent-provider-runtime.js";
+import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
 
 const MAX_STREAM_SESSIONS = 1_024;
 const MAX_STREAM_MESSAGES = 1_025;
@@ -25,6 +26,8 @@ type OpenCodeStreamSession = {
   /** Exact after snapshots/structural changes; a safe upper bound after deltas. */
   transcriptBytes?: number;
   title?: string;
+  sessionModelId?: string;
+  sessionReasoningId?: string;
   permission?: unknown;
   runtime?: Pick<NativeAgentRuntimeSummary, "todos" | "files">;
   turnStartedAt?: number;
@@ -135,6 +138,14 @@ export class OpenCodeStreamState {
     return this.sessions.get(sessionId)?.title;
   }
 
+  sessionModel(sessionId: string): { modelId?: string; reasoningId?: string } {
+    const state = this.sessions.get(sessionId);
+    return {
+      ...(state?.sessionModelId ? { modelId: state.sessionModelId } : {}),
+      ...(state?.sessionReasoningId ? { reasoningId: state.sessionReasoningId } : {}),
+    };
+  }
+
   permission(sessionId: string): unknown {
     return this.sessions.get(sessionId)?.permission;
   }
@@ -219,9 +230,29 @@ export class OpenCodeStreamState {
     this.bumpEventVersion(state);
 
     if (event.type === "session.status") {
-      const status = asRecord(properties?.status)?.type;
-      if (status === "busy" || status === "retry") {
+      const statusRecord = asRecord(properties?.status);
+      const status = statusRecord?.type;
+      if (status === "busy") {
         state.notices = [];
+        this.ensureTurnStarted(sessionId, observedAt);
+        return { sessionId, status: "running" };
+      }
+      if (status === "retry") {
+        const attempt = typeof statusRecord?.attempt === "number" ? statusRecord.attempt : undefined;
+        const detail =
+          nonEmptyString(statusRecord?.message) ??
+          "The model request failed and is being retried.";
+        const headline =
+          attempt !== undefined
+            ? `OpenCode is retrying the model request (attempt ${attempt}). ${detail}`
+            : `OpenCode is retrying the model request. ${detail}`;
+        state.notices = [
+          {
+            kind: "advisory",
+            severity: "warning",
+            message: headline.slice(0, 2_000),
+          },
+        ];
         this.ensureTurnStarted(sessionId, observedAt);
         return { sessionId, status: "running" };
       }
@@ -247,6 +278,13 @@ export class OpenCodeStreamState {
       const info = asRecord(properties?.info);
       const title = nonEmptyString(info?.title);
       if (title) state.title = title;
+      if (info && "model" in info) {
+        const sessionModel = openCodeSessionModelRef(info);
+        if (sessionModel.modelId) state.sessionModelId = sessionModel.modelId;
+        else delete state.sessionModelId;
+        if (sessionModel.reasoningId) state.sessionReasoningId = sessionModel.reasoningId;
+        else delete state.sessionReasoningId;
+      }
       // OpenCode v1 exposes the provider ruleset on Session.permission. Keep
       // the bounded provider value at this low adapter boundary; plan 12 owns
       // translating it into the shared execution-policy contract.

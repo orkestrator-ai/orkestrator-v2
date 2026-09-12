@@ -1080,6 +1080,27 @@ describe("OpenCode provider", () => {
     }
   });
 
+  test("creates an OpenCode session with the selected model", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.createSession("build", "Build task", {
+          model: "opencode-go/deepseek-v4-flash",
+          effort: "default",
+        }),
+      ).resolves.toBe("owned-session");
+      expect(fake.createCalls).toEqual([
+        {
+          title: "Build task",
+          model: { providerID: "opencode-go", id: "deepseek-v4-flash" },
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("answers only owned-session events and denies unexpected permissions", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

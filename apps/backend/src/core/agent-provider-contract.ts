@@ -249,6 +249,12 @@ export interface ProviderInteractiveSnapshot {
   title?: string;
   shareUrl?: string | null;
   composer?: NativeAgentComposerState;
+  /**
+   * Provider-owned session model, distinct from the catalog default that
+   * `composer.selectedModelId` may still advertise.
+   */
+  sessionModelId?: string;
+  sessionReasoningId?: string;
   readiness?: NativeAgentReadiness;
   controls?: NativeAgentControlUpdate;
   providerRevision?: number;

@@ -987,16 +987,21 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       this.streamState.endTurn(sessionId);
     }
     const turnStartedAt = running ? this.streamState.turnStartedAt(sessionId) : undefined;
-    return openCodeSessionStateSnapshot({
-      status,
-      revision: this.streamState.revision(sessionId),
-      ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
-      title: this.streamState.title(sessionId),
-      messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
-      policy: this.sessionPolicies.get(sessionId),
-      runtime: this.streamState.runtime(sessionId),
-      notices,
-    });
+    const sessionModel = this.streamState.sessionModel(sessionId);
+    return {
+      ...openCodeSessionStateSnapshot({
+        status,
+        revision: this.streamState.revision(sessionId),
+        ...(turnStartedAt === undefined ? {} : { turnStartedAt }),
+        title: this.streamState.title(sessionId),
+        messages: this.streamState.usageMessages(sessionId).slice(-OPEN_CODE_MESSAGE_HISTORY_LIMIT),
+        policy: this.sessionPolicies.get(sessionId),
+        runtime: this.streamState.runtime(sessionId),
+        notices,
+      }),
+      ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
+      ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
+    };
   }
 
   private async projectedMessages(sessionId: string, limit: number): Promise<unknown[]> {
@@ -1086,6 +1091,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
           : {}),
         executionProfiles: metadata.executionProfiles,
       },
+      ...(metadata.sessionModelId ? { sessionModelId: metadata.sessionModelId } : {}),
+      ...(metadata.sessionReasoningId ? { sessionReasoningId: metadata.sessionReasoningId } : {}),
       ...(latestUsage ? { contextUsage: latestUsage } : {}),
       ...(this.sessionPolicies.get(sessionId)
         ? { policy: this.sessionPolicies.get(sessionId) }
@@ -1152,14 +1159,19 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     T extends {
       runtime: NativeAgentRuntimeSummary;
       title?: string;
+      sessionModelId?: string;
+      sessionReasoningId?: string;
     },
   >(sessionId: string, metadata: T): T {
     const title = this.streamState.title(sessionId);
+    const sessionModel = this.streamState.sessionModel(sessionId);
     const runtime = { ...metadata.runtime, ...this.streamState.runtime(sessionId) };
     return {
       ...metadata,
       runtime,
       ...(title ? { title } : {}),
+      ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
+      ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
     };
   }
 

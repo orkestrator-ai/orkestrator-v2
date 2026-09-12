@@ -425,6 +425,21 @@ export function openCodeModelSelection(model: string | undefined) {
     : undefined;
 }
 
+/** `session.create` uses `{ id, providerID }`, not the prompt `{ modelID, providerID }`. */
+export function openCodeSessionCreateModel(
+  model: string | undefined,
+  variant?: string,
+): { providerID: string; id: string; variant?: string } | undefined {
+  const selection = openCodeModelSelection(model);
+  if (!selection) return undefined;
+  const reasoning = variant?.trim();
+  return {
+    providerID: selection.providerID,
+    id: selection.modelID,
+    ...(reasoning && reasoning !== "default" ? { variant: reasoning } : {}),
+  };
+}
+
 /**
  * OpenCode reasoning travels as the composer's reasoning selection, never as a
  * model parameter. An earlier catalog briefly advertised a `reasoning`

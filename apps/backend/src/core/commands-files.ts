@@ -12,6 +12,7 @@ import {
   validateRelativeFilePath,
   writeConfinedFile,
   moveConfinedFile,
+  createConfinedDirectory,
   INITIAL_PROMPT_STAGING_DIRECTORY,
 } from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
@@ -762,9 +763,13 @@ export async function enableGitScanCaches(worktreePath: string): Promise<void> {
   }
 }
 
+function pathHasGitMetadataSegment(relativePath: string): boolean {
+  return relativePath.split("/").some((segment) => segment.toLowerCase() === ".git");
+}
+
 export function validateWorkspaceMutationPath(relativePath: string, label = "filePath"): string {
   const target = validateRelativeFilePath(relativePath, label);
-  if (target === ".git" || target.startsWith(".git/")) {
+  if (pathHasGitMetadataSegment(target)) {
     throw new Error(`Invalid ${label}: Git metadata cannot be modified`);
   }
   return target;
@@ -1094,6 +1099,178 @@ export async function moveLocalFile(
   return move.destination;
 }
 
+const MAX_FOLDER_NAME_LENGTH = 255;
+
+/**
+ * Resolve a single-segment folder name against an existing parent directory.
+ *
+ * The name is a leaf only: separators are rejected so a right-click location
+ * cannot be used to create a nested path elsewhere in the workspace.
+ */
+export function resolveWorkspaceFolderCreate(
+  parentDirectory: string,
+  folderName: string,
+): { directory: string; folderPath: string } {
+  const name = folderName.trim();
+  if (name.length === 0) {
+    throw new Error("Invalid folderName: name is required");
+  }
+  if (name.length > MAX_FOLDER_NAME_LENGTH) {
+    throw new Error(`Invalid folderName: name exceeds ${MAX_FOLDER_NAME_LENGTH} characters`);
+  }
+  if (name === "." || name === "..") {
+    throw new Error("Invalid folderName: path must stay inside the workspace");
+  }
+  if (name.toLowerCase() === ".git") {
+    throw new Error("Invalid folderName: Git metadata cannot be modified");
+  }
+  if (name.includes("/") || name.includes("\\")) {
+    throw new Error("Invalid folderName: path separators are not allowed");
+  }
+
+  const directory =
+    parentDirectory === "."
+      ? "."
+      : validateWorkspaceMutationPath(parentDirectory, "parentDirectory");
+  const folderPath = validateWorkspaceMutationPath(
+    directory === "." ? name : path.posix.join(directory, name),
+    "folderPath",
+  );
+  if (path.posix.basename(folderPath) !== name) {
+    throw new Error("Invalid folderName: path must stay inside the workspace");
+  }
+  return { directory, folderPath };
+}
+
+/** Create one empty directory without replacing an existing path. */
+export async function createLocalFolder(
+  worktreePath: string,
+  parentDirectory: string,
+  folderName: string,
+  testHooks?: Parameters<typeof createConfinedDirectory>[2],
+): Promise<string> {
+  const created = resolveWorkspaceFolderCreate(parentDirectory, folderName);
+  try {
+    await createConfinedDirectory(worktreePath, created.folderPath, testHooks);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Parent directory does not exist")) {
+      throw new Error(
+        created.directory === "."
+          ? "Workspace root is not available"
+          : `Parent directory does not exist: ${created.directory}`,
+      );
+    }
+    throw error;
+  }
+  return created.folderPath;
+}
+
+export const CONTAINER_PINNED_FOLDER_CREATE = String.raw`
+const fs = require("node:fs"), path = require("node:path");
+const { dlopen, FFIType, ptr, read } = require("bun:ffi");
+const [rootPath, directory, folderPath, readyToken] = process.argv.slice(1);
+const parentDirectory = path.posix.dirname(folderPath);
+const folderName = path.posix.basename(folderPath);
+const encoded = value => Buffer.from(value + "\0");
+const isMac = process.platform === "darwin";
+const library = isMac
+  ? dlopen("/usr/lib/libSystem.B.dylib", {
+      openat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+      mkdirat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+      readlinkat: { args: [FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i64 },
+      close: { args: [FFIType.i32], returns: FFIType.i32 },
+      __error: { args: [], returns: FFIType.ptr },
+    })
+  : dlopen("libc.so.6", {
+      openat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+      mkdirat: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+      readlinkat: { args: [FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i64 },
+      close: { args: [FFIType.i32], returns: FFIType.i32 },
+      __errno_location: { args: [], returns: FFIType.ptr },
+    });
+const fds = [];
+const errno = () => read.i32(isMac ? library.symbols.__error() : library.symbols.__errno_location(), 0);
+const directoryFlags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW | fs.constants.O_CLOEXEC;
+const openAt = (parentFd, name, flags) => {
+  const nameBytes = encoded(name);
+  const fd = library.symbols.openat(parentFd, ptr(nameBytes), flags, 0);
+  if (fd >= 0) fds.push(fd);
+  return fd;
+};
+const fail = message => { throw new Error(message); };
+const isLoop = code => code === 40 || code === 62;
+const isSymlinkName = (parentFd, name) => {
+  const scratch = Buffer.alloc(1);
+  return library.symbols.readlinkat(parentFd, ptr(encoded(name)), ptr(scratch), 1) >= 0;
+};
+const openDirectory = (rootFd, relativeDirectory, label) => {
+  let current = openAt(rootFd, ".", directoryFlags);
+  if (current < 0) fail(label + " is not available");
+  const segments = relativeDirectory === "." ? [] : relativeDirectory.split("/");
+  for (const segment of segments) {
+    const next = openAt(current, segment, directoryFlags);
+    if (next < 0) {
+      const code = errno();
+      if (code === 2) fail(label + " does not exist: " + relativeDirectory);
+      if (isLoop(code) || isSymlinkName(current, segment)) fail("symlink ancestor is not allowed: " + folderPath);
+      fail("ancestor is not a directory: " + folderPath);
+    }
+    current = next;
+  }
+  return current;
+};
+const assertStillNamed = (relativeDirectory, fd) => {
+  const namedPath = relativeDirectory === "." ? rootPath : path.join(rootPath, relativeDirectory);
+  let named;
+  try { named = fs.lstatSync(namedPath); }
+  catch { fail("Workspace directory changed while the folder was being created; please try again"); }
+  const pinned = fs.fstatSync(fd);
+  if (named.isSymbolicLink() || !named.isDirectory() || named.dev !== pinned.dev || named.ino !== pinned.ino) {
+    fail("Workspace directory changed while the folder was being created; please try again");
+  }
+};
+let rootFd;
+try {
+  rootFd = fs.openSync(rootPath, directoryFlags);
+  const parentFd = openDirectory(rootFd, parentDirectory === "." ? "." : directory, "Parent directory");
+  if (readyToken) {
+    process.stdout.write(readyToken + "\n");
+    fs.readFileSync(0);
+  }
+  assertStillNamed(parentDirectory, parentFd);
+  const nameBytes = encoded(folderName);
+  const created = library.symbols.mkdirat(parentFd, ptr(nameBytes), 0o777);
+  if (created !== 0) {
+    const code = errno();
+    if (code === 17) fail("A file or folder already exists at " + folderPath);
+    if (code === 2) fail("Parent directory does not exist: " + directory);
+    if (isLoop(code)) fail("symlink ancestor is not allowed: " + folderPath);
+    fail("Unable to create folder safely: " + folderPath);
+  }
+  assertStillNamed(parentDirectory, parentFd);
+} catch (error) {
+  process.stderr.write(error && error.message ? error.message : "Unable to create folder safely");
+  process.exitCode = 1;
+} finally {
+  for (const fd of fds.reverse()) library.symbols.close(fd);
+  if (rootFd !== undefined) fs.closeSync(rootFd);
+  library.close();
+}
+`.trim();
+
+export function containerCreateFolderCommand(directory: string, folderPath: string): string {
+  return `
+    set -euo pipefail
+    cd /workspace
+    directory=${quoteShell(directory)}
+    folderPath=${quoteShell(folderPath)}
+    ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
+    assert_safe_path "$folderPath"
+    bun -e ${quoteShell(CONTAINER_PINNED_FOLDER_CREATE)} -- /workspace "$directory" "$folderPath"
+  `;
+}
+
 export async function requireLocalMutationEnvironment(
   storage: StorageService,
   environmentId: string,
@@ -1121,11 +1298,17 @@ export async function requireContainerMutationEnvironment(
 export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "assert_safe_path() {",
   '  local candidate="$1"',
-  '  case "$candidate" in .git|.git/*) echo "Git metadata cannot be modified" >&2; return 1 ;; esac',
-  "  local current=/workspace",
+  "  local part part_folded index",
   "  local -a parts=()",
-  "  local index",
   '  IFS=/ read -r -a parts <<< "$candidate"',
+  '  for part in "${parts[@]}"; do',
+  '    part_folded=$(printf "%s" "$part" | tr "[:upper:]" "[:lower:]")',
+  '    if [ "$part_folded" = ".git" ]; then',
+  '      echo "Git metadata cannot be modified" >&2',
+  "      return 1",
+  "    fi",
+  "  done",
+  "  local current=/workspace",
   "  for ((index = 0; index < ${#parts[@]} - 1; index++)); do",
   '    current="$current/${parts[$index]}"',
   '    if [ -L "$current" ]; then',

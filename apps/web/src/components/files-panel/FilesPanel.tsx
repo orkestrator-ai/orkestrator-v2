@@ -5,7 +5,7 @@ import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
 import { FileActionDialog, type PendingFileAction } from "./FileActionDialog";
 import { useFilesPanelStore } from "@/stores";
-import { useFilesPanel } from "@/hooks";
+import { useFilesPanel, FileBatchActionError } from "@/hooks";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { revealInFileManager } from "@/lib/backend";
 
@@ -25,6 +25,7 @@ export function FilesPanel() {
     revertFile,
     deleteFile,
     moveFile,
+    createFolder,
     fileActionPending,
     environmentId,
     isLocalEnvironment,
@@ -32,8 +33,8 @@ export function FilesPanel() {
   } = useFilesPanel();
 
   const moveFileInTree = useCallback(
-    (sourcePath: string, destinationDirectory: string) => {
-      void moveFile(sourcePath, destinationDirectory).catch(() => undefined);
+    (sourcePaths: string[], destinationDirectory: string) => {
+      void moveFile(sourcePaths, destinationDirectory).catch(() => undefined);
     },
     [moveFile],
   );
@@ -42,9 +43,10 @@ export function FilesPanel() {
     setPendingAction(null);
   }, [environmentId]);
 
-  const requestFileAction = (kind: PendingFileAction["kind"], path: string) => {
-    if (!environmentId) return;
-    setPendingAction({ environmentId, kind, path });
+  const requestFileAction = (kind: PendingFileAction["kind"], path: string | string[]) => {
+    const paths = Array.isArray(path) ? path : [path];
+    if (!environmentId || paths.length === 0) return;
+    setPendingAction({ environmentId, kind, paths });
   };
 
   const revealFile = useCallback(
@@ -66,13 +68,20 @@ export function FilesPanel() {
     }
     try {
       if (pendingAction.kind === "revert") {
-        await revertFile(pendingAction.path);
+        await revertFile(pendingAction.paths[0]!);
       } else {
-        await deleteFile(pendingAction.path);
+        await deleteFile(pendingAction.paths);
       }
       setPendingAction(null);
-    } catch {
-      // The hook reports the failure and leaves the dialog open for retry or cancellation.
+    } catch (error) {
+      // The hook reports the failure. A partial batch narrows the pending
+      // action to the paths that still need to run so a retry cannot get stuck
+      // re-applying already-processed paths.
+      if (error instanceof FileBatchActionError && error.remainingPaths.length > 0) {
+        setPendingAction((current) =>
+          current ? { ...current, paths: error.remainingPaths } : current,
+        );
+      }
     }
   };
 
@@ -92,6 +101,7 @@ export function FilesPanel() {
             onRevert={(path) => requestFileAction("revert", path)}
             onDelete={(path) => requestFileAction("delete", path)}
             onMove={moveFileInTree}
+            onCreateFolder={createFolder}
             movePending={fileActionPending !== null}
           />
         )}

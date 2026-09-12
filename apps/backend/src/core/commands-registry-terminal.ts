@@ -92,12 +92,15 @@ import {
   revertLocalFile,
   deleteLocalFile,
   moveLocalFile,
+  createLocalFolder,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
   containerRevertFileCommand,
   containerDeleteFileCommand,
   resolveWorkspaceFileMove,
+  resolveWorkspaceFolderCreate,
   containerMoveFileCommand,
+  containerCreateFolderCommand,
   readLocalFileAtBranch,
 } from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
@@ -785,6 +788,21 @@ export function registerTerminalCommands(
       return result;
     },
   );
+  register(
+    "create_local_folder",
+    async ({ environmentId, parentDirectory, folderName }, context) => {
+      const id = asString(environmentId, "environmentId");
+      const environment = await requireLocalMutationEnvironment(context.storage, id);
+      const result = await createLocalFolder(
+        environment.worktreePath!,
+        asString(parentDirectory, "parentDirectory"),
+        asString(folderName, "folderName"),
+      );
+      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
+      diffStatsService.refresh(id);
+      return result;
+    },
+  );
 
   register(
     "get_git_status",
@@ -986,6 +1004,25 @@ export function registerTerminalCommands(
       diffStatsService.invalidateChanges({ containerId: id });
       diffStatsService.refresh(environmentIdString);
       return move.destination;
+    },
+  );
+  register(
+    "create_container_folder",
+    async ({ environmentId, parentDirectory, folderName }, context) => {
+      const environmentIdString = asString(environmentId, "environmentId");
+      const environment = await requireContainerMutationEnvironment(
+        context.storage,
+        environmentIdString,
+      );
+      const id = environment.containerId!;
+      const created = resolveWorkspaceFolderCreate(
+        asString(parentDirectory, "parentDirectory"),
+        asString(folderName, "folderName"),
+      );
+      await dockerExec(id, containerCreateFolderCommand(created.directory, created.folderPath));
+      diffStatsService.invalidateChanges({ containerId: id });
+      diffStatsService.refresh(environmentIdString);
+      return created.folderPath;
     },
   );
 

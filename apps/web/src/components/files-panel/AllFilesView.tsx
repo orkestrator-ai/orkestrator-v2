@@ -1,4 +1,11 @@
-import { useMemo, useState, type DragEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type DragEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import {
@@ -7,7 +14,8 @@ import {
   isWorkspaceFileDrag,
   workspaceParentDirectory,
 } from "./FileTreeNode";
-import { Loader2, Folder, FolderTree } from "lucide-react";
+import { CreateFolderDialog } from "./CreateFolderDialog";
+import { Loader2, Folder, FolderPlus, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 import {
   Dialog,
@@ -16,8 +24,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import type { FileNode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { BoundedPathList } from "./BoundedPathList";
+import {
+  collectAllFilePaths,
+  collectVisibleFilePaths,
+  decodeWorkspaceFileDrag,
+  resolveFileSelection,
+} from "./file-selection";
 
 function collectDirectories(nodes: FileNode[]): FileNode[] {
   return nodes.flatMap((node) =>
@@ -28,9 +49,33 @@ function collectDirectories(nodes: FileNode[]): FileNode[] {
 interface AllFilesViewProps {
   onReveal?: (path: string) => void;
   onRevert?: (path: string) => void;
-  onDelete?: (path: string) => void;
-  onMove?: (sourcePath: string, destinationDirectory: string) => void;
+  onDelete?: (paths: string[]) => void;
+  onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
+  onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
   movePending?: boolean;
+}
+
+function WorkspaceCreateFolderMenu({
+  disabled,
+  onRequest,
+  children,
+}: {
+  disabled: boolean;
+  onRequest?: (parentDirectory: string) => void;
+  children: ReactNode;
+}) {
+  if (!onRequest) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem disabled={disabled} onSelect={() => onRequest(".")}>
+          <FolderPlus />
+          New folder
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 export function AllFilesView({
@@ -38,42 +83,122 @@ export function AllFilesView({
   onRevert,
   onDelete,
   onMove,
+  onCreateFolder,
   movePending = false,
 }: AllFilesViewProps = {}) {
   const fileTree = useFilesPanelStore((state) => state.fileTree);
   const changes = useFilesPanelStore((state) => state.changes);
   const isLoadingTree = useFilesPanelStore((state) => state.isLoadingTree);
+  const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
   const closePanel = useFilesPanelStore((state) => state.closePanel);
+  const setFolderExpanded = useFilesPanelStore((state) => state.setFolderExpanded);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
-  const [moveSourcePath, setMoveSourcePath] = useState<string | null>(null);
+  const [moveSourcePaths, setMoveSourcePaths] = useState<string[] | null>(null);
+  const [createParentDirectory, setCreateParentDirectory] = useState<string | null>(null);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [anchorPath, setAnchorPath] = useState<string | null>(null);
   const changedPaths = useMemo(() => new Set(changes.map((change) => change.path)), [changes]);
   const directories = useMemo(() => collectDirectories(fileTree), [fileTree]);
+  const visibleFilePaths = useMemo(
+    () => collectVisibleFilePaths(fileTree, expandedFolders),
+    [fileTree, expandedFolders],
+  );
+  const selectedPathSet = useMemo(() => new Set(selectedPaths), [selectedPaths]);
 
-  const handleFileClick = (path: string) => {
+  useEffect(() => {
+    const existing = new Set(collectAllFilePaths(fileTree));
+    setSelectedPaths((current) => {
+      const next = current.filter((path) => existing.has(path));
+      return next.length === current.length ? current : next;
+    });
+    setAnchorPath((current) => (current && existing.has(current) ? current : null));
+  }, [fileTree]);
+
+  const handleFileClick = (path: string, event: MouseEvent<HTMLButtonElement>) => {
+    const result = resolveFileSelection(
+      path,
+      {
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey || event.ctrlKey,
+      },
+      visibleFilePaths,
+      anchorPath,
+      selectedPaths,
+    );
+
+    if (result.type === "range") {
+      event.preventDefault();
+      setSelectedPaths(result.paths);
+      if (!anchorPath) setAnchorPath(path);
+      return;
+    }
+
+    if (result.type === "add") {
+      event.preventDefault();
+      setSelectedPaths((current) => (current.includes(path) ? current : [...current, path]));
+      if (!anchorPath) setAnchorPath(path);
+      return;
+    }
+
+    if (result.type === "remove") {
+      event.preventDefault();
+      setSelectedPaths((current) => current.filter((selected) => selected !== path));
+      setAnchorPath((current) => (current === path ? null : current));
+      return;
+    }
+
+    setSelectedPaths([path]);
+    setAnchorPath(path);
     if (!createFileTab) return;
     createFileTab(path);
     if (isMobile) closePanel();
   };
 
+  const handleContextSelect = (path: string) => {
+    if (selectedPathSet.has(path)) return;
+    setSelectedPaths([path]);
+    setAnchorPath(path);
+  };
+
+  const requestCreateFolder = onCreateFolder ? setCreateParentDirectory : undefined;
+
+  const handleCreateFolder = async (parentDirectory: string, folderName: string) => {
+    if (!onCreateFolder) return;
+    await onCreateFolder(parentDirectory, folderName);
+    if (parentDirectory !== ".") {
+      setFolderExpanded(parentDirectory, true);
+    }
+    setCreateParentDirectory(null);
+  };
+
   const moveTo = (destinationDirectory: string) => {
-    const sourcePath = moveSourcePath;
-    setMoveSourcePath(null);
-    if (!sourcePath || !onMove || workspaceParentDirectory(sourcePath) === destinationDirectory) {
+    const sourcePaths = (moveSourcePaths ?? []).filter(
+      (sourcePath) => workspaceParentDirectory(sourcePath) !== destinationDirectory,
+    );
+    setMoveSourcePaths(null);
+    if (sourcePaths.length === 0 || !onMove) {
       return;
     }
-    onMove(sourcePath, destinationDirectory);
+    onMove(sourcePaths, destinationDirectory);
   };
 
   const handleRootDrop = (event: DragEvent<HTMLDivElement>) => {
     setIsRootDragOver(false);
     if (!onMove || movePending) return;
-    const sourcePath = event.dataTransfer.getData(FILE_DRAG_TYPE);
-    if (!sourcePath || workspaceParentDirectory(sourcePath) === ".") return;
+    const sourcePaths = decodeWorkspaceFileDrag(event.dataTransfer.getData(FILE_DRAG_TYPE)).filter(
+      (sourcePath) => workspaceParentDirectory(sourcePath) !== ".",
+    );
+    if (sourcePaths.length === 0) return;
     event.preventDefault();
-    onMove(sourcePath, ".");
+    onMove(sourcePaths, ".");
   };
+
+  const destinationDisabled = (destinationDirectory: string) =>
+    !moveSourcePaths?.some(
+      (sourcePath) => workspaceParentDirectory(sourcePath) !== destinationDirectory,
+    );
 
   if (isLoadingTree) {
     return (
@@ -86,40 +211,60 @@ export function AllFilesView({
 
   if (fileTree.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-        <FolderTree className="mb-2 h-8 w-8 opacity-50" />
-        <p className="text-sm">No files found</p>
-      </div>
+      <>
+        <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+          <div className="flex min-h-40 flex-col items-center justify-center py-8 text-muted-foreground">
+            <FolderTree className="mb-2 h-8 w-8 opacity-50" />
+            <p className="text-sm">No files found</p>
+          </div>
+        </WorkspaceCreateFolderMenu>
+        <CreateFolderDialog
+          parentDirectory={createParentDirectory}
+          isPending={movePending}
+          onCancel={() => setCreateParentDirectory(null)}
+          onCreate={handleCreateFolder}
+        />
+      </>
     );
   }
 
+  const moveCount = moveSourcePaths?.length ?? 0;
+  const moveSubject =
+    moveCount === 1 ? moveSourcePaths?.[0]?.split("/").at(-1) : `${moveCount} files`;
+
+  const workspaceRootTarget = onMove ? (
+    <div
+      aria-label="Workspace root drop target"
+      onDragEnter={(event) => {
+        if (movePending || !isWorkspaceFileDrag(event)) return;
+        event.preventDefault();
+        setIsRootDragOver(true);
+      }}
+      onDragOver={(event) => {
+        if (movePending || !isWorkspaceFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setIsRootDragOver(true);
+      }}
+      onDragLeave={() => setIsRootDragOver(false)}
+      onDrop={handleRootDrop}
+      className={cn(
+        "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
+        isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
+      )}
+    >
+      <Folder className="h-3.5 w-3.5" />
+      Workspace root
+    </div>
+  ) : null;
+
   return (
     <>
-      <div className="p-2">
-        {onMove && (
-          <div
-            aria-label="Workspace root drop target"
-            onDragEnter={(event) => {
-              if (movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              setIsRootDragOver(true);
-            }}
-            onDragOver={(event) => {
-              if (movePending || !isWorkspaceFileDrag(event)) return;
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              setIsRootDragOver(true);
-            }}
-            onDragLeave={() => setIsRootDragOver(false)}
-            onDrop={handleRootDrop}
-            className={cn(
-              "mb-1 flex items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground",
-              isRootDragOver && "bg-primary/15 ring-1 ring-inset ring-primary/60",
-            )}
-          >
-            <Folder className="h-3.5 w-3.5" />
-            Workspace root
-          </div>
+      <div className="flex min-h-40 select-none flex-col p-2">
+        {workspaceRootTarget && (
+          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+            {workspaceRootTarget}
+          </WorkspaceCreateFolderMenu>
         )}
         {fileTree.map((node) => (
           <FileTreeNode
@@ -129,23 +274,38 @@ export function AllFilesView({
             onFileClick={handleFileClick}
             onReveal={onReveal}
             changedPaths={changedPaths}
+            selectedPaths={selectedPathSet}
+            onContextSelect={handleContextSelect}
             onRevert={onRevert}
             onDelete={onDelete}
             onMove={onMove}
-            onRequestMove={onMove ? setMoveSourcePath : undefined}
+            onRequestMove={onMove ? setMoveSourcePaths : undefined}
+            onCreateFolder={requestCreateFolder}
             movePending={movePending}
           />
         ))}
+        {requestCreateFolder && (
+          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+            <div className="min-h-16 flex-1" aria-label="Workspace empty space" />
+          </WorkspaceCreateFolderMenu>
+        )}
       </div>
+      <CreateFolderDialog
+        parentDirectory={createParentDirectory}
+        isPending={movePending}
+        onCancel={() => setCreateParentDirectory(null)}
+        onCreate={handleCreateFolder}
+      />
       <Dialog
-        open={moveSourcePath !== null}
-        onOpenChange={(open) => !open && setMoveSourcePath(null)}
+        open={moveSourcePaths !== null}
+        onOpenChange={(open) => !open && setMoveSourcePaths(null)}
       >
         <DialogContent className="max-h-[min(32rem,calc(100vh-2rem))] sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Move file</DialogTitle>
+            <DialogTitle>{moveCount > 1 ? "Move files" : "Move file"}</DialogTitle>
             <DialogDescription>
-              Choose a destination for {moveSourcePath?.split("/").at(-1)}.
+              Choose a destination for {moveSubject}.
+              {moveCount > 1 && <BoundedPathList paths={moveSourcePaths ?? []} />}
             </DialogDescription>
           </DialogHeader>
           <div
@@ -157,7 +317,7 @@ export function AllFilesView({
               type="button"
               role="option"
               aria-selected="false"
-              disabled={moveSourcePath ? workspaceParentDirectory(moveSourcePath) === "." : true}
+              disabled={destinationDisabled(".")}
               onClick={() => moveTo(".")}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-40"
             >
@@ -170,11 +330,7 @@ export function AllFilesView({
                 type="button"
                 role="option"
                 aria-selected="false"
-                disabled={
-                  moveSourcePath
-                    ? workspaceParentDirectory(moveSourcePath) === directory.path
-                    : true
-                }
+                disabled={destinationDisabled(directory.path)}
                 onClick={() => moveTo(directory.path)}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-40"
               >

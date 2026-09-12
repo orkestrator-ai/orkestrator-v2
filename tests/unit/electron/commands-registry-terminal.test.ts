@@ -1049,6 +1049,48 @@ exit 1
     expect(existsSync(path.join(worktree, "tracked.txt"))).toBe(false);
   });
 
+  test("creates local folders through the environment-scoped command", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const commands = createCommandRegistry();
+    const environment = createEnvironment({ worktreePath: worktree });
+    const context = createContext(environment).context;
+
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: environment.id, parentDirectory: ".", folderName: "docs" },
+        context,
+      ),
+    ).resolves.toBe("docs");
+    expect((await fs.stat(path.join(worktree, "docs"))).isDirectory()).toBe(true);
+
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: environment.id, parentDirectory: "docs", folderName: "guides" },
+        context,
+      ),
+    ).resolves.toBe("docs/guides");
+    expect((await fs.stat(path.join(worktree, "docs", "guides"))).isDirectory()).toBe(true);
+
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: environment.id, parentDirectory: ".", folderName: "../outside" },
+        context,
+      ),
+    ).rejects.toThrow("path separators are not allowed");
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: environment.id, parentDirectory: ".Git/refs", folderName: "heads2" },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: environment.id, parentDirectory: ".", folderName: ".GIT" },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
+  });
+
   test("rejects unsafe paths for local file mutations", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const commands = createCommandRegistry();
@@ -1219,6 +1261,22 @@ exit 1
         context,
       ),
     ).rejects.toThrow("Expected destinationDirectory to be a string");
+    await expect(
+      commands.get("create_local_folder")?.(
+        { environmentId: "missing", parentDirectory: ".", folderName: "docs" },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("create_local_folder")?.(
+        {
+          environmentId: containerEnvironment.id,
+          parentDirectory: ".",
+          folderName: "docs",
+        },
+        context,
+      ),
+    ).rejects.toThrow("not a local worktree");
 
     await expect(fs.readFile(path.join(worktree, "tracked.txt"), "utf8")).resolves.toBe("base\n");
   });
@@ -1749,6 +1807,16 @@ exit 0
             context,
           ),
         ).resolves.toBe("file name.ts");
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "src",
+              folderName: "hooks",
+            },
+            context,
+          ),
+        ).resolves.toBe("src/hooks");
 
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("set -euo pipefail");
@@ -1763,6 +1831,10 @@ exit 0
         expect(dockerExec).toContain("renameat2");
         expect(dockerExec).toContain("bun -e");
         expect(dockerExec).not.toContain('mv -- "$source" "$destination"');
+        expect(dockerExec).toContain("mkdirat");
+        expect(dockerExec).toContain("bun -e");
+        expect(dockerExec).not.toContain('mkdir -- "$folderPath"');
+        expect(dockerExec).not.toContain("mkdir -p");
       },
     );
 
@@ -1804,6 +1876,46 @@ exit 0
         context,
       ),
     ).rejects.toThrow("Expected destinationDirectory to be a string");
+    await expect(
+      commands.get("create_container_folder")?.(
+        {
+          environmentId: environment.id,
+          parentDirectory: "../outside",
+          folderName: "docs",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Invalid parentDirectory");
+    await expect(
+      commands.get("create_container_folder")?.(
+        {
+          environmentId: environment.id,
+          parentDirectory: "src",
+          folderName: undefined,
+        },
+        context,
+      ),
+    ).rejects.toThrow("Expected folderName to be a string");
+    await expect(
+      commands.get("create_container_folder")?.(
+        {
+          environmentId: environment.id,
+          parentDirectory: ".Git/refs",
+          folderName: "heads2",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
+    await expect(
+      commands.get("create_container_folder")?.(
+        {
+          environmentId: environment.id,
+          parentDirectory: "src",
+          folderName: ".GIT",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Git metadata cannot be modified");
   });
 
   test("binds destructive container commands to a stored container environment", async () => {
@@ -1844,6 +1956,22 @@ exit 0
         context,
       ),
     ).rejects.toThrow("not containerized");
+    await expect(
+      commands.get("create_container_folder")?.(
+        { environmentId: "missing", parentDirectory: ".", folderName: "docs" },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("create_container_folder")?.(
+        {
+          environmentId: localEnvironment.id,
+          parentDirectory: ".",
+          folderName: "docs",
+        },
+        context,
+      ),
+    ).rejects.toThrow("not containerized");
   });
 
   liveDockerTest(
@@ -1880,6 +2008,8 @@ exit 0
         printf 'delete me\\n' > delete-me.txt
         mkdir archive
         printf 'move me\\n' > move-me.txt
+        mkdir docs
+        printf 'not a directory\\n' > file-parent.txt
         mkdir -p /tmp/orkestrator-outside
         printf 'keep me\\n' > /tmp/orkestrator-outside/victim.txt
         ln -s /tmp/orkestrator-outside escape
@@ -1923,6 +2053,56 @@ exit 0
             context,
           ),
         ).rejects.toThrow("Symlink ancestor is not allowed");
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "docs",
+              folderName: "guides",
+            },
+            context,
+          ),
+        ).resolves.toBe("docs/guides");
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "escape",
+              folderName: "victim",
+            },
+            context,
+          ),
+        ).rejects.toThrow(/symlink ancestor/i);
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "missing",
+              folderName: "docs",
+            },
+            context,
+          ),
+        ).rejects.toThrow("does not exist");
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "file-parent.txt",
+              folderName: "nested",
+            },
+            context,
+          ),
+        ).rejects.toThrow("ancestor is not a directory");
+        await expect(
+          commands.get("create_container_folder")?.(
+            {
+              environmentId: environment.id,
+              parentDirectory: "docs",
+              folderName: "guides",
+            },
+            context,
+          ),
+        ).rejects.toThrow("already exists");
 
         await expect(
           execFileAsync("docker", [
@@ -1936,6 +2116,8 @@ exit 0
               "test ! -e /workspace/delete-me.txt",
               "test ! -e /workspace/move-me.txt",
               "test -f /workspace/archive/move-me.txt",
+              "test -d /workspace/docs/guides",
+              "test ! -e /tmp/orkestrator-outside/victim",
               "test -f /tmp/orkestrator-outside/victim.txt",
             ].join(" && "),
           ]),

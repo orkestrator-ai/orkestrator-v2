@@ -32,6 +32,10 @@ import type {
 } from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
 import { clearStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
+import {
+  activateProjectForEnvironmentCleanup,
+  startEnvironmentCleanupSelectionSync,
+} from "@/lib/environment-cleanup-selection";
 
 /**
  * Extract error message from various error types.
@@ -479,6 +483,8 @@ export function applyEnvironmentSetupComplete(payload: EnvironmentSetupCompleteP
  * registration serves every consumer.
  */
 export function useEnvironmentLifecycleService(): void {
+  useEffect(() => startEnvironmentCleanupSelectionSync(), []);
+
   // No mount-time lifecycle-error pass on purpose: the environment store has no
   // persisted state, so at mount it is still the empty initial array. The first
   // failure this renderer can see arrives with the first authoritative read,
@@ -810,7 +816,11 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
   const deleteEnvironment = useCallback(
     async (environmentId: string) => {
+      const projectId =
+        useEnvironmentStore.getState().getEnvironmentById(environmentId)?.projectId ??
+        useUIStore.getState().selectedProjectId;
       setDeleting(environmentId, true);
+      const didActivate = activateProjectForEnvironmentCleanup(environmentId);
       setError(null);
       try {
         // Delete all sessions for this environment first (cleans up buffer files too)
@@ -851,6 +861,13 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         throw new Error(message);
       } finally {
         setDeleting(environmentId, false);
+        if (
+          didActivate &&
+          projectId &&
+          useEnvironmentStore.getState().getEnvironmentById(environmentId)
+        ) {
+          useUIStore.getState().selectProjectAndEnvironment(projectId, environmentId);
+        }
       }
     },
     [removeEnvironmentFromStore, setError, deleteSessionsByEnvironment, setDeleting, showError],

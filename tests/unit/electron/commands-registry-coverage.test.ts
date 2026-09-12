@@ -1207,6 +1207,18 @@ describe("direct backend command registry coverage", () => {
         context,
       ),
     ).rejects.toThrow("parent directory traversal is not allowed");
+    await expect(
+      invoke(
+        "create_local_folder",
+        {
+          environmentId: local.id,
+          parentDirectory: "src",
+          folderName: "hooks",
+        },
+        context,
+      ),
+    ).resolves.toBe("src/hooks");
+    expect((await fs.stat(path.join(worktree, "src", "hooks"))).isDirectory()).toBe(true);
   });
 
   test("records paused PR watch intent, refreshes safely, and validates modes", async () => {

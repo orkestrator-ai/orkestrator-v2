@@ -23,7 +23,12 @@ import {
 import { modelSelection } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { createRunDiagnostics, type CursorRunDiagnostics } from "./run-diagnostics.js";
-import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
+import {
+  applyInteractionUpdate,
+  applyStreamUsage,
+  settleAbandonedToolParts,
+  settleBackgroundChildren,
+} from "./translate.js";
 import { boundTranscript } from "./transcript.js";
 import {
   mergeAccountWindows,
@@ -313,6 +318,7 @@ function finishTurn(
   streamed: StreamedUsage,
 ): void {
   settleBackgroundChildren(state);
+  settleAbandonedToolParts(state);
   state.cancelTurn = undefined;
   state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;
@@ -332,6 +338,7 @@ function finishTurn(
   // transcript is the honest record of what ran.
   state.status = "idle";
   state.error = undefined;
+  backfillTerminalAssistantText(state, result.result);
   recordUsage(state, result, streamed, input);
   recordStructuredOutput(state, result.result, input);
   journal(state, input.requestId, "completed");
@@ -348,6 +355,7 @@ function failTurn(
   streamed: StreamedUsage = {},
 ): void {
   settleBackgroundChildren(state);
+  settleAbandonedToolParts(state);
   state.cancelTurn = undefined;
   state.activeRun = undefined;
   state.pendingCancelPromptSequence = undefined;
@@ -717,6 +725,35 @@ function sumTurnUsage(
     total.totalTokens = (current.totalTokens ?? 0) + (next.totalTokens ?? 0);
   }
   return total;
+}
+
+/**
+ * Put the terminal assistant text on the transcript when the live stream
+ * never delivered it.
+ *
+ * Chat turns are built only from `onDelta` `text-delta`s. Cursor's public
+ * interaction callback can go silent at the tail of a run — the same gap
+ * that leaves MCP cards pending — while `wait()` still returns
+ * `RunResult.result`, which the SDK's own accumulator treats as
+ * `finalAssistantText()`. Schema turns already read that field; a normal
+ * chat turn used to discard it, so a finished run with no streamed prose
+ * looked like it never produced a final message.
+ *
+ * If the stream already wrote assistant text, leave it alone: the terminal
+ * string is often the same paragraph, and appending it would duplicate the
+ * bubble.
+ */
+function backfillTerminalAssistantText(state: SessionState, text: string | undefined): void {
+  if (!nonBlank(text)) return;
+  const last = state.messages.at(-1);
+  if (
+    last?.role === "assistant" &&
+    last.id === state.currentAssistantMessageId &&
+    last.content.trim().length > 0
+  ) {
+    return;
+  }
+  applyInteractionUpdate(state, { type: "text-delta", text: text.trim() });
 }
 
 /**

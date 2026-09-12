@@ -4,7 +4,13 @@ import { newSessionState } from "./agent-session.js";
 import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { publicContextUsage } from "./public.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
-import { applyInteractionUpdate, applyStreamUsage, settleBackgroundChildren } from "./translate.js";
+import {
+  ABANDONED_TOOL_NOTE,
+  applyInteractionUpdate,
+  applyStreamUsage,
+  settleAbandonedToolParts,
+  settleBackgroundChildren,
+} from "./translate.js";
 
 function running(): SessionState {
   const state = newSessionState();
@@ -426,6 +432,77 @@ describe("nested sub-agent updates", () => {
     });
     expect(state.activeSubagentDescriptors.size).toBe(0);
     expect(toolParts(state)[0]!.agentState).toBe("failed");
+  });
+});
+
+describe("abandoned tool cards", () => {
+  test("pending tool cards settle when the parent run ends", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: {
+          providerIdentifier: "orkestrator",
+          toolName: "update_ticket",
+          args: { status: "done" },
+        },
+      },
+    });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "todos-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "updateTodos",
+        args: { todos: [{ content: "Ship it", status: "completed" }] },
+        result: {
+          status: "success",
+          value: { todos: [{ content: "Ship it", status: "completed" }] },
+        },
+      },
+    });
+
+    const before = toolParts(state);
+    expect(before[0]).toMatchObject({ toolUseId: "mcp-1", toolState: "pending" });
+    expect(before[1]).toMatchObject({ toolUseId: "todos-1", toolState: "success" });
+
+    state.messages[0]!.parts.push({
+      type: "progress",
+      content: "calling",
+      sourcePartId: "progress-1",
+      sourceMessageId: state.messages[0]!.id,
+      toolUseId: "mcp-1",
+    });
+
+    settleAbandonedToolParts(state);
+    const after = toolParts(state);
+    expect(after[0]).toMatchObject({
+      toolUseId: "mcp-1",
+      toolState: "failure",
+      toolError: ABANDONED_TOOL_NOTE,
+    });
+    expect(after[1]).toMatchObject({ toolUseId: "todos-1", toolState: "success" });
+    expect(state.messages[0]!.parts.some((part) => part.type === "progress")).toBe(false);
+  });
+
+  test("keeps an error the card already had", () => {
+    const state = running();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "c1",
+      modelCallId: "m1",
+      toolCall: { type: "read", args: { path: "a.ts" } },
+    });
+    toolParts(state)[0]!.toolError = "already noted";
+
+    settleAbandonedToolParts(state);
+    expect(toolParts(state)[0]).toMatchObject({
+      toolState: "failure",
+      toolError: "already noted",
+    });
   });
 });
 

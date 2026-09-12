@@ -20,6 +20,7 @@ import {
 import { newSessionState } from "./agent-session.js";
 import { publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
+import { ABANDONED_TOOL_NOTE, applyInteractionUpdate } from "./translate.js";
 
 beforeEach(() => {
   resetPlanAccountWindowsForTests();
@@ -37,19 +38,24 @@ function runningSession(): SessionState {
   return state;
 }
 
+interface FakeRunResult {
+  status: string;
+  result?: string;
+}
+
 interface FakeRun extends FollowableRun {
   readonly cancels: () => number;
-  readonly finish: (result?: { status: string }) => void;
-  readonly finishTerminal: (result?: { status: string }) => void;
+  readonly finish: (result?: FakeRunResult) => void;
+  readonly finishTerminal: (result?: FakeRunResult) => void;
   readonly closeStream: () => void;
 }
 
 /** A run whose terminal acknowledgement is controlled by the test. */
 function controlledRun(onCancel?: () => void): FakeRun {
   let cancels = 0;
-  let finishRun!: (result: { status: string }) => void;
+  let finishRun!: (result: FakeRunResult) => void;
   let finishStream!: () => void;
-  const terminal = new Promise<{ status: string }>((resolve) => {
+  const terminal = new Promise<FakeRunResult>((resolve) => {
     finishRun = resolve;
   });
   const streamClosed = new Promise<void>((resolve) => {
@@ -216,6 +222,115 @@ describe("a turn that outlives its budget", () => {
     run.finish();
     await completion;
     expect(state.promptJournal.get("r1")?.state).toBe("completed");
+  });
+});
+
+describe("a turn that ends with pending tools", () => {
+  test("fails leftover pending cards instead of leaving them running", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "add_ticket_comment" },
+      },
+    });
+    applyInteractionUpdate(state, {
+      type: "tool-call-completed",
+      callId: "todos-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "updateTodos",
+        args: { todos: [{ content: "Done", status: "completed" }] },
+        result: { status: "success", value: { todos: [{ content: "Done", status: "completed" }] } },
+      },
+    });
+
+    const run = controlledRun();
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5_000);
+    run.finish({ status: "finished" });
+    await completion;
+
+    expect(state.status).toBe("idle");
+    const tools = state.messages.flatMap((message) =>
+      message.parts.filter((part) => part.type === "tool-invocation"),
+    );
+    expect(tools).toEqual([
+      expect.objectContaining({
+        toolUseId: "mcp-1",
+        toolState: "failure",
+        toolError: ABANDONED_TOOL_NOTE,
+      }),
+      expect.objectContaining({
+        toolUseId: "todos-1",
+        toolState: "success",
+      }),
+    ]);
+  });
+
+  test("publishes the terminal result when no text-delta arrived", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+
+    const run = controlledRun();
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5_000);
+    run.finish({ status: "finished", result: "The ticket is done." });
+    await completion;
+
+    expect(state.status).toBe("idle");
+    const assistant = state.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("The ticket is done.");
+    expect(assistant?.parts.some((part) => part.type === "text")).toBe(true);
+  });
+
+  test("does not duplicate assistant text the stream already delivered", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, { type: "text-delta", text: "Already streamed." });
+
+    const run = controlledRun();
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5_000);
+    run.finish({ status: "finished", result: "Already streamed." });
+    await completion;
+
+    expect(state.messages.find((message) => message.role === "assistant")?.content).toBe(
+      "Already streamed.",
+    );
+  });
+
+  test("fails leftover pending cards when the run itself errors", async () => {
+    const state = runningSession();
+    applyInteractionUpdate(state, {
+      type: "tool-call-started",
+      callId: "mcp-1",
+      modelCallId: "m1",
+      toolCall: {
+        type: "mcp",
+        args: { providerIdentifier: "orkestrator", toolName: "update_ticket" },
+      },
+    });
+
+    const run = controlledRun();
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5_000);
+    run.finish({ status: "error" });
+    await completion;
+
+    expect(state.status).toBe("error");
+    const tool = state.messages[0]!.parts.find((part) => part.type === "tool-invocation");
+    expect(tool).toMatchObject({
+      toolUseId: "mcp-1",
+      toolState: "failure",
+      toolError: ABANDONED_TOOL_NOTE,
+    });
   });
 });
 

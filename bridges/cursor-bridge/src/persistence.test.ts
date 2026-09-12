@@ -281,6 +281,59 @@ describe("sub-agent cards after a restart", () => {
   });
 });
 
+describe("pending tool cards after a restart", () => {
+  test("an idle restore fails leftover pending cards instead of leaving them running", async () => {
+    const state = newSessionState();
+    state.status = "running";
+    state.messages.push({
+      id: "m1",
+      role: "assistant",
+      content: "",
+      createdAt: new Date(0).toISOString(),
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "orkestrator: update_ticket",
+          sourcePartId: "m1:0",
+          sourceMessageId: "m1",
+          toolUseId: "mcp-1",
+          toolName: "mcp__orkestrator__update_ticket",
+          toolState: "pending",
+        },
+        {
+          type: "tool-invocation",
+          content: "Todos",
+          sourcePartId: "m1:1",
+          sourceMessageId: "m1",
+          toolUseId: "todos-1",
+          toolName: "updateTodos",
+          toolState: "success",
+        },
+      ],
+    });
+    sessions.set(state.id, state);
+
+    await persist();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+
+    const restored = sessions.get(state.id)!;
+    expect(restored.status).toBe("idle");
+    expect(restored.messages[0]!.parts).toEqual([
+      expect.objectContaining({
+        toolUseId: "mcp-1",
+        toolState: "failure",
+        toolError: "Tool call ended without a result",
+      }),
+      expect.objectContaining({
+        toolUseId: "todos-1",
+        toolState: "success",
+      }),
+    ]);
+  });
+});
+
 describe("recovering the todo list", () => {
   test("rebuilds it from the newest card that carried one", async () => {
     const state = newSessionState();

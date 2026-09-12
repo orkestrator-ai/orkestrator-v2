@@ -1,4 +1,4 @@
-import { memo, useState, type DragEvent } from "react";
+import { memo, useState, type DragEvent, type MouseEvent } from "react";
 import {
   ChevronRight,
   Copy,
@@ -20,8 +20,14 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { copyFilePath } from "./copy-file-path";
+import {
+  decodeWorkspaceFileDrag,
+  encodeWorkspaceFileDrag,
+  pathsForFileAction,
+} from "./file-selection";
 
 const EMPTY_CHANGED_PATHS: ReadonlySet<string> = new Set();
+const EMPTY_SELECTED_PATHS: ReadonlySet<string> = new Set();
 export const FILE_DRAG_TYPE = "application/x-orkestrator-workspace-file";
 
 export function isWorkspaceFileDrag(event: DragEvent<HTMLElement>): boolean {
@@ -36,13 +42,15 @@ export function workspaceParentDirectory(filePath: string): string {
 interface FileTreeNodeProps {
   item: FileNode;
   depth: number;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (path: string, event: MouseEvent<HTMLButtonElement>) => void;
   onReveal?: (path: string) => void;
   changedPaths?: ReadonlySet<string>;
+  selectedPaths?: ReadonlySet<string>;
+  onContextSelect?: (path: string) => void;
   onRevert?: (path: string) => void;
-  onDelete?: (path: string) => void;
-  onMove?: (sourcePath: string, destinationDirectory: string) => void;
-  onRequestMove?: (sourcePath: string) => void;
+  onDelete?: (paths: string[]) => void;
+  onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
+  onRequestMove?: (sourcePaths: string[]) => void;
   movePending?: boolean;
 }
 
@@ -52,6 +60,8 @@ export const FileTreeNode = memo(function FileTreeNode({
   onFileClick,
   onReveal,
   changedPaths = EMPTY_CHANGED_PATHS,
+  selectedPaths = EMPTY_SELECTED_PATHS,
+  onContextSelect,
   onRevert,
   onDelete,
   onMove,
@@ -64,6 +74,8 @@ export const FileTreeNode = memo(function FileTreeNode({
   const isFolder = item.isDirectory;
   const [isDragOver, setIsDragOver] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const isSelected = selectedPaths.has(item.path);
+  const actionPaths = pathsForFileAction(item.path, selectedPaths);
 
   const paddingLeft = depth * 12 + 8; // Indentation based on depth
 
@@ -95,11 +107,13 @@ export const FileTreeNode = memo(function FileTreeNode({
             onDrop={(event) => {
               setIsDragOver(false);
               if (!onMove || movePending) return;
-              const sourcePath = event.dataTransfer.getData(FILE_DRAG_TYPE);
-              if (!sourcePath || workspaceParentDirectory(sourcePath) === item.path) return;
+              const sourcePaths = decodeWorkspaceFileDrag(
+                event.dataTransfer.getData(FILE_DRAG_TYPE),
+              ).filter((sourcePath) => workspaceParentDirectory(sourcePath) !== item.path);
+              if (sourcePaths.length === 0) return;
               event.preventDefault();
               setFolderExpanded(item.path, true);
-              onMove(sourcePath, item.path);
+              onMove(sourcePaths, item.path);
             }}
             className={cn(
               "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
@@ -130,6 +144,8 @@ export const FileTreeNode = memo(function FileTreeNode({
               onFileClick={onFileClick}
               onReveal={onReveal}
               changedPaths={changedPaths}
+              selectedPaths={selectedPaths}
+              onContextSelect={onContextSelect}
               onRevert={onRevert}
               onDelete={onDelete}
               onMove={onMove}
@@ -142,11 +158,22 @@ export const FileTreeNode = memo(function FileTreeNode({
     );
   }
 
+  const deleteLabel = actionPaths.length > 1 ? `Delete ${actionPaths.length} files` : "Delete file";
+  const moveLabel =
+    actionPaths.length > 1
+      ? `Move ${actionPaths.length} files to another folder`
+      : `Move ${item.name} to another folder`;
+
   // File node
   const fileRow = (
     <div className="group flex min-w-0 items-center">
       <button
-        onClick={() => onFileClick?.(item.path)}
+        aria-pressed={isSelected}
+        onClick={(event) => onFileClick?.(item.path, event)}
+        onMouseDown={(event) => {
+          if (event.shiftKey) event.preventDefault();
+        }}
+        onContextMenu={() => onContextSelect?.(item.path)}
         draggable={Boolean(onMove) && !movePending}
         onDragStart={(event) => {
           if (!onMove || movePending) {
@@ -154,13 +181,14 @@ export const FileTreeNode = memo(function FileTreeNode({
             return;
           }
           event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData(FILE_DRAG_TYPE, item.path);
+          event.dataTransfer.setData(FILE_DRAG_TYPE, encodeWorkspaceFileDrag(actionPaths));
           setIsDragging(true);
         }}
         onDragEnd={() => setIsDragging(false)}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
           onMove && !movePending && "cursor-grab active:cursor-grabbing",
+          isSelected && "bg-accent",
           isDragging && "opacity-50",
         )}
         style={{ paddingLeft: paddingLeft + 14 }} // Extra indent for files (no chevron)
@@ -171,10 +199,10 @@ export const FileTreeNode = memo(function FileTreeNode({
       {onRequestMove && (
         <button
           type="button"
-          aria-label={`Move ${item.name} to another folder`}
+          aria-label={moveLabel}
           title="Move to…"
           disabled={movePending}
-          onClick={() => onRequestMove(item.path)}
+          onClick={() => onRequestMove(actionPaths)}
           className="mr-1 rounded p-1 text-muted-foreground opacity-70 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
         >
           <FolderInput className="h-3.5 w-3.5" />
@@ -192,7 +220,7 @@ export const FileTreeNode = memo(function FileTreeNode({
           Copy path
         </ContextMenuItem>
         {onRequestMove && (
-          <ContextMenuItem disabled={movePending} onSelect={() => onRequestMove(item.path)}>
+          <ContextMenuItem disabled={movePending} onSelect={() => onRequestMove(actionPaths)}>
             <FolderInput />
             Move to…
           </ContextMenuItem>
@@ -210,9 +238,9 @@ export const FileTreeNode = memo(function FileTreeNode({
           </ContextMenuItem>
         )}
         {onDelete && (
-          <ContextMenuItem variant="destructive" onSelect={() => onDelete(item.path)}>
+          <ContextMenuItem variant="destructive" onSelect={() => onDelete(actionPaths)}>
             <Trash2 />
-            Delete file
+            {deleteLabel}
           </ContextMenuItem>
         )}
       </ContextMenuContent>

@@ -2,7 +2,7 @@ export { useProjects } from "./useProjects";
 export { useEnvironments, useEnvironmentLifecycleService } from "./useEnvironments";
 export { useTerminal } from "./useTerminal";
 export { usePullRequest } from "./usePullRequest";
-export { useFilesPanel } from "./useFilesPanel";
+export { useFilesPanel, FileBatchActionError, findWorkspaceMoveConflicts } from "./useFilesPanel";
 export { useClipboardImagePaste } from "./useClipboardImagePaste";
 export { useTerminalClipboard } from "./useTerminalClipboard";
 export type {

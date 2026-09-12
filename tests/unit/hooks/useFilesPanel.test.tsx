@@ -110,7 +110,8 @@ mock.module("@/lib/backend", () => ({
   moveLocalFile: mockMoveLocalFile,
 }));
 
-const { useFilesPanel } = await import("../../../apps/web/src/hooks/useFilesPanel");
+const { useFilesPanel, FileBatchActionError } =
+  await import("../../../apps/web/src/hooks/useFilesPanel");
 
 const change: GitFileChange = {
   path: "src/App.tsx",
@@ -1239,6 +1240,244 @@ describe("useFilesPanel", () => {
     );
     expect(mockRevertContainerFile).not.toHaveBeenCalled();
     expect(mockDeleteContainerFile).not.toHaveBeenCalled();
+  });
+
+  test("deletes and moves multiple files with a single refresh", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile(["src/App.tsx", "README.md"]);
+    });
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx");
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("env-container", "README.md");
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Files deleted", { description: "2 files" });
+
+    mockGetGitStatus.mockClear();
+    mockGetFileTree.mockClear();
+    mockMoveContainerFile.mockResolvedValueOnce("App.tsx");
+    mockMoveContainerFile.mockResolvedValueOnce("README.md");
+    await act(async () => {
+      await result.current.moveFile(["src/App.tsx", "README.md"], "archive");
+    });
+    expect(mockMoveContainerFile).toHaveBeenCalledWith("env-container", "src/App.tsx", "archive");
+    expect(mockMoveContainerFile).toHaveBeenCalledWith("env-container", "README.md", "archive");
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastSuccess).toHaveBeenCalledWith("Files moved", { description: "2 files" });
+  });
+
+  test("rejects a batch move whose sources share a basename before any backend call", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await expect(
+      result.current.moveFile(["src/notes.txt", "lib/notes.txt"], "archive"),
+    ).rejects.toThrow("Two or more selected files would be moved to archive/notes.txt");
+
+    expect(mockMoveContainerFile).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Cannot move files", {
+      description:
+        "Two or more selected files would be moved to archive/notes.txt. Rename or deselect one before moving.",
+    });
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
+  test("rejects a batch move whose destination is another selected source", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await expect(
+      result.current.moveFile(["src/notes.txt", "archive/notes.txt"], "archive"),
+    ).rejects.toThrow("archive/notes.txt");
+
+    expect(mockMoveContainerFile).not.toHaveBeenCalled();
+  });
+
+  test("continues past a partial delete failure and reports the completed count", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    mockDeleteContainerFile.mockImplementation((_environmentId, filePath) =>
+      filePath === "src/b.ts"
+        ? Promise.reject(new Error("permission denied"))
+        : Promise.resolve(filePath),
+    );
+    const { result } = renderHook(() => useFilesPanel());
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.deleteFile(["src/a.ts", "src/b.ts", "src/c.ts"]);
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(mockDeleteContainerFile).toHaveBeenCalledTimes(3);
+    expect(mockGetGitStatus).toHaveBeenCalled();
+    expect(mockGetFileTree).toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to delete files", {
+      description: "2 of 3 files were changed before the failure: permission denied",
+    });
+    expect(caught).toBeInstanceOf(FileBatchActionError);
+    expect((caught as InstanceType<typeof FileBatchActionError>).remainingPaths).toEqual([
+      "src/b.ts",
+    ]);
+    expect((caught as InstanceType<typeof FileBatchActionError>).completedPaths).toEqual([
+      "src/a.ts",
+      "src/c.ts",
+    ]);
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
+  test("continues past a partial move failure and reports the completed count", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    mockMoveContainerFile.mockImplementation((_environmentId, sourcePath, destinationDirectory) =>
+      sourcePath === "src/b.ts"
+        ? Promise.reject(new Error("destination in use"))
+        : Promise.resolve(`${destinationDirectory}/${sourcePath.split("/").at(-1)}`),
+    );
+    const { result } = renderHook(() => useFilesPanel());
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await result.current.moveFile(["src/a.ts", "src/b.ts"], "archive");
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(mockMoveContainerFile).toHaveBeenCalledTimes(2);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to move files", {
+      description: "1 of 2 files were changed before the failure: destination in use",
+    });
+    expect(caught).toBeInstanceOf(FileBatchActionError);
+    expect((caught as InstanceType<typeof FileBatchActionError>).remainingPaths).toEqual([
+      "src/b.ts",
+    ]);
+  });
+
+  test("de-duplicates repeated paths and ignores empty batches", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile([]);
+      await result.current.moveFile([], "archive");
+    });
+    expect(mockDeleteContainerFile).not.toHaveBeenCalled();
+    expect(mockMoveContainerFile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.deleteFile(["src/App.tsx", "src/App.tsx"]);
+    });
+    expect(mockDeleteContainerFile).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.moveFile(["src/App.tsx", "src/App.tsx"], "archive");
+    });
+    expect(mockMoveContainerFile).toHaveBeenCalledTimes(1);
+  });
+
+  test("blocks a multi-file move when more than one selected file is open", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-local",
+      environments: new Map([
+        [
+          "env-local",
+          {
+            containerId: null,
+            activePaneId: "pane",
+            root: {
+              kind: "leaf",
+              id: "pane",
+              activeTabId: "file-tab",
+              tabs: [
+                {
+                  id: "file-tab",
+                  type: "file",
+                  fileData: {
+                    filePath: "src/App.tsx",
+                    isLocalEnvironment: true,
+                    worktreePath: "/tmp/worktree",
+                  },
+                },
+                {
+                  id: "file-tab-2",
+                  type: "file",
+                  fileData: {
+                    filePath: "src/main.ts",
+                    isLocalEnvironment: true,
+                    worktreePath: "/tmp/worktree",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      ]),
+    });
+    const { result } = renderHook(() => useFilesPanel());
+
+    await expect(
+      result.current.moveFile(["src/App.tsx", "src/main.ts"], "archive"),
+    ).rejects.toThrow("Close the selected files' editor tabs before moving them");
+    expect(mockMoveLocalFile).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Cannot move open files", {
+      description: "Close the selected files' editor tabs before moving them",
+    });
   });
 
   test("silent auto-refresh reloads the active tab without toggling loading state", async () => {

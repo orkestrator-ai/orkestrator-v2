@@ -26,6 +26,7 @@ const realAlertDialogSnapshot = { ...realAlertDialog };
 const refreshMock = mock(() => {});
 const revertFileMock = mock(async () => {});
 const deleteFileMock = mock(async () => {});
+const moveFileMock = mock(async () => {});
 let mockEnvironmentId: string | null = "env-container";
 let mockFileActionPending: string | null = null;
 let mockIsMobile = false;
@@ -51,6 +52,7 @@ mock.module("@/hooks", () => ({
     isLocalEnvironment: mockIsLocalEnvironment,
     revertFile: revertFileMock,
     deleteFile: deleteFileMock,
+    moveFile: moveFileMock,
     fileActionPending: mockFileActionPending,
   }),
   useMediaQuery: () => mockIsMobile,
@@ -175,8 +177,10 @@ describe("Files panel components", () => {
     refreshMock.mockClear();
     revertFileMock.mockClear();
     deleteFileMock.mockClear();
+    moveFileMock.mockClear();
     revertFileMock.mockImplementation(async () => {});
     deleteFileMock.mockImplementation(async () => {});
+    moveFileMock.mockImplementation(async () => {});
     mockEnvironmentId = "env-container";
     mockFileActionPending = null;
     mockIsMobile = false;
@@ -338,7 +342,7 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Revert" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     expect(onRevert).toHaveBeenCalledWith(file.path);
-    expect(onDelete).toHaveBeenCalledWith(file.path);
+    expect(onDelete).toHaveBeenCalledWith([file.path]);
 
     rerender(
       <FileTreeNode
@@ -470,7 +474,7 @@ describe("Files panel components", () => {
     const onConfirm = mock(async () => {});
     const { rerender } = render(
       <FileActionDialog
-        action={{ environmentId: "env-1", kind: "revert", path: "src/App.tsx" }}
+        action={{ environmentId: "env-1", kind: "revert", paths: ["src/App.tsx"] }}
         targetRef="main"
         isPending={false}
         onCancel={onCancel}
@@ -494,7 +498,7 @@ describe("Files panel components", () => {
     );
     rerender(
       <FileActionDialog
-        action={{ environmentId: "env-1", kind: "revert", path: "src/App.tsx" }}
+        action={{ environmentId: "env-1", kind: "revert", paths: ["src/App.tsx"] }}
         targetRef="main"
         isPending={false}
         onCancel={onCancel}
@@ -506,7 +510,7 @@ describe("Files panel components", () => {
 
     rerender(
       <FileActionDialog
-        action={{ environmentId: "env-1", kind: "delete", path: "src/App.tsx" }}
+        action={{ environmentId: "env-1", kind: "delete", paths: ["src/App.tsx"] }}
         targetRef="main"
         isPending={true}
         onCancel={onCancel}
@@ -520,6 +524,45 @@ describe("Files panel components", () => {
     expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+
+    rerender(
+      <FileActionDialog
+        action={{
+          environmentId: "env-1",
+          kind: "delete",
+          paths: ["src/App.tsx", "README.md"],
+        }}
+        targetRef="main"
+        isPending={false}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Delete files?" })).toBeTruthy();
+    expect(screen.getByText("src/App.tsx")).toBeTruthy();
+    expect(screen.getByText("README.md")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete files" }));
+    expect(onConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  test("bounds a large bulk-delete path list", () => {
+    const paths = Array.from({ length: 50 }, (_, index) => `src/file-${index}.ts`);
+    render(
+      <FileActionDialog
+        action={{ environmentId: "env-1", kind: "delete", paths }}
+        targetRef="main"
+        isPending={false}
+        onCancel={mock(() => {})}
+        onConfirm={mock(async () => {})}
+      />,
+    );
+
+    expect(screen.getByText("+42 more")).toBeTruthy();
+    const list = screen.getByText("+42 more").parentElement!;
+    expect(list.className).toContain("max-h-32");
+    expect(list.className).toContain("overflow-y-auto");
+    expect(screen.queryByText("src/file-49.ts")).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete files" })).toBeTruthy();
   });
 
   test("FilesPanel renders the panel surface and switches between tab views", () => {
@@ -639,7 +682,7 @@ describe("Files panel components", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Delete file" }).at(-1)!);
-    await waitFor(() => expect(deleteFileMock).toHaveBeenCalledWith(change.path));
+    await waitFor(() => expect(deleteFileMock).toHaveBeenCalledWith([change.path]));
     expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
 
     mockEnvironmentId = "env-other";
@@ -652,6 +695,90 @@ describe("Files panel components", () => {
       expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true),
     );
   }, 20_000);
+
+  test("confirms a multi-file delete from All Files with the full path list", async () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree: [
+        {
+          name: "src",
+          path: "src",
+          isDirectory: true,
+          children: [
+            { name: "App.tsx", path: "src/App.tsx", isDirectory: false },
+            { name: "main.ts", path: "src/main.ts", isDirectory: false },
+          ],
+        },
+      ],
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "main.ts" }), { metaKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getAllByText("Delete 2 files")[0]!);
+
+    expect(screen.getByRole("heading", { name: "Delete files?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete files" }));
+    await waitFor(() =>
+      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Delete files?" }) === null).toBe(true),
+    );
+  });
+
+  test("narrows a partial delete to the remaining paths for retry", async () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree: [
+        {
+          name: "src",
+          path: "src",
+          isDirectory: true,
+          children: [
+            { name: "App.tsx", path: "src/App.tsx", isDirectory: false },
+            { name: "main.ts", path: "src/main.ts", isDirectory: false },
+          ],
+        },
+      ],
+    });
+    deleteFileMock
+      .mockImplementationOnce(async () => {
+        throw new realHooks.FileBatchActionError(
+          "1 of 2 files were changed before the failure: boom",
+          { remainingPaths: ["src/main.ts"], completedPaths: ["src/App.tsx"] },
+        );
+      })
+      .mockImplementationOnce(async () => {});
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByRole("button", { name: "main.ts" }), { metaKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getAllByText("Delete 2 files")[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Delete files" }));
+
+    await waitFor(() =>
+      expect(deleteFileMock).toHaveBeenCalledWith(["src/App.tsx", "src/main.ts"]),
+    );
+    expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete file" }).at(-1)!);
+    await waitFor(() => expect(deleteFileMock).toHaveBeenLastCalledWith(["src/main.ts"]));
+  });
 
   test("FilesPanel does not queue destructive actions without an environment", () => {
     mockEnvironmentId = null;

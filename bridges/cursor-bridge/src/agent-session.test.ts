@@ -740,6 +740,82 @@ describe("resumeSession", () => {
     expect(assistant.planReview).toBeUndefined();
   });
 
+  test("replays steered historic user messages from the conversation record", async () => {
+    runs = {
+      items: [
+        conversationRun([
+          {
+            type: "conversationTurn",
+            turn: {
+              userMessage: { text: "original" },
+              userMessages: [{ text: "original" }, { text: "steer mid-turn" }],
+              steps: [{ type: "assistantMessage", message: { text: "done" } }],
+            },
+          },
+        ]),
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    expect(state.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual([
+      "original",
+      "steer mid-turn",
+    ]);
+  });
+
+  test("applies live stream updates while recovering a still-running run", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let settled = false;
+    runs = {
+      items: [
+        {
+          id: "run-live",
+          status: "running",
+          createdAt: Date.now(),
+          supports: () => true,
+          async *stream() {
+            yield { type: "text-delta", text: "before steer" };
+            yield { type: "user-message-appended", userMessage: { text: "redirect" } };
+            await hold;
+          },
+          wait: async () => {
+            await hold;
+            settled = true;
+            return { status: "finished" };
+          },
+          cancel: async () => undefined,
+          onDidChangeStatus: () => () => undefined,
+          conversation: async () => [
+            {
+              type: "conversationTurn",
+              turn: {
+                userMessage: { text: "start" },
+                ...(settled
+                  ? { userMessages: [{ text: "start" }, { text: "redirect" }] }
+                  : {}),
+                steps: [{ type: "assistantMessage", message: { text: "before steer" } }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const state = await resumeSession("agent-1", undefined);
+    const deadline = Date.now() + 2_000;
+    while (!state.messages.some((message) => message.content === "redirect")) {
+      if (Date.now() > deadline) throw new Error("recovered stream did not render the steer");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(state.status).toBe("running");
+    release();
+    await state.recoveringRun;
+    expect(state.messages.some((message) => message.content === "redirect")).toBe(true);
+  });
+
   test("historic createPlan turns are marked for plan review", async () => {
     runs = {
       items: [

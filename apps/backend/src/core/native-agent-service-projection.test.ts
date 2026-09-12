@@ -728,6 +728,39 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("drops a backend queue copy of a follow-up the provider already accepted", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({
+        status: "running",
+        messages: [],
+        providerQueue: { items: [{ id: "pi-1", text: "Already queued", mode: "follow-up" }] },
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-provider-queue-dedupe-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-provider-queue-dedupe",
+        };
+        await service.ensureSession(identity);
+        await storage.savePromptQueue(`pi\0${identity.logicalSessionKey}`, "env-1", [
+          { id: "backend-1", text: "Already queued", planModeEnabled: false },
+          { id: "backend-2", text: "Still waiting", planModeEnabled: false },
+        ]);
+
+        expect((await service.getProjection(identity))?.queue?.items).toEqual([
+          { id: "pi-1", text: "Already queued", mode: "follow-up" },
+          expect.objectContaining({ id: "backend-2", text: "Still waiting" }),
+        ]);
+      },
+    );
+  });
+
   test("uses the provider's raw OpenCode catalogue for durable cache refreshes", async () => {
     const filtered = [{ platform: "opencode" as const, id: "opencode/a", label: "A" }];
     const raw = [...filtered, { platform: "opencode" as const, id: "openrouter/b", label: "B" }];

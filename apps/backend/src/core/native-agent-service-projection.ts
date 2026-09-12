@@ -216,6 +216,45 @@ export type NativeAgentServiceLayerTypes = [
  * id also moves a corrected row to the newest position while retaining the
  * strict twenty-row bound.
  */
+/**
+ * Provider-owned mid-turn items are already accepted. Keep those first and
+ * drop backend-queue copies of the same text so a Pi follow-up does not appear
+ * twice after the bridge and the durable queue both observed it.
+ */
+export function mergeNativeAgentQueueItems(
+  providerItems: readonly unknown[],
+  backendItems: readonly unknown[],
+): unknown[] {
+  const seen = new Set<string>();
+  const merged: unknown[] = [];
+  const fields = (item: unknown) => {
+    const record = item && typeof item === "object" ? (item as { text?: unknown; id?: unknown }) : {};
+    return {
+      text: typeof record.text === "string" ? record.text.trim() : "",
+      id: typeof record.id === "string" ? record.id.trim() : "",
+    };
+  };
+  const remember = (item: unknown) => {
+    const { text, id } = fields(item);
+    if (text) seen.add(`text:${text}`);
+    if (id) seen.add(`id:${id}`);
+  };
+  const alreadySeen = (item: unknown) => {
+    const { text, id } = fields(item);
+    return (text !== "" && seen.has(`text:${text}`)) || (id !== "" && seen.has(`id:${id}`));
+  };
+  for (const item of providerItems) {
+    merged.push(item);
+    remember(item);
+  }
+  for (const item of backendItems) {
+    if (alreadySeen(item)) continue;
+    merged.push(item);
+    remember(item);
+  }
+  return merged;
+}
+
 export function mergeContextUsageTurns(
   previous: NativeAgentContextUsage | undefined,
   current: NativeAgentContextUsage | undefined,
@@ -1729,7 +1768,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(queue
         ? {
             queue: {
-              items: [...(stateSnapshot.providerQueue?.items ?? []), ...queue.messages],
+              items: mergeNativeAgentQueueItems(
+                stateSnapshot.providerQueue?.items ?? [],
+                queue.messages,
+              ),
               ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
               ...(queue.dispatchError
                 ? {
@@ -3248,7 +3290,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(queue
           ? {
               queue: {
-                items: [...(snapshot.providerQueue?.items ?? []), ...queue.messages],
+                items: mergeNativeAgentQueueItems(
+                  snapshot.providerQueue?.items ?? [],
+                  queue.messages,
+                ),
                 ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
                 ...(queue.dispatchError
                   ? {

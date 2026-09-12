@@ -48,6 +48,7 @@ import {
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -619,6 +620,14 @@ async function handlePrompt(
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or image attachment is required");
   }
+  const idleSteer = idleSteerPromptReply(prompt, "Cursor");
+  if (idleSteer && state.status !== "running" && !state.dispatching) {
+    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+    appendLocalExchange(state, prompt, idleSteer);
+    state.revision += 1;
+    schedulePersist();
+    return json(response, 200, { accepted: true, local: true });
+  }
   if (state.subagentLimitExceeded) {
     throw new HttpError(409, "Session exceeded the active sub-agent limit");
   }
@@ -731,6 +740,26 @@ async function handlePrompt(
   void handle.completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+function appendLocalExchange(state: SessionState, prompt: string, reply: string): void {
+  appendUserMessage(state, prompt, []);
+  const messageId = randomBytes(12).toString("hex");
+  state.messages.push({
+    id: messageId,
+    role: "assistant",
+    content: reply,
+    parts: [
+      {
+        type: "text",
+        content: reply,
+        sourcePartId: `${messageId}:0`,
+        sourceMessageId: messageId,
+      },
+    ],
+    createdAt: new Date().toISOString(),
+  });
+  chargeTranscript(state, Buffer.byteLength(reply));
 }
 
 function appendUserMessage(

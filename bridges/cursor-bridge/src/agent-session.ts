@@ -30,6 +30,7 @@ import {
   prewarmCursorWorkspace,
 } from "./sdk-runtime.js";
 import { boundTranscript, chargeTranscript } from "./transcript.js";
+import { applyInteractionUpdate } from "./translate.js";
 import {
   clientSessionKeys,
   isObject,
@@ -659,7 +660,7 @@ export async function resumeSession(
   state.composer = await hydrateComposer(state.composer);
   await hydrateHistory(state).catch(() => undefined);
   sessions.set(state.id, state);
-  void recoverActiveRun(state);
+  state.recoveringRun = recoverActiveRun(state);
   return state;
 }
 
@@ -716,11 +717,10 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   const unsubscribe = active.onDidChangeStatus(() => {
     state.revision += 1;
   });
-  void (async () => {
+  return (async () => {
     try {
-      for await (const _event of active.stream()) {
-        // The recovered run had no live onDelta callback. Its authoritative
-        // conversation is replayed below once the stream settles.
+      for await (const event of active.stream()) {
+        applyRecoveredStreamEvent(state, event);
       }
       await active.wait();
       state.messages = [];
@@ -735,9 +735,16 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       unsubscribe();
       if (state.activeRun === active) state.activeRun = undefined;
       state.cancelTurn = undefined;
+      if (state.recoveringRun) state.recoveringRun = undefined;
       state.revision += 1;
     }
   })();
+}
+
+function applyRecoveredStreamEvent(state: SessionState, event: unknown): void {
+  if (!isObject(event)) return;
+  const update = isObject(event.update) ? event.update : event;
+  if (typeof update.type === "string") applyInteractionUpdate(state, update);
 }
 
 function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): void {
@@ -747,11 +754,10 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
     return;
   }
   const body = turn.turn;
-  const userText =
-    isObject(body.userMessage) && nonBlank(body.userMessage.text)
-      ? body.userMessage.text
-      : undefined;
-  if (userText) pushMessage(state, "user", userText, [], undefined, { runId });
+  const userTexts = historicUserTexts(body);
+  for (const userText of userTexts) {
+    pushMessage(state, "user", userText, [], undefined, { runId });
+  }
   if (!Array.isArray(body.steps) || body.steps.length === 0) return;
 
   const parts: BridgeMessagePart[] = [];
@@ -803,6 +809,33 @@ function appendHistoricTurn(state: SessionState, turn: unknown, runId: string): 
     );
     pushMessage(state, "assistant", content, parts, messageId, { planReview });
   }
+}
+
+function historicUserTexts(body: Record<string, unknown>): string[] {
+  const texts: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const text =
+      typeof value === "string"
+        ? value
+        : isObject(value) && nonBlank(value.text)
+          ? value.text
+          : undefined;
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    texts.push(text);
+  };
+  add(isObject(body.userMessage) ? body.userMessage : undefined);
+  if (Array.isArray(body.userMessages)) {
+    for (const message of body.userMessages) add(message);
+  }
+  if (Array.isArray(body.steps)) {
+    for (const step of body.steps) {
+      if (!isObject(step) || step.type !== "userMessage") continue;
+      add(step.message);
+    }
+  }
+  return texts;
 }
 
 function isCreatePlanToolName(toolName: string | undefined): boolean {

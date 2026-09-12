@@ -108,6 +108,21 @@ export interface ResolvedSessionActionCommand {
  * turn: `/steer` typed while the agent is idle is a normal prompt, not an
  * error, which is what the Codex composer did before consolidation.
  */
+/**
+ * Local reply when `/steer` is submitted as an ordinary prompt while idle.
+ *
+ * The composer only routes `/steer` to the session action during a live turn.
+ * An idle or stale client can still POST it as a prompt; answering locally
+ * keeps the raw command from starting a model turn, matching Codex.
+ */
+export function idleSteerPromptReply(prompt: string, agentLabel: string): string | null {
+  const parsed = parseLeadingSlashCommand(prompt);
+  if (parsed?.name !== "/steer") return null;
+  return parsed.arguments?.trim()
+    ? `There is no active ${agentLabel} turn to steer. Start a turn, then use /steer while it is running.`
+    : `Usage: /steer <instructions>. Run it while a ${agentLabel} turn is active.`;
+}
+
 export function resolveSessionActionCommand(
   text: string,
   capabilities: NativeAgentCapabilities | undefined,

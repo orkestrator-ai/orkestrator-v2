@@ -53,6 +53,7 @@ import {
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/progressive-transcript";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import { refreshRuntimeCatalog } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
@@ -800,8 +801,13 @@ async function handlePrompt(
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or attachment is required");
   }
-  if (/^\/steer(?:\s|$)/i.test(prompt)) {
-    throw new HttpError(409, "There is no active Pi turn to steer");
+  const idleSteer = idleSteerPromptReply(prompt, "Pi");
+  if (idleSteer && state.status !== "running" && !state.dispatching && !state.compacting) {
+    if (schema) throw new HttpError(400, "/steer cannot be used with structured output");
+    appendLocalExchange(state, prompt, idleSteer);
+    state.revision += 1;
+    schedulePersist();
+    return json(response, 200, { accepted: true, local: true });
   }
 
   if (requestId && state.promptJournal.has(requestId)) {
@@ -945,6 +951,26 @@ async function handlePrompt(
   void handle.completion;
   void clientSignal;
   return json(response, 202, { accepted: true });
+}
+
+function appendLocalExchange(state: SessionState, prompt: string, reply: string): void {
+  appendUserMessage(state, prompt, [], []);
+  const messageId = randomBytes(12).toString("hex");
+  state.messages.push({
+    id: messageId,
+    role: "assistant",
+    content: reply,
+    parts: [
+      {
+        type: "text",
+        content: reply,
+        sourcePartId: `${messageId}:0`,
+        sourceMessageId: messageId,
+      },
+    ],
+    createdAt: new Date().toISOString(),
+  });
+  chargeTranscript(state, Buffer.byteLength(reply));
 }
 
 function appendUserMessage(

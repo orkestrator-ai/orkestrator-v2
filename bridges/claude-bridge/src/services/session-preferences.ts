@@ -37,9 +37,37 @@ export interface SessionPreferences {
    * idempotent across bridge and application restarts.
    */
   dispatchedRequestIds?: string[];
+  /**
+   * Recently accepted or attempted steer request ids.
+   *
+   * In-memory only would let a restart lose the digest, so a retried id could
+   * be pushed into a later turn. Bounded and optional so a missing field is
+   * "never steered", not a preferences-file fault.
+   */
+  steerJournal?: ClaudeSteerPreferenceEntry[];
+}
+
+export interface ClaudeSteerPreferenceEntry {
+  requestId: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "dispatched" | "absent" | "unknown";
+  createdAt: number;
 }
 
 export const MAX_DISPATCHED_REQUEST_IDS = 64;
+export const MAX_STEER_JOURNAL_ENTRIES = 512;
+
+export function steerJournalMapFromPreferences(
+  entries: readonly ClaudeSteerPreferenceEntry[] | undefined,
+): Map<string, ClaudeSteerPreferenceEntry> | undefined {
+  if (!entries?.length) return undefined;
+  const journal = new Map<string, ClaudeSteerPreferenceEntry>();
+  for (const entry of entries.slice(-MAX_STEER_JOURNAL_ENTRIES)) {
+    journal.set(entry.requestId, { ...entry });
+  }
+  return journal;
+}
 
 /**
  * Only a canonical UUID may become a filename. The id normally comes from the
@@ -311,7 +339,45 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
       preferences.dispatchedRequestIds = [...unique].slice(-MAX_DISPATCHED_REQUEST_IDS);
     }
   }
+  if (Array.isArray(record.steerJournal)) {
+    const journal: ClaudeSteerPreferenceEntry[] = [];
+    for (const value of record.steerJournal) {
+      const entry = parseSteerJournalEntry(value);
+      if (entry) journal.push(entry);
+    }
+    if (journal.length > 0) {
+      preferences.steerJournal = journal.slice(-MAX_STEER_JOURNAL_ENTRIES);
+    }
+  }
   return preferences;
+}
+
+function parseSteerJournalEntry(value: unknown): ClaudeSteerPreferenceEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const requestId = typeof record.requestId === "string" ? record.requestId.trim() : "";
+  const inputDigest = typeof record.inputDigest === "string" ? record.inputDigest.trim() : "";
+  const expectedRunId = typeof record.expectedRunId === "string" ? record.expectedRunId.trim() : "";
+  const state = record.state;
+  if (
+    !requestId ||
+    requestId.length > 200 ||
+    !/^[a-f0-9]{64}$/.test(inputDigest) ||
+    !expectedRunId ||
+    expectedRunId.length > 512 ||
+    (state !== "dispatched" && state !== "absent" && state !== "unknown") ||
+    typeof record.createdAt !== "number" ||
+    !Number.isFinite(record.createdAt)
+  ) {
+    return undefined;
+  }
+  return {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state,
+    createdAt: record.createdAt,
+  };
 }
 
 /**

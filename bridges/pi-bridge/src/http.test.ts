@@ -1813,6 +1813,20 @@ describe("approvals", () => {
 });
 
 describe("steering", () => {
+  test("answers an idle /steer prompt locally instead of starting a turn", async () => {
+    const state = seedSession();
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer keep going", requestId: "idle-steer" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ accepted: true, local: true });
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.has("idle-steer")).toBe(false);
+    expect(state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(state.messages[1]?.content).toContain("no active Pi turn to steer");
+  });
+
   test("answers idle when no turn is running instead of starting one", async () => {
     const state = seedSession();
     const response = await call(`/session/${state.id}/steer`, {

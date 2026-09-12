@@ -46,6 +46,7 @@ import {
   MAX_DISPATCHED_REQUEST_IDS,
   readSessionPreferences,
   sessionPreferencesUnavailable,
+  steerJournalMapFromPreferences,
   updateSessionPreferences,
   type SessionPreferences,
 } from "./session-preferences.js";
@@ -225,6 +226,9 @@ export async function reconcilePersistedSessions(): Promise<void> {
             dispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
           }
         : {}),
+      ...(storedPreferences?.steerJournal?.length
+        ? { steerJournal: steerJournalMapFromPreferences(storedPreferences.steerJournal) }
+        : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
         ? { dispatchJournalUnavailable: true }
         : {}),
@@ -279,6 +283,9 @@ export async function materializePersistedSessionState(
     ...(preferences?.planMode !== undefined ? { planMode: preferences.planMode } : {}),
     ...(preferences?.dispatchedRequestIds?.length
       ? { dispatchedRequestIds: new Set(preferences.dispatchedRequestIds) }
+      : {}),
+    ...(preferences?.steerJournal?.length
+      ? { steerJournal: steerJournalMapFromPreferences(preferences.steerJournal) }
       : {}),
     ...(sessionPreferencesUnavailable(preferences) ? { dispatchJournalUnavailable: true } : {}),
   };

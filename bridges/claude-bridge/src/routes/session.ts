@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   createOrRecoverSession,
   getSession,
@@ -34,6 +35,7 @@ import {
   readSessionMcpServers,
   performSessionMcpAction,
   steerClaudeSession,
+  answerIdleSteerPrompt,
   readClaudeSteerDispatch,
   configureClaudeSession,
   gracefulInterruptClaudeSession,
@@ -671,6 +673,14 @@ session.post("/:id/prompt", async (c) => {
       (prompt.trim().length === 0 && (!attachments || attachments.length === 0))
     ) {
       return c.json({ error: "Prompt is required" }, 400);
+    }
+
+    if (sessionData.status !== "running" && idleSteerPromptReply(prompt, "Claude")) {
+      if (outputSchema !== undefined) {
+        return c.json({ error: "/steer cannot be used with structured output" }, 400);
+      }
+      answerIdleSteerPrompt(sessionData, prompt);
+      return c.json({ status: "accepted", requestId, local: true });
     }
 
     // Answered before the `running` conflict below on purpose: a retry of the

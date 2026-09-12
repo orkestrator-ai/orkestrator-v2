@@ -499,6 +499,21 @@ describe("prompt dispatch", () => {
     expect(state.agent).toBe(agent);
   });
 
+  test("answers an idle /steer locally instead of starting a model turn", async () => {
+    const state = await createSession();
+    attachFake(state);
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "/steer keep going", requestId: "idle-steer" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ accepted: true, local: true });
+    expect(state.status).toBe("idle");
+    expect(state.promptJournal.has("idle-steer")).toBe(false);
+    expect(state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(state.messages[1]?.content).toContain("no active Cursor turn to steer");
+  });
+
   test("an empty prompt with no attachment is a caller error", async () => {
     const state = await createSession();
     attachFake(state);
@@ -928,6 +943,84 @@ describe("global usage", () => {
     expect(payload.account).toEqual([
       { window: "billing_cycle", label: "Cursor quota", usedPercent: 42 },
     ]);
+  });
+});
+
+describe("steering", () => {
+  test("qualifies the no-touch dispatch route without a journal entry", async () => {
+    const state = await createSession();
+    const response = await call(
+      `/session/${state.id}/steer/dispatch?requestId=orkestrator-steer-qualification`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ dispatch: "unknown" });
+  });
+
+  test("answers idle when no run can accept steering", async () => {
+    const state = await createSession();
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "focus on tests",
+        requestId: "steer-idle",
+        expectedRunId: "run-1",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "idle" });
+  });
+
+  test("pins, delivers, and deduplicates a running steer", async () => {
+    const state = await createSession();
+    const steered: string[] = [];
+    state.status = "running";
+    state.activeRun = {
+      id: "run-1",
+      supports: (feature: string) => feature === "stream",
+      steer: async (text: string) => {
+        steered.push(text);
+        return "complete_delivered";
+      },
+    } as SessionState["activeRun"];
+
+    const accepted = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "narrow the scope",
+        requestId: "steer-1",
+        expectedRunId: "run-1",
+      }),
+    });
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({ outcome: "applied", requestId: "steer-1" });
+    expect(steered).toEqual(["narrow the scope"]);
+
+    const duplicate = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "narrow the scope",
+        requestId: "steer-1",
+        expectedRunId: "run-1",
+      }),
+    });
+    expect(duplicate.status).toBe(202);
+    expect(await duplicate.json()).toMatchObject({ outcome: "applied", duplicate: true });
+    expect(steered).toEqual(["narrow the scope"]);
+
+    const mismatch = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "something else",
+        requestId: "steer-2",
+        expectedRunId: "run-old",
+      }),
+    });
+    expect(mismatch.status).toBe(409);
+    expect(await mismatch.json()).toEqual({ outcome: "mismatch" });
+
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-1`)).json(),
+    ).toEqual({ dispatch: "dispatched" });
   });
 });
 

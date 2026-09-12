@@ -96,6 +96,7 @@ const mockReadSessionCommands = mock(async () => []);
 const mockReadSessionMcpServers = mock(async () => []);
 const mockPerformSessionMcpAction = mock(async () => ({ ok: true }));
 const mockSteerClaudeSession = mock(() => "applied" as const);
+const mockAnswerIdleSteerPrompt = mock(() => "There is no active Claude turn to steer.");
 const mockReadClaudeSteerDispatch = mock(() => "dispatched" as const);
 const mockConfigureClaudeSession = mock(async () => undefined);
 const mockRefreshClaudeContextUsage = mock(async () => ({
@@ -201,6 +202,7 @@ mock.module("../services/session-manager.js", () => ({
   readSessionMcpServers: mockReadSessionMcpServers,
   performSessionMcpAction: mockPerformSessionMcpAction,
   steerClaudeSession: mockSteerClaudeSession,
+  answerIdleSteerPrompt: mockAnswerIdleSteerPrompt,
   readClaudeSteerDispatch: mockReadClaudeSteerDispatch,
   configureClaudeSession: mockConfigureClaudeSession,
   refreshClaudeContextUsage: mockRefreshClaudeContextUsage,
@@ -303,6 +305,8 @@ describe("session routes", () => {
     mockRefreshClaudeContextUsage.mockClear();
     mockSteerClaudeSession.mockReset();
     mockSteerClaudeSession.mockReturnValue("applied");
+    mockAnswerIdleSteerPrompt.mockReset();
+    mockAnswerIdleSteerPrompt.mockReturnValue("There is no active Claude turn to steer.");
     mockDeleteSession.mockClear();
     mockReconcilePersistedSessions.mockClear();
     mockEnsurePersistedSession.mockClear();
@@ -840,6 +844,55 @@ describe("session routes", () => {
       const data = await jsonBody(res);
       expect(data.status).toBe("processing");
       expect(data.turnStartedAt).toBe(turnStartedAt);
+    });
+
+    test("answers an idle /steer locally instead of starting a model turn", async () => {
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/steer keep the diff small",
+      });
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        status: "accepted",
+        requestId: undefined,
+        local: true,
+      });
+      expect(mockAnswerIdleSteerPrompt).toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("refuses a structured idle /steer instead of starting a turn", async () => {
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/steer keep going",
+        outputSchema: { type: "object" },
+      });
+      expect(res.status).toBe(400);
+      expect(await jsonBody(res)).toEqual({
+        error: "/steer cannot be used with structured output",
+      });
+      expect(mockAnswerIdleSteerPrompt).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("durably claims a stable request id before dispatch", async () => {
@@ -1495,8 +1548,8 @@ describe("session routes", () => {
       );
     });
 
-    test("reports an idle session as absent", async () => {
-      mockSteerClaudeSession.mockReturnValueOnce("absent");
+    test("reports an idle session without starting a turn", async () => {
+      mockSteerClaudeSession.mockReturnValueOnce("idle");
       const res = await jsonRequest("POST", "/session/s-1/steer", {
         input: "Follow up",
         requestId: "steer-idle",
@@ -1504,7 +1557,7 @@ describe("session routes", () => {
       });
 
       expect(res.status).toBe(200);
-      expect(await jsonBody(res)).toEqual({ outcome: "absent" });
+      expect(await jsonBody(res)).toEqual({ outcome: "idle" });
     });
   });
 

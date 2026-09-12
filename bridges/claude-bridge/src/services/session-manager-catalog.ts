@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AccountInfo,
@@ -13,19 +14,27 @@ import type {
   NativeAgentMcpServerAction,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   claudeExecutableOptions,
+  generateMessageId,
   getStructuredUsageWithTimeout,
   rateLimitsFromStructuredUsage,
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
-import type { ClaudeQueryControl, PermissionMode, SessionState } from "../types/index.js";
+import { eventEmitter } from "./event-emitter.js";
+import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
+import type {
+  ClaudeSteerJournalEntry,
+  ClaudeQueryControl,
+  PermissionMode,
+  SessionState,
+} from "../types/index.js";
 
 const CATALOG_LIMIT = 512;
 const AUTH_CACHE_TTL_MS = 30_000;
 let authCache: { expiresAt: number; value: NativeAgentAuthStatus } | undefined;
-const steerDispatches = new Map<string, "dispatched" | "absent" | "unknown">();
 
 export function resetClaudeCatalogCachesForTesting(): void {
   authCache = undefined;
@@ -64,30 +73,84 @@ function rethrowUnlessClosedTransport(error: unknown): void {
   if (!isClosedTransportError(error)) throw error;
 }
 
-function steerKey(sessionId: string, requestId: string): string {
-  return `${sessionId}\u0000${requestId}`;
-}
-
-function rememberSteer(
-  sessionId: string,
-  requestId: string,
-  state: "dispatched" | "absent" | "unknown",
-) {
-  const key = steerKey(sessionId, requestId);
-  steerDispatches.delete(key);
-  steerDispatches.set(key, state);
-  while (steerDispatches.size > 512) {
-    const oldest = steerDispatches.keys().next().value;
+function rememberSteer(session: SessionState, entry: ClaudeSteerJournalEntry): void {
+  const journal = session.steerJournal ?? new Map<string, ClaudeSteerJournalEntry>();
+  journal.delete(entry.requestId);
+  journal.set(entry.requestId, entry);
+  while (journal.size > MAX_STEER_JOURNAL_ENTRIES) {
+    const oldest = journal.keys().next().value;
     if (oldest === undefined) break;
-    steerDispatches.delete(oldest);
+    journal.delete(oldest);
   }
+  session.steerJournal = journal;
+  const sdkSessionId = session.sdkSessionId;
+  if (!sdkSessionId) return;
+  void updateSessionPreferences(sdkSessionId, {
+    steerJournal: Array.from(journal.values()),
+  }).catch(() => undefined);
 }
 
 export function readClaudeSteerDispatch(
   sessionId: string,
   requestId: string,
 ): "dispatched" | "absent" | "unknown" {
-  return steerDispatches.get(steerKey(sessionId, requestId)) ?? "unknown";
+  if (requestId === "orkestrator-steer-qualification") return "unknown";
+  const entry = sessions.get(sessionId)?.steerJournal?.get(requestId);
+  if (entry?.state === "dispatched") return "dispatched";
+  if (entry?.state === "absent") return "absent";
+  return "unknown";
+}
+
+function appendSteerUserMessage(session: SessionState, text: string, requestId: string): void {
+  const existingId = `steer:${requestId}`;
+  if (session.messages.some((message) => message.id === existingId)) return;
+  session.splitAssistantAfterSteer?.();
+  const message = {
+    id: existingId,
+    role: "user" as const,
+    content: text,
+    parts: [{ type: "text" as const, content: text }],
+    createdAt: new Date().toISOString(),
+  };
+  session.messages.push(message);
+  session.lastActivity = new Date();
+  eventEmitter.emit({
+    type: "message.updated",
+    sessionId: session.id,
+    data: { message },
+  });
+}
+
+export function answerIdleSteerPrompt(session: SessionState, prompt: string): string | null {
+  const reply = idleSteerPromptReply(prompt, "Claude");
+  if (!reply) return null;
+  const userMessage = {
+    id: generateMessageId(),
+    role: "user" as const,
+    content: prompt,
+    parts: [{ type: "text" as const, content: prompt }],
+    createdAt: new Date().toISOString(),
+  };
+  const assistantMessage = {
+    id: generateMessageId(),
+    role: "assistant" as const,
+    content: reply,
+    parts: [{ type: "text" as const, content: reply }],
+    createdAt: new Date().toISOString(),
+  };
+  session.messages.push(userMessage, assistantMessage);
+  session.lastActivity = new Date();
+  eventEmitter.emit({
+    type: "message.updated",
+    sessionId: session.id,
+    data: { message: userMessage },
+  });
+  eventEmitter.emit({
+    type: "message.updated",
+    sessionId: session.id,
+    data: { message: assistantMessage },
+  });
+  return reply;
 }
 
 function createProbe(): Query {
@@ -393,8 +456,26 @@ export function steerClaudeSession(
   expectedRunId: string,
 ): "applied" | "idle" | "mismatch" | "unknown" {
   const session = sessions.get(sessionId);
+  const inputDigest = createHash("sha256").update(text).digest("hex");
+  const previous = session?.steerJournal?.get(requestId);
+  if (previous) {
+    if (previous.inputDigest !== inputDigest || previous.expectedRunId !== expectedRunId) {
+      return "unknown";
+    }
+    if (previous.state === "dispatched") return "applied";
+    if (previous.state === "absent") return "idle";
+    return "unknown";
+  }
   if (!session || session.status !== "running" || !session.queryControl?.pushInput) {
-    rememberSteer(sessionId, requestId, "absent");
+    if (session) {
+      rememberSteer(session, {
+        requestId,
+        inputDigest,
+        expectedRunId,
+        state: "absent",
+        createdAt: Date.now(),
+      });
+    }
     return "idle";
   }
   if (String(session.latestTurnGeneration ?? "") !== expectedRunId) return "mismatch";
@@ -406,9 +487,17 @@ export function steerClaudeSession(
     uuid: requestId as SDKUserMessage["uuid"],
     session_id: session.sdkSessionId,
   };
-  const state = session.queryControl.pushInput(message) ? "dispatched" : "unknown";
-  rememberSteer(sessionId, requestId, state);
-  return state === "dispatched" ? "applied" : "unknown";
+  const pushed = session.queryControl.pushInput(message);
+  rememberSteer(session, {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state: pushed ? "dispatched" : "unknown",
+    createdAt: Date.now(),
+  });
+  if (!pushed) return "unknown";
+  appendSteerUserMessage(session, text, requestId);
+  return "applied";
 }
 
 export async function configureClaudeSession(

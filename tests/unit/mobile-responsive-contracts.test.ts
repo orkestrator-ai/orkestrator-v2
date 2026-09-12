@@ -62,7 +62,8 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/pane-layout/DraggableTabBar.tsx", "TAB_STRIP_CLASS"],
     [
       "apps/web/src/components/pane-layout/TabShell.tsx",
-      "md:opacity-0",
+      "text-muted-foreground",
+      "md:hover-fine:opacity-0",
       "h-7 w-7",
       "overflow-x-auto",
       "md:min-h-[32px]",
@@ -99,6 +100,7 @@ describe("mobile responsive layout contracts", () => {
   test("message actions only opt into hidden hover controls for precise pointers", () => {
     const css = read("apps/web/src/index.css");
     const messageShell = read("apps/web/src/components/chat/MessageShell.tsx");
+    const tabShell = read("apps/web/src/components/pane-layout/TabShell.tsx");
 
     expect(css).toContain("@custom-variant hover-fine");
     expect(css).toContain("@media (hover: hover) and (pointer: fine)");
@@ -107,6 +109,10 @@ describe("mobile responsive layout contracts", () => {
     expect(messageShell).toContain("md:hover-fine:group-hover:opacity-100");
     expect(messageShell).toContain("md:hover-fine:focus-within:opacity-100");
     expect(messageShell).not.toContain("md:opacity-0 md:group-hover:opacity-100");
+    expect(tabShell).toContain("text-muted-foreground");
+    expect(tabShell).toContain("md:hover-fine:opacity-0");
+    expect(tabShell).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(tabShell).not.toContain("md:opacity-0 md:group-hover:opacity-100");
   });
 
   test("touch compose input uses real font geometry instead of transform scaling", () => {

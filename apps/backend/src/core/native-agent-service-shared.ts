@@ -391,6 +391,8 @@ export interface NativeAgentServiceOptions {
   /** Disabled by default. Milestone 3 observes and never resolves. */
   interactionMonitorMode?: "disabled" | "observe-only";
   interactionMonitorAdoptionEnabled?: boolean;
+  /** Launch/queue sweep cadence. Injectable so tests do not sleep through 2 s. */
+  launchReconcileIntervalMs?: number;
   interactionMonitorIntervalMs?: number;
   interactionMonitorMaxConcurrency?: number;
   interactionMonitorMaxSessionsPerEnvironment?: number;

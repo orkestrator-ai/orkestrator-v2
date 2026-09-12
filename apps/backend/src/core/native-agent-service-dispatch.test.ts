@@ -255,6 +255,7 @@ async function withService(
     toolDetailCacheMaxEntries?: number;
     toolDetailCacheMaxBytes?: number;
     abortGraceMs?: number;
+    launchReconcileIntervalMs?: number;
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -300,6 +301,9 @@ async function withService(
       ? {}
       : { toolDetailCacheMaxBytes: setup.toolDetailCacheMaxBytes }),
     ...(setup.abortGraceMs === undefined ? {} : { abortGraceMs: setup.abortGraceMs }),
+    ...(setup.launchReconcileIntervalMs === undefined
+      ? {}
+      : { launchReconcileIntervalMs: setup.launchReconcileIntervalMs }),
   });
   try {
     await run({ storage, service });
@@ -1300,6 +1304,7 @@ describe("NativeAgentService", () => {
     await withService(
       {
         prefix: "orkestrator-native-launch-timer-body-",
+        launchReconcileIntervalMs: 40,
       },
       async ({ service }) => {
         const internal = service as unknown as {
@@ -1311,11 +1316,43 @@ describe("NativeAgentService", () => {
         internal.reconcilePendingLaunches = launches;
         internal.drainPromptQueues = drains;
         await service.init();
-        await Bun.sleep(2_100);
+        await Bun.sleep(120);
         expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(drains.mock.calls.length).toBeGreaterThanOrEqual(2);
       },
     );
+  });
+
+  test("the launch reconcile timer keeps the production default and a safe floor", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const record = async (launchReconcileIntervalMs?: number) => {
+      const delays: number[] = [];
+      const spy = ((...args: Parameters<typeof originalSetInterval>) => {
+        delays.push((args[1] as number | undefined) ?? 0);
+        return originalSetInterval(...args);
+      }) as typeof globalThis.setInterval;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-interval-",
+          ...(launchReconcileIntervalMs === undefined ? {} : { launchReconcileIntervalMs }),
+        },
+        async ({ service }) => {
+          globalThis.setInterval = spy;
+          try {
+            await service.init();
+          } finally {
+            globalThis.setInterval = originalSetInterval;
+          }
+        },
+      );
+      return delays;
+    };
+    expect(await record()).toEqual([2_000]);
+    expect(await record(75)).toEqual([75]);
+    expect(await record(0)).toEqual([20]);
+    expect(await record(-50)).toEqual([20]);
+    expect(await record(Number.NaN)).toEqual([2_000]);
+    expect(await record(Number.POSITIVE_INFINITY)).toEqual([2_000]);
   });
 
   test("does not report a parked waiting turn as completed or complete it when it becomes idle", async () => {

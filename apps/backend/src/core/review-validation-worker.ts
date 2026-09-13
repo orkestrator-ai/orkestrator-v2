@@ -56,11 +56,38 @@ function stop(reason) {
 process.on("SIGTERM", () => { stop("Validation was cancelled"); });
 process.on("SIGINT", () => { stop("Validation was cancelled"); });
 
-function snapshotMatches() {
-  const options = { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
-  const head = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], options);
-  const status = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], options);
-  return head.status === 0 && head.stdout.trim() === run.plan.headRef && status.status === 0 && status.stdout.trim() === "";
+function gitOptions() {
+  return { cwd: root, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
+}
+function headMatches() {
+  const head = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], gitOptions());
+  return head.status === 0 && head.stdout.trim() === run.plan.headRef;
+}
+function worktreePaths() {
+  const status = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], gitOptions());
+  if (status.status !== 0) return null;
+  const files = [];
+  for (const line of status.stdout.split("\n")) {
+    if (!line) continue;
+    if (line.length < 4 || line[2] !== " ") return null;
+    const rest = line.slice(3);
+    const arrow = rest.indexOf(" -> ");
+    files.push(arrow === -1 ? rest : rest.slice(arrow + 4));
+  }
+  return files;
+}
+function recordEnvironmentChanges(files) {
+  if (!files || files.length === 0) return;
+  const previous = Array.isArray(run.environmentChanges) ? run.environmentChanges : [];
+  run.environmentChanges = Array.from(new Set(previous.concat(files)))
+    .filter(file => typeof file === "string" && file.length > 0 && file.length <= 4096)
+    .sort()
+    .slice(0, 1024);
+}
+function noteWorktreeDrift() {
+  const files = worktreePaths();
+  if (files === null) throw new Error("Git status could not be read; rediscover validation against the current snapshot");
+  recordEnvironmentChanges(files);
 }
 
 async function execute(cmd, index) {
@@ -105,11 +132,12 @@ async function execute(cmd, index) {
     }
     result.queuedMs = Date.now() - queuedAt;
     if (stopping) throw new Error("Validation was cancelled before execution");
-    if (!snapshotMatches()) {
-      run.error = "Repository changed while validation was queued; rediscover against the current snapshot";
+    if (!headMatches()) {
+      run.error = "Repository HEAD changed while validation was queued; rediscover against the current snapshot";
       stop(run.error);
       throw new Error(run.error);
     }
+    noteWorktreeDrift();
   const cwd = fs.realpathSync(path.resolve(root, cmd.cwd));
   if (cwd !== root && !cwd.startsWith(root + path.sep)) throw new Error("Validation working directory escapes the workspace");
   const ordinal = String(index + 1).padStart(2, "0");
@@ -276,7 +304,10 @@ async function main() {
       }
     }
     delete run.queueReason;
-    if (!stopping && !snapshotMatches()) throw new Error("Repository changed after discovery or is not clean; rediscover validation against the current snapshot");
+    if (!stopping) {
+      if (!headMatches()) throw new Error("Repository HEAD changed after discovery; rediscover validation against the current snapshot");
+      noteWorktreeDrift();
+    }
     const pending = new Set(run.plan.commands.map((_, i) => i));
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
@@ -307,10 +338,13 @@ async function main() {
     if (stopping) {
       for (const i of pending) Object.assign(run.results[i], { status: "skipped", limitation: "Validation was cancelled" });
       run.status = run.error ? "failed" : "cancelled";
-    } else if (!snapshotMatches()) {
+    } else if (!headMatches()) {
       run.status = "failed";
-      run.error = "Repository changed during validation; results cannot certify the discovered snapshot";
-    } else run.status = "completed";
+      run.error = "Repository HEAD changed during validation; results cannot certify the discovered snapshot";
+    } else {
+      noteWorktreeDrift();
+      run.status = "completed";
+    }
   } catch (error) {
     stop("Validation worker stopped");
     await Promise.all(tasks);

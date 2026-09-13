@@ -1662,28 +1662,40 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
       await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
       await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
-      await expect(command(args, context)).rejects.toThrow("account for every uncommitted file");
-      await expect(
-        command(
-          {
-            ...args,
-            preparation: {
-              ...args.preparation,
-              uncommittedFiles: [
-                {
-                  path: "review.txt",
-                  reason: "Later user edit after the prepared commit.",
-                },
-                {
-                  path: "unrelated.txt",
-                  reason: "Unrelated user file.",
-                },
-              ],
-            },
+      const dirty = (await command(args, context)) as Record<string, unknown>;
+      const dirtyPackage = JSON.parse(
+        await fs.readFile(path.join(worktreePath, String(dirty.filePath)), "utf8"),
+      ) as Record<string, unknown>;
+      expect(dirtyPackage.uncommittedFiles).toEqual([
+        { path: "review.txt", reason: "Changed since the review snapshot" },
+        { path: "unrelated.txt", reason: "Changed since the review snapshot" },
+      ]);
+      const noted = (await command(
+        {
+          ...args,
+          preparation: {
+            ...args.preparation,
+            uncommittedFiles: [
+              {
+                path: "review.txt",
+                reason: "Later user edit after the prepared commit.",
+              },
+              {
+                path: "unrelated.txt",
+                reason: "Unrelated user file.",
+              },
+            ],
           },
-          context,
-        ),
-      ).rejects.toThrow("requires a clean worktree");
+        },
+        context,
+      )) as Record<string, unknown>;
+      const notedPackage = JSON.parse(
+        await fs.readFile(path.join(worktreePath, String(noted.filePath)), "utf8"),
+      ) as Record<string, unknown>;
+      expect(notedPackage.uncommittedFiles).toEqual([
+        { path: "review.txt", reason: "Later user edit after the prepared commit." },
+        { path: "unrelated.txt", reason: "Unrelated user file." },
+      ]);
     },
     ASYNC_TEST_BUDGET_MS,
   );

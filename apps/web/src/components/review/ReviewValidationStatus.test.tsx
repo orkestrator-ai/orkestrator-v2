@@ -289,6 +289,27 @@ describe("ReviewValidationStatus", () => {
     }
   });
 
+  test("shows a clickable environment state changed note with the drifted files", () => {
+    const run = runningValidation();
+    run.environmentChanges = ["playwright-report/index.html", "test-results/.last-run.json"];
+    render(
+      <ReviewValidationStatus
+        environmentId="env-1"
+        run={run}
+        now={Date.parse("2026-09-08T20:00:10.000Z")}
+      />,
+    );
+
+    const note = screen.getByText("environment state changed").closest("details")!;
+    expect(note.hasAttribute("open")).toBe(false);
+    expect(screen.queryByText("Repository changed")).toBeNull();
+    fireEvent.click(screen.getByText("environment state changed"));
+    expect(note.hasAttribute("open")).toBe(true);
+    expect(screen.getByText("playwright-report/index.html")).toBeTruthy();
+    expect(screen.getByText("test-results/.last-run.json")).toBeTruthy();
+    expect(screen.getByLabelText("Files changed since the snapshot")).toBeTruthy();
+  });
+
   test("opens skipped steps without trying to read a missing artifact", () => {
     const run = runningValidation();
     const loadOutput = mock(async () => {

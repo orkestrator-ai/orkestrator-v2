@@ -196,12 +196,33 @@ test("shared resources serialize; failed dependencies skip while independent che
   expect(result.results[2]!.stdoutPath).toBeNull();
 });
 
-test("changed source before or during validation invalidates the snapshot", async () => {
+test("worktree drift before or during validation is recorded without failing the run", async () => {
   const before = await fixture([command("check", "exit 0")]);
   await writeFile(path.join(before.root, "source.txt"), "changed\n");
-  expect((await completed(before.root, before.run)).status).toBe("failed");
+  const dirtyBefore = await completed(before.root, before.run);
+  expect(dirtyBefore.status).toBe("completed");
+  expect(dirtyBefore.error).toBeUndefined();
+  expect(dirtyBefore.results[0]!.status).toBe("passed");
+  expect(dirtyBefore.environmentChanges).toEqual(["source.txt"]);
+  expect(validationPreparation(dirtyBefore).uncommittedFiles).toEqual([
+    { path: "source.txt", reason: "Changed since the review snapshot" },
+  ]);
   const during = await fixture([command("check", "printf changed > source.txt")]);
-  expect((await completed(during.root, during.run)).error).toContain("changed during validation");
+  const dirtyDuring = await completed(during.root, during.run);
+  expect(dirtyDuring.status).toBe("completed");
+  expect(dirtyDuring.error).toBeUndefined();
+  expect(dirtyDuring.environmentChanges).toEqual(["source.txt"]);
+});
+
+test("HEAD change after discovery still fails validation", async () => {
+  const { root, run, git } = await fixture([command("check", "exit 0")]);
+  await writeFile(path.join(root, "source.txt"), "committed change\n");
+  git("add", ".");
+  git("commit", "-m", "moved head");
+  const result = await completed(root, run);
+  expect(result.status).toBe("failed");
+  expect(result.error).toContain("HEAD changed");
+  expect(result.results[0]!.status).toBe("pending");
 });
 
 test("cancellation terminates children and a cancelled launch cannot start commands", async () => {
@@ -292,7 +313,7 @@ test("host queue survives reconnect, excludes wait from timeout, and cancels wit
   }
 });
 
-test("a snapshot changed during host admission never executes stale validation", async () => {
+test("worktree drift during host admission still runs and records the changed files", async () => {
   const { root, run } = await fixture([command("check", "touch .orkestrator/should-not-run")]);
   const scheduler = createHostTestScheduler({
     directory: path.join(root, ".orkestrator", "scheduler"),
@@ -314,8 +335,43 @@ test("a snapshot changed during host admission never executes stale validation",
     await writeFile(path.join(root, "source.txt"), "changed while waiting");
     scheduler.release(ticket);
     const done = await completed(root, run);
+    expect(done.status).toBe("completed");
+    expect(done.error).toBeUndefined();
+    expect(done.results[0]!.status).toBe("passed");
+    expect(done.environmentChanges).toEqual(["source.txt"]);
+    expect(Bun.file(path.join(root, ".orkestrator/should-not-run")).exists()).resolves.toBe(true);
+  } finally {
+    scheduler.release(ticket);
+    scheduler.close();
+  }
+});
+
+test("HEAD change during host admission still refuses stale validation", async () => {
+  const { root, run, git } = await fixture([command("check", "touch .orkestrator/should-not-run")]);
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+  });
+  const capacity = scheduler.capacity();
+  const ticket = scheduler.enqueue({
+    owner: scheduler.owner(root),
+    workers: capacity.workers,
+    memoryMiB: capacity.memoryMiB,
+  });
+  try {
+    await control(root, run);
+    const deadline = Date.now() + 3000;
+    while (
+      (await control(root, run, "status")).results[0]!.status !== "queued" &&
+      Date.now() < deadline
+    )
+      await Bun.sleep(50);
+    await writeFile(path.join(root, "source.txt"), "committed while waiting\n");
+    git("add", ".");
+    git("commit", "-m", "moved head while queued");
+    scheduler.release(ticket);
+    const done = await completed(root, run);
     expect(done.status).toBe("failed");
-    expect(done.error).toContain("changed while");
+    expect(done.error).toContain("HEAD changed");
     expect(done.results[0]!.stdoutPath).toBeNull();
     expect(Bun.file(path.join(root, ".orkestrator/should-not-run")).exists()).resolves.toBe(false);
   } finally {

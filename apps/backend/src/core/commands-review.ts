@@ -891,22 +891,11 @@ export async function generateLoopedReviewPackage(
   const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus).filter(
     (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
   );
-  const submittedUncommittedPaths = uncommittedFiles.map((note) => note.path);
-  const actualUncommittedSet = new Set(actualUncommittedPaths);
-  const submittedUncommittedSet = new Set(submittedUncommittedPaths);
-  if (
-    actualUncommittedSet.size !== actualUncommittedPaths.length ||
-    submittedUncommittedSet.size !== submittedUncommittedPaths.length ||
-    actualUncommittedSet.size !== submittedUncommittedSet.size ||
-    [...actualUncommittedSet].some((filePath) => !submittedUncommittedSet.has(filePath))
-  ) {
-    throw new Error("Preparation result does not account for every uncommitted file");
-  }
-  if (actualUncommittedPaths.length > 0) {
-    throw new Error(
-      `Review package preparation requires a clean worktree; ${actualUncommittedPaths.length} non-ignored ${actualUncommittedPaths.length === 1 ? "path remains" : "paths remain"} uncommitted`,
-    );
-  }
+  const submittedReasons = new Map(uncommittedFiles.map((note) => [note.path, note.reason]));
+  const recordedUncommittedFiles = actualUncommittedPaths.map((filePath) => ({
+    path: filePath,
+    reason: submittedReasons.get(filePath) ?? "Changed since the review snapshot",
+  }));
 
   await verifyValidationArtifacts(environment, runner, validation);
   const hydratedValidation = validation.map((entry) => {
@@ -973,7 +962,7 @@ export async function generateLoopedReviewPackage(
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
-    uncommittedFiles: [...uncommittedFiles].sort((left, right) =>
+    uncommittedFiles: [...recordedUncommittedFiles].sort((left, right) =>
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),
     limitations,

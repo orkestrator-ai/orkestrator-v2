@@ -130,26 +130,31 @@ function validationEntry(overrides: Record<string, unknown> = {}) {
 }
 
 describe("generateLoopedReviewPackage", () => {
-  test("fails closed when tracked or untracked changes remain outside the package", async () => {
+  test("records remaining worktree changes instead of failing the package", async () => {
     const { worktree, storage } = await reviewEnvironment();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "modified\n");
     await fs.writeFile(path.join(worktree, "untracked.txt"), "new\n");
 
-    await expect(
-      generateLoopedReviewPackage(
-        "env-1",
-        "package-1",
-        1,
-        "main",
-        [],
-        [
-          { path: "tracked.txt", reason: "Left behind." },
-          { path: "untracked.txt", reason: "Left behind." },
-        ],
-        ["The worktree is not clean."],
-        { storage } as never,
-      ),
-    ).rejects.toThrow("requires a clean worktree");
+    const reference = await generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      1,
+      "main",
+      [],
+      [
+        { path: "tracked.txt", reason: "Left behind." },
+        { path: "untracked.txt", reason: "Left behind." },
+      ],
+      ["The worktree is not clean."],
+      { storage } as never,
+    );
+    const written = JSON.parse(
+      await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+    ) as ReviewPackage;
+    expect(written.uncommittedFiles).toEqual([
+      { path: "tracked.txt", reason: "Left behind." },
+      { path: "untracked.txt", reason: "Left behind." },
+    ]);
   });
 
   test("pins the range and points at validation artifacts without reading file bytes", async () => {

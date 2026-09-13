@@ -267,7 +267,10 @@ export function validationPreparation(run: ReviewValidationRun): ReviewPreparati
         stderrSha256: r.stderrSha256,
       };
     }),
-    uncommittedFiles: [],
+    uncommittedFiles: (run.environmentChanges ?? []).map((filePath) => ({
+      path: filePath,
+      reason: "Changed since the review snapshot",
+    })),
     limitations: run.plan.limitations,
   };
 }

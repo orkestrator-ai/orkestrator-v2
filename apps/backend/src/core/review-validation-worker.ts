@@ -1,5 +1,9 @@
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { HOST_TEST_SCHEDULER_SOURCE } from "@orkestrator/protocol/host-test-scheduler";
+import {
+  REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX,
+  REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
+} from "@orkestrator/protocol/review-workflow";
 
 /**
  * Environment-side worker, launched with the application's Bun runtime from a
@@ -64,25 +68,41 @@ function headMatches() {
   return head.status === 0 && head.stdout.trim() === run.plan.headRef;
 }
 function worktreePaths() {
-  const status = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], gitOptions());
+  const status = spawnSync("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], gitOptions());
   if (status.status !== 0) return null;
+  const fields = status.stdout.split("\0");
+  if (fields[fields.length - 1] === "") fields.pop();
   const files = [];
-  for (const line of status.stdout.split("\n")) {
-    if (!line) continue;
-    if (line.length < 4 || line[2] !== " ") return null;
-    const rest = line.slice(3);
-    const arrow = rest.indexOf(" -> ");
-    files.push(arrow === -1 ? rest : rest.slice(arrow + 4));
+  for (let index = 0; index < fields.length;) {
+    const entry = fields[index++];
+    if (!entry || entry.length < 4 || entry[2] !== " ") return null;
+    const statusCode = entry.slice(0, 2);
+    files.push(entry.slice(3));
+    if (statusCode.includes("R") || statusCode.includes("C")) {
+      const destination = fields[index++];
+      if (!destination) return null;
+      files.push(destination);
+    }
   }
   return files;
 }
+const seenDriftPaths = new Set();
 function recordEnvironmentChanges(files) {
   if (!files || files.length === 0) return;
-  const previous = Array.isArray(run.environmentChanges) ? run.environmentChanges : [];
-  run.environmentChanges = Array.from(new Set(previous.concat(files)))
-    .filter(file => typeof file === "string" && file.length > 0 && file.length <= 4096)
-    .sort()
-    .slice(0, 1024);
+  const recorded = Array.isArray(run.environmentChanges) ? run.environmentChanges.slice() : [];
+  for (const file of recorded) seenDriftPaths.add(file);
+  let omitted = Number.isSafeInteger(run.environmentChangesOmitted) ? run.environmentChangesOmitted : 0;
+  for (const file of files) {
+    if (typeof file !== "string" || file.length === 0 || file.length > ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX}) continue;
+    if (seenDriftPaths.has(file)) continue;
+    seenDriftPaths.add(file);
+    if (recorded.length < ${REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX}) recorded.push(file);
+    else omitted++;
+  }
+  recorded.sort();
+  run.environmentChanges = recorded;
+  if (omitted > 0) run.environmentChangesOmitted = omitted;
+  else delete run.environmentChangesOmitted;
 }
 function noteWorktreeDrift() {
   const files = worktreePaths();

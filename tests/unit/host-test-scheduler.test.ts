@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -353,5 +353,49 @@ test("a failed publish in the admission finally does not discard a group's resul
   // reject and lose the group's result.
   const result = await admission.run(group, async () => ({ status: 0 }));
   expect(result).toMatchObject({ status: 75, infrastructureError: true });
+  admission.close();
+});
+
+test("cooperative admission continues on a dirty worktree and still refuses a moved HEAD", async () => {
+  const { directory } = fixture();
+  const worktree = path.join(directory, "worktree");
+  mkdirSync(worktree);
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: worktree,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  git("init", "-b", "main");
+  git(
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "fixture",
+  );
+  const head = git("rev-parse", "HEAD").trim();
+  writeFileSync(path.join(worktree, "dirty.txt"), "changed\n");
+  const notes: string[] = [];
+  const admission = createTestAdmission(
+    worktree,
+    {
+      ORKESTRATOR_TEST_SCHEDULER_DIR: directory,
+      ORKESTRATOR_VALIDATION_HEAD_REF: head,
+      ORKESTRATOR_VALIDATION_SCHEDULER_STATE: path.join(directory, "channel.json"),
+    },
+    (line) => notes.push(line),
+  );
+  const group = { name: "fixture", command: "unused", args: [], exclusive: true };
+  expect((await admission.run(group, async () => ({ status: 0 }))).status).toBe(0);
+  expect(notes.some((line) => line.includes("worktree is dirty"))).toBe(true);
+  git("add", "dirty.txt");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "moved");
+  const stale = await admission.run(group, async () => ({ status: 0 }));
+  expect(stale).toMatchObject({ status: 75, infrastructureError: true });
+  expect(String(stale.output)).toContain("Repository changed while queued");
   admission.close();
 });

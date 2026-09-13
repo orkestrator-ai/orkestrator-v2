@@ -36,6 +36,9 @@ export interface ReviewValidationResult {
 
 /** Maximum tail returned for each validation output stream in one UI snapshot. */
 export const REVIEW_VALIDATION_OUTPUT_MAX_BYTES = 512 * 1024;
+/** Bounded evidence list of worktree paths observed dirty during validation. */
+export const REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX = 1024;
+export const REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX = 4096;
 
 export interface ReviewValidationOutputStream {
   contentBase64: string;
@@ -66,6 +69,8 @@ export interface ReviewValidationRun {
    * Recorded as a note; they do not fail validation.
    */
   environmentChanges?: string[];
+  /** Count of drifted paths omitted after `environmentChanges` hit its cap. */
+  environmentChangesOmitted?: number;
   results: ReviewValidationResult[];
 }
 
@@ -77,8 +82,14 @@ const strings = (v: unknown, count = 32): v is string[] =>
   Array.isArray(v) && v.length <= count && v.every((s) => text(s));
 const driftedPaths = (v: unknown): v is string[] =>
   Array.isArray(v) &&
-  v.length <= 1024 &&
-  v.every((s) => typeof s === "string" && s.length > 0 && s.length <= 4096 && !s.includes("\0"));
+  v.length <= REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX &&
+  v.every(
+    (s) =>
+      typeof s === "string" &&
+      s.length > 0 &&
+      s.length <= REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX &&
+      !s.includes("\0"),
+  );
 const sha = (v: unknown) => typeof v === "string" && /^[a-f0-9]{40}$/.test(v);
 const digest = (v: unknown) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 const date = (v: unknown) => typeof v === "string" && Number.isFinite(Date.parse(v));
@@ -144,6 +155,9 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
     (value.error !== undefined && !text(value.error)) ||
     (value.queueReason !== undefined && !text(value.queueReason)) ||
     (value.environmentChanges !== undefined && !driftedPaths(value.environmentChanges)) ||
+    (value.environmentChangesOmitted !== undefined &&
+      (!Number.isSafeInteger(value.environmentChangesOmitted) ||
+        (value.environmentChangesOmitted as number) < 1)) ||
     !Array.isArray(value.results) ||
     value.results.length !== value.plan.commands.length
   )

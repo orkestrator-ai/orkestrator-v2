@@ -9,6 +9,8 @@ import {
   newReviewValidationRun,
   isReviewValidationRun,
   parseReviewValidationPlan,
+  REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX,
+  REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
   type ReviewValidationPlan,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
@@ -20,6 +22,18 @@ import { validationPreparation } from "./review-validation-service.js";
 import { parseReviewPreparationValidation } from "./commands-review.js";
 
 const fixtures: Array<{ root: string; run: ReviewValidationRun }> = [];
+const extraRoots: string[] = [];
+async function gitOnPath(script: string): Promise<Record<string, string>> {
+  const bin = await mkdtemp(path.join(tmpdir(), "review-validation-git-"));
+  extraRoots.push(bin);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  await writeFile(
+    path.join(bin, "git"),
+    `#!/usr/bin/env bash\n${script}\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  return { PATH: `${bin}:${process.env.PATH}` };
+}
 const command = (
   id: string,
   shell: string,
@@ -151,6 +165,7 @@ afterEach(async () => {
     await control(root, run, "cancel").catch(() => {});
     await rm(root, { recursive: true, force: true });
   }
+  await Promise.all(extraRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 test("independent commands overlap, output stays in artifacts, and reconnect does not redispatch", async () => {
@@ -207,11 +222,149 @@ test("worktree drift before or during validation is recorded without failing the
   expect(validationPreparation(dirtyBefore).uncommittedFiles).toEqual([
     { path: "source.txt", reason: "Changed since the review snapshot" },
   ]);
-  const during = await fixture([command("check", "printf changed > source.txt")]);
+  const during = await fixture([command("check", "printf extra > extra.txt")]);
+  await writeFile(path.join(during.root, "source.txt"), "changed\n");
   const dirtyDuring = await completed(during.root, during.run);
   expect(dirtyDuring.status).toBe("completed");
   expect(dirtyDuring.error).toBeUndefined();
-  expect(dirtyDuring.environmentChanges).toEqual(["source.txt"]);
+  expect(dirtyDuring.environmentChanges).toEqual(["extra.txt", "source.txt"]);
+});
+
+test("cooperative admission continues when the worktree is already dirty", async () => {
+  const { root, run } = await cooperativeFixture(
+    [
+      command("check", "bun cooperative.ts", {
+        weight: 1,
+        timeoutMs: 10_000,
+        resources: ["cooperative-dirty"],
+      }),
+    ],
+    {
+      "cooperative.ts": `import { createTestAdmission } from __MODULE__;
+const admission = createTestAdmission(import.meta.dir, process.env, console.log);
+const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1, exclusive: true }, async () => ({ status: 0 }));
+admission.close(); process.exitCode = result.status ?? 1;
+`,
+    },
+  );
+  await writeFile(path.join(root, "source.txt"), "changed\n");
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.error).toBeUndefined();
+  expect(done.results[0]!.status).toBe("passed");
+  expect(done.results[0]!.limitation).toBeNull();
+  expect(done.environmentChanges).toEqual(["source.txt"]);
+  expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toContain(
+    "NOTE worktree is dirty while queued",
+  );
+});
+
+test("records unquoted rename destinations and non-ASCII worktree paths", async () => {
+  const { root, run, git } = await fixture([command("check", "exit 0")]);
+  await writeFile(path.join(root, "α-file.txt"), "untracked\n");
+  git("mv", "source.txt", "renamed.txt");
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.environmentChanges).toEqual(["renamed.txt", "source.txt", "α-file.txt"]);
+});
+
+test("records a filename that contains a newline from NUL porcelain", async () => {
+  const { root, run } = await fixture([command("check", "exit 0")]);
+  await writeFile(path.join(root, "weird\nname.txt"), "untracked\n");
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.environmentChanges).toEqual(["weird\nname.txt"]);
+});
+
+test("records untracked directory entries with a trailing slash", async () => {
+  const { root, run } = await fixture([command("check", "exit 0")]);
+  const done = await waitFor(
+    root,
+    run,
+    12_000,
+    await gitOnPath(`
+for arg in "$@"; do
+  if [ "$arg" = "--porcelain=v1" ]; then
+    printf '?? nested/\\0'
+    exit 0
+  fi
+done
+`),
+  );
+  expect(done.status).toBe("completed");
+  expect(done.environmentChanges).toEqual(["nested/"]);
+});
+
+test("fails when git status cannot be parsed as porcelain", async () => {
+  const { root, run } = await fixture([command("check", "exit 0")]);
+  const done = await waitFor(
+    root,
+    run,
+    12_000,
+    await gitOnPath(`
+for arg in "$@"; do
+  if [ "$arg" = "--porcelain=v1" ]; then
+    printf 'not porcelain\\n'
+    exit 0
+  fi
+done
+`),
+  );
+  expect(done.status).toBe("failed");
+  expect(done.error).toContain("Git status could not be read");
+});
+
+test("drops overlong drifted paths and makes a 1024-path cap observable", async () => {
+  const { root, run } = await fixture([command("check", "exit 0")]);
+  await mkdir(path.join(root, "drift"));
+  await Promise.all(
+    Array.from({ length: REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX + 16 }, (_, index) =>
+      writeFile(path.join(root, "drift", `f-${String(index).padStart(4, "0")}.txt`), "changed\n"),
+    ),
+  );
+  const done = await completed(root, run);
+  expect(done.status).toBe("completed");
+  expect(done.environmentChanges).toHaveLength(REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX);
+  expect(done.environmentChanges?.[0]).toBe("drift/f-0000.txt");
+  expect(done.environmentChanges?.at(-1)).toBe("drift/f-1023.txt");
+  expect(done.environmentChangesOmitted).toBe(16);
+  expect(isReviewValidationRun(done)).toBe(true);
+  expect(validationPreparation(done).limitations).toEqual([
+    "Environment change list was truncated; 16 additional paths were omitted",
+  ]);
+
+  const filtered = await fixture([command("check", "exit 0")]);
+  const overlong = await waitFor(
+    filtered.root,
+    filtered.run,
+    12_000,
+    await gitOnPath(`
+for arg in "$@"; do
+  if [ "$arg" = "--porcelain=v1" ]; then
+    python3 -c 'import sys; sys.stdout.buffer.write(b"?? " + b"a" * ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX + 1} + b"\\0?? kept.txt\\0")'
+    exit 0
+  fi
+done
+`),
+  );
+  expect(overlong.status).toBe("completed");
+  expect(overlong.environmentChanges).toEqual(["kept.txt"]);
+  expect(overlong.environmentChangesOmitted).toBeUndefined();
+});
+
+test("environmentChangesOmitted must be a positive integer when present", () => {
+  const run = newReviewValidationRun("review-validation-omitted", {
+    headRef: "a".repeat(40),
+    commands: [command("check", "true")],
+    limitations: [],
+  });
+  run.status = "completed";
+  Object.assign(run.results[0]!, { status: "passed", exitCode: 0 });
+  run.environmentChanges = ["source.txt"];
+  run.environmentChangesOmitted = 3;
+  expect(isReviewValidationRun(run)).toBe(true);
+  run.environmentChangesOmitted = 0;
+  expect(isReviewValidationRun(run)).toBe(false);
 });
 
 test("HEAD change after discovery still fails validation", async () => {

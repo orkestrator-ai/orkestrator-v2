@@ -271,7 +271,14 @@ export function validationPreparation(run: ReviewValidationRun): ReviewPreparati
       path: filePath,
       reason: "Changed since the review snapshot",
     })),
-    limitations: run.plan.limitations,
+    limitations: [
+      ...run.plan.limitations,
+      ...(run.environmentChangesOmitted
+        ? [
+            `Environment change list was truncated; ${run.environmentChangesOmitted} additional paths were omitted`,
+          ]
+        : []),
+    ],
   };
 }
 

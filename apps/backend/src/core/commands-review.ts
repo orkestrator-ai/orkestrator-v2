@@ -15,6 +15,7 @@ import {
 import type { Environment, PrState } from "./commands-dependencies.js";
 import {
   REVIEW_PACKAGE_FORMAT,
+  REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
   type ReviewPackage,
   type ReviewPackageReference,
   type ReviewValidationPlan,
@@ -824,9 +825,11 @@ export function parseGitPorcelainPaths(output: string): string[] {
     const status = entry.slice(0, 2);
     paths.push(validateWorkspaceMutationPath(entry.slice(3), "uncommitted file path"));
     if (status.includes("R") || status.includes("C")) {
-      if (!fields[index++]) {
+      const destination = fields[index++];
+      if (!destination) {
         throw new Error("Git returned malformed renamed worktree status");
       }
+      paths.push(validateWorkspaceMutationPath(destination, "uncommitted file path"));
     }
   }
   return paths;
@@ -891,11 +894,35 @@ export async function generateLoopedReviewPackage(
   const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus).filter(
     (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
   );
+  const actualUncommittedSet = new Set(actualUncommittedPaths);
   const submittedReasons = new Map(uncommittedFiles.map((note) => [note.path, note.reason]));
-  const recordedUncommittedFiles = actualUncommittedPaths.map((filePath) => ({
-    path: filePath,
-    reason: submittedReasons.get(filePath) ?? "Changed since the review snapshot",
-  }));
+  const recordedUncommittedFiles = [
+    ...new Set([...uncommittedFiles.map((note) => note.path), ...actualUncommittedPaths]),
+  ]
+    .map((filePath) => ({
+      path: filePath,
+      reason: actualUncommittedSet.has(filePath)
+        ? (submittedReasons.get(filePath) ?? "Changed since the review snapshot")
+        : "Changed during validation and no longer present",
+    }))
+    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const truncatedUncommittedCount = Math.max(
+    0,
+    recordedUncommittedFiles.length - REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
+  );
+  if (truncatedUncommittedCount > 0) {
+    recordedUncommittedFiles.splice(
+      REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
+      truncatedUncommittedCount,
+    );
+  }
+  const packageLimitations =
+    truncatedUncommittedCount > 0
+      ? [
+          ...limitations,
+          `Uncommitted file list was truncated; ${truncatedUncommittedCount} additional paths observed during validation were omitted`,
+        ]
+      : limitations;
 
   await verifyValidationArtifacts(environment, runner, validation);
   const hydratedValidation = validation.map((entry) => {
@@ -962,10 +989,8 @@ export async function generateLoopedReviewPackage(
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
-    uncommittedFiles: [...recordedUncommittedFiles].sort((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-    ),
-    limitations,
+    uncommittedFiles: recordedUncommittedFiles,
+    limitations: packageLimitations,
     // Deliberately absent rather than `null`. The context is supplied by the
     // workflow, not by package generation, and a null here is not a valid
     // `ReviewPackageContext` — persisting it would make the snapshot fail

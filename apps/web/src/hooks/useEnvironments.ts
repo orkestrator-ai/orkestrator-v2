@@ -814,6 +814,42 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     [addEnvironmentToStore, setLoading, setError, showError],
   );
 
+  const forkEnvironment = useCallback(
+    async (environmentId: string, environmentType: EnvironmentType) => {
+      const source = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      const projectId = source?.projectId;
+      if (projectId) beginEnvironmentCreation(projectId);
+      setLoading(true);
+      setError(null);
+      try {
+        const environment = await backend.forkEnvironment(environmentId, environmentType);
+        addEnvironmentToStore(environment);
+        useConfigStore
+          .getState()
+          .setRepositoryLastEnvironmentType(environment.projectId, environment.environmentType);
+        toast.success(
+          environmentType === "local" ? "Local environment forked" : "Container environment forked",
+        );
+        return environment;
+      } catch (err) {
+        const message = getErrorMessage(err, "Failed to fork environment");
+        setError(message);
+        toast.error("Failed to fork environment", {
+          description: truncateForToast(message),
+          action: {
+            label: "Details",
+            onClick: () => showError("Failed to fork environment", message),
+          },
+        });
+        throw new Error(message);
+      } finally {
+        if (projectId) finishEnvironmentCreation(projectId);
+        setLoading(false);
+      }
+    },
+    [addEnvironmentToStore, setLoading, setError, showError],
+  );
+
   const deleteEnvironment = useCallback(
     async (environmentId: string) => {
       const projectId =
@@ -1165,6 +1201,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     error,
     loadEnvironments,
     createEnvironment,
+    forkEnvironment,
     deleteEnvironment,
     startEnvironment,
     stopEnvironment,

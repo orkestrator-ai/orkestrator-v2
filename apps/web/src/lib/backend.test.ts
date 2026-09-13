@@ -23,6 +23,7 @@ const backendWrappers = (await import(wrapperModulePath)) as typeof import("./ba
 const {
   connectLinear,
   createEnvironment,
+  forkEnvironment,
   createLocalTerminalSession,
   createTerminalSession,
   bootstrapTerminalSession,
@@ -684,6 +685,20 @@ describe("backend setup wrappers", () => {
           environmentType: "local",
           namingPrompt: undefined,
           buildPipelineId: "pipeline-42",
+        },
+      ],
+    ]);
+  });
+
+  test("calls the fork-environment Electron command", async () => {
+    await forkEnvironment("env-source", "local");
+
+    expect(invokeMock.mock.calls).toEqual([
+      [
+        "fork_environment",
+        {
+          environmentId: "env-source",
+          environmentType: "local",
         },
       ],
     ]);

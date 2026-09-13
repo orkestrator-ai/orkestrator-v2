@@ -33,7 +33,7 @@ import {
   Settings2,
   LayoutGrid,
 } from "lucide-react";
-import type { Project, Environment } from "@/types";
+import type { Project, Environment, EnvironmentType } from "@/types";
 import { cn } from "@/lib/utils";
 import { openInBrowser } from "@/lib/backend";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
@@ -59,6 +59,7 @@ interface SortableProjectGroupProps {
   onStartEnvironment: (environmentId: string) => void;
   onStopEnvironment: (environmentId: string) => void;
   onRestartEnvironment: (environmentId: string) => void;
+  onForkEnvironment?: (environmentId: string, environmentType: EnvironmentType) => void;
   onUpdateEnvironment?: (environment: Environment) => void;
   onCreateEnvironment: () => void;
   /** Opens the folder composer for this project. */
@@ -84,6 +85,7 @@ export function SortableProjectGroup({
   onStartEnvironment,
   onStopEnvironment,
   onRestartEnvironment,
+  onForkEnvironment,
   onUpdateEnvironment,
   onCreateEnvironment,
   onAddToFolder,
@@ -328,6 +330,7 @@ export function SortableProjectGroup({
                       onStart={onStartEnvironment}
                       onStop={onStopEnvironment}
                       onRestart={onRestartEnvironment}
+                      onFork={onForkEnvironment}
                       onUpdate={onUpdateEnvironment}
                       isMultiSelectMode={isMultiSelectMode}
                       isChecked={selectedEnvironmentIds.includes(environment.id)}

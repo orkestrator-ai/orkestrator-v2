@@ -85,6 +85,20 @@ const mockCreateEnvironment = mock<
 >((projectId) =>
   Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" })),
 );
+const mockForkEnvironment = mock<
+  (environmentId: string, environmentType: EnvironmentType) => Promise<Environment>
+>((environmentId, environmentType) =>
+  Promise.resolve(
+    createMockEnvironment({
+      id: "forked-env-id",
+      projectId: "project-1",
+      name: "test-env-fork",
+      environmentType,
+      delegationBaseCommit: "a".repeat(40),
+      delegationBaseBranch: "main",
+    }),
+  ),
+);
 const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -117,6 +131,7 @@ mock.module("@/lib/backend", () => ({
   getEnvironment: mockGetEnvironment,
   getEnvironmentSetupSession: mockGetEnvironmentSetupSession,
   createEnvironment: mockCreateEnvironment,
+  forkEnvironment: mockForkEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
   startEnvironmentInBackground: mockStartEnvironmentInBackground,
@@ -181,6 +196,7 @@ describe("useEnvironments", () => {
     mockGetEnvironment.mockClear();
     mockGetEnvironmentSetupSession.mockClear();
     mockCreateEnvironment.mockClear();
+    mockForkEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
     mockStartEnvironmentInBackground.mockClear();
@@ -199,6 +215,18 @@ describe("useEnvironments", () => {
     mockGetEnvironmentSetupSession.mockImplementation(() => Promise.resolve(null));
     mockCreateEnvironment.mockImplementation((projectId) =>
       Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" })),
+    );
+    mockForkEnvironment.mockImplementation((_environmentId, environmentType) =>
+      Promise.resolve(
+        createMockEnvironment({
+          id: "forked-env-id",
+          projectId: "project-1",
+          name: "test-env-fork",
+          environmentType,
+          delegationBaseCommit: "a".repeat(40),
+          delegationBaseBranch: "main",
+        }),
+      ),
     );
     mockDeleteEnvironment.mockImplementation(() => Promise.resolve());
     mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
@@ -432,6 +460,29 @@ describe("useEnvironments", () => {
       "containerized",
       "Build task\n\nShip the feature",
       undefined,
+    );
+  });
+
+  test("forkEnvironment creates an environment from the source and records its type", async () => {
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    let forked: Environment | undefined;
+    await act(async () => {
+      forked = await result.current.forkEnvironment("env-1", "local");
+    });
+
+    expect(mockForkEnvironment).toHaveBeenCalledWith("env-1", "local");
+    expect(forked?.id).toBe("forked-env-id");
+    expect(forked?.environmentType).toBe("local");
+    expect(
+      result.current.allEnvironments.some((environment) => environment.id === "forked-env-id"),
+    ).toBe(true);
+    expect(useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType).toBe(
+      "local",
     );
   });
 

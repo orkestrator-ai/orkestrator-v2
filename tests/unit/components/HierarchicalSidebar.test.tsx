@@ -53,6 +53,15 @@ const createdEnvironment: Environment = {
 };
 
 const createEnvironmentMock = mock(async () => createdEnvironment);
+const forkEnvironmentMock = mock(async () => ({
+  ...createdEnvironment,
+  id: "env-forked",
+  name: "env-created-fork",
+  environmentType: "local" as const,
+  containerId: null,
+  delegationBaseCommit: "a".repeat(40),
+  delegationBaseBranch: "main",
+}));
 const updateEnvironmentAgentSettingsMock = mock(async () => createdEnvironment);
 const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
@@ -105,6 +114,7 @@ mock.module("@/hooks/useEnvironments", () => ({
     allEnvironments: environmentsValue,
     loadEnvironments: loadEnvironmentsMock,
     createEnvironment: createEnvironmentMock,
+    forkEnvironment: forkEnvironmentMock,
     deleteEnvironment: deleteEnvironmentMock,
     startEnvironment: startEnvironmentMock,
     stopEnvironment: stopEnvironmentMock,
@@ -219,6 +229,7 @@ describe("HierarchicalSidebar", () => {
     setMobileViewport(false);
     cleanup();
     createEnvironmentMock.mockClear();
+    forkEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
@@ -514,6 +525,32 @@ describe("HierarchicalSidebar", () => {
         name: "Updated from settings",
       }),
     );
+  });
+
+  test("forks an environment from the activity-row context menu", async () => {
+    projectsValue = [{ ...project, localPath: "/work/project-one" }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-source",
+        name: "Source environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+    render(<HierarchicalSidebar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
+
+    await waitFor(() => {
+      expect(forkEnvironmentMock).toHaveBeenCalledWith("env-source", "local");
+    });
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-forked");
+    expect(startEnvironmentMock).toHaveBeenCalledWith("env-forked", undefined, {
+      background: true,
+      silent: true,
+    });
   });
 
   test("animates activity row movement and skips first, stationary, unsupported, and reduced-motion cases", () => {

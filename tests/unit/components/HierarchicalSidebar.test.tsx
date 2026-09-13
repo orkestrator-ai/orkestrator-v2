@@ -340,6 +340,11 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
+  test("shows a project and environment search bar under the host switcher", () => {
+    render(<HierarchicalSidebar />);
+    expect(screen.getByRole("button", { name: "Search projects and environments" })).toBeTruthy();
+  });
+
   test("offers project and activity sorting next to refresh and persists the selection", async () => {
     render(<HierarchicalSidebar />);
 

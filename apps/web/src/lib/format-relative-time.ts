@@ -44,6 +44,35 @@ export function formatRelativeTime(
 }
 
 /**
+ * Compact age labels for dense pickers (the project/environment search palette).
+ *
+ * Uses the same thresholds as `formatRelativeTime` so "4d" and "4d ago" never
+ * disagree about when a day starts. Missing or unparseable input returns an
+ * empty string so the caller can omit the age rather than render "unknown".
+ */
+export function formatCompactRelativeTime(
+  value: string | number | Date | null | undefined,
+  now: Date = new Date(),
+): string {
+  const date = toDate(value);
+  if (!date) return "";
+
+  const ageSeconds = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
+
+  if (ageSeconds < MINUTE_SECONDS) return "now";
+  if (ageSeconds < HOUR_SECONDS) {
+    return `${Math.floor(ageSeconds / MINUTE_SECONDS)}m`;
+  }
+  if (ageSeconds < DAY_SECONDS) {
+    return `${Math.floor(ageSeconds / HOUR_SECONDS)}h`;
+  }
+  if (ageSeconds < WEEK_SECONDS) {
+    return `${Math.floor(ageSeconds / DAY_SECONDS)}d`;
+  }
+  return date.toLocaleDateString();
+}
+
+/**
  * Same formatting, for the tmux backend's Unix-seconds timestamps.
  *
  * Kept as a named helper rather than making callers remember to multiply by

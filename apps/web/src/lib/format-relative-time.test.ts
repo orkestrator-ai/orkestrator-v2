@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { formatRelativeTime, formatRelativeTimeFromUnixSeconds } from "./format-relative-time";
+import {
+  formatCompactRelativeTime,
+  formatRelativeTime,
+  formatRelativeTimeFromUnixSeconds,
+} from "./format-relative-time";
 
 const NOW = new Date("2026-07-27T12:00:00.000Z");
 
@@ -47,6 +51,20 @@ describe("formatRelativeTime", () => {
     const fiveMinutesAgo = NOW.getTime() - 5 * 60 * 1000;
     expect(formatRelativeTime(new Date(fiveMinutesAgo), NOW)).toBe("5m ago");
     expect(formatRelativeTime(fiveMinutesAgo, NOW)).toBe("5m ago");
+  });
+});
+
+describe("formatCompactRelativeTime", () => {
+  test("uses the same thresholds as the long form, without the ago suffix", () => {
+    expect(formatCompactRelativeTime(agoIso(0), NOW)).toBe("now");
+    expect(formatCompactRelativeTime(agoIso(60), NOW)).toBe("1m");
+    expect(formatCompactRelativeTime(agoIso(60 * 60), NOW)).toBe("1h");
+    expect(formatCompactRelativeTime(agoIso(24 * 60 * 60), NOW)).toBe("1d");
+  });
+
+  test("omits unparseable input instead of rendering unknown", () => {
+    expect(formatCompactRelativeTime(null, NOW)).toBe("");
+    expect(formatCompactRelativeTime("not a date", NOW)).toBe("");
   });
 });
 

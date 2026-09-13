@@ -52,7 +52,7 @@ import {
   MoreVertical,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { AgentActivityState, Environment } from "@/types";
+import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -63,6 +63,7 @@ import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
@@ -182,6 +183,7 @@ interface EnvironmentItemProps {
   onStart: (environmentId: string) => void;
   onStop: (environmentId: string) => void;
   onRestart: (environmentId: string) => void;
+  onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
   onUpdate?: (environment: Environment) => void;
   isMultiSelectMode?: boolean;
   isChecked?: boolean;
@@ -197,12 +199,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   onStart,
   onStop,
   onRestart,
+  onFork,
   onUpdate,
   isMultiSelectMode = false,
   isChecked = false,
   subtitle,
 }: EnvironmentItemProps) {
   const dockerAvailable = useDockerAvailability();
+  const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   // Local state to track transitioning - ensures spinner shows immediately
@@ -377,6 +381,21 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           },
         ]
       : []),
+    { key: "fork-separator", separator: true },
+    {
+      key: "fork-local",
+      label: "Fork local",
+      icon: <Laptop className="h-4 w-4 mr-2" />,
+      onSelect: () => onFork?.(environment.id, "local"),
+      disabled: !localEnvironmentAvailable || isCreating || isEnvironmentDeleting,
+    },
+    {
+      key: "fork-container",
+      label: "Fork container",
+      icon: <Container className="h-4 w-4 mr-2" />,
+      onSelect: () => onFork?.(environment.id, "containerized"),
+      disabled: !dockerAvailable || isCreating || isEnvironmentDeleting,
+    },
     // Start/Stop/Restart only apply to containerized environments.
     ...(!isLocalEnvironment
       ? ([

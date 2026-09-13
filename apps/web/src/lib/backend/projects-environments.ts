@@ -165,6 +165,13 @@ export async function createEnvironment(
   });
 }
 
+export async function forkEnvironment(
+  environmentId: string,
+  environmentType: EnvironmentType,
+): Promise<Environment> {
+  return invoke<Environment>("fork_environment", { environmentId, environmentType });
+}
+
 export async function deleteEnvironment(environmentId: string): Promise<void> {
   return invoke("delete_environment", { environmentId });
 }

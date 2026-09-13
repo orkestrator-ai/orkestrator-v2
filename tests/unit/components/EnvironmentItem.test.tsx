@@ -1,7 +1,7 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
 import { act, cleanup, render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { Profiler } from "react";
-import type { Environment } from "../../../apps/web/src/types";
+import type { Environment, EnvironmentType } from "../../../apps/web/src/types";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -151,6 +151,7 @@ import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentSto
 import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -183,6 +184,7 @@ type RenderOptions = {
   onStart?: (environmentId: string) => void;
   onStop?: (environmentId: string) => void;
   onRestart?: (environmentId: string) => void;
+  onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
   onUpdate?: (environment: Environment) => void;
 };
 
@@ -196,6 +198,7 @@ function itemElement(env: Environment, options: RenderOptions = {}) {
       onStart={options.onStart ?? noopEnvironmentHandler}
       onStop={options.onStop ?? noopEnvironmentHandler}
       onRestart={options.onRestart ?? noopEnvironmentHandler}
+      onFork={options.onFork}
       onUpdate={options.onUpdate}
       isMultiSelectMode={options.isMultiSelectMode}
       isChecked={options.isChecked}
@@ -245,6 +248,7 @@ beforeEach(() => {
   const config = structuredClone(useConfigStore.getInitialState().config);
   config.global.agentMessaging = { ...config.global.agentMessaging!, enabled: true };
   useConfigStore.setState({ config });
+  useProjectStore.setState({ projects: [] });
 });
 
 afterEach(() => {
@@ -1247,6 +1251,8 @@ describe("EnvironmentItem mobile actions menu", () => {
       "Settings",
       "Copy Address",
       "Copy Initial Prompt",
+      "Fork local",
+      "Fork container",
       "Stop",
       "Restart",
       "Delete",
@@ -1264,7 +1270,7 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Delete"]);
+    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Fork local", "Fork container", "Delete"]);
     expect(actionsMenuLabels(menu)).toEqual(contextMenuLabels(container));
 
     await closeActionsMenu(menu);
@@ -1278,7 +1284,14 @@ describe("EnvironmentItem mobile actions menu", () => {
     await openActionsMenu();
     const menu = await findActionsMenu();
 
-    expect(actionsMenuLabels(menu)).toEqual(["Settings", "Start", "Restart", "Delete"]);
+    expect(actionsMenuLabels(menu)).toEqual([
+      "Settings",
+      "Fork local",
+      "Fork container",
+      "Start",
+      "Restart",
+      "Delete",
+    ]);
 
     const restart = findActionsMenuItem(menu, "Restart");
     expect(restart.getAttribute("aria-disabled")).toBe("true");
@@ -1379,6 +1392,61 @@ describe("EnvironmentItem mobile actions menu", () => {
     fireEvent.click(confirm!);
     expect(onDelete).toHaveBeenCalledWith("env-1");
   });
+
+  test("Fork local and Fork container call onFork with the selected type", async () => {
+    const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
+    renderItem(makeEnvironment(), { onFork });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+    await selectActionsMenuItem(menu, "Fork local");
+    expect(onFork).toHaveBeenCalledWith("env-1", "local");
+
+    await openActionsMenu();
+    const nextMenu = await findActionsMenu();
+    await selectActionsMenuItem(nextMenu, "Fork container");
+    expect(onFork).toHaveBeenCalledWith("env-1", "containerized");
+  });
+
+  test("disables Fork container when Docker is unavailable", async () => {
+    const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
+    render(
+      <DockerAvailabilityProvider available={false}>
+        {itemElement(makeEnvironment(), { onFork })}
+      </DockerAvailabilityProvider>,
+    );
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+    const item = findActionsMenuItem(menu, "Fork container");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(onFork).not.toHaveBeenCalled();
+  });
+
+  test("disables Fork local when the project has no checkout", async () => {
+    const onFork = mock((_environmentId: string, _environmentType: EnvironmentType) => {});
+    useProjectStore.setState({
+      projects: [
+        {
+          id: "project-1",
+          name: "Project One",
+          gitUrl: "https://example.test/project-one.git",
+          localPath: null,
+          addedAt: "2026-08-11T00:00:00.000Z",
+          order: 0,
+        },
+      ],
+    });
+    renderItem(makeEnvironment(), { onFork });
+
+    await openActionsMenu();
+    const menu = await findActionsMenu();
+    const item = findActionsMenuItem(menu, "Fork local");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(onFork).not.toHaveBeenCalled();
+  });
 });
 
 describe("EnvironmentItem on a desktop viewport", () => {
@@ -1404,6 +1472,8 @@ describe("EnvironmentItem on a desktop viewport", () => {
     expect(contextMenuLabels(container)).toEqual([
       "Settings",
       "Copy Address",
+      "Fork local",
+      "Fork container",
       "Stop",
       "Restart",
       "Delete",

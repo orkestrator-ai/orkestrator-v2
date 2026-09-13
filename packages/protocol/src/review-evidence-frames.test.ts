@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
   isReviewValidationDiscoveryPrompt,
+  reviewValidationDiscoveryBody,
   stripSystemInstructions,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
@@ -60,14 +62,25 @@ describe("system instructions frame", () => {
       "Fix the <orkestrator-system-instructions> handling",
     );
   });
+
+  test("neutralizes interpolated frame markers so the wrapper still strips cleanly", () => {
+    const branch = `x${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}y`;
+    const wrapped = wrapSystemInstructions(`Target ${JSON.stringify(branch)} stays inside.`);
+
+    expect(wrapped.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toBe(true);
+    expect(wrapped.endsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE)).toBe(true);
+    expect(wrapped).toContain("\\u003c/orkestrator-system-instructions\\u003e");
+    expect(stripSystemInstructions(`Visible.\n\n${wrapped}`)).toBe("Visible.");
+  });
 });
 
 describe("review package preparation display fragments", () => {
-  test("recognizes the unwrapped discovery prompt and ignores similar user text", () => {
-    const prompt = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read.`;
+  const truncatedLegacy = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
 
-    expect(isReviewValidationDiscoveryPrompt(prompt)).toBe(true);
-    expect(isReviewValidationDiscoveryPrompt(`  ${prompt}\n`)).toBe(true);
+  test("recognizes the unwrapped discovery prompt and ignores similar user text", () => {
+    expect(isReviewValidationDiscoveryPrompt(truncatedLegacy)).toBe(true);
+    expect(isReviewValidationDiscoveryPrompt(`  ${truncatedLegacy}\n`)).toBe(true);
+    expect(isReviewValidationDiscoveryPrompt(reviewValidationDiscoveryBody("main"))).toBe(true);
     expect(
       isReviewValidationDiscoveryPrompt(
         `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main" without the discovery signature.`,
@@ -76,5 +89,21 @@ describe("review package preparation display fragments", () => {
     expect(isReviewValidationDiscoveryPrompt(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBe(
       false,
     );
+  });
+
+  test("does not treat a user request that quotes the discovery phrases as automatic", () => {
+    const userRequest = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}
+
+Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} in the docs.`;
+
+    expect(isReviewValidationDiscoveryPrompt(userRequest)).toBe(false);
+  });
+
+  test("recognizes the current kickoff producer even when the frame is still present", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      reviewValidationDiscoveryBody("main"),
+    )}`;
+
+    expect(isReviewValidationDiscoveryPrompt(source)).toBe(true);
   });
 });

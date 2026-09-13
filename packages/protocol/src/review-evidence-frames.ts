@@ -24,9 +24,29 @@ export interface ReviewEvidenceFrameDisplayContract {
 export const SYSTEM_INSTRUCTIONS_FRAME_OPEN = "<orkestrator-system-instructions>";
 export const SYSTEM_INSTRUCTIONS_FRAME_CLOSE = "</orkestrator-system-instructions>";
 
+/**
+ * Neutralize frame markers so interpolated values (a Git branch name, a
+ * result key, reviewer JSON) cannot close the wrapper early. The escaped
+ * form is still readable as the original marker spelled with JSON-style
+ * `\u003c` / `\u003e` escapes.
+ */
+function neutralizeSystemInstructionMarkers(content: string): string {
+  if (
+    !content.includes(SYSTEM_INSTRUCTIONS_FRAME_OPEN) &&
+    !content.includes(SYSTEM_INSTRUCTIONS_FRAME_CLOSE)
+  ) {
+    return content;
+  }
+  return content
+    .replaceAll(SYSTEM_INSTRUCTIONS_FRAME_CLOSE, "\\u003c/orkestrator-system-instructions\\u003e")
+    .replaceAll(SYSTEM_INSTRUCTIONS_FRAME_OPEN, "\\u003corkestrator-system-instructions\\u003e");
+}
+
 /** Wrap backend-owned prompt guidance in one complete system-instructions frame. */
 export function wrapSystemInstructions(...parts: readonly string[]): string {
-  const content = parts.filter((part) => part.trim().length > 0).join("\n\n");
+  const content = neutralizeSystemInstructionMarkers(
+    parts.filter((part) => part.trim().length > 0).join("\n\n"),
+  );
   return `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n${content}\n${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}`;
 }
 
@@ -95,9 +115,97 @@ export const REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION = "Initiate review pack
 export const REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX =
   "Prepare the existing change for review against ";
 
+/** Clause that follows the JSON-encoded target branch in every producer. */
+export const REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE = ", then discover its validation plan.";
+
+/** Sentence that follows the branch clause in the current producer body. */
+export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BACKEND_SENTENCE =
+  "The backend will run the plan and publish one immutable evidence package to every reviewer.";
+
 /** Stable phrase that distinguishes the discovery prompt from user text. */
 export const REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE =
   "This is a short command-discovery task.";
+
+/**
+ * Official discovery prose after the signature. Legacy transcripts and test
+ * fixtures may be truncated; they still match when they are an exact prefix.
+ */
+export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE = ` Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
+
+1. Inspect the current Git status and changes. Commit only relevant safe changes using the repository's commit conventions and hooks. Never skip hooks, force a clean tree, delete unrelated files, push, merge, rebase, reset, switch branches, or create a worktree. Do not implement features or fix validation failures. If unrelated or sensitive changes prevent a clean worktree, report the limitation.
+2. Discover validation requirements afresh from the CURRENT repository: instructions, directory structure, changed paths, CI workflows, manifests, task definitions, toolchain configuration, and relevant scripts. Do not assume a language, package manager, fixed list of files, or that the codebase resembles an earlier review. Follow repository-specific test entrypoints. Do not infer that a command covers another merely from its name.
+3. Produce at most 32 commands covering the relevant full tests, static checks, and build, plus any repository-specific requirements. Do not RUN validation, install dependencies, inspect validation output, or perform the code review. Command execution, timing, artifact paths, and exit codes belong to the backend. A skipped requirement needs an explicit limitation; an empty plan requires a limitation.
+4. Each command has a unique short id, a non-interactive shell command, a workspace-relative cwd (usually "."), and dependsOn listing prerequisite ids EARLIER in the array. Split independent work so it can run concurrently. Inspect what each selected stage actually runs before adding another command: if the full test stage already runs the production build, omit a separate build command instead of repeating it. Shared build prerequisites run once; avoid overlapping aggregate commands that repeat the same validation. Preserve necessary build/test dependencies and setup/cleanup semantics; tightly coupled setup, test, and cleanup should be one command using a shell trap.
+5. resources names directories or shared services the command writes or consumes exclusively (for example a generated output directory, test database, or simulator). Commands with the same resource serialize. Use ["*"] if interference is uncertain. Empty resources means you have verified parallel safety. weight=2 reserves the runner for internally parallel or memory-heavy work; weight=1 allows two independent commands concurrently. Do not guess a command is lightweight. timeoutMs must be between 1000 and 7200000 and appropriate to this project. Never request watch mode, interactive input, background servers without cleanup, or a detached process. If .orkestrator-test-scheduler.json is present, use its cooperativeCommands verbatim from cwd="." as separate plan entries, not inside shell wrappers or compound commands; those runners reserve their own host capacity. Waiting for capacity does not count against timeoutMs.
+6. Read the final full HEAD commit SHA into headRef. Commands will run only while this clean snapshot still matches. Include actual missing prerequisites and coverage uncertainty in limitations. Do not include secrets or environment-variable values in the plan.
+
+Keep discovery focused on what must run and how it can overlap safely. Narrate concise ordinary-prose progress; only the final response is the schema-constrained plan. Do not return command results or read old validation artifacts.`;
+
+/** Inner discovery contract interpolated with a JSON-encoded target branch. */
+export function reviewValidationDiscoveryBody(targetBranch: string): string {
+  return `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}${JSON.stringify(targetBranch)}${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE} ${REVIEW_VALIDATION_DISCOVERY_PROMPT_BACKEND_SENTENCE}
+
+${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE}${REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE}`;
+}
+
+/** Consume a JSON string at the start of `source`, including escaped quotes. */
+function consumeLeadingJsonString(source: string): { raw: string; rest: string } | null {
+  if (!source.startsWith('"')) return null;
+  let index = 1;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === "\\") {
+      index += 2;
+      continue;
+    }
+    if (character === '"') {
+      const raw = source.slice(0, index + 1);
+      try {
+        JSON.parse(raw);
+      } catch {
+        return null;
+      }
+      return { raw, rest: source.slice(index + 1) };
+    }
+    index += 1;
+  }
+  return null;
+}
+
+/**
+ * True when the current framed producer (or a damaged frame of it) is still
+ * present in the source. A kickoff sentence plus these three fragments is
+ * enough to recover after a branch name closes the frame early.
+ */
+function containsAutomaticDiscoveryFrame(source: string): boolean {
+  return (
+    source.includes(SYSTEM_INSTRUCTIONS_FRAME_OPEN) &&
+    source.includes(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX) &&
+    source.includes(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE)
+  );
+}
+
+/**
+ * Recognize the unframed historical discovery grammar: prefix, JSON branch,
+ * expected clause, then a body that starts with the signature and is a prefix
+ * of the official continuation. Extra prefix or suffix content is rejected.
+ */
+function isLegacyReviewValidationDiscoveryPrompt(trimmed: string): boolean {
+  if (!trimmed.startsWith(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX)) return false;
+  const parsed = consumeLeadingJsonString(
+    trimmed.slice(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX.length),
+  );
+  if (!parsed || !parsed.rest.startsWith(REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE)) return false;
+  let remainder = parsed.rest.slice(REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE.length);
+  const backendPrefix = ` ${REVIEW_VALIDATION_DISCOVERY_PROMPT_BACKEND_SENTENCE}`;
+  if (remainder.startsWith(backendPrefix)) {
+    remainder = remainder.slice(backendPrefix.length);
+  }
+  const body = remainder.trim();
+  if (!body.startsWith(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE)) return false;
+  const afterSignature = body.slice(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE.length);
+  return REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE.startsWith(afterSignature);
+}
 
 /**
  * Recognize the automatic validation-discovery prompt, including transcripts
@@ -105,10 +213,11 @@ export const REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE =
  */
 export function isReviewValidationDiscoveryPrompt(source: string): boolean {
   const trimmed = source.trim();
-  return (
-    trimmed.startsWith(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX) &&
-    trimmed.includes(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE)
-  );
+  if (trimmed.startsWith(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)) {
+    const afterKickoff = trimmed.slice(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION.length);
+    return afterKickoff.trim().length > 0 && containsAutomaticDiscoveryFrame(trimmed);
+  }
+  return isLegacyReviewValidationDiscoveryPrompt(trimmed);
 }
 
 export const COORDINATOR_DELEGATION_FRAME_OPEN = "<orkestrator-coordinator-delegation>";

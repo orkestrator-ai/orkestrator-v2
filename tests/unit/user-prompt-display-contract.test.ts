@@ -7,6 +7,7 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
@@ -28,6 +29,7 @@ import {
   userPromptDisplayText,
   userPromptPresentation,
 } from "../../apps/web/src/lib/chat/user-prompt-display";
+import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
 import { multiReviewCustomFixPrompt } from "../../apps/web/src/lib/review-actions";
 
 const report = {
@@ -168,6 +170,57 @@ describe("backend prompt display contract", () => {
     expect(attendedDisplay).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
     expect(displayed).not.toContain("Produce at most 32 commands");
     expect(attendedDisplay).not.toContain("non-interactive build session");
+  });
+
+  test("hides the default tool-v1 discovery dispatch including the result-tool paragraph", () => {
+    const source = `${withUnattendedPolicy(reviewValidationDiscoveryPrompt("main"))}\n\n${workflowResultInstruction("validation-plan", "k")}`;
+    const multiReview = `${reviewValidationDiscoveryPrompt("main")}\n\n${workflowResultInstruction("validation-plan", "k")}`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(multiReview)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain("submit_validation_plan");
+    expect(userPromptDisplayText(multiReview)).not.toContain("result-tool instructions");
+  });
+
+  test("hides a historical unframed result-tool paragraph beside the framed discovery prompt", () => {
+    const unframedInstruction =
+      "The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn.";
+    const source = `${reviewValidationDiscoveryPrompt("main")}\n\n${unframedInstruction}`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain("result-tool instructions");
+  });
+
+  test("hides discovery when the target branch contains the system-instructions close marker", () => {
+    const source = reviewValidationDiscoveryPrompt(`x${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}y`);
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain("Produce at most 32 commands");
+  });
+
+  test("hides only the unattended policy around an ordinary visible prompt", () => {
+    const visible = "Resume the implementation from the last committed snapshot.";
+    const wrapped = withUnattendedPolicy(visible);
+
+    expect(wrapped).toContain("non-interactive build session");
+    expect(userPromptDisplayText(wrapped)).toBe(visible);
+  });
+
+  test("hides a coordinator-delegated discovery prompt down to the kickoff sentence", () => {
+    const prompt = reviewValidationDiscoveryPrompt("main");
+    const delegated = createCoordinatorDelegatedPrompt(
+      {
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+      },
+      prompt,
+    );
+
+    expect(userPromptDisplayText(delegated.source, COORDINATOR_DELEGATION_PRESENTATION)).toBe(
+      `${COORDINATOR_DELEGATION_OMISSION_TEXT}\n\n${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}`,
+    );
   });
 
   test("hides the injected review handoff and keeps only the address instruction", () => {

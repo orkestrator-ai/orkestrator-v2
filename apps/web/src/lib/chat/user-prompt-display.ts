@@ -225,9 +225,7 @@ export function userPromptPresentation(
   const strippedSystemInstructions = stripSystemInstructions(displaySource);
   const strippedPreparation = reviewPackagePreparationPresentation(strippedSystemInstructions);
   if (strippedPreparation !== null) {
-    return delegation
-      ? withCoordinatorDelegationNotice(strippedPreparation)
-      : strippedPreparation;
+    return delegation ? withCoordinatorDelegationNotice(strippedPreparation) : strippedPreparation;
   }
   const evidenceSource =
     strippedSystemInstructions === displaySource ? displaySource : strippedSystemInstructions;

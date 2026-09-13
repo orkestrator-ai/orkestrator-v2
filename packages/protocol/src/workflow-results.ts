@@ -1,3 +1,4 @@
+import { wrapSystemInstructions } from "./review-evidence-frames.js";
 import type { JsonSchema, StructuredOutputProvider } from "./structured-output.js";
 import type { ReviewFindingPool, StructuredReviewReport } from "./structured-review.js";
 
@@ -125,7 +126,9 @@ export function workflowResultToolName(kind: WorkflowResultKind): string {
 }
 
 export function workflowResultInstruction(kind: WorkflowResultKind, resultKey: string): string {
-  return `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with resultKey ${JSON.stringify(resultKey)} and the complete ${kind.replaceAll("-", " ")} in \`result\`. If the tool rejects the result, correct only the reported contract problems and call it again. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`;
+  return wrapSystemInstructions(
+    `The following result-tool instructions replace any earlier instruction to emit final JSON, a tagged state block, or a provider-enforced schema for this turn. When your work is complete, call the Orkestrator \`${workflowResultToolName(kind)}\` tool with resultKey ${JSON.stringify(resultKey)} and the complete ${kind.replaceAll("-", " ")} in \`result\`. If the tool rejects the result, correct only the reported contract problems and call it again. If delivery is uncertain, call \`get_workflow_result_status\` with the same resultKey before resubmitting. After the tool accepts the result, finish with a concise prose response. Do not print the result as JSON in your final response. The backend decides when the workflow advances.`,
+  );
 }
 
 /**

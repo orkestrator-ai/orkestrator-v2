@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
+  SYSTEM_INSTRUCTIONS_FRAME_OPEN,
+} from "./review-evidence-frames.js";
+import {
   DEFAULT_WORKFLOW_RESULT_TOOLS_SETTINGS,
   QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS,
   WORKFLOW_RESULT_KINDS,
@@ -38,6 +42,8 @@ describe("workflow result contracts", () => {
     expect(instruction).toContain("Do not print the result as JSON in your final response.");
     // Acceptance must not read as workflow completion.
     expect(instruction).toContain("The backend decides when the workflow advances.");
+    expect(instruction.startsWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toBe(true);
+    expect(instruction.endsWith(SYSTEM_INSTRUCTIONS_FRAME_CLOSE)).toBe(true);
   });
 
   test("the instruction carries no credential material", () => {

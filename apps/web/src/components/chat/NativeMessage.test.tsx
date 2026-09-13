@@ -873,7 +873,7 @@ describe("NativeMessage task list rendering", () => {
 
   test("shows only the kickoff sentence for a review-package discovery prompt", () => {
     const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
-      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read.`,
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
     )}`;
     const message = makeMessage([{ type: "text", content: source }], {
       role: "user",
@@ -3797,7 +3797,11 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("8 tool uses") === null).toBe(true);
     expect(screen.queryByText("0 tools") === null).toBe(true);
     expect(screen.queryByText("0 updates") === null).toBe(true);
-    expect(screen.getByText("Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md.",
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /summarize two docs/i }));
     expect(screen.getByText("Type")).toBeTruthy();

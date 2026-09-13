@@ -216,6 +216,9 @@ function mockActivityRowOffsetTop(
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
+    if (!HTMLElement.prototype.scrollIntoView) {
+      HTMLElement.prototype.scrollIntoView = () => {};
+    }
     setMobileViewport(false);
     cleanup();
     createEnvironmentMock.mockClear();
@@ -343,6 +346,72 @@ describe("HierarchicalSidebar", () => {
   test("shows a project and environment search bar under the host switcher", () => {
     render(<HierarchicalSidebar />);
     expect(screen.getByRole("button", { name: "Search projects and environments" })).toBeTruthy();
+  });
+
+  test("expands a collapsed folder and project when a search result is chosen", async () => {
+    const secondProject: Project = {
+      ...project,
+      id: "project-2",
+      name: "Project Two",
+      gitUrl: "https://github.com/acme/project-two.git",
+      folder: "Work",
+      order: 1,
+    };
+    projectsValue = [{ ...project, folder: "Work" }, secondProject];
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-nested", name: "Nested Env", projectId: "project-1" },
+    ];
+    useUIStore.setState({
+      collapsedProjects: ["project-1"],
+      collapsedProjectFolders: ["Work"],
+    });
+
+    render(<HierarchicalSidebar />);
+    expect(screen.queryByRole("button", { name: /^Project One/i }) === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
+    fireEvent.click(await screen.findByTestId("project-search-item-project-1"));
+
+    await waitFor(() => {
+      expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+      expect(useUIStore.getState().collapsedProjectFolders).not.toContain("Work");
+      expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+    });
+    expect(screen.getByRole("button", { name: /^Project One/i })).toBeTruthy();
+  });
+
+  test("auto-starts a local environment chosen from search while revealing its collapsed project", async () => {
+    projectsValue = [{ ...project, folder: "Work" }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-needs-start",
+        name: "Needs Start",
+        projectId: "project-1",
+        environmentType: "local",
+        containerId: null,
+        worktreePath: undefined,
+        status: "stopped",
+      },
+    ];
+    useUIStore.setState({
+      collapsedProjects: ["project-1"],
+      collapsedProjectFolders: ["Work"],
+    });
+
+    render(<HierarchicalSidebar />);
+    expect(screen.queryByRole("button", { name: "Needs Start" }) === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Search projects and environments" }));
+    fireEvent.click(await screen.findByTestId("project-search-item-env-needs-start"));
+
+    await waitFor(() => {
+      expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+      expect(useUIStore.getState().collapsedProjectFolders).not.toContain("Work");
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-needs-start");
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-needs-start");
+    });
+    expect(screen.getByRole("button", { name: "Needs Start" })).toBeTruthy();
   });
 
   test("offers project and activity sorting next to refresh and persists the selection", async () => {

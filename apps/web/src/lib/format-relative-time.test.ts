@@ -66,6 +66,16 @@ describe("formatCompactRelativeTime", () => {
     expect(formatCompactRelativeTime(null, NOW)).toBe("");
     expect(formatCompactRelativeTime("not a date", NOW)).toBe("");
   });
+
+  test("falls back to a locale date once the age passes a week", () => {
+    expect(formatCompactRelativeTime(agoIso(7 * 24 * 60 * 60 - 1), NOW)).toBe("6d");
+    const weekOld = new Date(NOW.getTime() - 7 * 24 * 60 * 60 * 1000);
+    expect(formatCompactRelativeTime(weekOld.toISOString(), NOW)).toBe(
+      weekOld.toLocaleDateString(),
+    );
+    const older = new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000);
+    expect(formatCompactRelativeTime(older.toISOString(), NOW)).toBe(older.toLocaleDateString());
+  });
 });
 
 describe("formatRelativeTimeFromUnixSeconds", () => {

@@ -4,6 +4,7 @@ import {
   buildProjectSearchResults,
   flattenProjectSearchResults,
   nextProjectSearchFilter,
+  previousProjectSearchFilter,
 } from "./project-search";
 
 function project(overrides: Partial<Project> & Pick<Project, "id" | "name">): Project {
@@ -74,6 +75,14 @@ describe("nextProjectSearchFilter", () => {
     expect(nextProjectSearchFilter("all")).toBe("projects");
     expect(nextProjectSearchFilter("projects")).toBe("environments");
     expect(nextProjectSearchFilter("environments")).toBe("all");
+  });
+});
+
+describe("previousProjectSearchFilter", () => {
+  test("cycles all → environments → projects → all", () => {
+    expect(previousProjectSearchFilter("all")).toBe("environments");
+    expect(previousProjectSearchFilter("environments")).toBe("projects");
+    expect(previousProjectSearchFilter("projects")).toBe("all");
   });
 });
 
@@ -208,5 +217,88 @@ describe("buildProjectSearchResults", () => {
       defaultBranches,
     });
     expect(results.projects[0]?.environmentCount).toBe(2);
+  });
+
+  test("requires every token to match the same hit", () => {
+    const both = buildProjectSearchResults({
+      query: "build modal",
+      filter: "all",
+      projects,
+      environments: [main, feature, docsEnv],
+      recentProjectIds: [],
+      defaultBranches,
+    });
+    expect(both.projects).toEqual([]);
+    expect(both.environments.map((hit) => hit.id)).toEqual(["e-feature"]);
+
+    const split = buildProjectSearchResults({
+      query: "build docs",
+      filter: "all",
+      projects,
+      environments: [main, feature, docsEnv],
+      recentProjectIds: [],
+      defaultBranches,
+    });
+    expect(split.projects).toEqual([]);
+    expect(split.environments).toEqual([]);
+  });
+
+  test("does not match generic git URL or worktree path tokens", () => {
+    const widgets = project({
+      id: "p-widgets",
+      name: "widgets",
+      gitUrl: "https://github.com/acme/widgets.git",
+      order: 2,
+    });
+    const widgetsEnv = environment({
+      id: "e-widgets",
+      projectId: "p-widgets",
+      name: "preview",
+      branch: "preview",
+      worktreePath: "/tmp/widgets",
+    });
+
+    for (const query of ["git", "https", "tmp"]) {
+      const results = buildProjectSearchResults({
+        query,
+        filter: "all",
+        projects: [...projects, widgets],
+        environments: [main, widgetsEnv],
+        recentProjectIds: [],
+        defaultBranches: new Map([...defaultBranches, ["p-widgets", "main"]]),
+      });
+      expect(results.projects).toEqual([]);
+      expect(results.environments).toEqual([]);
+    }
+
+    const bySlug = buildProjectSearchResults({
+      query: "acme/widgets",
+      filter: "all",
+      projects: [...projects, widgets],
+      environments: [main, widgetsEnv],
+      recentProjectIds: [],
+      defaultBranches: new Map([...defaultBranches, ["p-widgets", "main"]]),
+    });
+    expect(bySlug.projects.map((hit) => hit.id)).toEqual(["p-widgets"]);
+    expect(bySlug.environments.map((hit) => hit.id)).toEqual(["e-widgets"]);
+  });
+
+  test("skips environments whose project is missing from the project list", () => {
+    const orphan = environment({
+      id: "e-orphan",
+      projectId: "missing",
+      name: "build-orphan",
+      branch: "build-orphan",
+    });
+    const results = buildProjectSearchResults({
+      query: "build",
+      filter: "all",
+      projects,
+      environments: [feature, orphan],
+      recentProjectIds: [],
+      defaultBranches,
+    });
+
+    expect(results.environments.map((hit) => hit.id)).toEqual(["e-feature"]);
   });
 });

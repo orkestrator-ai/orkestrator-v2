@@ -40,6 +40,12 @@ export function nextProjectSearchFilter(current: ProjectSearchFilter): ProjectSe
   return PROJECT_SEARCH_FILTERS[(index + 1) % PROJECT_SEARCH_FILTERS.length] ?? "all";
 }
 
+export function previousProjectSearchFilter(current: ProjectSearchFilter): ProjectSearchFilter {
+  const index = PROJECT_SEARCH_FILTERS.indexOf(current);
+  const previous = (index - 1 + PROJECT_SEARCH_FILTERS.length) % PROJECT_SEARCH_FILTERS.length;
+  return PROJECT_SEARCH_FILTERS[previous] ?? "all";
+}
+
 export function parseProjectSearchQuery(query: string): string[] {
   return query
     .trim()
@@ -52,6 +58,47 @@ function parseActivityTime(value: string | undefined): number {
   if (!value) return Number.NEGATIVE_INFINITY;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+function pathBasename(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "";
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] ?? "";
+}
+
+/**
+ * Owner/repo (or deeper SSH path) without scheme or host, so tokens like
+ * `git`, `https`, and `github` do not match every remote.
+ */
+function parseRepoSlug(gitUrl: string): string | null {
+  const url = gitUrl.trim();
+  if (!url) return null;
+  const withoutGit = url.endsWith(".git") ? url.slice(0, -4) : url;
+
+  const sshMatch = withoutGit.match(/^git@[^:]+:(.+)$/i);
+  if (sshMatch?.[1]) {
+    const path = sshMatch[1].replace(/^\/+/, "");
+    return path.includes("/") ? path : null;
+  }
+
+  try {
+    if (/^(https?|ssh):\/\//i.test(withoutGit)) {
+      const parsed = new URL(withoutGit);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      if (parts.length >= 2) return parts.slice(0, 2).join("/");
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function projectRepoHaystacks(gitUrl: string): string[] {
+  const slug = parseRepoSlug(gitUrl);
+  if (!slug) return [];
+  const repoName = pathBasename(slug);
+  return repoName && repoName !== slug ? [repoName, slug] : [slug];
 }
 
 function scoreHaystacks(haystacks: string[], tokens: string[]): number | null {
@@ -144,7 +191,14 @@ export function buildProjectSearchResults({
   const projectHits: ProjectSearchProjectHit[] = [];
   if (includeProjects) {
     for (const project of projects) {
-      const score = scoreHaystacks([project.name, project.gitUrl], tokens);
+      const score = scoreHaystacks(
+        [
+          project.name,
+          ...projectRepoHaystacks(project.gitUrl),
+          pathBasename(project.localPath ?? ""),
+        ],
+        tokens,
+      );
       if (score === null) continue;
       projectHits.push({
         type: "project",
@@ -170,8 +224,9 @@ export function buildProjectSearchResults({
           environment.name,
           environment.branch,
           project.name,
+          ...projectRepoHaystacks(project.gitUrl),
           environment.environmentType,
-          environment.worktreePath ?? "",
+          pathBasename(environment.worktreePath ?? ""),
         ],
         tokens,
       );

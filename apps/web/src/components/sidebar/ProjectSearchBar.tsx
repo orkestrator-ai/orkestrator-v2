@@ -1,13 +1,8 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { FolderGit2, ListFilter, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +20,7 @@ import {
   flattenProjectSearchResults,
   nextProjectSearchFilter,
   parseProjectSearchQuery,
+  previousProjectSearchFilter,
   type ProjectSearchFilter,
   type ProjectSearchHit,
 } from "@/lib/project-search";
@@ -36,6 +32,12 @@ const FILTER_LABELS: Record<ProjectSearchFilter, string> = {
   projects: "Projects",
   environments: "Environments",
 };
+
+const RESULTS_LIST_ID = "project-search-results";
+
+function projectSearchOptionId(hitId: string): string {
+  return `project-search-option-${hitId}`;
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -75,8 +77,11 @@ function ProjectSearchRow({
       <button
         ref={rowRef}
         type="button"
+        id={projectSearchOptionId(hit.id)}
+        role="option"
+        tabIndex={-1}
         data-testid={`project-search-item-${hit.id}`}
-        aria-current={isActive ? "true" : undefined}
+        aria-selected={isActive}
         onMouseEnter={onHighlight}
         onClick={() => onSelect(hit)}
         className={cn(
@@ -102,8 +107,11 @@ function ProjectSearchRow({
     <button
       ref={rowRef}
       type="button"
+      id={projectSearchOptionId(hit.id)}
+      role="option"
+      tabIndex={-1}
       data-testid={`project-search-item-${hit.id}`}
-      aria-current={isActive ? "true" : undefined}
+      aria-selected={isActive}
       onMouseEnter={onHighlight}
       onClick={() => onSelect(hit)}
       className={cn(
@@ -143,12 +151,11 @@ export function ProjectSearchBar({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProjectSearchFilter>("all");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedHitId, setSelectedHitId] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedItemRef = useRef<HTMLButtonElement | null>(null);
 
-  const deferredQuery = useDeferredValue(query);
   const recentProjectIds = useUIStore((state) => state.recentProjectIds);
   const repositories = useConfigStore((state) => state.config.repositories);
 
@@ -163,16 +170,22 @@ export function ProjectSearchBar({
   const results = useMemo(
     () =>
       buildProjectSearchResults({
-        query: deferredQuery,
+        query,
         filter,
         projects,
         environments,
         recentProjectIds,
         defaultBranches,
       }),
-    [deferredQuery, filter, projects, environments, recentProjectIds, defaultBranches],
+    [query, filter, projects, environments, recentProjectIds, defaultBranches],
   );
   const hits = useMemo(() => flattenProjectSearchResults(results), [results]);
+  const selectedIndex = useMemo(() => {
+    if (hits.length === 0) return -1;
+    const index = selectedHitId ? hits.findIndex((hit) => hit.id === selectedHitId) : -1;
+    return index >= 0 ? index : 0;
+  }, [hits, selectedHitId]);
+  const selectedHit = selectedIndex >= 0 ? hits[selectedIndex] : undefined;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -207,7 +220,7 @@ export function ProjectSearchBar({
     if (!open) {
       setQuery("");
       setFilter("all");
-      setSelectedIndex(0);
+      setSelectedHitId(null);
       return;
     }
 
@@ -220,8 +233,8 @@ export function ProjectSearchBar({
   }, [open]);
 
   useEffect(() => {
-    setSelectedIndex(0);
-  }, [deferredQuery, filter]);
+    setSelectedHitId(null);
+  }, [query, filter]);
 
   useEffect(() => {
     selectedItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -236,34 +249,44 @@ export function ProjectSearchBar({
     setOpen(false);
   };
 
+  const moveSelection = (delta: number) => {
+    if (hits.length === 0) return;
+    const currentIndex = selectedHitId ? hits.findIndex((hit) => hit.id === selectedHitId) : 0;
+    const safeIndex = currentIndex < 0 ? 0 : currentIndex;
+    const nextIndex = Math.max(0, Math.min(safeIndex + delta, hits.length - 1));
+    setSelectedHitId(hits[nextIndex]?.id ?? null);
+  };
+
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedIndex((current) => Math.min(current + 1, Math.max(hits.length - 1, 0)));
+      moveSelection(1);
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((current) => Math.max(current - 1, 0));
+      moveSelection(-1);
       return;
     }
 
     if (event.key === "Tab") {
       event.preventDefault();
-      setFilter((current) => nextProjectSearchFilter(current));
+      setFilter((current) =>
+        event.shiftKey ? previousProjectSearchFilter(current) : nextProjectSearchFilter(current),
+      );
       return;
     }
 
     if (event.key === "Enter") {
-      const selected = hits[selectedIndex];
+      const selected = hits.find((hit) => hit.id === selectedHitId) ?? hits[0];
       if (!selected) return;
       event.preventDefault();
       handleSelect(selected);
     }
   };
 
-  const hasQuery = parseProjectSearchQuery(deferredQuery).length > 0;
+  const hasQuery = parseProjectSearchQuery(query).length > 0;
   const projectHeading = hasQuery ? "Projects" : "Recent projects";
   const environmentHeading = hasQuery ? "Environments" : "Recent environments";
 
@@ -295,6 +318,13 @@ export function ProjectSearchBar({
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
               ref={inputRef}
+              role="combobox"
+              aria-expanded="true"
+              aria-controls={RESULTS_LIST_ID}
+              aria-activedescendant={
+                selectedHit ? projectSearchOptionId(selectedHit.id) : undefined
+              }
+              aria-autocomplete="list"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleInputKeyDown}
@@ -302,6 +332,7 @@ export function ProjectSearchBar({
               aria-label="Search projects and environments"
               autoCorrect="off"
               autoCapitalize="off"
+              autoComplete="off"
               spellCheck={false}
               className="h-8 min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
@@ -339,7 +370,12 @@ export function ProjectSearchBar({
             </DropdownMenu>
           </div>
 
-          <div className="max-h-[28rem] overflow-y-auto px-2 py-2">
+          <div
+            id={RESULTS_LIST_ID}
+            role="listbox"
+            aria-label="Search results"
+            className="max-h-[28rem] overflow-y-auto px-2 py-2"
+          >
             {hits.length === 0 ? (
               <div className="px-3 py-10 text-center text-sm text-muted-foreground">
                 {projects.length === 0
@@ -356,16 +392,16 @@ export function ProjectSearchBar({
                       {projectHeading}
                     </h3>
                     <div className="space-y-0.5">
-                      {results.projects.map((hit, index) => (
+                      {results.projects.map((hit) => (
                         <ProjectSearchRow
                           key={hit.id}
                           hit={hit}
-                          isActive={index === selectedIndex}
+                          isActive={hit.id === selectedHit?.id}
                           now={now}
-                          onHighlight={() => setSelectedIndex(index)}
+                          onHighlight={() => setSelectedHitId(hit.id)}
                           onSelect={handleSelect}
                           rowRef={
-                            index === selectedIndex
+                            hit.id === selectedHit?.id
                               ? (node) => {
                                   selectedItemRef.current = node;
                                 }
@@ -383,26 +419,23 @@ export function ProjectSearchBar({
                       {environmentHeading}
                     </h3>
                     <div className="space-y-0.5">
-                      {results.environments.map((hit, environmentIndex) => {
-                        const index = results.projects.length + environmentIndex;
-                        return (
-                          <ProjectSearchRow
-                            key={hit.id}
-                            hit={hit}
-                            isActive={index === selectedIndex}
-                            now={now}
-                            onHighlight={() => setSelectedIndex(index)}
-                            onSelect={handleSelect}
-                            rowRef={
-                              index === selectedIndex
-                                ? (node) => {
-                                    selectedItemRef.current = node;
-                                  }
-                                : undefined
-                            }
-                          />
-                        );
-                      })}
+                      {results.environments.map((hit) => (
+                        <ProjectSearchRow
+                          key={hit.id}
+                          hit={hit}
+                          isActive={hit.id === selectedHit?.id}
+                          now={now}
+                          onHighlight={() => setSelectedHitId(hit.id)}
+                          onSelect={handleSelect}
+                          rowRef={
+                            hit.id === selectedHit?.id
+                              ? (node) => {
+                                  selectedItemRef.current = node;
+                                }
+                              : undefined
+                          }
+                        />
+                      ))}
                     </div>
                   </section>
                 ) : null}

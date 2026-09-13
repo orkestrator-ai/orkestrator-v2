@@ -739,21 +739,43 @@ function sumTurnUsage(
  * chat turn used to discard it, so a finished run with no streamed prose
  * looked like it never produced a final message.
  *
- * If the stream already wrote assistant text, leave it alone: the terminal
- * string is often the same paragraph, and appending it would duplicate the
- * bubble.
+ * The stream may already hold a prefix, a duplicate, or a different preamble.
+ * Skip only when the trailing assistant text already equals or ends with the
+ * terminal string. A strict prefix gets just the missing suffix; any other
+ * missing tail is applied as its own delta so a narrated turn still keeps
+ * `RunResult.result`.
  */
 function backfillTerminalAssistantText(state: SessionState, text: string | undefined): void {
   if (!nonBlank(text)) return;
+  const terminal = text.trim();
   const last = state.messages.at(-1);
-  if (
-    last?.role === "assistant" &&
-    last.id === state.currentAssistantMessageId &&
-    last.content.trim().length > 0
-  ) {
-    return;
+  if (last?.role === "assistant" && last.id === state.currentAssistantMessageId) {
+    const streamed = last.content;
+    const streamedTrimmed = streamed.trim();
+    if (
+      streamedTrimmed === terminal ||
+      streamed.endsWith(terminal) ||
+      streamedTrimmed.endsWith(terminal)
+    ) {
+      return;
+    }
+    if (streamed.length > 0 && terminal.startsWith(streamed)) {
+      applyInteractionUpdate(state, { type: "text-delta", text: terminal.slice(streamed.length) });
+      return;
+    }
+    if (streamedTrimmed.length > 0 && terminal.startsWith(streamedTrimmed)) {
+      applyInteractionUpdate(state, {
+        type: "text-delta",
+        text: terminal.slice(streamedTrimmed.length),
+      });
+      return;
+    }
+    if (streamedTrimmed.length > 0) {
+      applyInteractionUpdate(state, { type: "text-delta", text: terminal });
+      return;
+    }
   }
-  applyInteractionUpdate(state, { type: "text-delta", text: text.trim() });
+  applyInteractionUpdate(state, { type: "text-delta", text: terminal });
 }
 
 /**

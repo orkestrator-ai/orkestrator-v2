@@ -5,6 +5,7 @@ import { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { publicContextUsage } from "./public.js";
 import type { BridgeToolPart, SessionState } from "./state.js";
 import {
+  ABANDONED_COMPACTION_NOTE,
   ABANDONED_TOOL_NOTE,
   applyInteractionUpdate,
   applyStreamUsage,
@@ -502,6 +503,35 @@ describe("abandoned tool cards", () => {
     expect(toolParts(state)[0]).toMatchObject({
       toolState: "failure",
       toolError: "already noted",
+    });
+  });
+
+  test("fails a compaction left pending by an interrupted summary", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "pending",
+    });
+
+    settleAbandonedToolParts(state);
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "failure",
+      content: ABANDONED_COMPACTION_NOTE,
+    });
+  });
+
+  test("keeps a compaction summary that already arrived", () => {
+    const state = running();
+    applyInteractionUpdate(state, { type: "summary-started" });
+    applyInteractionUpdate(state, { type: "summary-completed", summary: "kept the plan" });
+
+    settleAbandonedToolParts(state);
+    expect(state.messages.at(-1)!.parts.at(-1)).toMatchObject({
+      type: "compaction",
+      toolState: "success",
+      content: "kept the plan",
     });
   });
 });

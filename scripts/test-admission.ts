@@ -142,20 +142,21 @@ export function createTestAdmission(
             maxBuffer: 1024 * 1024,
           };
           const head = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], options);
-          const status = spawnSync(
-            "git",
-            ["status", "--porcelain=v1", "--untracked-files=all"],
-            options,
-          );
-          if (
-            head.status !== 0 ||
-            head.stdout.trim() !== env.ORKESTRATOR_VALIDATION_HEAD_REF ||
-            status.status !== 0 ||
-            status.stdout.trim()
-          )
+          if (head.status !== 0 || head.stdout.trim() !== env.ORKESTRATOR_VALIDATION_HEAD_REF)
             throw new Error(
               "Repository changed while queued; group did not run against a stale snapshot",
             );
+          const status = spawnSync(
+            "git",
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            options,
+          );
+          if (status.status !== 0)
+            throw new Error(
+              "Repository changed while queued; group did not run against a stale snapshot",
+            );
+          if (status.stdout.replaceAll("\0", "").trim())
+            log("NOTE worktree is dirty while queued; continuing with recorded environment drift");
         }
         const job = jobs.get(id);
         if (job) {

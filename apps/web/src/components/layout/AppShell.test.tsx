@@ -232,7 +232,7 @@ describe("AppShell", () => {
     // The title sits at the left, clear of the macOS traffic lights, and the
     // bar carries the same bottom rule as the toolbar below it.
     expect(titleBar?.className).toContain("justify-start");
-    expect(titleBar?.className).toContain("pl-[96px]");
+    expect(titleBar?.className).toContain("pl-[var(--desktop-title-bar-inset)]");
     expect(titleBar?.className).toContain("border-b");
     expect(titleBar?.className).toContain("border-border/80");
     fireEvent.mouseDown(titleBar!, { button: 2 });
@@ -246,9 +246,17 @@ describe("AppShell", () => {
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
 
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
+
     sidebarOpen = false;
     rerender(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByText("Sidebar")).toBeNull();
+    expect(screen.queryByText("Sidebar") === null).toBe(true);
+    expect(screen.queryByTestId("resize-handle") === null).toBe(true);
+
+    sidebarOpen = true;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.getByText("Sidebar")).toBeTruthy();
+    expect(screen.getByTestId("resize-handle")).toBeTruthy();
   });
 
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {

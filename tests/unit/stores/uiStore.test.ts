@@ -8,6 +8,7 @@ describe("uiStore", () => {
     useUIStore.setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      sidebarOpen: true,
       recentProjectIds: [],
       projectBoardTab: "kanban",
       projectBoardNotesOpen: false,
@@ -33,6 +34,28 @@ describe("uiStore", () => {
     expect(state.expandedSessionsEnvironments).toEqual([]);
     expect(state.environmentSortMode).toBe("project");
     expect(state.zoomLevel).toBe(100);
+    expect(state.sidebarOpen).toBe(true);
+  });
+
+  test("toggleSidebar flips and persists the left panel visibility", async () => {
+    expect(useUIStore.getState().sidebarOpen).toBe(true);
+
+    useUIStore.getState().toggleSidebar();
+    expect(useUIStore.getState().sidebarOpen).toBe(false);
+
+    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    expect((JSON.parse(persistedRaw) as { state?: Record<string, unknown> }).state).toMatchObject({
+      sidebarOpen: false,
+    });
+
+    useUIStore.setState({ sidebarOpen: true });
+    localStorage.setItem("ui-storage", persistedRaw);
+    await useUIStore.persist.rehydrate();
+
+    expect(useUIStore.getState().sidebarOpen).toBe(false);
+
+    useUIStore.getState().toggleSidebar();
+    expect(useUIStore.getState().sidebarOpen).toBe(true);
   });
 
   test("selectProject sets project and clears environment and multi-selection", () => {

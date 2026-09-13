@@ -59,9 +59,10 @@ const DARWIN_GPU_UTILIZATION_KEYS = [
   "Tiler Utilization %",
 ] as const;
 
-const GPU_AVAILABLE_CACHE_MS = 5_000;
+/** Keep this above the title-bar meter interval so each poll reuses the last probe. */
+export const GPU_AVAILABLE_CACHE_MS = 15_000;
 const GPU_UNAVAILABLE_CACHE_MS = 30_000;
-const DARWIN_GPU_SAMPLE_COUNT = 5;
+export const DARWIN_GPU_SAMPLE_COUNT = 2;
 const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
 const CPU_MIN_INTERVAL_MS = 100;
@@ -187,11 +188,9 @@ export async function readDarwinGpuPercent(
   for (let index = 0; index < sampleCount; index += 1) {
     if (index > 0) await delay(DARWIN_GPU_SAMPLE_GAP_MS);
     try {
-      const result = await execute(
-        "ioreg",
-        ["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"],
-        { timeoutMs: 1_500 },
-      );
+      const result = await execute("ioreg", ["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"], {
+        timeoutMs: 1_500,
+      });
       const value = parseDarwinGpuPercent(result.stdout);
       if (value !== null) samples.push(value);
     } catch {

@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
+import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
 import {
   ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
   SYSTEM_USAGE_POLL_INTERVAL_MS,
   SystemUsageIndicator,
   formatProcessRamKb,
+  sanitizeProcessCommand,
 } from "./SystemUsageIndicator";
 
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
@@ -25,6 +27,7 @@ function usageSnapshot(overrides: Record<string, unknown> = {}) {
 function processSnapshot(overrides: Record<string, unknown> = {}) {
   return {
     sampledAt: new Date().toISOString(),
+    truncated: false,
     environments: [
       {
         environmentId: "env-local",
@@ -161,9 +164,9 @@ describe("SystemUsageIndicator", () => {
 
     expect(isPopoverOpen()).toBe(false);
     expect(popover().className).toContain("invisible");
-    expect(nativeInvokeMock.mock.calls.some((call) => call[0] === "get_environment_process_usage")).toBe(
-      false,
-    );
+    expect(
+      nativeInvokeMock.mock.calls.some((call) => call[0] === "get_environment_process_usage"),
+    ).toBe(false);
 
     openPanel();
     expect(isPopoverOpen()).toBe(true);
@@ -287,6 +290,127 @@ describe("SystemUsageIndicator", () => {
     expect(formatProcessRamKb(1.5 * 1024 * 1024)).toBe("1.5 GB");
     expect(formatProcessRamKb(2 * 1024 * 1024)).toBe("2 GB");
     expect(formatProcessRamKb(1.04 * 1024 * 1024)).toBe("1 GB");
+  });
+
+  test("redacts secret flags from process command tooltips", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") {
+        return processSnapshot({
+          environments: [
+            {
+              environmentId: "env-local",
+              environmentName: "title-bar-layout",
+              projectId: "project-1",
+              environmentType: "local",
+              processes: [
+                {
+                  pid: 11,
+                  name: "node",
+                  command: "node server.js --token supersecret --cwd /private/home",
+                  cpuPercent: 1,
+                  ramPercent: 1,
+                  rssKb: 10,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      return undefined;
+    });
+
+    render(<SystemUsageIndicator />);
+    openPanel();
+    await waitFor(() => expect(screen.getByText("node")).toBeTruthy());
+    const row = screen.getByText("node").closest("li");
+    expect(row?.getAttribute("title")).toBe("node server.js --token *** --cwd /private/home");
+    expect(row?.getAttribute("title")).not.toContain("supersecret");
+    expect(document.body.textContent).not.toContain("supersecret");
+    expect(sanitizeProcessCommand("curl Authorization Bearer.secret")).toBe(
+      "curl Authorization ***",
+    );
+  });
+
+  test("shows Data unavailable when the last process snapshot is stale", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") {
+        return processSnapshot({
+          sampledAt: new Date(Date.now() - SYSTEM_USAGE_STALE_AFTER_MS - 1_000).toISOString(),
+        });
+      }
+      return undefined;
+    });
+
+    render(<SystemUsageIndicator />);
+    openPanel();
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("Data unavailable"),
+    );
+    expect(screen.getByText("node")).toBeTruthy();
+    expect(screen.getByText("117 MB")).toBeTruthy();
+  });
+
+  test("tears the meter poll down on unmount and pauses while the document is hidden", async () => {
+    let calls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_system_usage") return undefined;
+      calls += 1;
+      return usageSnapshot({ cpuPercent: 10, ramPercent: 20 });
+    });
+
+    const timers = new Map<number, () => unknown>();
+    let nextId = 9_000;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === SYSTEM_USAGE_POLL_INTERVAL_MS && typeof handler === "function") {
+        const id = (nextId += 1);
+        timers.set(id, () => handler());
+        return id;
+      }
+      return originalSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout;
+    window.clearTimeout = ((id?: number) => {
+      if (typeof id === "number" && timers.delete(id)) return;
+      return originalClearTimeout(id);
+    }) as typeof window.clearTimeout;
+
+    try {
+      const { unmount } = render(<SystemUsageIndicator />);
+      await waitFor(() => expect(calls).toBe(1));
+      expect(timers.size).toBe(1);
+
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(timers.size).toBe(0);
+
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "visible",
+      });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => expect(calls).toBe(2));
+
+      unmount();
+      expect(timers.size).toBe(0);
+      expect(calls).toBe(2);
+    } finally {
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+      if (originalVisibility)
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      else delete (document as { visibilityState?: unknown }).visibilityState;
+    }
   });
 
   test("shows an empty running-environment message when nothing is sampled", async () => {

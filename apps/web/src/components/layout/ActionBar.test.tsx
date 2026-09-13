@@ -2337,6 +2337,12 @@ describe("ActionBar toolbar interactions", () => {
     expect(panelToggle.getAttribute("aria-pressed")).toBe("false");
   });
 
+  test("hides the left panel toggle in grid presentation", () => {
+    render(<ActionBar presentation="grid" />);
+    expect(screen.queryByRole("button", { name: "Hide left panel" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Show left panel" }) === null).toBe(true);
+  });
+
   test("leaves Command+N unhandled for the desktop or browser new-window accelerator", () => {
     render(<ActionBar />);
 

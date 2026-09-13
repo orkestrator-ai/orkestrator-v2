@@ -26,6 +26,20 @@ export const SYSTEM_USAGE_POLL_INTERVAL_MS = 5_000;
 /** Cadence for the process list while the popover is open. */
 export const ENVIRONMENT_PROCESS_POLL_INTERVAL_MS = 3_000;
 
+const SECRET_FLAG_PATTERN =
+  /(--(?:token|api-?key|password|passwd|secret|authorization|auth-token)|-p)(=|\s+)\S+/gi;
+const AUTHORIZATION_HEADER_PATTERN = /\bAuthorization\s+\S+/gi;
+const MAX_COMMAND_DISPLAY_LENGTH = 240;
+
+/** Redact known secret flags before a command is shown in a tooltip. */
+export function sanitizeProcessCommand(command: string): string {
+  const redacted = command
+    .replace(SECRET_FLAG_PATTERN, (_, flag: string, separator: string) => `${flag}${separator}***`)
+    .replace(AUTHORIZATION_HEADER_PATTERN, "Authorization ***");
+  if (redacted.length <= MAX_COMMAND_DISPLAY_LENGTH) return redacted;
+  return `${redacted.slice(0, MAX_COMMAND_DISPLAY_LENGTH)}…`;
+}
+
 function formatPercent(value: number | null | undefined): string {
   return typeof value === "number" ? `${Math.round(value)}%` : "—";
 }
@@ -70,7 +84,19 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const schedule = () => {
+      clearTimer();
+      if (!active || document.visibilityState === "hidden") return;
+      timer = window.setTimeout(refresh, SYSTEM_USAGE_POLL_INTERVAL_MS);
+    };
     const refresh = async () => {
+      if (document.visibilityState === "hidden") return;
       try {
         const snapshot = await getSystemUsage();
         if (active && snapshot) {
@@ -82,13 +108,22 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
         // snapshot if a transient backend request fails.
         if (active) setCheckedAt(Date.now());
       } finally {
-        if (active) timer = window.setTimeout(refresh, SYSTEM_USAGE_POLL_INTERVAL_MS);
+        if (active) schedule();
       }
     };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        clearTimer();
+        return;
+      }
+      void refresh();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
     void refresh();
     return () => {
       active = false;
-      if (timer !== undefined) window.clearTimeout(timer);
+      clearTimer();
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []);
 
@@ -269,8 +304,16 @@ function EnvironmentProcessPanel() {
   return (
     <div className="space-y-4">
       {stale ? (
-        <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70" role="status">
+        <p
+          className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70"
+          role="status"
+        >
           Data unavailable
+        </p>
+      ) : null}
+      {snapshot.truncated ? (
+        <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          List truncated
         </p>
       ) : null}
       {groups.map((group) => (
@@ -304,7 +347,9 @@ function EnvironmentProcessGroupList({
           {group.processes.length}
         </span>
       </div>
-      {subtitle ? <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p> : null}
+      {subtitle ? (
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p>
+      ) : null}
       {group.processes.length === 0 ? (
         <p className="mt-2 text-xs text-muted-foreground">No processes</p>
       ) : (
@@ -319,9 +364,11 @@ function EnvironmentProcessGroupList({
               <li
                 key={`${group.environmentId}-${process.pid}`}
                 className="flex items-center gap-2 text-xs"
-                title={process.command}
+                title={sanitizeProcessCommand(process.command)}
               >
-                <span className="min-w-0 flex-1 truncate font-mono text-foreground">{process.name}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                  {process.name}
+                </span>
                 <span className="w-10 text-right font-mono tabular-nums text-muted-foreground">
                   {formatPercent(process.cpuPercent)}
                 </span>

@@ -117,16 +117,16 @@ export function AppShell({ children }: AppShellProps) {
       ) : (
         <>
           <div
-            className="relative flex h-[var(--desktop-title-bar-height)] w-full shrink-0 items-center justify-start gap-2 border-b border-border/80 bg-chrome pl-[96px] pr-1.5"
+            className="relative flex h-[var(--desktop-title-bar-height)] w-full shrink-0 items-center justify-start gap-2 border-b border-border/80 bg-chrome pl-[var(--desktop-title-bar-inset)] pr-1.5"
             data-backend-drag-region
             onMouseDown={handleTitleBarMouseDown}
             style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
           >
             {/*
-              `pl-[96px]` clears the macOS traffic lights handed to us by
-              `titleBarStyle: "hiddenInset"` and leaves a comfortable gap
-              before the title. The bottom border matches the toolbar's own
-              edge so the two chrome rows read as one frame.
+              `--desktop-title-bar-inset` is 96px only on darwin, where
+              `titleBarStyle: "hiddenInset"` owns the traffic lights. Other
+              platforms keep a normal gutter. The bottom border matches the
+              toolbar's own edge so the two chrome rows read as one frame.
             */}
             <span
               className="min-w-0 truncate text-xs font-medium text-muted-foreground"

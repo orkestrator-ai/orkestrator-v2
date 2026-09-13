@@ -201,6 +201,8 @@
 html {
   /* Shared by the desktop shell and fullscreen surfaces that preserve its title bar. */
   --desktop-title-bar-height: 37px;
+  /* Traffic-light gutter is applied only on darwin via Electron preload. */
+  --desktop-title-bar-inset: 12px;
   color-scheme: dark;
   scrollbar-color: var(--color-border) transparent;
   height: 100%;

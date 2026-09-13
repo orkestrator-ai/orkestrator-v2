@@ -4,6 +4,13 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../../../apps/backend/src/core/constants";
 import { createMainWindow, isTrustedRendererUrl } from "../../../apps/desktop/electron/window";
+import {
+  applyDesktopTitleBarInset,
+  DARWIN_TITLE_BAR_INSET,
+  DEFAULT_TITLE_BAR_INSET,
+  desktopTitleBarInset,
+  desktopTitleBarStyle,
+} from "../../../apps/desktop/electron/title-bar-inset";
 
 function createHarness() {
   const windows: FakeBrowserWindow[] = [];
@@ -85,6 +92,49 @@ describe("createMainWindow", () => {
     );
     expect(harness.windows[0].loadURL).not.toHaveBeenCalled();
     expect(harness.windows[0].webContents.openDevTools).not.toHaveBeenCalled();
+  });
+
+  test("uses hiddenInset and a traffic-light gutter only on darwin", async () => {
+    expect(desktopTitleBarStyle("darwin")).toBe("hiddenInset");
+    expect(desktopTitleBarStyle("linux")).toBe("default");
+    expect(desktopTitleBarInset("darwin")).toBe(DARWIN_TITLE_BAR_INSET);
+    expect(desktopTitleBarInset("linux")).toBe(DEFAULT_TITLE_BAR_INSET);
+
+    const styles = new Map<string, string>();
+    applyDesktopTitleBarInset(
+      { style: { setProperty: (name, value) => styles.set(name, value) } },
+      "linux",
+    );
+    expect(styles.get("--desktop-title-bar-inset")).toBe(DEFAULT_TITLE_BAR_INSET);
+    applyDesktopTitleBarInset(
+      { style: { setProperty: (name, value) => styles.set(name, value) } },
+      "darwin",
+    );
+    expect(styles.get("--desktop-title-bar-inset")).toBe(DARWIN_TITLE_BAR_INSET);
+
+    const darwin = createHarness();
+    await createMainWindow({
+      BrowserWindowCtor: darwin.FakeBrowserWindow as never,
+      menu: darwin.menu,
+      writeClipboardText: darwin.writeClipboardText,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+      platform: "darwin",
+    });
+    expect(darwin.windows[0].options.titleBarStyle).toBe("hiddenInset");
+
+    const linux = createHarness();
+    await createMainWindow({
+      BrowserWindowCtor: linux.FakeBrowserWindow as never,
+      menu: linux.menu,
+      writeClipboardText: linux.writeClipboardText,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+      platform: "linux",
+    });
+    expect(linux.windows[0].options.titleBarStyle).toBe("default");
   });
 
   test("loads the configured dev server and opens devtools in development", async () => {

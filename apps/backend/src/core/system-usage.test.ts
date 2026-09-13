@@ -8,6 +8,7 @@ import {
   cpuPercent,
   cpuTimes,
   createSystemUsageReader,
+  GPU_AVAILABLE_CACHE_MS,
   parseDarwinGpuPercent,
   parsePercentLines,
   readDarwinGpuPercent,
@@ -135,9 +136,13 @@ describe("system usage", () => {
       ),
     ).toBe(60);
     expect(
-      parseDarwinGpuPercent(`"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`),
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`,
+      ),
     ).toBe(0);
-    expect(parseDarwinGpuPercent(`"PerformanceStatistics" = {"Alloc system memory"=12}`)).toBeNull();
+    expect(
+      parseDarwinGpuPercent(`"PerformanceStatistics" = {"Alloc system memory"=12}`),
+    ).toBeNull();
 
     const execute = mock(async () => ({
       stdout: `"PerformanceStatistics" = {"Device Utilization %"=18,"Renderer Utilization %"=12}`,
@@ -194,6 +199,20 @@ describe("system usage", () => {
     ).toBe(26);
     expect(execute).toHaveBeenCalledTimes(3);
     expect(delays).toEqual([80, 80]);
+  });
+
+  test("samples Darwin GPU twice by default so title-bar polls stay cheap", async () => {
+    const execute = mock(async () => ({
+      stdout: `"PerformanceStatistics" = {"Device Utilization %"=18}`,
+    }));
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        delay: async () => {},
+        runCommand: execute,
+      }),
+    ).toBe(18);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   test("uses sysfs before nvidia-smi and parses multi-GPU output", async () => {
@@ -352,9 +371,9 @@ describe("system usage", () => {
     expect((await read("/data")).gpuPercent).toBe(44);
     clock += 4_999;
     expect((await read("/data")).gpuPercent).toBe(44);
-    clock += 1;
+    clock += GPU_AVAILABLE_CACHE_MS - 4_999;
     expect((await read("/data")).gpuPercent).toBe(45);
-    clock += 5_000;
+    clock += GPU_AVAILABLE_CACHE_MS;
     expect((await read("/data")).gpuPercent).toBeNull();
     for (let index = 0; index < 6; index += 1) {
       clock += 4_999;

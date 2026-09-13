@@ -1,3 +1,4 @@
+import { commandMatchesRecordedServer, type LocalServerPidField } from "./local-server-reaper.js";
 import { runCommand } from "./shell.js";
 
 export interface EnvironmentProcessUsage {
@@ -20,6 +21,7 @@ export interface EnvironmentProcessGroup {
 export interface EnvironmentProcessUsageSnapshot {
   environments: EnvironmentProcessGroup[];
   sampledAt: string;
+  truncated: boolean;
 }
 
 export interface ProcessUsageEnvironment {
@@ -46,11 +48,29 @@ interface ProcessUsageDependencies {
     args: string[],
     options: { timeoutMs: number },
   ) => Promise<{ stdout: string }>;
+  maxConcurrentContainerProbes?: number;
 }
 
 const PROCESS_PROBE_TIMEOUT_MS = 2_000;
-const MAX_PROCESSES_PER_ENVIRONMENT = 40;
+export const MAX_PROCESSES_PER_ENVIRONMENT = 40;
+export const MAX_CONCURRENT_CONTAINER_PROBES = 4;
+export const MAX_COMMAND_DISPLAY_LENGTH = 240;
+export const MAX_SNAPSHOT_PROCESSES = 200;
+export const MAX_SNAPSHOT_BYTES = 64_000;
 const PS_COLUMNS = "pid=,ppid=,pcpu=,pmem=,rss=,args=";
+
+const ROOT_PID_FIELDS = [
+  "opencodePid",
+  "claudeBridgePid",
+  "codexBridgePid",
+  "cursorBridgePid",
+  "grokBridgePid",
+  "piBridgePid",
+] as const satisfies readonly LocalServerPidField[];
+
+const SECRET_FLAG_PATTERN =
+  /(--(?:token|api-?key|password|passwd|secret|authorization|auth-token)|-p)(=|\s+)\S+/gi;
+const AUTHORIZATION_HEADER_PATTERN = /\bAuthorization\s+\S+/gi;
 
 interface ListedProcess extends EnvironmentProcessUsage {
   ppid: number;
@@ -60,10 +80,23 @@ function clampPercent(value: number): number {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
 }
 
+/** Per-process CPU can exceed 100% on multicore hosts; keep it nonnegative. */
+function roundProcessCpuPercent(value: number): number {
+  return Math.round(Math.max(0, value) * 10) / 10;
+}
+
 export function processDisplayName(command: string): string {
   const first = command.trim().split(/\s+/)[0] ?? "";
   const base = first.split("/").pop() ?? first;
   return base || "process";
+}
+
+export function sanitizeProcessCommand(command: string): string {
+  const redacted = command
+    .replace(SECRET_FLAG_PATTERN, (_, flag: string, separator: string) => `${flag}${separator}***`)
+    .replace(AUTHORIZATION_HEADER_PATTERN, "Authorization ***");
+  if (redacted.length <= MAX_COMMAND_DISPLAY_LENGTH) return redacted;
+  return `${redacted.slice(0, MAX_COMMAND_DISPLAY_LENGTH)}…`;
 }
 
 export function parsePsUsageLines(output: string): ListedProcess[] {
@@ -87,8 +120,8 @@ export function parsePsUsageLines(output: string): ListedProcess[] {
       pid,
       ppid,
       name,
-      command,
-      cpuPercent: clampPercent(cpuPercent),
+      command: sanitizeProcessCommand(command),
+      cpuPercent: roundProcessCpuPercent(cpuPercent),
       ramPercent: clampPercent(ramPercent),
       rssKb,
     });
@@ -96,18 +129,27 @@ export function parsePsUsageLines(output: string): ListedProcess[] {
   return processes;
 }
 
-export function environmentRootPids(environment: ProcessUsageEnvironment): number[] {
-  return [
-    environment.opencodePid,
-    environment.claudeBridgePid,
-    environment.codexBridgePid,
-    environment.cursorBridgePid,
-    environment.grokBridgePid,
-    environment.piBridgePid,
-  ].filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 1);
+export function environmentRootPids(
+  environment: ProcessUsageEnvironment,
+  processes?: readonly ListedProcess[],
+): number[] {
+  const pids: number[] = [];
+  for (const field of ROOT_PID_FIELDS) {
+    const pid = environment[field];
+    if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 1) continue;
+    if (processes) {
+      const listed = processes.find((process) => process.pid === pid);
+      if (!listed || !commandMatchesRecordedServer(field, listed.command)) continue;
+    }
+    pids.push(pid);
+  }
+  return pids;
 }
 
-export function collectDescendantPids(roots: readonly number[], processes: ListedProcess[]): Set<number> {
+export function collectDescendantPids(
+  roots: readonly number[],
+  processes: ListedProcess[],
+): Set<number> {
   const children = new Map<number, number[]>();
   for (const process of processes) {
     const siblings = children.get(process.ppid);
@@ -127,19 +169,39 @@ export function collectDescendantPids(roots: readonly number[], processes: Liste
   return owned;
 }
 
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(command)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return tokens;
+}
+
+function tokenTouchesWorktree(token: string, worktreePath: string): boolean {
+  const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
+  if (value === worktreePath) return true;
+  const prefix = worktreePath.endsWith("/") ? worktreePath : `${worktreePath}/`;
+  return value.startsWith(prefix);
+}
+
 export function commandTouchesWorktree(command: string, worktreePath: string | undefined): boolean {
   if (!worktreePath || worktreePath.length === 0) return false;
-  return command.includes(worktreePath);
+  const normalized = worktreePath.replace(/\/+$/, "");
+  if (normalized.length === 0) return false;
+  return tokenizeCommand(command).some((token) => tokenTouchesWorktree(token, normalized));
 }
 
 export function selectLocalProcesses(
   processes: ListedProcess[],
   environment: ProcessUsageEnvironment,
 ): EnvironmentProcessUsage[] {
-  const owned = collectDescendantPids(environmentRootPids(environment), processes);
+  const owned = collectDescendantPids(environmentRootPids(environment, processes), processes);
   return rankProcesses(
     processes.filter(
-      (process) => owned.has(process.pid) || commandTouchesWorktree(process.command, environment.worktreePath),
+      (process) =>
+        owned.has(process.pid) || commandTouchesWorktree(process.command, environment.worktreePath),
     ),
   );
 }
@@ -158,9 +220,7 @@ function rankProcesses(processes: ListedProcess[]): EnvironmentProcessUsage[] {
 }
 
 function hostPsArgs(platform: NodeJS.Platform): string[] {
-  return platform === "darwin"
-    ? ["-axo", PS_COLUMNS]
-    : ["-eo", PS_COLUMNS, "--no-headers"];
+  return platform === "darwin" ? ["-axo", PS_COLUMNS] : ["-eo", PS_COLUMNS, "--no-headers"];
 }
 
 async function listHostProcesses(
@@ -184,12 +244,60 @@ async function listContainerProcesses(
   return parsePsUsageLines(result.stdout);
 }
 
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (next < items.length) {
+        const index = next;
+        next += 1;
+        results[index] = await mapper(items[index]!);
+      }
+    }),
+  );
+  return results;
+}
+
+function boundSnapshot(groups: EnvironmentProcessGroup[]): {
+  environments: EnvironmentProcessGroup[];
+  truncated: boolean;
+} {
+  let remaining = MAX_SNAPSHOT_PROCESSES;
+  let bytes = 2;
+  let truncated = false;
+  const environments: EnvironmentProcessGroup[] = [];
+  for (const group of groups) {
+    const processes: EnvironmentProcessUsage[] = [];
+    for (const process of group.processes) {
+      const encoded = JSON.stringify(process).length + 1;
+      if (remaining <= 0 || bytes + encoded > MAX_SNAPSHOT_BYTES) {
+        truncated = true;
+        break;
+      }
+      processes.push(process);
+      remaining -= 1;
+      bytes += encoded;
+    }
+    if (processes.length < group.processes.length) truncated = true;
+    environments.push({ ...group, processes });
+  }
+  return { environments, truncated };
+}
+
 /**
  * Live CPU/RAM for processes that belong to each running environment.
  *
  * Containerized environments are sampled inside the container. Local
- * environments reuse one host `ps` and keep descendants of the persisted
- * bridge/server PIDs plus anything whose argv still names the worktree.
+ * environments reuse one host `ps` and keep descendants of verified
+ * bridge/server PIDs plus anything whose argv names the worktree with
+ * path-boundary semantics.
  */
 export async function readEnvironmentProcessUsage(
   environments: readonly ProcessUsageEnvironment[],
@@ -209,9 +317,11 @@ export async function readEnvironmentProcessUsage(
     }
   }
 
-  const groups = await Promise.all(
-    running.map(async (environment): Promise<EnvironmentProcessGroup> => {
-      let listed: ListedProcess[] = [];
+  const groups = await mapWithConcurrency(
+    running,
+    dependencies.maxConcurrentContainerProbes ?? MAX_CONCURRENT_CONTAINER_PROBES,
+    async (environment): Promise<EnvironmentProcessGroup> => {
+      let listed: EnvironmentProcessUsage[] = [];
       if (environment.environmentType === "local") {
         listed = selectLocalProcesses(hostProcesses, environment);
       } else if (environment.containerId) {
@@ -228,11 +338,13 @@ export async function readEnvironmentProcessUsage(
         environmentType: environment.environmentType,
         processes: listed,
       };
-    }),
+    },
   );
 
+  const bounded = boundSnapshot(groups);
   return {
-    environments: groups,
+    environments: bounded.environments,
     sampledAt: new Date(now()).toISOString(),
+    truncated: bounded.truncated,
   };
 }

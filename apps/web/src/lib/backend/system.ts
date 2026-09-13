@@ -40,6 +40,7 @@ export interface EnvironmentProcessGroup {
 export interface EnvironmentProcessUsageSnapshot {
   environments: EnvironmentProcessGroup[];
   sampledAt: string;
+  truncated?: boolean;
 }
 
 /** Live CPU/RAM for child processes of every running environment. */

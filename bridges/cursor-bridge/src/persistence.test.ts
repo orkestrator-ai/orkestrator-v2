@@ -13,6 +13,7 @@ import path from "node:path";
 import { newSessionState } from "./agent-session.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
 import { clientSessionKeys, sessionIsWorking, sessions, type BridgeToolPart } from "./state.js";
+import { ABANDONED_COMPACTION_NOTE } from "./translate.js";
 
 let stateRoot: string;
 let stateFile: string;
@@ -278,6 +279,95 @@ describe("sub-agent cards after a restart", () => {
     const part = (await reload(state.id)).messages[0]!.parts[0] as BridgeToolPart;
     expect(part.toolOutput).toBe("done");
     expect(part.agentState).toBe("finished");
+  });
+});
+
+describe("pending tool cards after a restart", () => {
+  test("an idle restore fails leftover pending cards instead of leaving them running", async () => {
+    const state = newSessionState();
+    state.status = "running";
+    state.messages.push({
+      id: "m1",
+      role: "assistant",
+      content: "",
+      createdAt: new Date(0).toISOString(),
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "orkestrator: update_ticket",
+          sourcePartId: "m1:0",
+          sourceMessageId: "m1",
+          toolUseId: "mcp-1",
+          toolName: "mcp__orkestrator__update_ticket",
+          toolState: "pending",
+        },
+        {
+          type: "tool-invocation",
+          content: "Todos",
+          sourcePartId: "m1:1",
+          sourceMessageId: "m1",
+          toolUseId: "todos-1",
+          toolName: "updateTodos",
+          toolState: "success",
+        },
+      ],
+    });
+    sessions.set(state.id, state);
+
+    await persist();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+
+    const restored = sessions.get(state.id)!;
+    expect(restored.status).toBe("idle");
+    expect(restored.messages[0]!.parts).toEqual([
+      expect.objectContaining({
+        toolUseId: "mcp-1",
+        toolState: "failure",
+        toolError: "Tool call ended without a result",
+      }),
+      expect.objectContaining({
+        toolUseId: "todos-1",
+        toolState: "success",
+      }),
+    ]);
+  });
+
+  test("an idle restore fails a compaction left pending mid-summary", async () => {
+    const state = newSessionState();
+    state.status = "running";
+    state.messages.push({
+      id: "m1",
+      role: "assistant",
+      content: "",
+      createdAt: new Date(0).toISOString(),
+      parts: [
+        {
+          type: "compaction",
+          content: "",
+          sourcePartId: "summary:0",
+          sourceMessageId: "m1",
+          toolState: "pending",
+        },
+      ],
+    });
+    sessions.set(state.id, state);
+
+    await persist();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+
+    const restored = sessions.get(state.id)!;
+    expect(restored.status).toBe("idle");
+    expect(restored.messages[0]!.parts).toEqual([
+      expect.objectContaining({
+        type: "compaction",
+        toolState: "failure",
+        content: ABANDONED_COMPACTION_NOTE,
+      }),
+    ]);
   });
 });
 

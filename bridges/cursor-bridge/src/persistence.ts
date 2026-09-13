@@ -14,7 +14,7 @@ import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
 import { seedObservedMcpTools } from "./mcp.js";
 import { readTodos } from "./tool-rendering.js";
-import { settleDetachedSubagentPart } from "./translate.js";
+import { settleAbandonedToolParts, settleDetachedSubagentPart } from "./translate.js";
 import {
   clientSessionKeys,
   isObject,
@@ -202,6 +202,9 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.todos = restoreTodos(state);
   seedObservedMcpTools(state);
   settleRestoredSubagents(state);
+  // A mid-turn persist records the session as idle. Pending tool cards from
+  // that write would otherwise render as still running after a restart.
+  settleAbandonedToolParts(state);
   return state;
 }
 

@@ -362,6 +362,56 @@ export function settleDetachedSubagentPart(part: BridgeToolPart): void {
     : DETACHED_SUBAGENT_NOTE;
 }
 
+/**
+ * Close tool cards and compaction boundaries still pending after the run
+ * that owned them has ended.
+ *
+ * Cursor's interaction stream can drop `tool-call-completed` — MCP calls in
+ * particular have been seen to finish in the world while the public update
+ * stays at `started`. The renderer labels `pending` as "running", so an idle
+ * session with leftover cards looks like a turn that is still working and
+ * never produced a final message. The same is true of a compaction opened
+ * by `summary-started` whose `summary-completed` never arrived: a process
+ * death mid-compaction would otherwise restore an in-progress boundary.
+ * ACP already fails leftover tools on restart; do the same here the moment
+ * the parent run is terminal, and again on restore.
+ *
+ * This is not a claim that the tool or compaction failed in the workspace.
+ * It is a claim that this bridge will never see a result for it.
+ */
+export const ABANDONED_TOOL_NOTE = "Tool call ended without a result";
+export const ABANDONED_COMPACTION_NOTE = "Compaction ended without a summary";
+
+export function settleAbandonedToolParts(state: SessionState): void {
+  const abandoned = new Set<string>();
+  let settledCompaction = false;
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type === "compaction") {
+        if (part.toolState === "success" || part.toolState === "failure") continue;
+        part.toolState = "failure";
+        if (!part.content.trim()) part.content = ABANDONED_COMPACTION_NOTE;
+        settledCompaction = true;
+        continue;
+      }
+      if (part.type !== "tool-invocation") continue;
+      if (part.toolState === "success" || part.toolState === "failure") continue;
+      part.toolState = "failure";
+      part.toolError = part.toolError ?? ABANDONED_TOOL_NOTE;
+      abandoned.add(part.toolUseId);
+    }
+  }
+  if (abandoned.size === 0 && !settledCompaction) return;
+  if (abandoned.size > 0) {
+    for (const message of state.messages) {
+      message.parts = message.parts.filter(
+        (candidate) => candidate.type !== "progress" || !abandoned.has(candidate.toolUseId),
+      );
+    }
+  }
+  state.revision += 1;
+}
+
 function applyShellOutputDelta(
   state: SessionState,
   update: JsonObject,

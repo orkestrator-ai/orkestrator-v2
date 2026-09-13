@@ -94,6 +94,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
   const changes = useFilesPanelStore((state) => state.changes);
+  const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  const toggleSidebar = useUIStore((state) => state.toggleSidebar);
 
   // Settings dialogs are pinned by id, not by snapshot: the store stays the
   // single source of truth, so a background update to the pinned entity is
@@ -1986,6 +1988,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     filesPanelOpen,
     toggleFilesPanel,
     changes,
+    sidebarOpen,
+    toggleSidebar,
     repoSettingsProjectId,
     setRepoSettingsProjectId,
     globalSettingsOpen,

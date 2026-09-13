@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { PRODUCT_NAME } from "./app-constants.js";
 import { installDefaultContextMenu } from "./context-menu.js";
 import { resolveRendererIndexPath } from "./paths.js";
+import { desktopTitleBarStyle } from "./title-bar-inset.js";
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindow;
 type ContextMenuMenu = Parameters<typeof installDefaultContextMenu>[1];
@@ -20,6 +21,7 @@ export type CreateMainWindowOptions = {
   title?: string;
   partition?: string;
   beforeLoad?: (window: BrowserWindow) => void | Promise<void>;
+  platform?: NodeJS.Platform;
 };
 
 export function isTrustedRendererUrl(candidateUrl: string, trustedRendererUrl: string): boolean {
@@ -58,7 +60,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    titleBarStyle: desktopTitleBarStyle(options.platform ?? process.platform),
     webPreferences: {
       preload: path.join(options.dirname, "preload.js"),
       contextIsolation: true,

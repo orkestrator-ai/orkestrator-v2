@@ -8,7 +8,10 @@ import {
   cpuPercent,
   cpuTimes,
   createSystemUsageReader,
+  GPU_AVAILABLE_CACHE_MS,
+  parseDarwinGpuPercent,
   parsePercentLines,
+  readDarwinGpuPercent,
   readDiskPercent,
   readGpuPercent,
   readLinuxGpuPercent,
@@ -121,14 +124,109 @@ describe("system usage", () => {
     ).toBeNull();
   });
 
+  test("reads Darwin GPU percentages from IOAccelerator performance statistics", async () => {
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=24,"Tiler Utilization %"=14}`,
+      ),
+    ).toBe(24);
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %" = 40}\n"PerformanceStatistics" = {"Renderer Utilization %" = 80}`,
+      ),
+    ).toBe(60);
+    expect(
+      parseDarwinGpuPercent(
+        `"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`,
+      ),
+    ).toBe(0);
+    expect(
+      parseDarwinGpuPercent(`"PerformanceStatistics" = {"Alloc system memory"=12}`),
+    ).toBeNull();
+
+    const execute = mock(async () => ({
+      stdout: `"PerformanceStatistics" = {"Device Utilization %"=18,"Renderer Utilization %"=12}`,
+    }));
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 1,
+        runCommand: execute,
+      }),
+    ).toBe(18);
+    expect(execute).toHaveBeenCalledWith(
+      "ioreg",
+      ["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"],
+      { timeoutMs: 1_500 },
+    );
+    expect(
+      await readDarwinGpuPercent({
+        platform: "linux",
+        runCommand: async () => {
+          throw new Error("must not run");
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 2,
+        delay: async () => {},
+        runCommand: async () => {
+          throw new Error("ioreg missing");
+        },
+      }),
+    ).toBeNull();
+  });
+
+  test("keeps the peak Darwin GPU sample so idle snapshots do not hide activity", async () => {
+    const outputs = [
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=0}`,
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Renderer Utilization %"=26}`,
+      `"PerformanceStatistics" = {"Device Utilization %"=0,"Tiler Utilization %"=0}`,
+    ];
+    const execute = mock(async () => ({ stdout: outputs.shift() ?? outputs[0]! }));
+    const delays: number[] = [];
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        sampleCount: 3,
+        delay: async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+        runCommand: execute,
+      }),
+    ).toBe(26);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([80, 80]);
+  });
+
+  test("samples Darwin GPU twice by default so title-bar polls stay cheap", async () => {
+    const execute = mock(async () => ({
+      stdout: `"PerformanceStatistics" = {"Device Utilization %"=18}`,
+    }));
+    expect(
+      await readDarwinGpuPercent({
+        platform: "darwin",
+        delay: async () => {},
+        runCommand: execute,
+      }),
+    ).toBe(18);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   test("uses sysfs before nvidia-smi and parses multi-GPU output", async () => {
     const execute = mock(async () => ({ stdout: "45\n85\n" }));
     expect(await readGpuPercent({ linuxGpuPercent: async () => 31, runCommand: execute })).toBe(31);
     expect(execute).not.toHaveBeenCalled();
 
-    expect(await readGpuPercent({ linuxGpuPercent: async () => null, runCommand: execute })).toBe(
-      65,
-    );
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
+        runCommand: execute,
+      }),
+    ).toBe(65);
     expect(execute).toHaveBeenCalledWith(
       "nvidia-smi",
       ["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
@@ -136,16 +234,37 @@ describe("system usage", () => {
     );
   });
 
+  test("uses ioreg after sysfs and treats an idle Darwin reading as authoritative", async () => {
+    const execute = mock(async () => ({ stdout: "45\n85\n" }));
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => 22,
+        runCommand: execute,
+      }),
+    ).toBe(22);
+    expect(
+      await readGpuPercent({
+        linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => 0,
+        runCommand: execute,
+      }),
+    ).toBe(0);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   test("returns null when nvidia-smi fails or produces no usable values", async () => {
     expect(
       await readGpuPercent({
         linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
         runCommand: async () => ({ stdout: "\nN/A\n" }),
       }),
     ).toBeNull();
     expect(
       await readGpuPercent({
         linuxGpuPercent: async () => null,
+        darwinGpuPercent: async () => null,
         runCommand: async () => {
           throw new Error("timed out");
         },
@@ -252,9 +371,9 @@ describe("system usage", () => {
     expect((await read("/data")).gpuPercent).toBe(44);
     clock += 4_999;
     expect((await read("/data")).gpuPercent).toBe(44);
-    clock += 1;
+    clock += GPU_AVAILABLE_CACHE_MS - 4_999;
     expect((await read("/data")).gpuPercent).toBe(45);
-    clock += 5_000;
+    clock += GPU_AVAILABLE_CACHE_MS;
     expect((await read("/data")).gpuPercent).toBeNull();
     for (let index = 0; index < 6; index += 1) {
       clock += 4_999;

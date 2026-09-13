@@ -26,6 +26,8 @@ interface UIState {
   // Sidebar state
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
+  /** Whether the left projects/environments panel is visible. */
+  sidebarOpen: boolean;
   /** Most recently opened project IDs, newest first. */
   recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
@@ -50,6 +52,8 @@ interface UIState {
   // Actions
   selectProject: (projectId: string | null) => void;
   selectEnvironment: (environmentId: string | null) => void;
+  /** Toggle the left projects/environments panel. */
+  toggleSidebar: () => void;
   setProjectBoardTab: (tab: ProjectBoardTab) => void;
   setProjectBoardNotesOpen: (open: boolean) => void;
   /** Select both project and environment at once (for hierarchical sidebar) */
@@ -92,6 +96,7 @@ export const useUIStore = create<UIState>()(
       // Initial state
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      sidebarOpen: true,
       recentProjectIds: [],
       projectBoardTab: "coordinator",
       projectBoardNotesOpen: false,
@@ -115,6 +120,8 @@ export const useUIStore = create<UIState>()(
         })),
 
       selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
+
+      toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
       setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
 
@@ -220,6 +227,7 @@ export const useUIStore = create<UIState>()(
       name: desktopConnectionStorageKey("ui-storage"),
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
+        sidebarOpen: state.sidebarOpen,
         collapsedProjects: state.collapsedProjects,
         collapsedProjectFolders: state.collapsedProjectFolders,
         recentProjectIds: state.recentProjectIds,

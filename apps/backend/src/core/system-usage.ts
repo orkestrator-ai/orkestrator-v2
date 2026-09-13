@@ -32,8 +32,20 @@ interface LinuxGpuDependencies {
   readFile: (path: string) => Promise<string>;
 }
 
+interface DarwinGpuDependencies {
+  platform: NodeJS.Platform;
+  runCommand: (
+    command: string,
+    args: string[],
+    options: { timeoutMs: number },
+  ) => Promise<{ stdout: string }>;
+  delay: (milliseconds: number) => Promise<void>;
+  sampleCount: number;
+}
+
 interface GpuDependencies {
   linuxGpuPercent: () => Promise<number | null>;
+  darwinGpuPercent: () => Promise<number | null>;
   runCommand: (
     command: string,
     args: string[],
@@ -41,8 +53,17 @@ interface GpuDependencies {
   ) => Promise<{ stdout: string }>;
 }
 
-const GPU_AVAILABLE_CACHE_MS = 5_000;
+const DARWIN_GPU_UTILIZATION_KEYS = [
+  "Device Utilization %",
+  "Renderer Utilization %",
+  "Tiler Utilization %",
+] as const;
+
+/** Keep this above the title-bar meter interval so each poll reuses the last probe. */
+export const GPU_AVAILABLE_CACHE_MS = 15_000;
 const GPU_UNAVAILABLE_CACHE_MS = 30_000;
+export const DARWIN_GPU_SAMPLE_COUNT = 2;
+const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
 const CPU_MIN_INTERVAL_MS = 100;
 const CPU_FRESH_SAMPLE_MS = 200;
@@ -130,13 +151,66 @@ export async function readLinuxGpuPercent(
   }
 }
 
+// Apple Silicon often reports Device Utilization % as 0 while Renderer or
+// Tiler utilization tracks the work Activity Monitor shows. Take the peak of
+// the three per accelerator, then average across devices like the Linux reader.
+export function parseDarwinGpuPercent(output: string): number | null {
+  const devicePercents: number[] = [];
+  for (const match of output.matchAll(/"PerformanceStatistics"\s*=\s*\{([^}]*)\}/g)) {
+    const body = match[1] ?? "";
+    const values: number[] = [];
+    for (const key of DARWIN_GPU_UTILIZATION_KEYS) {
+      const keyMatch = body.match(new RegExp(`"${key}"\\s*=\\s*(\\d+(?:\\.\\d+)?)`));
+      if (!keyMatch) continue;
+      const value = Number(keyMatch[1]);
+      if (Number.isFinite(value)) values.push(value);
+    }
+    if (values.length > 0) devicePercents.push(Math.max(...values));
+  }
+  return averagePercent(devicePercents);
+}
+
+export async function readDarwinGpuPercent(
+  dependencies: Partial<DarwinGpuDependencies> = {},
+): Promise<number | null> {
+  const platform = dependencies.platform ?? process.platform;
+  if (platform !== "darwin") return null;
+  const execute = dependencies.runCommand ?? runCommand;
+  const delay =
+    dependencies.delay ??
+    ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const sampleCount = dependencies.sampleCount ?? DARWIN_GPU_SAMPLE_COUNT;
+
+  // IOAccelerator utilization is a point sample and is often 0 between GPU
+  // command bursts. Keep the peak across a short window so the meter reports
+  // activity during GPU work instead of the idle gaps between bursts.
+  const samples: number[] = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    if (index > 0) await delay(DARWIN_GPU_SAMPLE_GAP_MS);
+    try {
+      const result = await execute("ioreg", ["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"], {
+        timeoutMs: 1_500,
+      });
+      const value = parseDarwinGpuPercent(result.stdout);
+      if (value !== null) samples.push(value);
+    } catch {
+      // A single missed snapshot is not fatal; later samples can still succeed.
+    }
+  }
+  if (samples.length === 0) return null;
+  return clampPercent(Math.max(...samples));
+}
+
 export async function readGpuPercent(
   dependencies: Partial<GpuDependencies> = {},
 ): Promise<number | null> {
   const linuxGpuPercent = dependencies.linuxGpuPercent ?? readLinuxGpuPercent;
+  const darwinGpuPercent = dependencies.darwinGpuPercent ?? readDarwinGpuPercent;
   const execute = dependencies.runCommand ?? runCommand;
   const sysfsPercent = await linuxGpuPercent();
   if (sysfsPercent !== null) return sysfsPercent;
+  const ioregPercent = await darwinGpuPercent();
+  if (ioregPercent !== null) return ioregPercent;
 
   try {
     const result = await execute(

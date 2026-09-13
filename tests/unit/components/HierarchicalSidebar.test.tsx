@@ -4,6 +4,7 @@ import { createElement, type ComponentProps } from "react";
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
+import { mockToastWarning } from "../../mocks/sonner";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
@@ -162,6 +163,7 @@ const {
   createEnvironmentUpdateHandler,
   createProjectUpdateHandler,
   deleteProjectAndEnvironments,
+  forkSidebarEnvironment,
   resolveSidebarReorder,
   resolveSidebarSelection,
   sortEnvironmentsByActivity,
@@ -551,6 +553,104 @@ describe("HierarchicalSidebar", () => {
       background: true,
       silent: true,
     });
+  });
+
+  test("does not select or auto-start when forking fails", async () => {
+    projectsValue = [{ ...project, localPath: "/work/project-one" }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-source",
+        name: "Source environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    forkEnvironmentMock.mockRejectedValueOnce(new Error("published to a remote"));
+    useUIStore.getState().setEnvironmentSortMode("activity");
+    const consoleError = mock(() => undefined);
+    const originalConsoleError = console.error;
+    console.error = consoleError as typeof console.error;
+    render(<HierarchicalSidebar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
+
+    await waitFor(() => {
+      expect(forkEnvironmentMock).toHaveBeenCalledWith("env-source", "local");
+    });
+    expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalled();
+    console.error = originalConsoleError;
+  });
+
+  test("warns when Docker is unavailable for a container fork", async () => {
+    mockToastWarning.mockClear();
+    const setProjectCollapsed = mock(() => undefined);
+    const selectProjectAndEnvironment = mock(() => undefined);
+    await forkSidebarEnvironment("env-source", "containerized", {
+      allEnvironments: [{ ...createdEnvironment, id: "env-source", projectId: "project-1" }],
+      dockerAvailable: false,
+      projectsById: new Map([["project-1", { localPath: "/work/project-one" }]]),
+      forkEnvironment: forkEnvironmentMock,
+      setProjectCollapsed,
+      selectProjectAndEnvironment,
+      startEnvironment: startEnvironmentMock,
+    });
+
+    expect(mockToastWarning).toHaveBeenCalledWith("Docker is not running", {
+      description: "Start Docker before forking a container environment.",
+    });
+    expect(forkEnvironmentMock).not.toHaveBeenCalled();
+    expect(selectProjectAndEnvironment).not.toHaveBeenCalled();
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("toasts from the activity-row menu when the project has no checkout", async () => {
+    mockToastWarning.mockClear();
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-source",
+        name: "Source environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+    render(<HierarchicalSidebar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Source environment/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Fork local" }));
+
+    await waitFor(() => {
+      expect(mockToastWarning).toHaveBeenCalledWith("Local worktrees are unavailable", {
+        description: "Add a local checkout for this project before forking locally.",
+      });
+    });
+    expect(forkEnvironmentMock).not.toHaveBeenCalled();
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("warns when a local fork needs a project checkout", async () => {
+    mockToastWarning.mockClear();
+    const setProjectCollapsed = mock(() => undefined);
+    const selectProjectAndEnvironment = mock(() => undefined);
+    await forkSidebarEnvironment("env-source", "local", {
+      allEnvironments: [{ ...createdEnvironment, id: "env-source", projectId: "project-1" }],
+      dockerAvailable: true,
+      projectsById: new Map([["project-1", { localPath: null }]]),
+      forkEnvironment: forkEnvironmentMock,
+      setProjectCollapsed,
+      selectProjectAndEnvironment,
+      startEnvironment: startEnvironmentMock,
+    });
+
+    expect(mockToastWarning).toHaveBeenCalledWith("Local worktrees are unavailable", {
+      description: "Add a local checkout for this project before forking locally.",
+    });
+    expect(forkEnvironmentMock).not.toHaveBeenCalled();
+    expect(selectProjectAndEnvironment).not.toHaveBeenCalled();
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
   });
 
   test("animates activity row movement and skips first, stationary, unsupported, and reduced-motion cases", () => {

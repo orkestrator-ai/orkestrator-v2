@@ -486,6 +486,45 @@ describe("useEnvironments", () => {
     );
   });
 
+  test("forkEnvironment sets error, toasts, and cleans up creation state on failure", async () => {
+    const existing = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+    useEnvironmentStore.setState({
+      environments: [existing],
+      isLoading: false,
+      error: null,
+    });
+    mockForkEnvironment.mockImplementation(() => Promise.reject(new Error("Failed to fork")));
+    mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
+    mockToastError.mockClear();
+
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.forkEnvironment("env-1", "local");
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("Failed to fork");
+    expect(result.current.error).toBe("Failed to fork");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to fork environment", expect.any(Object));
+    expect(
+      result.current.allEnvironments.some((environment) => environment.id === "forked-env-id"),
+    ).toBe(false);
+
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toBeUndefined();
+  });
+
   test("createEnvironment sets error on failure", async () => {
     const expectedError = new Error("Failed to create");
     mockCreateEnvironment.mockImplementation(() => Promise.reject(expectedError));

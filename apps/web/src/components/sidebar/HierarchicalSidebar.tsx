@@ -349,6 +349,53 @@ export function createEnvironmentUpdateHandler(
   return (environment) => updateEnvironment(environment.id, environment);
 }
 
+export async function forkSidebarEnvironment(
+  environmentId: string,
+  environmentType: EnvironmentType,
+  options: {
+    allEnvironments: Environment[];
+    dockerAvailable: boolean;
+    projectsById: Map<string, Pick<Project, "localPath">>;
+    forkEnvironment: (
+      environmentId: string,
+      environmentType: EnvironmentType,
+    ) => Promise<Environment>;
+    setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
+    selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
+    startEnvironment: (
+      environmentId: string,
+      initialPrompt?: string,
+      startOptions?: { background?: boolean; silent?: boolean },
+    ) => Promise<unknown>;
+  },
+): Promise<void> {
+  const source = options.allEnvironments.find((environment) => environment.id === environmentId);
+  if (!source) return;
+  if (environmentType === "containerized" && !options.dockerAvailable) {
+    toast.warning("Docker is not running", {
+      description: "Start Docker before forking a container environment.",
+    });
+    return;
+  }
+  if (environmentType === "local") {
+    const project = options.projectsById.get(source.projectId);
+    if (project && !project.localPath) {
+      toast.warning("Local worktrees are unavailable", {
+        description: "Add a local checkout for this project before forking locally.",
+      });
+      return;
+    }
+  }
+  try {
+    const created = await options.forkEnvironment(environmentId, environmentType);
+    options.setProjectCollapsed(created.projectId, false);
+    options.selectProjectAndEnvironment(created.projectId, created.id);
+    startEnvironmentInBackground(options.startEnvironment, created.id);
+  } catch (error) {
+    console.error("[HierarchicalSidebar] Failed to fork environment:", error);
+  }
+}
+
 export function createProjectUpdateHandler(
   updateProject: (project: Project) => Promise<unknown>,
 ): (project: Project) => Promise<void> {
@@ -847,33 +894,16 @@ export function HierarchicalSidebar() {
   );
 
   const handleForkEnvironment = useCallback(
-    async (environmentId: string, environmentType: EnvironmentType) => {
-      const source = allEnvironments.find((environment) => environment.id === environmentId);
-      if (!source) return;
-      if (environmentType === "containerized" && !dockerAvailable) {
-        toast.warning("Docker is not running", {
-          description: "Start Docker before forking a container environment.",
-        });
-        return;
-      }
-      if (environmentType === "local") {
-        const project = projectsById.get(source.projectId);
-        if (project && !project.localPath) {
-          toast.warning("Local worktrees are unavailable", {
-            description: "Add a local checkout for this project before forking locally.",
-          });
-          return;
-        }
-      }
-      try {
-        const created = await forkEnvironment(environmentId, environmentType);
-        setProjectCollapsed(created.projectId, false);
-        selectProjectAndEnvironment(created.projectId, created.id);
-        startEnvironmentInBackground(startEnvironment, created.id);
-      } catch (error) {
-        console.error("[HierarchicalSidebar] Failed to fork environment:", error);
-      }
-    },
+    (environmentId: string, environmentType: EnvironmentType) =>
+      forkSidebarEnvironment(environmentId, environmentType, {
+        allEnvironments,
+        dockerAvailable,
+        projectsById,
+        forkEnvironment,
+        setProjectCollapsed,
+        selectProjectAndEnvironment,
+        startEnvironment,
+      }),
     [
       allEnvironments,
       dockerAvailable,

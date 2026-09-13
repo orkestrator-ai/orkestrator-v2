@@ -85,6 +85,32 @@ export function stripSystemInstructions(source: string): string {
   return result.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * Visible transcript substitute for the automatic review-package kickoff
+ * prompt. The provider still receives the framed discovery contract.
+ */
+export const REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION = "Initiate review package creation.";
+
+/** Leading sentence of the discovery prompt, before the JSON target branch. */
+export const REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX =
+  "Prepare the existing change for review against ";
+
+/** Stable phrase that distinguishes the discovery prompt from user text. */
+export const REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE =
+  "This is a short command-discovery task.";
+
+/**
+ * Recognize the automatic validation-discovery prompt, including transcripts
+ * sent before it was wrapped in a system-instructions frame.
+ */
+export function isReviewValidationDiscoveryPrompt(source: string): boolean {
+  const trimmed = source.trim();
+  return (
+    trimmed.startsWith(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX) &&
+    trimmed.includes(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE)
+  );
+}
+
 export const COORDINATOR_DELEGATION_FRAME_OPEN = "<orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_CLOSE = "</orkestrator-coordinator-delegation>";
 export const COORDINATOR_DELEGATION_FRAME_SEPARATOR = "\n\n";

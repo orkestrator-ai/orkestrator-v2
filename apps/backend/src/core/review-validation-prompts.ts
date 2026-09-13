@@ -1,4 +1,10 @@
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import {
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
+  wrapSystemInstructions,
+} from "@orkestrator/protocol/review-evidence-frames";
 
 export const REVIEW_VALIDATION_PLAN_SCHEMA: JsonSchema = {
   type: "object",
@@ -28,9 +34,10 @@ export const REVIEW_VALIDATION_PLAN_SCHEMA: JsonSchema = {
 };
 
 export function reviewValidationDiscoveryPrompt(targetBranch: string): string {
-  return `Prepare the existing change for review against ${JSON.stringify(targetBranch)}, then discover its validation plan. The backend will run the plan and publish one immutable evidence package to every reviewer.
+  return `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+    `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}${JSON.stringify(targetBranch)}, then discover its validation plan. The backend will run the plan and publish one immutable evidence package to every reviewer.
 
-This is a short command-discovery task. Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
+${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read and one targeted read of task definitions are sufficient. Stop as soon as you know the required entrypoints and their prerequisites. Do not review implementation correctness, read application/test bodies merely to understand the change, inspect full commit history, or repeat repository-wide scans. Read source only when it defines a validation command or is essential to resolve a specific execution dependency. When parallel safety remains uncertain, mark the command exclusive and disclose the uncertainty instead of exhaustively tracing the codebase. Keep all discovery tool output bounded.
 
 1. Inspect the current Git status and changes. Commit only relevant safe changes using the repository's commit conventions and hooks. Never skip hooks, force a clean tree, delete unrelated files, push, merge, rebase, reset, switch branches, or create a worktree. Do not implement features or fix validation failures. If unrelated or sensitive changes prevent a clean worktree, report the limitation.
 2. Discover validation requirements afresh from the CURRENT repository: instructions, directory structure, changed paths, CI workflows, manifests, task definitions, toolchain configuration, and relevant scripts. Do not assume a language, package manager, fixed list of files, or that the codebase resembles an earlier review. Follow repository-specific test entrypoints. Do not infer that a command covers another merely from its name.
@@ -39,7 +46,8 @@ This is a short command-discovery task. Usually one batched inventory read and o
 5. resources names directories or shared services the command writes or consumes exclusively (for example a generated output directory, test database, or simulator). Commands with the same resource serialize. Use ["*"] if interference is uncertain. Empty resources means you have verified parallel safety. weight=2 reserves the runner for internally parallel or memory-heavy work; weight=1 allows two independent commands concurrently. Do not guess a command is lightweight. timeoutMs must be between 1000 and 7200000 and appropriate to this project. Never request watch mode, interactive input, background servers without cleanup, or a detached process. If .orkestrator-test-scheduler.json is present, use its cooperativeCommands verbatim from cwd="." as separate plan entries, not inside shell wrappers or compound commands; those runners reserve their own host capacity. Waiting for capacity does not count against timeoutMs.
 6. Read the final full HEAD commit SHA into headRef. Commands will run only while this clean snapshot still matches. Include actual missing prerequisites and coverage uncertainty in limitations. Do not include secrets or environment-variable values in the plan.
 
-Keep discovery focused on what must run and how it can overlap safely. Narrate concise ordinary-prose progress; only the final response is the schema-constrained plan. Do not return command results or read old validation artifacts.`;
+Keep discovery focused on what must run and how it can overlap safely. Narrate concise ordinary-prose progress; only the final response is the schema-constrained plan. Do not return command results or read old validation artifacts.`,
+  )}`;
 }
 
 export const IMPLEMENTATION_VALIDATION_HANDOFF =

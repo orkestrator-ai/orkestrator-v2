@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
+  isReviewValidationDiscoveryPrompt,
   stripSystemInstructions,
   wrapSystemInstructions,
 } from "./review-evidence-frames.js";
@@ -54,6 +58,23 @@ describe("system instructions frame", () => {
 
     expect(stripSystemInstructions(source)).toBe(
       "Fix the <orkestrator-system-instructions> handling",
+    );
+  });
+});
+
+describe("review package preparation display fragments", () => {
+  test("recognizes the unwrapped discovery prompt and ignores similar user text", () => {
+    const prompt = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read.`;
+
+    expect(isReviewValidationDiscoveryPrompt(prompt)).toBe(true);
+    expect(isReviewValidationDiscoveryPrompt(`  ${prompt}\n`)).toBe(true);
+    expect(
+      isReviewValidationDiscoveryPrompt(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main" without the discovery signature.`,
+      ),
+    ).toBe(false);
+    expect(isReviewValidationDiscoveryPrompt(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBe(
+      false,
     );
   });
 });

@@ -30,6 +30,7 @@ import {
   type AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
+import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import type { AppConfig } from "./models.js";
 import {
   type BuildPipelineProvider,
@@ -503,7 +504,7 @@ export const UNATTENDED_POLICY_INSTRUCTION =
   "state that assumption, and continue. Never treat the absence of a person as authorization.";
 
 export function withUnattendedPolicy(prompt: string): string {
-  return `${prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`;
+  return `${prompt}\n\n${wrapSystemInstructions(UNATTENDED_POLICY_INSTRUCTION)}`;
 }
 
 /**

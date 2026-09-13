@@ -9,6 +9,9 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
@@ -351,6 +354,22 @@ describe("userPromptDisplayText", () => {
       kind: "json",
       value: { issues: [{ title: "Older format" }] },
     });
+  });
+
+  test("hides an unwrapped review-package discovery prompt", () => {
+    const source = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read.`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(`${source}\n`)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+  });
+
+  test("shows only the kickoff sentence after a framed discovery prompt", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read.`,
+    )}`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX);
   });
 
   test("tolerates echo drift around generated review guidance", () => {

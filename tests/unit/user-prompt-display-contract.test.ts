@@ -6,6 +6,7 @@ import {
   COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
@@ -13,6 +14,8 @@ import {
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
+import { withUnattendedPolicy } from "../../apps/backend/src/core/build-pipeline-service-helpers";
+import { reviewValidationDiscoveryPrompt } from "../../apps/backend/src/core/review-validation-prompts";
 import {
   buildReviewHandoffPrompt,
   prependReviewHandoff,
@@ -151,6 +154,20 @@ describe("backend prompt display contract", () => {
     expect(presentation.evidencePayload?.source).toBe(
       JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT, null, 2),
     );
+  });
+
+  test("hides the automatic review-package discovery prompt", () => {
+    const source = reviewValidationDiscoveryPrompt("main");
+    const attended = withUnattendedPolicy(source);
+    const displayed = userPromptDisplayText(source);
+    const attendedDisplay = userPromptDisplayText(attended);
+
+    expect(source).toContain("Produce at most 32 commands");
+    expect(attended).toContain("non-interactive build session");
+    expect(displayed).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(attendedDisplay).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(displayed).not.toContain("Produce at most 32 commands");
+    expect(attendedDisplay).not.toContain("non-interactive build session");
   });
 
   test("hides the injected review handoff and keeps only the address instruction", () => {

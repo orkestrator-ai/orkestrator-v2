@@ -250,7 +250,7 @@ async function mapWithConcurrency<T, R>(
   mapper: (item: T) => Promise<R>,
 ): Promise<R[]> {
   if (items.length === 0) return [];
-  const results = new Array<R>(items.length);
+  const results = Array.from<R>({ length: items.length });
   let next = 0;
   const workerCount = Math.max(1, Math.min(concurrency, items.length));
   await Promise.all(

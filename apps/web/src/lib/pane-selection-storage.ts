@@ -178,7 +178,7 @@ export function writeWindowPaneSelection(environmentId: string, state: Environme
 
 /**
  * Remember that this Electron window initiated an environment whose startup
- * agent should take over from setup once its provider session is ready.
+ * agent should take over from setup once setup is complete.
  *
  * This is connection-scoped and persisted because setup continues while the
  * environment is inactive and can outlive a renderer reload. Browser clients

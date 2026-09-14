@@ -45,6 +45,8 @@ import {
 import {
   applyStoredPaneSelection,
   clearStoredPaneSelection,
+  consumeWindowStartupAgentActivation,
+  hasWindowStartupAgentActivation,
   readStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
@@ -140,8 +142,9 @@ export function TerminalContainer({
   const setupPhase = environment?.setupPhase ?? "pending";
   const backendSetupRunning = setupPhase === "running";
   const setupReady = setupPhase === "ready";
-  // The backend clears this once the startup launch has converged, so it is the
-  // window in which a setup-to-agent focus handoff is still owed.
+  // Prompt-bearing launches keep this true until the initial prompt is
+  // dispatched. Prompt-less launches consume it in the same setup-complete
+  // snapshot, so the one-shot window activation is the remaining owed handoff.
   const isStartupLaunchPending = environment?.pendingAgentLaunch === true;
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
   // For local environments, worktreePath must be set before terminal can work
@@ -1106,13 +1109,23 @@ export function TerminalContainer({
   // setup becomes ready, move focus onto that agent — including when the
   // durable-launch effect is still blocked on a `starting` session.
   //
-  // Gated on the launch intent, not on `setupReady` alone. Setup readiness and
+  // Gated on an owed handoff, not on `setupReady` alone. Setup readiness and
   // the setup tab's `isSetupTab` flag both outlive the launch by the life of the
   // environment, so without this gate a reload or a remount would hand focus off
   // again every time the user happened to be sitting on that terminal.
+  // Prompt-less launches clear `pendingAgentLaunch` before setup-complete is
+  // emitted, so the persisted window activation is the remaining one-shot.
   useEffect(() => {
-    if (!setupReady || !isStartupLaunchPending) {
-      handedOffSetupFocusRef.current.delete(environmentId);
+    const windowHandoffOwed = hasWindowStartupAgentActivation(environmentId);
+    if (!setupReady || (!isStartupLaunchPending && !windowHandoffOwed)) {
+      if (!setupReady && windowHandoffOwed) {
+        // A one-shot armed (or re-armed) while setup is not ready must be
+        // allowed to fire when setup becomes ready, including after a previous
+        // handoff for this environment.
+        handedOffSetupFocusRef.current.delete(environmentId);
+      } else if (!isStartupLaunchPending && !windowHandoffOwed) {
+        handedOffSetupFocusRef.current.delete(environmentId);
+      }
       return;
     }
     if (!currentEnvState) return;
@@ -1121,6 +1134,7 @@ export function TerminalContainer({
     if (!startupTabId) return;
     handoffSetupFocusToStartupAgent(environmentId, currentEnvState, startupTabId);
     handedOffSetupFocusRef.current.add(environmentId);
+    consumeWindowStartupAgentActivation(environmentId);
   }, [setupReady, isStartupLaunchPending, currentEnvState, environmentId]);
 
   // Register terminal write function with context

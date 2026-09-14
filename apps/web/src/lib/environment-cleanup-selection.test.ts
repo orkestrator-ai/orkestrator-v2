@@ -10,7 +10,9 @@ import {
 
 import * as realBackend from "@/lib/backend";
 
-const mockGetEnvironment = mock(async (_environmentId: string): Promise<Environment | null> => null);
+const mockGetEnvironment = mock(
+  async (_environmentId: string): Promise<Environment | null> => null,
+);
 mock.module("@/lib/backend", () => ({
   ...realBackend,
   getEnvironment: mockGetEnvironment,

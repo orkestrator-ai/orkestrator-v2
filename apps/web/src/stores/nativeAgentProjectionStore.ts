@@ -92,7 +92,10 @@ function dropProgressiveTranscriptToken(
   sessionKey: string,
 ): void {
   const entry = caches.get(sessionKey);
-  if (!entry || (entry.transcriptToken === undefined && entry.transcriptHistoryEpoch === undefined)) {
+  if (
+    !entry ||
+    (entry.transcriptToken === undefined && entry.transcriptHistoryEpoch === undefined)
+  ) {
     return;
   }
   caches.set(sessionKey, {

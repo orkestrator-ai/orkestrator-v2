@@ -465,7 +465,8 @@ describe("ACP bridge", () => {
       agentState: "finished",
       toolArgs: {
         description: "Summarize two docs",
-        prompt: "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md. Return one line each.",
+        prompt:
+          "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md. Return one line each.",
         subagent_type: "explore",
         model: "composer-2.5",
         agentId: "bc-abc123",

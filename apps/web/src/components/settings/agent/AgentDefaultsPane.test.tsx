@@ -150,6 +150,18 @@ function SettingsHarness({
   );
 }
 
+describe("AgentDefaultsPane action default layout", () => {
+  test("flows action defaults into a two-column grid when width permits", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => {});
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    const grid = screen.getByRole("group", { name: "Action defaults" });
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("@2xl:grid-cols-2");
+    expect(grid.childElementCount).toBe(9);
+  });
+});
+
 describe("AgentDefaultsPane create-script defaults", () => {
   test.each([
     ["claude", "Claude"],

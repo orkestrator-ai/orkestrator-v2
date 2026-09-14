@@ -60,12 +60,21 @@ export function formatProcessRamKb(rssKb: number): string {
 
 /** Summed process CPU for ranking an environment group. */
 export function environmentProcessGroupCpu(group: EnvironmentProcessGroup): number {
-  return group.processes.reduce((total, process) => total + process.cpuPercent, 0);
+  return typeof group.totalCpuPercent === "number"
+    ? group.totalCpuPercent
+    : group.processes.reduce((total, process) => total + process.cpuPercent, 0);
 }
 
 /** Summed process RSS for an environment group total. */
 export function environmentProcessGroupRamKb(group: EnvironmentProcessGroup): number {
-  return group.processes.reduce((total, process) => total + process.rssKb, 0);
+  return typeof group.totalRssKb === "number"
+    ? group.totalRssKb
+    : group.processes.reduce((total, process) => total + process.rssKb, 0);
+}
+
+/** Selected process count, including rows omitted by snapshot bounds. */
+export function environmentProcessGroupCount(group: EnvironmentProcessGroup): number {
+  return typeof group.processCount === "number" ? group.processCount : group.processes.length;
 }
 
 /** Highest-CPU environments first; name then id break ties so the open-time order is stable. */
@@ -84,12 +93,14 @@ export function sortEnvironmentProcessGroupsByCpu(
 /**
  * Keep the order captured when the panel first received environments.
  * Later polls update the same rows in place; newcomers append by current CPU.
+ * A poll that returns a subset still consults `frozenIds` so a later full
+ * snapshot can restore the original open-time ranking.
  */
 export function orderEnvironmentProcessGroups(
   groups: readonly EnvironmentProcessGroup[],
   frozenIds: readonly string[] | null,
 ): EnvironmentProcessGroup[] {
-  if (groups.length <= 1) return [...groups];
+  if (groups.length === 0) return [];
   if (frozenIds === null || frozenIds.length === 0) {
     return sortEnvironmentProcessGroupsByCpu(groups);
   }
@@ -105,6 +116,24 @@ export function orderEnvironmentProcessGroups(
     ordered.push(...sortEnvironmentProcessGroupsByCpu([...remaining.values()]));
   }
   return ordered;
+}
+
+/** Grow-only id list: seed from the first ranking, then append newcomers. */
+export function mergeFrozenEnvironmentIds(
+  frozenIds: readonly string[],
+  groups: readonly EnvironmentProcessGroup[],
+): string[] {
+  if (groups.length === 0) return [...frozenIds];
+  if (frozenIds.length === 0) {
+    return sortEnvironmentProcessGroupsByCpu(groups).map((group) => group.environmentId);
+  }
+  const seen = new Set(frozenIds);
+  const newcomers = groups.filter((group) => !seen.has(group.environmentId));
+  if (newcomers.length === 0) return [...frozenIds];
+  return [
+    ...frozenIds,
+    ...sortEnvironmentProcessGroupsByCpu(newcomers).map((group) => group.environmentId),
+  ];
 }
 
 interface UsageMetric {
@@ -321,7 +350,7 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
 function EnvironmentProcessPanel() {
   const [snapshot, setSnapshot] = useState<EnvironmentProcessUsageSnapshot | null>(null);
   const [checkedAt, setCheckedAt] = useState(() => Date.now());
-  const frozenOrderRef = useRef<string[] | null>(null);
+  const [frozenIds, setFrozenIds] = useState<string[]>([]);
   const projects = useProjectStore((state) => state.projects);
 
   useEffect(() => {
@@ -358,10 +387,18 @@ function EnvironmentProcessPanel() {
       : null;
   const stale = snapshot !== null && fresh === null;
   const rawGroups = fresh?.environments ?? snapshot?.environments ?? [];
-  const groups = orderEnvironmentProcessGroups(rawGroups, frozenOrderRef.current);
-  if (groups.length > 0) {
-    frozenOrderRef.current = groups.map((group) => group.environmentId);
-  }
+  const groups = orderEnvironmentProcessGroups(rawGroups, frozenIds);
+
+  useEffect(() => {
+    const nextGroups = snapshot?.environments ?? [];
+    if (nextGroups.length === 0) return;
+    setFrozenIds((current) => {
+      const next = mergeFrozenEnvironmentIds(current, nextGroups);
+      return next.length === current.length && next.every((id, index) => id === current[index])
+        ? current
+        : next;
+    });
+  }, [snapshot]);
 
   if (snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading processes…</p>;
@@ -409,6 +446,7 @@ function EnvironmentProcessGroupList({
     .join(" · ");
   const totalCpu = formatPercent(environmentProcessGroupCpu(group));
   const totalRam = formatProcessRamKb(environmentProcessGroupRamKb(group));
+  const processCount = environmentProcessGroupCount(group);
   return (
     <section aria-label={`${group.environmentName} processes`}>
       <div className="flex items-baseline justify-between gap-2">
@@ -416,13 +454,13 @@ function EnvironmentProcessGroupList({
           {group.environmentName}
         </h3>
         <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-          {group.processes.length}
+          {processCount}
         </span>
       </div>
       {subtitle ? (
         <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p>
       ) : null}
-      {group.processes.length === 0 ? (
+      {processCount === 0 ? (
         <p className="mt-2 text-xs text-muted-foreground">No processes</p>
       ) : (
         <div className="mt-2 space-y-1">

@@ -87,6 +87,8 @@ const DARWIN_GPU_UTILIZATION_KEYS = [
 /** Keep this above the title-bar meter interval so each poll reuses the last probe. */
 export const GPU_AVAILABLE_CACHE_MS = 15_000;
 const GPU_UNAVAILABLE_CACHE_MS = 30_000;
+export const RAM_AVAILABLE_CACHE_MS = GPU_AVAILABLE_CACHE_MS;
+export const RAM_UNAVAILABLE_CACHE_MS = 30_000;
 export const DARWIN_GPU_SAMPLE_COUNT = 2;
 const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
@@ -203,9 +205,7 @@ export async function readDarwinRamPercent(
 }
 
 export async function readRamPercent(
-  dependencies: Partial<
-    DarwinRamDependencies & Pick<SystemUsageDependencies, "freeMemory">
-  > = {},
+  dependencies: Partial<DarwinRamDependencies & Pick<SystemUsageDependencies, "freeMemory">> = {},
 ): Promise<number> {
   const darwin = await readDarwinRamPercent(dependencies);
   if (darwin !== null) return darwin;
@@ -343,15 +343,8 @@ export function createSystemUsageReader(
   const freeMemory = dependencies.freeMemory ?? os.freemem;
   const diskPercent = dependencies.diskPercent ?? readDiskPercent;
   const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
-  const ramPercent =
-    dependencies.ramPercent ??
-    (() =>
-      readRamPercent({
-        platform: dependencies.platform ?? process.platform,
-        totalMemory,
-        freeMemory,
-        runCommand: dependencies.runCommand ?? runCommand,
-      }));
+  const platform = dependencies.platform ?? process.platform;
+  const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
   const delay =
     dependencies.delay ??
@@ -362,7 +355,37 @@ export function createSystemUsageReader(
   let pendingCpu: Promise<number> | null = null;
   let cachedGpu: { value: number | null; expiresAt: number } | null = null;
   let pendingGpu: Promise<number | null> | null = null;
+  let cachedRam: { value: number; expiresAt: number } | null = null;
+  let pendingRam: Promise<number> | null = null;
+  let lastDarwinRam: number | null = null;
   const pendingReads = new Map<string, Promise<SystemUsageSnapshot>>();
+
+  const fallbackRamPercent = (): number => {
+    const total = totalMemory();
+    const free = freeMemory();
+    return total > 0 ? clampPercent(((total - free) / total) * 100) : 0;
+  };
+
+  const probeRam = async (): Promise<{ value: number; darwinFailed: boolean }> => {
+    if (platform !== "darwin") {
+      return {
+        value: await readRamPercent({ platform, totalMemory, freeMemory, runCommand: execute }),
+        darwinFailed: false,
+      };
+    }
+    const darwin = await readDarwinRamPercent({
+      platform,
+      totalMemory,
+      runCommand: execute,
+    });
+    if (darwin !== null) {
+      lastDarwinRam = darwin;
+      return { value: darwin, darwinFailed: false };
+    }
+    // vm_stat failed or parsed empty. Reuse the last good Darwin reading
+    // rather than os.freemem(), which treats cached files as used.
+    return { value: lastDarwinRam ?? fallbackRamPercent(), darwinFailed: true };
+  };
 
   const calculateCpu = async (): Promise<number> => {
     const sampleStartedAt = now();
@@ -418,6 +441,26 @@ export function createSystemUsageReader(
     return pendingGpu;
   };
 
+  const sampleRam = (sampledAt: number): Promise<number> => {
+    if (dependencies.ramPercent) return dependencies.ramPercent();
+    if (cachedRam && cachedRam.expiresAt > sampledAt) return Promise.resolve(cachedRam.value);
+    if (pendingRam) return pendingRam;
+
+    pendingRam = (async () => {
+      try {
+        const { value, darwinFailed } = await probeRam();
+        cachedRam = {
+          value,
+          expiresAt: now() + (darwinFailed ? RAM_UNAVAILABLE_CACHE_MS : RAM_AVAILABLE_CACHE_MS),
+        };
+        return value;
+      } finally {
+        pendingRam = null;
+      }
+    })();
+    return pendingRam;
+  };
+
   return (diskPath) => {
     const pending = pendingReads.get(diskPath);
     if (pending) return pending;
@@ -426,7 +469,7 @@ export function createSystemUsageReader(
       const cpuUsage = await sampleCpu();
       const sampledAt = now();
       const [ramUsage, diskUsage, gpuUsage] = await Promise.all([
-        ramPercent(),
+        sampleRam(sampledAt),
         diskPercent(diskPath),
         sampleGpu(sampledAt),
       ]);

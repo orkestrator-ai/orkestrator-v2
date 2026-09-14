@@ -13,6 +13,7 @@ import {
   parseDarwinGpuPercent,
   parseDarwinVmStat,
   parsePercentLines,
+  RAM_UNAVAILABLE_CACHE_MS,
   readDarwinGpuPercent,
   readDarwinRamPercent,
   readDiskPercent,
@@ -441,6 +442,22 @@ describe("system usage", () => {
     expect(darwinRamPercentFromVmStat(output, 137_438_953_472)).toBe(78.4);
     expect(parseDarwinVmStat("Pages wired down: 1.")).toBeNull();
     expect(darwinRamPercentFromVmStat(output, 0)).toBeNull();
+
+    const quoted = [
+      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      '"Pages wired down":                        624415.',
+      '"Pages purgeable":                          67841.',
+      '"Anonymous pages":                        4109534.',
+      '"Pages occupied by compressor":           1907369.',
+    ].join("\n");
+    expect(parseDarwinVmStat(quoted)).toEqual({
+      pageSize: 16_384,
+      wired: 624_415,
+      purgeable: 67_841,
+      anonymous: 4_109_534,
+      compressor: 1_907_369,
+    });
+    expect(darwinRamPercentFromVmStat(quoted, 137_438_953_472)).toBe(78.4);
   });
 
   test("reads Darwin RAM from vm_stat and falls back off-platform or on failure", async () => {
@@ -528,5 +545,116 @@ describe("system usage", () => {
     });
     expect((await read("/data")).ramPercent).toBe(56);
     expect(execute).toHaveBeenCalledWith("vm_stat", [], { timeoutMs: 1_500 });
+  });
+
+  test("falls back to the free-page formula on Darwin when vm_stat is unusable", async () => {
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 1_000,
+        freeMemory: () => 10,
+        runCommand: async () => {
+          throw new Error("vm_stat missing");
+        },
+      }),
+    ).toBe(99);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 2_000,
+        freeMemory: () => 500,
+        runCommand: async () => {
+          throw new Error("vm_stat timed out");
+        },
+      }),
+    ).toBe(75);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 1_000,
+        freeMemory: () => 250,
+        runCommand: async () => ({ stdout: "Pages wired down: 1." }),
+      }),
+    ).toBe(75);
+    expect(
+      await readRamPercent({
+        platform: "darwin",
+        totalMemory: () => 4_000,
+        freeMemory: () => 1_000,
+        runCommand: async () => ({
+          stdout: [
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+            "Pages wired down:                              200.",
+            "Pages purgeable:                               100.",
+          ].join("\n"),
+        }),
+      }),
+    ).toBe(75);
+  });
+
+  test("caches a failed Darwin vm_stat probe across title-bar polls", async () => {
+    let clock = 0;
+    const execute = mock(async () => {
+      throw new Error("vm_stat denied");
+    });
+    const read = createSystemUsageReader({
+      platform: "darwin",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 1_000,
+      freeMemory: () => 10,
+      diskPercent: async () => 0,
+      gpuPercent: async () => null,
+      runCommand: execute,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+
+    expect((await read("/data")).ramPercent).toBe(99);
+    for (let index = 0; index < 5; index += 1) {
+      clock += 5_000;
+      expect((await read("/data")).ramPercent).toBe(99);
+    }
+    expect(execute).toHaveBeenCalledTimes(1);
+    clock += RAM_UNAVAILABLE_CACHE_MS - 5_000 * 5 + 1;
+    expect((await read("/data")).ramPercent).toBe(99);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  test("reuses the last Darwin vm_stat reading instead of the free-page fallback", async () => {
+    let clock = 0;
+    let fail = false;
+    const execute = mock(async () => {
+      if (fail) throw new Error("vm_stat timed out");
+      return {
+        stdout: [
+          "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+          "Pages wired down:                              200.",
+          "Pages purgeable:                               100.",
+          "Anonymous pages:                              1000.",
+          "Pages occupied by compressor:                  300.",
+        ].join("\n"),
+      };
+    });
+    const read = createSystemUsageReader({
+      platform: "darwin",
+      cpus: () => [cpu(clock, clock)],
+      totalMemory: () => 40_960_000,
+      freeMemory: () => 0,
+      diskPercent: async () => 0,
+      gpuPercent: async () => null,
+      runCommand: execute,
+      now: () => clock,
+      delay: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+
+    expect((await read("/data")).ramPercent).toBe(56);
+    fail = true;
+    clock += 15_000;
+    expect((await read("/data")).ramPercent).toBe(56);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 });

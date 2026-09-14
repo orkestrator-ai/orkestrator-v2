@@ -16,6 +16,14 @@ export interface EnvironmentProcessGroup {
   projectId: string;
   environmentType: "containerized" | "local";
   processes: EnvironmentProcessUsage[];
+  /** Summed CPU across every selected process, including rows omitted by bounds. */
+  totalCpuPercent: number;
+  /** Summed RSS across every selected process, including rows omitted by bounds. */
+  totalRssKb: number;
+  /** Selected process count before per-environment or snapshot row clipping. */
+  processCount: number;
+  /** True when `processes` is a prefix of the selected set. */
+  truncated: boolean;
 }
 
 export interface EnvironmentProcessUsageSnapshot {
@@ -197,26 +205,55 @@ export function selectLocalProcesses(
   processes: ListedProcess[],
   environment: ProcessUsageEnvironment,
 ): EnvironmentProcessUsage[] {
+  return summarizeListedProcesses(selectLocalListedProcesses(processes, environment)).processes;
+}
+
+function selectLocalListedProcesses(
+  processes: ListedProcess[],
+  environment: ProcessUsageEnvironment,
+): ListedProcess[] {
   const owned = collectDescendantPids(environmentRootPids(environment, processes), processes);
-  return rankProcesses(
-    processes.filter(
-      (process) =>
-        owned.has(process.pid) || commandTouchesWorktree(process.command, environment.worktreePath),
-    ),
+  return processes.filter(
+    (process) =>
+      owned.has(process.pid) || commandTouchesWorktree(process.command, environment.worktreePath),
   );
 }
 
-function rankProcesses(processes: ListedProcess[]): EnvironmentProcessUsage[] {
-  return processes
-    .slice()
-    .sort((left, right) => {
-      if (right.cpuPercent !== left.cpuPercent) return right.cpuPercent - left.cpuPercent;
-      if (right.ramPercent !== left.ramPercent) return right.ramPercent - left.ramPercent;
-      if (right.rssKb !== left.rssKb) return right.rssKb - left.rssKb;
-      return left.name.localeCompare(right.name);
-    })
-    .slice(0, MAX_PROCESSES_PER_ENVIRONMENT)
-    .map(({ ppid: _ppid, ...process }) => process);
+export function summarizeListedProcesses(
+  processes: readonly ListedProcess[],
+): Pick<
+  EnvironmentProcessGroup,
+  "processes" | "totalCpuPercent" | "totalRssKb" | "processCount" | "truncated"
+> {
+  const ranked = processes.slice().sort((left, right) => {
+    if (right.cpuPercent !== left.cpuPercent) return right.cpuPercent - left.cpuPercent;
+    if (right.ramPercent !== left.ramPercent) return right.ramPercent - left.ramPercent;
+    if (right.rssKb !== left.rssKb) return right.rssKb - left.rssKb;
+    return left.name.localeCompare(right.name);
+  });
+  const totalCpuPercent =
+    Math.round(ranked.reduce((total, process) => total + process.cpuPercent, 0) * 10) / 10;
+  const totalRssKb = ranked.reduce((total, process) => total + process.rssKb, 0);
+  const processCount = ranked.length;
+  return {
+    processes: ranked
+      .slice(0, MAX_PROCESSES_PER_ENVIRONMENT)
+      .map(({ ppid: _ppid, ...process }) => process),
+    totalCpuPercent,
+    totalRssKb,
+    processCount,
+    truncated: processCount > MAX_PROCESSES_PER_ENVIRONMENT,
+  };
+}
+
+function emptyProcessSummary(): ReturnType<typeof summarizeListedProcesses> {
+  return {
+    processes: [],
+    totalCpuPercent: 0,
+    totalRssKb: 0,
+    processCount: 0,
+    truncated: false,
+  };
 }
 
 function hostPsArgs(platform: NodeJS.Platform): string[] {
@@ -265,7 +302,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function boundSnapshot(groups: EnvironmentProcessGroup[]): {
+export function boundSnapshot(groups: EnvironmentProcessGroup[]): {
   environments: EnvironmentProcessGroup[];
   truncated: boolean;
 } {
@@ -285,10 +322,18 @@ function boundSnapshot(groups: EnvironmentProcessGroup[]): {
       remaining -= 1;
       bytes += encoded;
     }
-    if (processes.length < group.processes.length) truncated = true;
-    environments.push({ ...group, processes });
+    const clipped = processes.length < group.processes.length;
+    if (clipped) truncated = true;
+    environments.push({
+      ...group,
+      processes,
+      truncated: group.truncated || clipped,
+    });
   }
-  return { environments, truncated };
+  return {
+    environments,
+    truncated: truncated || environments.some((group) => group.truncated),
+  };
 }
 
 /**
@@ -321,14 +366,16 @@ export async function readEnvironmentProcessUsage(
     running,
     dependencies.maxConcurrentContainerProbes ?? MAX_CONCURRENT_CONTAINER_PROBES,
     async (environment): Promise<EnvironmentProcessGroup> => {
-      let listed: EnvironmentProcessUsage[] = [];
+      let summary = emptyProcessSummary();
       if (environment.environmentType === "local") {
-        listed = selectLocalProcesses(hostProcesses, environment);
+        summary = summarizeListedProcesses(selectLocalListedProcesses(hostProcesses, environment));
       } else if (environment.containerId) {
         try {
-          listed = rankProcesses(await listContainerProcesses(environment.containerId, execute));
+          summary = summarizeListedProcesses(
+            await listContainerProcesses(environment.containerId, execute),
+          );
         } catch {
-          listed = [];
+          summary = emptyProcessSummary();
         }
       }
       return {
@@ -336,7 +383,7 @@ export async function readEnvironmentProcessUsage(
         environmentName: environment.name,
         projectId: environment.projectId,
         environmentType: environment.environmentType,
-        processes: listed,
+        ...summary,
       };
     },
   );

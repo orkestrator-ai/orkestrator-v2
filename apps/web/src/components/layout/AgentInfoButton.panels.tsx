@@ -107,7 +107,9 @@ export function SystemUsagePanel({
           {stale ? <span role="status">Data unavailable</span> : null}
         </div>
       ) : null}
-      <div className={heading || stale ? "mt-2 grid grid-cols-4 gap-1.5" : "grid grid-cols-4 gap-1.5"}>
+      <div
+        className={heading || stale ? "mt-2 grid grid-cols-4 gap-1.5" : "grid grid-cols-4 gap-1.5"}
+      >
         <SystemMetric
           icon={Cpu}
           label="Central processing unit (CPU) usage"

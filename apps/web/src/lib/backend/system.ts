@@ -35,6 +35,14 @@ export interface EnvironmentProcessGroup {
   projectId: string;
   environmentType: "containerized" | "local";
   processes: EnvironmentProcessUsage[];
+  /** Summed CPU across every selected process, including omitted rows. */
+  totalCpuPercent: number;
+  /** Summed RSS across every selected process, including omitted rows. */
+  totalRssKb: number;
+  /** Selected process count before per-environment or snapshot row clipping. */
+  processCount: number;
+  /** True when `processes` is a prefix of the selected set. */
+  truncated?: boolean;
 }
 
 export interface EnvironmentProcessUsageSnapshot {

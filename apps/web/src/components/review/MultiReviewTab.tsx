@@ -1101,11 +1101,14 @@ function MultiReviewOverviewTab({
                                 {runtimeSummary}
                               </p>
                             ) : null}
-                            <WorkflowResultStatus
-                              state={reviewer.resultSubmission}
-                              kind="review-report"
-                              className="mt-0.5 text-[11px]"
-                            />
+                            {reviewer.resultSubmission &&
+                            reviewer.resultSubmission !== "preparing" ? (
+                              <WorkflowResultStatus
+                                state={reviewer.resultSubmission}
+                                kind="review-report"
+                                className="mt-0.5 text-[11px]"
+                              />
+                            ) : null}
                             {/* The workflow error generalizes a shared cause; this is
                             the only place the reviewer's own outcome is legible. */}
                             {note ? (

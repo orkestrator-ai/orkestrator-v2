@@ -332,6 +332,25 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.queryByRole("button", { name: /coverage gaps? found/ }) === null).toBe(true);
   });
 
+  test("does not stack a preparing-report spinner on a running reviewer tile", () => {
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0]!.resultSubmission = "preparing";
+    reviewing.reviewers[1]!.resultSubmission = "correcting";
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
+
+    expect(screen.queryByText("Preparing report") === null).toBe(true);
+    expect(screen.getByText("Correcting report format")).toBeTruthy();
+    expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(1);
+  });
+
   test("keeps partial-report counts visible for failed and cancelled reviewers", () => {
     const settled = readyWorkflow();
     settled.phase = "failed";

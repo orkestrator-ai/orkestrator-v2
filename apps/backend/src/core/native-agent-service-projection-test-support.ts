@@ -246,6 +246,10 @@ export function internals(service: NativeAgentService) {
     invalidateProjection(key: string): void;
     pruneProjectionEpoch(key: string): void;
     flushDisplayTailPersist(sessionKey: string): Promise<void>;
+    progressiveHydrations: Map<
+      string,
+      { sourceToken: string; snapshot?: unknown; promise?: Promise<void> }
+    >;
     launchTimer: ReturnType<typeof setInterval> | null;
     interactionTimer: ReturnType<typeof setInterval> | null;
   };

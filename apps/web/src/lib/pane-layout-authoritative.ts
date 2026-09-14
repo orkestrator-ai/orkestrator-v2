@@ -157,7 +157,14 @@ function applyStartupAgentSetupHandoff(
     !paneSelectionIsSetupHandoffSource(targetLeaf) ||
     (focusedLeaf !== targetLeaf && !paneSelectionIsSetupHandoffSource(focusedLeaf))
   ) {
-    return { state: selected, retireActivationAfterInstall: true };
+    // Setup-readiness alone must not burn the one-shot. The renderer can see
+    // setupPhase ready before the backend publishes the revision that selects
+    // the startup agent. Retire only on a published handoff fact: a provider
+    // session (prompted launch) or an authoritative startup-agent selection
+    // (prompt-less `activateOnSetupHandoff`).
+    const handoffPublished =
+      Boolean(providerSessionId) || authoritativeLeaf?.activeTabId === STARTUP_AGENT_TAB_ID;
+    return { state: selected, retireActivationAfterInstall: handoffPublished };
   }
   return {
     state: activateTabInState(selected, STARTUP_AGENT_TAB_ID) ?? selected,

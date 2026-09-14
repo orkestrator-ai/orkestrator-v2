@@ -1533,6 +1533,94 @@ describe("pane-layout binding", () => {
     }
   });
 
+  test("hands a prompt-less inactive environment to its startup agent after a setup-ready snapshot that still shows setup", async () => {
+    detach?.();
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...environment("env-1"),
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+            pendingAgentLaunch: false,
+          },
+        ],
+      });
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.initialize(null, "env-1");
+      paneStore.addTab("default", { id: "default", type: "plain", isSetupTab: true }, "env-1");
+      paneStore.beginHydration("env-1");
+      paneStore.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+
+      armStartupAgentTabActivation("env-1");
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const promptlessAgentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: { environmentId: "env-1", isLocal: true },
+      };
+      const staleLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-1",
+        containerId: null,
+        activePaneId: "default",
+        root: {
+          kind: "leaf" as const,
+          id: "default",
+          tabs: [setupTab, promptlessAgentTab],
+          activeTabId: "default",
+        },
+        updatedAt: "2026-09-14T08:00:00.000Z",
+        revision: 4,
+      };
+      const handedOffLayout = {
+        ...staleLayout,
+        revision: 5,
+        updatedAt: "2026-09-14T08:00:01.000Z",
+        root: { ...staleLayout.root, activeTabId: "startup-agent" },
+      };
+
+      let revision = 4;
+      const getPaneLayout = mock(async () => (revision === 4 ? staleLayout : handedOffLayout));
+      detach = startTestStoreResourceSync({
+        getPaneLayout: getPaneLayout as never,
+        adoptPaneLayout: () => true,
+      });
+
+      // No TerminalContainer is mounted: this is the inactive-environment path
+      // that depends on the persisted window activation surviving the stale
+      // setup-ready snapshot until the backend publishes the handoff.
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 4 });
+      await tick();
+      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("default");
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
+
+      revision = 5;
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 5 });
+      await tick();
+      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe(
+        "startup-agent",
+      );
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
+
+      // Returning or reloading the initiating window must keep the user's later
+      // setup-tab choice; the retired one-shot must not steal focus again.
+      usePaneLayoutStore.getState().setActiveTab("default", "default", "env-1");
+      dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 6 });
+      await tick();
+      expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("default");
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(false);
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
   test("ignores a change for an environment this client has not loaded", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [] });

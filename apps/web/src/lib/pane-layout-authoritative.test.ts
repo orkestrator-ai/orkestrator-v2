@@ -41,7 +41,8 @@ const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
-const { consumeWindowStartupAgentActivation } = await import("./pane-selection-storage");
+const { consumeWindowStartupAgentActivation, hasWindowStartupAgentActivation } =
+  await import("./pane-selection-storage");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
 type PersistedPaneLayout = import("@/types/paneLayout").PersistedPaneLayout;
@@ -507,6 +508,58 @@ describe("reconcileAuthoritativePaneLayout", () => {
       );
 
       expect(restored?.root).toMatchObject({ activeTabId: "default" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not retire a prompt-less activation on a setup-ready snapshot that still shows the setup tab", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const promptlessAgentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: { environmentId: "env-1", isLocal: true },
+        initialAgentPlatform: "cursor" as const,
+      };
+      const setupRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (setupRoot.kind !== "leaf") throw new Error("expected leaf");
+      setupRoot.activeTabId = "default";
+      const handedOffRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (handedOffRoot.kind !== "leaf") throw new Error("expected leaf");
+      handedOffRoot.activeTabId = "startup-agent";
+
+      armStartupAgentTabActivation("env-1");
+      const awaitingHandoff = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(setupRoot),
+        paneState(setupRoot),
+      );
+      expect(awaitingHandoff?.root).toMatchObject({ activeTabId: "default" });
+      if (!awaitingHandoff) throw new Error("expected a pending layout");
+      // Production commits as soon as the reconciled tree is installed. A
+      // setup-ready snapshot that has not selected the agent must leave the
+      // one-shot armed for the later handoff revision.
+      commitStartupAgentSetupHandoff("env-1", awaitingHandoff);
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
+
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(handedOffRoot),
+        awaitingHandoff,
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "startup-agent" });
+      expect(hasWindowStartupAgentActivation("env-1")).toBe(true);
     } finally {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;

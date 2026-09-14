@@ -1118,7 +1118,12 @@ export function TerminalContainer({
   useEffect(() => {
     const windowHandoffOwed = hasWindowStartupAgentActivation(environmentId);
     if (!setupReady || (!isStartupLaunchPending && !windowHandoffOwed)) {
-      if (!isStartupLaunchPending && !windowHandoffOwed) {
+      if (!setupReady && windowHandoffOwed) {
+        // A one-shot armed (or re-armed) while setup is not ready must be
+        // allowed to fire when setup becomes ready, including after a previous
+        // handoff for this environment.
+        handedOffSetupFocusRef.current.delete(environmentId);
+      } else if (!isStartupLaunchPending && !windowHandoffOwed) {
         handedOffSetupFocusRef.current.delete(environmentId);
       }
       return;

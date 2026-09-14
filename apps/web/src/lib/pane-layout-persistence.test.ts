@@ -130,6 +130,7 @@ describe("pane layout persistence", () => {
         type: "agent-native",
         initialPrompt: "do not persist",
         agentHandoffId: "handoff-1",
+        consumedAgentHandoffId: "handoff-consumed",
         initialAgentPlatform: "codex",
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
@@ -150,6 +151,7 @@ describe("pane layout persistence", () => {
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
     expect(JSON.stringify(persisted)).toContain('"agentHandoffId":"handoff-1"');
+    expect(JSON.stringify(persisted)).toContain('"consumedAgentHandoffId":"handoff-consumed"');
     expect(JSON.stringify(persisted)).toContain('"initialAgentPlatform":"codex"');
     expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
@@ -178,6 +180,7 @@ describe("pane layout persistence", () => {
     expect(rehydratedTab?.hideStructuredOutput).toBe(true);
     expect(rehydratedTab?.initialPrompt).toBeUndefined();
     expect(rehydratedTab?.agentHandoffId).toBe("handoff-1");
+    expect(rehydratedTab?.consumedAgentHandoffId).toBe("handoff-consumed");
 
     store.clearTabInitialAgentOptions("native", "env-1");
     await waitForTimers();
@@ -186,6 +189,67 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(consumed)).not.toContain("initialAgentModel");
     expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
     expect(JSON.stringify(consumed)).not.toContain("initialExecutionProfileId");
+    stop();
+  });
+
+  test("round-trips consume then clear of a handoff through persist and restore", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    usePaneLayoutStore.getState().beginHydration("env-1");
+    usePaneLayoutStore
+      .getState()
+      .finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "native",
+        type: "agent-native",
+        agentHandoffId: "handoff-1",
+        nativeAgentData: {
+          environmentId: "env-1",
+          containerId: "container-1",
+          sessionId: "session-1",
+        },
+      },
+      "env-1",
+    );
+    await waitForTimers();
+
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("native", "env-1");
+    await waitForTimers();
+    const consumed = save.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(consumed)).toContain('"agentHandoffId":"handoff-1"');
+    expect(JSON.stringify(consumed)).toContain('"consumedAgentHandoffId":"handoff-1"');
+    const consumedRestore = reconcilePersistedLayout(createSaved("env-1", consumed!), {
+      environmentId: "env-1",
+      containerId: "container-1",
+      isLocal: false,
+    });
+    const consumedTab = (
+      consumedRestore!.root as unknown as { tabs: Array<Record<string, unknown>> }
+    ).tabs.find((tab) => tab.id === "native");
+    expect(consumedTab?.agentHandoffId).toBe("handoff-1");
+    expect(consumedTab?.consumedAgentHandoffId).toBe("handoff-1");
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("native", "env-1");
+    await waitForTimers();
+    const cleared = save.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(cleared)).not.toContain('"agentHandoffId"');
+    expect(JSON.stringify(cleared)).toContain('"consumedAgentHandoffId":"handoff-1"');
+    const clearedRestore = reconcilePersistedLayout(createSaved("env-1", cleared!), {
+      environmentId: "env-1",
+      containerId: "container-1",
+      isLocal: false,
+    });
+    const clearedTab = (
+      clearedRestore!.root as unknown as { tabs: Array<Record<string, unknown>> }
+    ).tabs.find((tab) => tab.id === "native");
+    expect(clearedTab?.agentHandoffId).toBeUndefined();
+    expect(clearedTab?.consumedAgentHandoffId).toBe("handoff-1");
     stop();
   });
 

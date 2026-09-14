@@ -2113,7 +2113,7 @@ export function SharedNativeAgentController({
                 promptSuggestions: composer?.promptSuggestionsEnabled,
               })
                 .then(() => {
-                  if (agentHandoffId && providerSessionId !== sourceSessionId) {
+                  if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
                     clearTabAgentHandoff(tabId, data.environmentId);
                   }
                   clearPersistedVirtuosoState(sessionKey);

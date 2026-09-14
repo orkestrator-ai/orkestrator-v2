@@ -221,7 +221,8 @@ interface PaneLayoutState {
   consumeTabAgentHandoff: (tabId: string, environmentId?: string) => void;
   /**
    * Detaches imported history and deletes the snapshot. Used when this tab
-   * leaves the destination session (resume of another conversation).
+   * leaves the destination session (resume of another conversation, or an
+   * automatic replacement of a consumed destination session).
    */
   clearTabAgentHandoff: (tabId: string, environmentId?: string) => void;
   /**
@@ -1054,9 +1055,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const consumedAgentHandoffId = tabWithHandoff.agentHandoffId;
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
-      tabs: leaf.tabs.map((tab) =>
-        tab.id === tabId ? { ...tab, consumedAgentHandoffId } : tab,
-      ),
+      tabs: leaf.tabs.map((tab) => (tab.id === tabId ? { ...tab, consumedAgentHandoffId } : tab)),
     }));
     const newEnvs = new Map(state.environments);
     newEnvs.set(envId, { ...envState, root: newRoot });
@@ -1140,20 +1139,44 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const currentSessionId = nativeAgentData.sessionId;
     if (currentSessionId === sessionId) return;
 
+    // Imported history belongs to the destination session that accepted it.
+    // A later real session — resume of another conversation, or the
+    // connect-time replacement for a missing provider session — must drop
+    // that transcript rather than prepend it onto a thread that never saw
+    // the handoff. First assignment (no prior id) and an unloaded id stay
+    // attached so an unsent transfer can still go to the new session.
+    const shouldDetachConsumedHandoff =
+      Boolean(currentSessionId) &&
+      Boolean(sessionId) &&
+      Boolean(existingTab.agentHandoffId) &&
+      existingTab.consumedAgentHandoffId === existingTab.agentHandoffId;
+
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
       tabs: leaf.tabs.map((tab) => {
         if (tab.id !== tabId) return tab;
         const nextNativeAgentData = getNativeAgentData(tab);
-        return nextNativeAgentData
-          ? { ...tab, nativeAgentData: { ...nextNativeAgentData, sessionId } }
-          : tab;
+        if (!nextNativeAgentData) return tab;
+        const next = {
+          ...tab,
+          nativeAgentData: { ...nextNativeAgentData, sessionId },
+          ...(shouldDetachConsumedHandoff
+            ? {
+                agentHandoffId: undefined,
+                consumedAgentHandoffId: tab.agentHandoffId,
+              }
+            : {}),
+        };
+        return next;
       }),
     }));
 
     const environments = new Map(state.environments);
     environments.set(envId, { ...envState, root: newRoot });
     set({ environments });
+    if (shouldDetachConsumedHandoff) {
+      deleteUnreferencedAgentHandoffs(envId, [existingTab], newRoot);
+    }
   },
 
   navigateFileTab: (tabId, lineNumber, columnNumber, environmentId) => {

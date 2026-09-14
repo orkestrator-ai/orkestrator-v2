@@ -281,7 +281,8 @@ mock.module("@/lib/pane-layout-persistence", () => ({
 }));
 
 const { AgentNativeTab } = await import("./AgentNativeTab");
-const { enqueueNativeAsyncQuestionResponse } = await import("./AgentNativeTab.controller");
+const { enqueueNativeAsyncQuestionResponse, SharedNativeAgentController } =
+  await import("./AgentNativeTab.controller");
 const { useNativeAgentSession } = await import("@/hooks/useNativeAgentSession");
 
 // Favorites and enabled platforms live in the shared config store, which no
@@ -503,6 +504,55 @@ function TerminalTabHarness({
     return () => setCreateTab(null);
   }, [createTab, setCreateTab]);
   return children;
+}
+
+function seedEnvTab(tab: TabInfo) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        "env-1",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [tab],
+            activeTabId: tab.id,
+          },
+          activePaneId: "default",
+          containerId: "container-1",
+        },
+      ],
+    ]),
+    hydration: new Map([["env-1", "done"]]),
+    activeEnvironmentId: "env-1",
+  });
+}
+
+function grokToCursorHandoff(id = "handoff-grok-to-cursor") {
+  return createAgentHandoffSnapshot({
+    id,
+    environmentId: "env-1",
+    sourceProvider: "grok",
+    destinationProvider: "cursor",
+    sourceSessionId: "grok-session",
+    messages: [
+      {
+        id: "grok-user-1",
+        role: "user",
+        content: "Investigate the layout",
+        parts: [{ type: "text", content: "Investigate the layout" }],
+        createdAt: "2026-09-14T22:00:00.000Z",
+      },
+      {
+        id: "grok-assistant-1",
+        role: "assistant",
+        content: "I found three concrete gaps",
+        parts: [{ type: "text", content: "I found three concrete gaps" }],
+        createdAt: "2026-09-14T22:01:00.000Z",
+      },
+    ],
+    now: "2026-09-14T22:02:00.000Z",
+  });
 }
 
 function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) {
@@ -4157,6 +4207,255 @@ describe("AgentNativeTab", () => {
     const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
     expect(tab?.agentHandoffId).toBe(snapshot.id);
     expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
+  });
+
+  test("consumes and retains a first handoff after enqueueing on a running turn", async () => {
+    renderVirtualizedMessages = true;
+    const snapshot = grokToCursorHandoff("handoff-queue-cursor");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Queue this follow-up",
+    );
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      turn: { phase: "running" as const },
+      messages: [],
+    }));
+    const tabId = "tab-handoff-queue";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      nativeAgentData: identity("cursor"),
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Queue this follow-up" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        `cursor\0${createSessionKey("env-1", tabId)}`,
+        "env-1",
+        expect.objectContaining({ text: transported }),
+      ),
+    );
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
+    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    expect(tab?.agentHandoffId).toBe(snapshot.id);
+    expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
+  });
+
+  test("drops imported history when a consumed destination session is replaced", async () => {
+    renderVirtualizedMessages = true;
+    const snapshot = grokToCursorHandoff("handoff-replaced-session");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    adoptNativeAgentSessionMock.mockImplementation(async (input) => {
+      if (input.providerSessionId === "cursor-missing") {
+        throw new Error("provider session was not found");
+      }
+      return defaultAdoptNativeAgentSession(input);
+    });
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => ({
+      ...(await defaultEnsureNativeAgentSession(input)),
+      providerSessionId: "cursor-replacement",
+    }));
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      sessionId: "cursor-replacement",
+    }));
+    const tabId = "tab-handoff-replaced";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      consumedAgentHandoffId: snapshot.id,
+      nativeAgentData: { ...identity("cursor"), sessionId: "cursor-missing" },
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
+    );
+    expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
+    await waitFor(() => {
+      expect(screen.queryByText("Investigate the layout")).toBeNull();
+      expect(screen.queryByText("I found three concrete gaps")).toBeNull();
+    });
+    const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
+    expect(tab?.consumedAgentHandoffId).toBe(snapshot.id);
+    expect(getNativeAgentData(tab!)?.sessionId).toBe("cursor-replacement");
+  });
+
+  test("remounts consumed history and hides the carrier after resuming another session", async () => {
+    renderVirtualizedMessages = true;
+    const snapshot = grokToCursorHandoff("handoff-remount-resume");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Keep going in Cursor",
+    );
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+        ...(await defaultProjection(projectionInput)),
+        messages: [
+          {
+            id: "cursor-bootstrap",
+            role: "user" as const,
+            content: transported,
+            parts: [{ type: "text" as const, content: transported }],
+            createdAt: "2026-09-14T22:03:00.000Z",
+          },
+        ],
+      }));
+      return { outcome: "accepted" as const, requestId: input.requestId };
+    });
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          {
+            sessionId: "older-session",
+            title: "Earlier work",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          },
+        ] as never,
+    );
+    resumeNativeAgentSessionMock.mockImplementation(async (input) => {
+      const resumed = {
+        ...(await defaultProjection({
+          agent: input.agent!,
+          environmentId: input.environmentId,
+        })),
+        sessionId: input.providerSessionId,
+        generation: `resumed:${input.providerSessionId}`,
+        messages: [
+          {
+            id: "leftover-carrier",
+            role: "user" as const,
+            content: transported,
+            parts: [{ type: "text" as const, content: transported }],
+            createdAt: "2026-09-14T22:04:00.000Z",
+          },
+          {
+            id: "resumed-reply",
+            role: "assistant" as const,
+            content: "Resumed earlier work",
+            parts: [{ type: "text" as const, content: "Resumed earlier work" }],
+            createdAt: "2026-09-14T22:05:00.000Z",
+          },
+        ],
+      };
+      getNativeAgentProjectionMock.mockImplementation(async () => resumed);
+      return resumed;
+    });
+
+    const tabId = "tab-handoff-remount";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      nativeAgentData: identity("cursor"),
+    });
+
+    const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Keep going in Cursor" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
+        snapshot.id,
+      ),
+    );
+    first.unmount();
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+    expect(await screen.findByText("Investigate the layout")).toBeTruthy();
+    expect(screen.getByText("I found three concrete gaps")).toBeTruthy();
+    expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
+
+    fireEvent.click(screen.getByText("Resume Session"));
+    const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
+
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBeUndefined(),
+    );
+    expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
+    expect(await screen.findByText("Resumed earlier work")).toBeTruthy();
+    expect(screen.queryByText("Investigate the layout")).toBeNull();
+    expect(screen.queryByText((text) => text.includes("orkestrator-handoff")) === null).toBe(true);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
+      snapshot.id,
+    );
+  });
+
+  test("does not delete a handoff when resume runs before the projection has a session id", async () => {
+    const snapshot = grokToCursorHandoff("handoff-unloaded-resume");
+    getAgentHandoffMock.mockResolvedValue({
+      id: snapshot.id,
+      environmentId: snapshot.environmentId,
+      version: AGENT_HANDOFF_VERSION,
+      snapshot,
+    });
+    adoptNativeAgentSessionMock.mockImplementation(() => new Promise(() => {}));
+    listNativeAgentResumableSessionsMock.mockImplementation(
+      async () =>
+        [
+          {
+            sessionId: "cursor-session",
+            title: "Current destination",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          },
+        ] as never,
+    );
+    const tabId = "tab-handoff-unloaded";
+    seedEnvTab({
+      id: tabId,
+      type: "agent-native",
+      agentHandoffId: snapshot.id,
+      nativeAgentData: identity("cursor"),
+    });
+
+    render(
+      <SharedNativeAgentController
+        tabId={tabId}
+        data={identity("cursor")}
+        isActive
+        agentHandoffId={snapshot.id}
+        initialResumeOpen
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Current destination/ }));
+    await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId).toBe(snapshot.id);
   });
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
@@ -7818,6 +8117,137 @@ describe("AgentNativeTab", () => {
           }),
         ),
       );
+    });
+
+    test("resuming a different session detaches a consumed handoff", async () => {
+      const snapshot = grokToCursorHandoff("handoff-resume-other");
+      getAgentHandoffMock.mockResolvedValue({
+        id: snapshot.id,
+        environmentId: snapshot.environmentId,
+        version: AGENT_HANDOFF_VERSION,
+        snapshot,
+      });
+      seedProjection({ sessionId: "claude-session" });
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "older-session",
+              title: "Earlier work",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+          ] as never,
+      );
+      const tabId = "tab-resume-handoff-other";
+      seedEnvTab({
+        id: tabId,
+        type: "agent-native",
+        agentHandoffId: snapshot.id,
+        consumedAgentHandoffId: snapshot.id,
+        nativeAgentData: identity("claude"),
+      });
+
+      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
+
+      await waitFor(() =>
+        expect(
+          usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.agentHandoffId,
+        ).toBeUndefined(),
+      );
+      expect(deleteAgentHandoffMock).toHaveBeenCalledWith(snapshot.id, "env-1");
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.consumedAgentHandoffId).toBe(
+        snapshot.id,
+      );
+    });
+
+    test("resuming the current session leaves a consumed handoff intact", async () => {
+      const snapshot = grokToCursorHandoff("handoff-resume-same");
+      getAgentHandoffMock.mockResolvedValue({
+        id: snapshot.id,
+        environmentId: snapshot.environmentId,
+        version: AGENT_HANDOFF_VERSION,
+        snapshot,
+      });
+      seedProjection({ sessionId: "claude-session" });
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "claude-session",
+              title: "Current destination",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+            {
+              sessionId: "older-session",
+              title: "Earlier work",
+              updatedAt: "2026-07-01T00:00:00.000Z",
+            },
+          ] as never,
+      );
+      const tabId = "tab-resume-handoff-same";
+      seedEnvTab({
+        id: tabId,
+        type: "agent-native",
+        agentHandoffId: snapshot.id,
+        consumedAgentHandoffId: snapshot.id,
+        nativeAgentData: identity("claude"),
+      });
+
+      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      expect(within(dialog).queryByRole("button", { name: /Current destination/ })).toBeNull();
+      expect(within(dialog).getByText("Earlier work")).toBeTruthy();
+      expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+        agentHandoffId: snapshot.id,
+        consumedAgentHandoffId: snapshot.id,
+      });
+    });
+
+    test("a failed resume does not detach a consumed handoff", async () => {
+      const snapshot = grokToCursorHandoff("handoff-resume-fail");
+      getAgentHandoffMock.mockResolvedValue({
+        id: snapshot.id,
+        environmentId: snapshot.environmentId,
+        version: AGENT_HANDOFF_VERSION,
+        snapshot,
+      });
+      seedProjection({ sessionId: "claude-session" });
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "older-session",
+              title: "Earlier work",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+          ] as never,
+      );
+      resumeNativeAgentSessionMock.mockRejectedValueOnce(new Error("resume failed"));
+      const tabId = "tab-resume-handoff-fail";
+      seedEnvTab({
+        id: tabId,
+        type: "agent-native",
+        agentHandoffId: snapshot.id,
+        consumedAgentHandoffId: snapshot.id,
+        nativeAgentData: identity("claude"),
+      });
+
+      render(<PaneBackedAgentNativeTab tabId={tabId} />);
+      fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
+      fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      expect(deleteAgentHandoffMock).not.toHaveBeenCalled();
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+        agentHandoffId: snapshot.id,
+        consumedAgentHandoffId: snapshot.id,
+      });
     });
 
     test("dismisses an accepted suggestion for any provider that tracks them", async () => {

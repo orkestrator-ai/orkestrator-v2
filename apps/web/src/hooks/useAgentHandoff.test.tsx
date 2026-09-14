@@ -546,15 +546,13 @@ describe("useAgentHandoff", () => {
       }: {
         providerMessages: NativeMessage[];
         consumedHandoffId?: string;
-      }) =>
-        useAgentHandoff(
-          snapshot.id,
-          "cursor",
-          "env-1",
-          providerMessages,
-          consumedHandoffId,
-        ),
-      { initialProps: { providerMessages: [] as NativeMessage[] } },
+      }) => useAgentHandoff(snapshot.id, "cursor", "env-1", providerMessages, consumedHandoffId),
+      {
+        initialProps: {
+          providerMessages: [] as NativeMessage[],
+          consumedHandoffId: undefined as string | undefined,
+        },
+      },
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 

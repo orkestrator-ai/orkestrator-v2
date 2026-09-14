@@ -3194,6 +3194,180 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(getAgentHandoff).toHaveBeenCalledWith("handoff-1");
   });
 
+  test("clear still drops a previously consumed live handoff and deletes the snapshot", async () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            nativeAgentData: { environmentId: "env-handoff" },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore.getState().consumeTabAgentHandoff("handoff-tab", "env-handoff");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: "handoff-1",
+      consumedAgentHandoffId: "handoff-1",
+    });
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+
+    usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: undefined,
+      consumedAgentHandoffId: "handoff-1",
+    });
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
+    await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
+  });
+
+  test("replacing a consumed destination session detaches the live handoff", async () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            consumedAgentHandoffId: "handoff-1",
+            nativeAgentData: {
+              environmentId: "env-handoff",
+              sessionId: "destination-original",
+            },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId("handoff-tab", "destination-replacement", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: undefined,
+      consumedAgentHandoffId: "handoff-1",
+      nativeAgentData: { sessionId: "destination-replacement" },
+    });
+    expect(deleteAgentHandoff).toHaveBeenCalledWith("handoff-1", "env-handoff");
+    await expect(loadAgentHandoff("handoff-1")).resolves.toBeNull();
+  });
+
+  test("assigning the first destination session keeps an unconsumed handoff", () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            nativeAgentData: { environmentId: "env-handoff" },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId("handoff-tab", "destination-first", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: "handoff-1",
+      nativeAgentData: { sessionId: "destination-first" },
+    });
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+  });
+
+  test("replacing an unconsumed destination session keeps the live handoff", () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            nativeAgentData: {
+              environmentId: "env-handoff",
+              sessionId: "destination-original",
+            },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId("handoff-tab", "destination-replacement", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: "handoff-1",
+      nativeAgentData: { sessionId: "destination-replacement" },
+    });
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+  });
+
+  test("the same destination session id does not detach a consumed handoff", () => {
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            consumedAgentHandoffId: "handoff-1",
+            nativeAgentData: {
+              environmentId: "env-handoff",
+              sessionId: "destination-original",
+            },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
+    rememberAgentHandoff({ id: "handoff-1" } as never);
+
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId("handoff-tab", "destination-original", "env-handoff");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      agentHandoffId: "handoff-1",
+      consumedAgentHandoffId: "handoff-1",
+    });
+    expect(deleteAgentHandoff).not.toHaveBeenCalled();
+  });
+
   test("clearing an already-consumed handoff is a no-op", () => {
     seedPaneTree(
       {
@@ -3723,7 +3897,8 @@ describe("paneLayoutStore guard branches", () => {
 
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-handoff-consume-noop")[0]?.consumedAgentHandoffId,
+      usePaneLayoutStore.getState().getAllTabs("env-handoff-consume-noop")[0]
+        ?.consumedAgentHandoffId,
     ).toBeUndefined();
   });
 

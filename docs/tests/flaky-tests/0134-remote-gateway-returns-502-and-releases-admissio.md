@@ -1,0 +1,12 @@
+# `remote gateway > returns 502 and releases admission when an eligible buffered proxy body aborts` (`tests/unit/electron/gateway-proxy.test.ts:810`)
+
+- **ID:** 0134
+- **Status:** resolved
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes plus this document.
+- **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the root group shared the host with the workspace, bridges and protocol groups.
+- **Failure:** the status assertion passed — the proxy did answer `502` — and the *body* assertion failed: `expect(received).toContain("aborted")`, received `{"error":"The socket connection was closed unexpectedly. For more information, pass \`verbose: true\` in the second argument to fetch()}`. So the abort was handled and admission released as intended; what varied is whether the client read the gateway's own error body or Bun's fetch-level socket-closed message first. Duration 64.71 ms, so this is a race in the read, not a timeout.
+- **Suite counts:** root group `3772 pass, 1 fail. Ran 3774 tests across 181 files. [115.24s]`. It was the only failure in the group and in the whole run.
+- **Isolated rerun:** `bun test tests/unit/electron/gateway-proxy.test.ts` → 26 passed, 0 failed, exit 0; the target passed.
+- **Related:** same file as `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`gateway-proxy.test.ts:674`), and the same aggregate-only pattern recorded for that entry. Different mechanism, though: that one is a timing miss on a keep-alive, this one is a body-versus-socket-close read race on a deliberate abort.
+- **Hypothesis:** the test aborts the upstream body and then asserts on both the status and the response text. When the abort lands before the gateway's error body is flushed and read, Bun's fetch surfaces its own socket-closed JSON instead, so the assertion sees a different — but equally correct — 502 body. The behaviour under test (502 plus admission release) was not violated in this run. Before touching the gateway, a recurrence should establish whether the assertion should accept either body shape, or whether the gateway should be made to flush its error body before the socket closes; the change in flight was confined to `apps/web` transcript rendering and `docs/`, and loads no gateway code.

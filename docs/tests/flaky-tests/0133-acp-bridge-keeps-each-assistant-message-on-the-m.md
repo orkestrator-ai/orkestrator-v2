@@ -1,0 +1,12 @@
+# `ACP bridge > keeps each assistant message on the model that produced it when the model changes` (`bridges/acp-bridge/src/acp-transcript.test.ts`)
+
+- **ID:** 0133
+- **Status:** resolved
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes.
+- **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the bridges group shared the host with the workspace, root and protocol groups. This is the loudest configuration in which this family has been recorded.
+- **Failure:** `error: Timed out waiting for ACP state: false` (duration 15,011.46 ms), thrown from the shared `waitFor` helper (`acp-test-harness.ts:184`) via `spawnBridge` (`acp-test-harness.ts:234`). As with the rest of the family the expired wait is the `GET /global/health` poll against the freshly spawned bridge child, so the child never reported healthy and none of the per-message model attribution under test was reached.
+- **Suite counts:** bridges group `2690 pass, 1 fail`. It was the only failure in that group; the root group's one failure in the same run was a real expectation change, not a flake.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/acp-transcript.test.ts` → 69 passed, 0 failed; the target passed.
+- **Related:** same `spawnBridge` health-wait family as `ACP bridge > bounds remembered provider message ids during a large replay` (`acp-transcript.test.ts:136`), `ACP bridge > keeps a completed turn idle when Cursor replay is failed` (`acp-transcript.test.ts:1410`), `ACP bridge > reads agent arguments from the spawned child` (`acp-prompt.test.ts:50`) and `ACP bridge > rejects a concurrent second turn that carries a different requestId` (`index.test.ts:4956`).
+- **Hypothesis:** no new evidence, and this occurrence is the load-side complement to the `acp-prompt.test.ts:50` entry: that one missed the 15 s budget on the quietest configuration, this one missed it on the busiest, which is consistent with the family being dominated by something other than host throughput. The change in flight was confined to `apps/web` transcript rendering and `docs/`; no ACP path loads any of it, and `bridges/` was untouched. The outstanding measurement is unchanged — record how long the child took to bind and whether a previous child was still alive when the failing spawn began, before the startup budget is touched.

@@ -109,7 +109,7 @@ const SKIPPED_TREES = ["test-fixtures"];
  * Dated records of runs that already happened. They quote the commands exactly
  * as they were typed at the time, so rewriting them would falsify the record.
  */
-const HISTORICAL_TREES = ["docs/development/flaky-tests.md"];
+const HISTORICAL_TREES = ["docs/development/flaky-tests.md", "docs/tests/flaky-tests"];
 
 function markdownFiles(): string[] {
   const found: string[] = [];
@@ -127,7 +127,10 @@ function markdownFiles(): string[] {
       )
         continue;
       if (entry.isDirectory()) {
-        if (!SKIPPED_DIRECTORIES.has(entry.name)) walk(relativePath);
+        // Dot directories are agent state, leftovers, or VCS — not documents.
+        // In-tree `.protocol-*` fixtures from older runs must not be scanned.
+        if (entry.name.startsWith(".") || SKIPPED_DIRECTORIES.has(entry.name)) continue;
+        walk(relativePath);
       } else if (entry.name.endsWith(".md")) {
         found.push(relativePath);
       }

@@ -1,0 +1,12 @@
+# `Electron backend command registry > deduplicates concurrent background starts for one environment` (`tests/unit/electron/commands.test.ts`)
+
+- **ID:** 0060
+- **Status:** resolved
+- **Date observed:** 2026-08-15
+- **Original command:** `bun run test:logged -- --name full-suite-3 -- bun run test`
+- **Worker configuration:** the root and agent-support group ran at six Bun workers while the workspace, bridges, and protocol-lockfile groups ran concurrently; those three groups passed.
+- **Failure:** `error: Timed out waiting for deduplicated background start to finish`, raised by the file's own `waitForCondition` helper (`commands.test.ts` line 1139) after 3,004.38 ms, reached through the nested `withFakeGh` -> `withFakeDocker` fixtures at `commands.test.ts:4358`. The helper polls every 5 ms against its own three-second budget, so this expired inside the fixture rather than against Bun's outer per-test budget.
+- **Suite counts:** root and agent-support group: 3,696 passed, 1 skipped, 3 failed, 16,678 assertions across 147 files in 223.68 s. The other two failures are the tmux cluster recorded above.
+- **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 405 passed, 1 skipped, 0 failed, 2,411 assertions in 65.78 s; the affected case passed.
+- **Hypothesis:** the case asserts that two concurrent starts collapse into one by waiting for a real fake-Docker child to finish inside a three-second budget. The same aggregate run was simultaneously timing out two process-heavy tmux cases, so process-startup contention is the most likely cause; no assertion mismatch was reported before the wait expired. Distinct from the `deterministically generates refs, diff, Git-object contents, hashes, and validation evidence` entry above, which is a different test in the same file and expired against Bun's outer budget instead.
+- **Recurrence (ACP usage replay guard, 2026-08-16):** `bun run test:logged -- --name full-suite2 -- bun run test` failed it again at 3,009.54 ms — the same three-second `waitForCondition` budget, in the same run that failed the tmux pair above. Root group: 3,695 passed, 1 skip, 5 fail. Isolated rerun `bun test tests/unit/electron/commands.test.ts` -> passed in 71.6 s. The pairing with the tmux cluster has now held across three separate aggregate runs, which continues to point at shared process-startup contention rather than at anything in this file.

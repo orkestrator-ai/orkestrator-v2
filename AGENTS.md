@@ -1250,20 +1250,25 @@ report whether its state was reset or deliberately retained.
 
 ### Flaky Test Tracking
 
-Keep [`docs/development/flaky-tests.md`](docs/development/flaky-tests.md) current whenever test behavior
-shows a credible flake. It is the only flake registry — do not start a second
-one. If a test fails in the normal aggregate or parallel suite but passes when
-its owning file is rerun alone, add or update its entry in that document in the
-same change. Record the exact test name and file, the original command and
-worker configuration, the failure message and duration when available, suite
-counts, the isolated rerun command and result, the observation date, and any
-evidence-backed hypothesis or reproduction notes.
+Keep [`docs/tests/flaky-tests/0000-index.md`](docs/tests/flaky-tests/0000-index.md)
+current whenever test behavior shows a credible flake. That directory is the
+only flake registry — do not start a second one. Search the index by test name
+or owning file; read the **Status** column before opening a case file. Do not
+read every `NNNN-*.md` file.
+
+If a test fails in the normal aggregate or parallel suite but passes when its
+owning file is rerun alone, add or update the matching numbered case file and
+its index row in the same change. Record the exact test name and file, the
+original command and worker configuration, the failure message and duration when
+available, suite counts, the isolated rerun command and result, the observation
+date, and any evidence-backed hypothesis or reproduction notes.
 
 Do not call a test flaky merely because it failed once: run the owning file alone
 first and preserve both results. Do not hide a flake by deleting, skipping, or
-loosening the test. When a flake is fixed, update its existing entry with the
+loosening the test. When a flake is fixed, update its existing case file with the
 root cause, fix reference, and stress or parallel verification, then mark it
-resolved instead of silently removing its history.
+resolved in both the case file and the index instead of silently removing its
+history.
 
 ### Parallelism
 

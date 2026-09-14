@@ -12,6 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const distEntry = path.join(packageRoot, "dist", "index.js");
@@ -61,6 +62,15 @@ describe.if(existsSync(distEntry))("the built bundle", () => {
     ]) {
       expect(existsSync(path.join(vendored, dependency))).toBe(true);
     }
+  });
+
+  test("the vendored Bun export exposes the diagnostic seam", async () => {
+    const bundled = path.join(vendored, "@cursor", "sdk", "dist", "bundled", "index.js");
+    expect(existsSync(bundled)).toBe(true);
+    const module = (await import(pathToFileURL(bundled).href)) as {
+      __orkestratorDiagnosticsV1?: unknown;
+    };
+    expect(typeof module.__orkestratorDiagnosticsV1).toBe("function");
   });
 
   test("stages a platform package beside the SDK for its native helpers", async () => {

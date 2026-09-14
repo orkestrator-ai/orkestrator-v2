@@ -194,7 +194,20 @@ export function instrumentSdk(seam: SdkDiagnosticSeam): () => void {
       handleControlMessage: (...input) => manager.handleControlMessage(...input),
       handle: (...input) => observeExecution(manager.handle(...input), scope, input[1]),
     };
-    return run.apply(this, args);
+    const restore = () => {
+      this.controlledExecManager = manager;
+    };
+    try {
+      const result = run.apply(this, args);
+      if (result !== null && typeof result === "object" && "then" in result) {
+        return Promise.resolve(result).finally(restore);
+      }
+      restore();
+      return result;
+    } catch (error) {
+      restore();
+      throw error;
+    }
   };
   return () => {
     detector.startTimer = startTimer;
@@ -232,18 +245,31 @@ async function* observeExecution(
   }
 }
 
+type DiagnosticModule = object;
+let sdkModule: DiagnosticModule = sdk;
 let coverage: "installed" | "unavailable" | undefined;
+let uninstall: (() => void) | undefined;
+
 function install(): "installed" | "unavailable" {
   if (coverage) return coverage;
   coverage = "unavailable";
   safely(() => {
-    const hook: unknown = Reflect.get(sdk, "__orkestratorDiagnosticsV1");
+    const hook: unknown = Reflect.get(sdkModule, "__orkestratorDiagnosticsV1");
     if (typeof hook === "function") {
-      hook(instrumentSdk);
+      const restore: unknown = hook(instrumentSdk);
+      if (typeof restore === "function") uninstall = restore as () => void;
       coverage = "installed";
     }
   });
   return coverage;
+}
+
+/** Restores vendor prototypes and clears the coverage memo. Tests only. */
+export function resetSdkDiagnosticsForTests(nextModule: DiagnosticModule = sdk): void {
+  uninstall?.();
+  uninstall = undefined;
+  coverage = undefined;
+  sdkModule = nextModule;
 }
 
 /** One bounded scope per bridge turn, including while its renderer is inactive. */

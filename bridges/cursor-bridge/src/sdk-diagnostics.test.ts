@@ -1,11 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import * as sdk from "@cursor/sdk";
-import { CursorSdkDiagnostics, instrumentSdk, type SdkDiagnosticSeam } from "./sdk-diagnostics.js";
+import {
+  CursorSdkDiagnostics,
+  instrumentSdk,
+  resetSdkDiagnosticsForTests,
+  type SdkDiagnosticSeam,
+} from "./sdk-diagnostics.js";
 import { CursorRunDiagnostics } from "./run-diagnostics.js";
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt } from "./prompt.js";
 import type { SDKAgent } from "@cursor/sdk";
-import { spyOn } from "bun:test";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -34,6 +38,32 @@ function harness(id = "session-private") {
     },
   };
 }
+
+const READ_REQUEST = { execId: "exec-read", message: { case: "readArgs" } };
+
+function vendorExecContext() {
+  return {
+    get() {
+      return undefined;
+    },
+    set() {
+      return this;
+    },
+    delete() {
+      return this;
+    },
+    with() {
+      return this;
+    },
+    withName() {
+      return this;
+    },
+  };
+}
+
+afterAll(() => {
+  resetSdkDiagnosticsForTests();
+});
 
 describe("Cursor SDK boundary diagnostics", () => {
   test("the pinned Bun export exposes the actual detector and execution controller", () => {
@@ -162,7 +192,8 @@ describe("Cursor SDK boundary diagnostics", () => {
     class Controller {
       controlledExecManager = {
         handleControlMessage() {},
-        async *handle() {
+        async *handle(_ctx: unknown, request: unknown) {
+          expect(request).toEqual(READ_REQUEST);
           try {
             await toolReady.promise;
             yield result;
@@ -172,7 +203,7 @@ describe("Cursor SDK boundary diagnostics", () => {
         },
       };
       async run() {
-        for await (const response of this.controlledExecManager.handle()) {
+        for await (const response of this.controlledExecManager.handle({}, READ_REQUEST)) {
           expect(response).toBe(result);
           responseReady.resolve();
           await wroteResult.promise;
@@ -203,7 +234,9 @@ describe("Cursor SDK boundary diagnostics", () => {
       expect(h.snapshot()).toMatchObject({
         executionsCompleted: 1,
         pendingExecutionCount: 0,
-        recentExecutions: [{ stage: "completed" }],
+        recentExecutions: [
+          { stage: "completed", kind: "readArgs", id: expect.stringMatching(/^[0-9a-f]{16}$/) },
+        ],
       });
       expect(h.lines.join("")).not.toContain("SECRET");
     } finally {
@@ -222,7 +255,8 @@ describe("Cursor SDK boundary diagnostics", () => {
     class Controller {
       controlledExecManager = {
         handleControlMessage() {},
-        async *handle() {
+        async *handle(_ctx: unknown, request: unknown) {
+          expect(request).toEqual(READ_REQUEST);
           try {
             yield 42;
             throw error;
@@ -232,7 +266,7 @@ describe("Cursor SDK boundary diagnostics", () => {
         },
       };
       async run(cancel: unknown) {
-        for await (const value of this.controlledExecManager.handle()) {
+        for await (const value of this.controlledExecManager.handle({}, READ_REQUEST)) {
           if (cancel) break;
           expect(value).toBe(42);
         }
@@ -321,5 +355,181 @@ describe("Cursor SDK boundary diagnostics", () => {
     });
     expect(() => scope.report("heartbeat")).not.toThrow();
     scope.close();
+  });
+
+  test("dispatch follows a real patched ExecController.run and records the request", async () => {
+    const previous = process.env.ORKESTRATOR_BRIDGE_DEBUG;
+    const lines: string[] = [];
+    const log = spyOn(console, "info").mockImplementation((line) => {
+      lines.push(String(line));
+    });
+    try {
+      process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
+      const state = newSessionState();
+      state.status = "running";
+      const writes: unknown[] = [];
+      const agent = {
+        send: async () => {
+          const hook = Reflect.get(sdk, "__orkestratorDiagnosticsV1") as (
+            install: (seam: SdkDiagnosticSeam) => unknown,
+          ) => unknown;
+          expect(typeof hook).toBe("function");
+          await Promise.resolve(
+            hook((seam) => {
+              const detector = Object.assign(Object.create(seam.stallDetectorPrototype), {
+                disposed: true,
+                activityHistory: [],
+              });
+              detector.startTimer();
+              detector.trackActivity("inbound_message", "execServerMessage:readArgs");
+              const controller = Object.create(seam.execControllerPrototype) as {
+                serverStream: AsyncIterable<unknown>;
+                clientStream: { write: (value: unknown) => Promise<void> };
+                controlledExecManager: {
+                  handleControlMessage: (...input: unknown[]) => void;
+                  handle: (ctx: unknown, request: unknown) => AsyncIterable<unknown>;
+                };
+                run: (ctx: unknown) => Promise<void>;
+              };
+              controller.serverStream = (async function* () {
+                yield READ_REQUEST;
+              })();
+              controller.clientStream = {
+                write: async (value) => {
+                  writes.push(value);
+                },
+              };
+              controller.controlledExecManager = {
+                handleControlMessage() {},
+                async *handle(_ctx, request) {
+                  expect(request).toEqual(READ_REQUEST);
+                  yield { ok: true };
+                },
+              };
+              return controller.run(vendorExecContext());
+            }),
+          ).catch(() => undefined);
+          return {
+            id: "private-run-id",
+            onDidChangeStatus: () => () => {},
+            wait: async () => ({ status: "finished" }),
+            async *stream() {},
+            cancel: async () => {},
+          };
+        },
+      } as unknown as SDKAgent;
+      await (
+        await dispatchPrompt(state, agent, { prompt: "private", images: [] })
+      ).completion;
+      expect(writes).toEqual([{ ok: true }]);
+      const records = lines.map((line) => JSON.parse(line.slice("[bridge-diagnostics] ".length)));
+      const sdkRecord = records.findLast((r) => r.event === "sdk-snapshot");
+      expect(sdkRecord).toMatchObject({
+        coverage: "installed",
+        transportCount: 1,
+        executionsCompleted: 1,
+        recentExecutions: [
+          { kind: "readArgs", stage: "completed", id: expect.stringMatching(/^[0-9a-f]{16}$/) },
+        ],
+      });
+      expect(lines.join("")).not.toContain("private");
+      expect(lines.join("")).not.toContain("exec-read");
+    } finally {
+      log.mockRestore();
+      if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
+      else process.env.ORKESTRATOR_BRIDGE_DEBUG = previous;
+    }
+  });
+
+  test("a reused controller attributes the second turn and restores its manager", async () => {
+    const first = harness("first");
+    const second = harness("second");
+    const original = {
+      handleControlMessage() {},
+      async *handle(_ctx: unknown, request: unknown) {
+        expect(request).toEqual(READ_REQUEST);
+        yield 1;
+      },
+    };
+    class Controller {
+      controlledExecManager = original;
+      async run() {
+        for await (const response of this.controlledExecManager.handle({}, READ_REQUEST)) {
+          expect(response).toBe(1);
+        }
+      }
+    }
+    const restore = instrumentSdk({
+      stallDetectorPrototype: { startTimer() {}, trackActivity() {} },
+      execControllerPrototype: Controller.prototype,
+    });
+    const controller = new Controller();
+    try {
+      await first.scope.follow(() => controller.run());
+      expect(controller.controlledExecManager).toBe(original);
+      first.scope.close();
+      await second.scope.follow(() => controller.run());
+      expect(controller.controlledExecManager).toBe(original);
+      expect(second.snapshot()).toMatchObject({
+        executionsCompleted: 1,
+        recentExecutions: [{ kind: "readArgs", stage: "completed" }],
+      });
+      const closedCount = first.lines.length;
+      first.scope.report("heartbeat");
+      expect(first.lines.length).toBe(closedCount);
+    } finally {
+      restore();
+      first.scope.close();
+      second.scope.close();
+    }
+  });
+
+  test("install reports coverage unavailable against a seam-less module", () => {
+    resetSdkDiagnosticsForTests({});
+    try {
+      const h = harness("unavailable");
+      expect(h.snapshot()).toMatchObject({
+        coverage: "unavailable",
+        transportCount: 0,
+        executionsStarted: 0,
+      });
+      h.scope.close();
+    } finally {
+      resetSdkDiagnosticsForTests();
+    }
+  });
+
+  test("install reports coverage unavailable when the hook or seam throws", () => {
+    resetSdkDiagnosticsForTests({
+      __orkestratorDiagnosticsV1: () => {
+        throw new Error("hook failed");
+      },
+    });
+    try {
+      expect(harness("hook-throws").snapshot().coverage).toBe("unavailable");
+    } finally {
+      resetSdkDiagnosticsForTests();
+    }
+    resetSdkDiagnosticsForTests({
+      __orkestratorDiagnosticsV1: (install: (seam: SdkDiagnosticSeam) => () => void) =>
+        install({
+          stallDetectorPrototype: {} as SdkDiagnosticSeam["stallDetectorPrototype"],
+          execControllerPrototype: {} as SdkDiagnosticSeam["execControllerPrototype"],
+        }),
+    });
+    try {
+      expect(harness("bad-seam").snapshot().coverage).toBe("unavailable");
+    } finally {
+      resetSdkDiagnosticsForTests();
+    }
+  });
+
+  test("instrumentSdk rejects a prototype that lacks the expected methods", () => {
+    expect(() =>
+      instrumentSdk({
+        stallDetectorPrototype: {} as SdkDiagnosticSeam["stallDetectorPrototype"],
+        execControllerPrototype: {} as SdkDiagnosticSeam["execControllerPrototype"],
+      }),
+    ).toThrow("Unsupported Cursor diagnostic seam");
   });
 });

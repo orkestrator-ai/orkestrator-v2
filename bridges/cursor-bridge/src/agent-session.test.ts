@@ -139,6 +139,7 @@ const {
 } = await import("./sdk-runtime.js");
 const { resetPlanAccountWindowsForTests } = await import("./plan-usage.js");
 const { useCursorModelsForTests } = await import("./models.js");
+const { useCursorCredentialRuntimeForTests } = await import("./credentials.js");
 const { clientSessionKeys, sessions } = await import("./state.js");
 
 const testStore = new FakeJsonlLocalAgentStore(
@@ -147,6 +148,7 @@ const testStore = new FakeJsonlLocalAgentStore(
 let restoreAgent: () => void;
 let restoreModels: () => void;
 let restoreRuntime: () => void;
+let restoreCredentials: () => void;
 let previousStore: LocalAgentStore;
 
 beforeAll(() => {
@@ -160,6 +162,14 @@ beforeAll(() => {
       createTestPlatform as unknown as typeof import("@cursor/sdk").createAgentPlatform,
   });
   previousStore = useCursorLocalAgentStoreForTests(testStore);
+  restoreCredentials = useCursorCredentialRuntimeForTests({
+    store: {
+      load: async () => undefined,
+      save: async () => undefined,
+      clear: async () => undefined,
+    },
+    auth: { login: async () => undefined, logout: async () => undefined } as never,
+  });
 });
 
 beforeEach(() => {
@@ -260,6 +270,7 @@ afterAll(() => {
   useCursorLocalAgentStoreForTests(previousStore);
   restoreModels();
   restoreAgent();
+  restoreCredentials();
   if (previousApiKey === undefined) delete process.env.CURSOR_API_KEY;
   else process.env.CURSOR_API_KEY = previousApiKey;
   if (previousStateDir === undefined) delete process.env.CURSOR_BRIDGE_STATE_DIR;
@@ -307,7 +318,7 @@ describe("ensureAgent", () => {
   test("refuses to attach without a credential, with a message naming the fix", async () => {
     delete process.env.CURSOR_API_KEY;
     const state = newSessionState();
-    expect(ensureAgent(state)).rejects.toThrow(/Settings/);
+    await expect(ensureAgent(state)).rejects.toThrow(/Settings/);
   });
 
   /**

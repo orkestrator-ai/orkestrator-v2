@@ -27,6 +27,7 @@ import {
   readWindowPaneSelection,
 } from "@/lib/pane-selection-storage";
 import {
+  environmentIsReadyForSetupHandoff,
   paneSelectionIsSetupHandoffSource,
   STARTUP_AGENT_TAB_ID,
 } from "@/lib/startup-agent-handoff";
@@ -118,14 +119,15 @@ function findLeaf(root: PaneNode, predicate: (leaf: PaneLeaf) => boolean): PaneL
 }
 
 /**
- * Let the provider-binding layout revision perform the one setup-to-agent
- * focus handoff requested by this Electron window.
+ * Let the post-setup layout revision perform the one setup-to-agent focus
+ * handoff requested by this Electron window.
  *
  * The tab is published before setup, so presence alone is too early. A
- * provider session id is the durable boundary that setup has completed and
- * the agent can render. Resolve the request at that boundary even when focus
- * has moved elsewhere; once the result is installed, a later reconcile must
- * not steal an intentional choice.
+ * provider session id (an opening prompt was dispatched) or environment
+ * setup-ready (a prompt-less launch never mints a session) is the durable
+ * boundary that the agent can take focus. Resolve the request at that
+ * boundary even when focus has moved elsewhere; once the result is
+ * installed, a later reconcile must not steal an intentional choice.
  */
 function applyStartupAgentSetupHandoff(
   environmentId: string,
@@ -139,7 +141,10 @@ function applyStartupAgentSetupHandoff(
   const providerSessionId = authoritativeTab
     ? getNativeAgentData(authoritativeTab)?.sessionId
     : undefined;
-  if (!providerSessionId || !hasWindowStartupAgentActivation(environmentId)) {
+  const setupReady = environmentIsReadyForSetupHandoff(
+    useEnvironmentStore.getState().getEnvironmentById(environmentId),
+  );
+  if ((!providerSessionId && !setupReady) || !hasWindowStartupAgentActivation(environmentId)) {
     return { state: selected, retireActivationAfterInstall: false };
   }
 

@@ -437,6 +437,82 @@ describe("reconcileAuthoritativePaneLayout", () => {
     }
   });
 
+  test("hands an isolated Electron window from setup to a prompt-less startup agent", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "ready", setupScriptsComplete: true })],
+      });
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const promptlessAgentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: { environmentId: "env-1", isLocal: true },
+        initialAgentPlatform: "cursor" as const,
+      };
+      const currentRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "default";
+
+      const backendRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "startup-agent";
+
+      armStartupAgentTabActivation("env-1");
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "startup-agent" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
+  test("does not hand a prompt-less startup agent focus before setup is ready", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    try {
+      useEnvironmentStore.setState({
+        environments: [environment({ setupPhase: "running", setupScriptsComplete: false })],
+      });
+      const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+      const promptlessAgentTab = {
+        id: "startup-agent",
+        type: "agent-native" as const,
+        nativeAgentData: { environmentId: "env-1", isLocal: true },
+      };
+      const currentRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+      currentRoot.activeTabId = "default";
+      const backendRoot = leaf("default", [setupTab, promptlessAgentTab]);
+      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
+      backendRoot.activeTabId = "startup-agent";
+
+      armStartupAgentTabActivation("env-1");
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(backendRoot),
+        paneState(currentRoot),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "default" });
+    } finally {
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  });
+
   test("does not steal focus from another tab when the startup agent becomes ready", () => {
     const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
     Object.defineProperty(window, "orkestrator", {

@@ -232,7 +232,7 @@ describe("SystemUsageIndicator", () => {
     ).toBe("true");
 
     await waitFor(() => expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy());
-    expect(screen.getByText("Process")).toBeTruthy();
+    expect(screen.getByText("Process (1)")).toBeTruthy();
     expect(screen.getByText("CPU")).toBeTruthy();
     expect(screen.getByText("RAM")).toBeTruthy();
     expect(screen.getByText("orkestrator-v2 · local")).toBeTruthy();
@@ -242,10 +242,11 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getByLabelText("title-bar-layout total usage: 18% CPU, 117 MB RAM")).toBeTruthy();
     expect(screen.getByLabelText("review-box processes")).toBeTruthy();
     expect(screen.getByText("No processes")).toBeTruthy();
-    expect(screen.queryByLabelText(/review-box total usage/) === null).toBe(true);
+    expect(screen.getByLabelText("review-box total usage: 0% CPU, 0 MB RAM")).toBeTruthy();
+    expect(screen.queryByText("Process (0)") === null).toBe(true);
   });
 
-  test("shows summed CPU and RAM on the right above each environment table", async () => {
+  test("shows summed CPU and RAM to the right of each environment name", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) => {
       if (command === "get_system_usage") return usageSnapshot();
       if (command === "get_environment_process_usage") {
@@ -285,14 +286,18 @@ describe("SystemUsageIndicator", () => {
     openPanel();
     const section = await waitFor(() => screen.getByLabelText("busy-box processes"));
     const totals = within(section).getByLabelText("busy-box total usage: 20% CPU, 117 MB RAM");
-    expect(section.textContent?.indexOf("20%") ?? -1).toBeLessThan(
-      section.textContent?.indexOf("Process") ?? -1,
-    );
-    expect(section.textContent?.indexOf("2") ?? -1).toBeLessThan(
+    expect(section.textContent?.indexOf("busy-box") ?? -1).toBeLessThan(
       section.textContent?.indexOf("20%") ?? -1,
+    );
+    expect(section.textContent?.indexOf("20%") ?? -1).toBeLessThan(
+      section.textContent?.indexOf("orkestrator-v2") ?? -1,
+    );
+    expect(section.textContent?.indexOf("orkestrator-v2") ?? -1).toBeLessThan(
+      section.textContent?.indexOf("Process (2)") ?? -1,
     );
     expect(totals.textContent).toContain("20%");
     expect(totals.textContent).toContain("117 MB");
+    expect(within(section).getByText("Process (2)")).toBeTruthy();
     expect(within(section).getByText("12%")).toBeTruthy();
     expect(within(section).getByText("8%")).toBeTruthy();
     expect(within(section).getByText("78 MB")).toBeTruthy();
@@ -815,7 +820,7 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getByText("List truncated")).toBeTruthy();
     const heavy = screen.getByLabelText("heavy-box processes");
     expect(within(heavy).getByLabelText("heavy-box total usage: 100% CPU, 50 MB RAM")).toBeTruthy();
-    expect(within(heavy).getByText("50")).toBeTruthy();
+    expect(within(heavy).getByText("Process (50)")).toBeTruthy();
     expect(within(heavy).getAllByRole("listitem")).toHaveLength(40);
     const light = screen.getByLabelText("light-box processes");
     expect(within(light).getByLabelText("light-box total usage: 90% CPU, 88 MB RAM")).toBeTruthy();

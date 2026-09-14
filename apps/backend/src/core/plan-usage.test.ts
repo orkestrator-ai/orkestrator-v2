@@ -164,6 +164,61 @@ describe("codexPlanWindows", () => {
     ]);
   });
 
+  test("maps ChatGPT's /codex/usage window spelling so settings refresh shows weekly", () => {
+    const { windows, plan } = codexPlanWindows(
+      {
+        plan_type: "plus",
+        rate_limit: {
+          primary_window: {
+            used_percent: 42,
+            limit_window_seconds: 604_800,
+            reset_after_seconds: 3_600,
+            reset_at: 1_779_826_837,
+          },
+          secondary_window: {
+            used_percent: 7,
+            limit_window_seconds: 18_000,
+            reset_at: 1_758_000_000,
+          },
+        },
+        credits: { balance: "$0" },
+      },
+      Date.UTC(2026, 8, 11, 18, 0, 0),
+    );
+    expect(plan).toBe("plus");
+    expect(windows).toEqual([
+      {
+        window: "primary",
+        label: "Weekly limit",
+        usedPercent: 42,
+        resetsAt: new Date(1_779_826_837_000).toISOString(),
+        windowMinutes: 10_080,
+      },
+      {
+        window: "secondary",
+        label: "5-hour limit",
+        usedPercent: 7,
+        resetsAt: new Date(1_758_000_000_000).toISOString(),
+        windowMinutes: 300,
+      },
+      { window: "credits", label: "Credits", creditBalance: "$0" },
+    ]);
+  });
+
+  test("prefers HTTP windows when rate_limits is present but empty of slots", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limits: { credits: { balance: "$0" } },
+        rate_limit: {
+          primary_window: { used_percent: 18, limit_window_seconds: 604_800 },
+        },
+      },
+      0,
+    );
+    expect(windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(windows[0]?.usedPercent).toBe(18);
+  });
+
   test("returns nothing for a payload with no windows", () => {
     expect(codexPlanWindows({ rate_limits: {} }, 0).windows).toEqual([]);
     expect(codexPlanWindows(undefined, 0).windows).toEqual([]);
@@ -329,6 +384,30 @@ describe("createPlanUsageReader", () => {
     const snapshot = await reader(contextWithGlobal(), "claude");
     expect(snapshot.status).toBe("unavailable");
     expect(snapshot.message).toMatch(/Sign in again/);
+  });
+
+  test("a forced Codex refresh maps the ChatGPT usage payload's weekly window", async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({
+        rate_limit: {
+          primary_window: {
+            used_percent: 18,
+            limit_window_seconds: 604_800,
+            reset_at: 1_779_826_837,
+          },
+        },
+        credits: { balance: "$0" },
+      })) as unknown as typeof fetch;
+    const auth = JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } });
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => 1_700_000_000_000,
+      credentials: { codex: async () => auth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex", { force: true });
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(snapshot.windows[0]?.usedPercent).toBe(18);
   });
 
   test("reads Codex usage with the account its stored token names", async () => {

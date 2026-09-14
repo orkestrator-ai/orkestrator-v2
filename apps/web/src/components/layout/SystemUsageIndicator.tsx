@@ -150,9 +150,10 @@ interface UsageMetric {
  * running environment, grouped by environment, with live CPU and RAM.
  * The same host CPU/RAM/GPU/disk readings from the title bar are repeated
  * under the Process usage title, in the header above the divider. Each
- * environment shows summed CPU and RAM on the right, under its process
- * count and above its table. Environments are ranked by total CPU when the
- * panel first loads and then stay in that order while it remains open.
+ * environment shows summed CPU and RAM to the right of its name, and the
+ * selected process count in brackets after the Process column title.
+ * Environments are ranked by total CPU when the panel first loads and then
+ * stay in that order while it remains open.
  * Host meters keep polling whether the panel is open; `isSystemUsageFresh`
  * is the same staleness rule the agent-information popover uses.
  */
@@ -453,9 +454,14 @@ function EnvironmentProcessGroupList({
         <h3 className="truncate text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
           {group.environmentName}
         </h3>
-        <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-          {processCount}
-        </span>
+        <div
+          className="flex shrink-0 items-baseline gap-2 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+          role="group"
+          aria-label={`${group.environmentName} total usage: ${totalCpu} CPU, ${totalRam} RAM`}
+        >
+          <span className="w-10 text-right">{totalCpu}</span>
+          <span className="w-14 text-right">{totalRam}</span>
+        </div>
       </div>
       {subtitle ? (
         <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p>
@@ -464,16 +470,8 @@ function EnvironmentProcessGroupList({
         <p className="mt-2 text-xs text-muted-foreground">No processes</p>
       ) : (
         <div className="mt-2 space-y-1">
-          <div
-            className="flex items-center gap-2 text-[10px] font-mono tabular-nums text-muted-foreground/70"
-            aria-label={`${group.environmentName} total usage: ${totalCpu} CPU, ${totalRam} RAM`}
-          >
-            <span className="min-w-0 flex-1" />
-            <span className="w-10 text-right">{totalCpu}</span>
-            <span className="w-14 text-right">{totalRam}</span>
-          </div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/60">
-            <span className="min-w-0 flex-1">Process</span>
+            <span className="min-w-0 flex-1">Process ({processCount})</span>
             <span className="w-10 text-right">CPU</span>
             <span className="w-14 text-right">RAM</span>
           </div>

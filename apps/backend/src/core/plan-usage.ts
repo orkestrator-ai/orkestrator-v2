@@ -215,7 +215,7 @@ function windowMinutesFromSeconds(value: unknown): number | undefined {
  * app-server uses `rateLimits.primary`. A settings refresh hits HTTP, so both
  * spellings have to produce the weekly bar.
  */
-function codexLimitSources(body: Record<string, unknown>): Record<string, unknown>[] {
+function codexDedicatedSources(body: Record<string, unknown>): Record<string, unknown>[] {
   const sources: Record<string, unknown>[] = [];
   const byLimitId = asRecord(body.rate_limits_by_limit_id ?? body.rateLimitsByLimitId);
   const preferred = asRecord(byLimitId?.codex);
@@ -224,7 +224,6 @@ function codexLimitSources(body: Record<string, unknown>): Record<string, unknow
   if (mapped) sources.push(mapped);
   const http = asRecord(body.rate_limit ?? body.rateLimit);
   if (http) sources.push(http);
-  sources.push(body);
   return sources;
 }
 
@@ -235,8 +234,98 @@ function codexWindowRecord(
   return (
     asRecord(source[slot]) ??
     asRecord(source[`${slot}_window`]) ??
-    asRecord(source[`${slot}Window`])
+    asRecord(source[`${slot}Window`]) ??
+    undefined
   );
+}
+
+function parseCodexWindow(
+  source: Record<string, unknown>,
+  slot: "primary" | "secondary",
+  now: number,
+  limitName: string | undefined,
+  fallbackLabel: string,
+): NativeAgentAccountUsageWindow | undefined {
+  const raw = codexWindowRecord(source, slot);
+  if (!raw) return undefined;
+  const usedPercent = finitePercent(raw.used_percent ?? raw.usedPercent);
+  const windowMinutes =
+    positiveNumber(
+      raw.window_minutes ??
+        raw.windowMinutes ??
+        raw.window_duration_mins ??
+        raw.windowDurationMins,
+    ) ?? windowMinutesFromSeconds(raw.limit_window_seconds ?? raw.limitWindowSeconds);
+  const resetsAt =
+    isoReset(raw.resets_at ?? raw.resetsAt ?? raw.reset_at ?? raw.resetAt) ??
+    isoResetFromDelta(
+      raw.resets_in_seconds ??
+        raw.resetsInSeconds ??
+        raw.reset_after_seconds ??
+        raw.resetAfterSeconds,
+      now,
+    );
+  if (usedPercent === undefined && resetsAt === undefined) return undefined;
+  const label =
+    slot === "primary" && limitName !== undefined
+      ? limitName
+      : windowLengthLabel(windowMinutes, fallbackLabel);
+  return {
+    window: slot,
+    label,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+    ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+  };
+}
+
+function codexSnapshotWindows(
+  source: Record<string, unknown>,
+  now: number,
+): {
+  primary?: NativeAgentAccountUsageWindow;
+  secondary?: NativeAgentAccountUsageWindow;
+} {
+  const limitName = nonEmptyString(source.limit_name) ?? nonEmptyString(source.limitName);
+  return {
+    primary: parseCodexWindow(source, "primary", now, limitName, "Usage limit"),
+    secondary: parseCodexWindow(source, "secondary", now, limitName, "Secondary limit"),
+  };
+}
+
+function snapshotWindowCount(snapshot: {
+  primary?: NativeAgentAccountUsageWindow;
+  secondary?: NativeAgentAccountUsageWindow;
+}): number {
+  return (snapshot.primary ? 1 : 0) + (snapshot.secondary ? 1 : 0);
+}
+
+/**
+ * Prefer the most complete dedicated snapshot so a by-limit-id object with a
+ * null secondary cannot steal the other slot from `rate_limits` and drop the
+ * weekly window. The body is only a last-resort fallback.
+ */
+function pickCodexSnapshot(
+  dedicated: Record<string, unknown>[],
+  body: Record<string, unknown>,
+  now: number,
+): {
+  primary?: NativeAgentAccountUsageWindow;
+  secondary?: NativeAgentAccountUsageWindow;
+} {
+  let best: ReturnType<typeof codexSnapshotWindows> | undefined;
+  let bestCount = 0;
+  for (const source of dedicated) {
+    const snapshot = codexSnapshotWindows(source, now);
+    const count = snapshotWindowCount(snapshot);
+    if (count > bestCount) {
+      best = snapshot;
+      bestCount = count;
+    }
+    if (bestCount === 2) break;
+  }
+  if (best) return best;
+  return codexSnapshotWindows(body, now);
 }
 
 /**
@@ -253,63 +342,21 @@ export function codexPlanWindows(
 ): { windows: NativeAgentAccountUsageWindow[]; plan?: string } {
   const body = asRecord(value);
   if (!body) return { windows: [] };
-  const sources = codexLimitSources(body);
-  const limitName = sources
-    .map((source) => nonEmptyString(source.limit_name ?? source.limitName))
-    .find((name) => name !== undefined);
+  const dedicated = codexDedicatedSources(body);
+  const sources = [...dedicated, body];
+  const chosen = pickCodexSnapshot(dedicated, body, now);
   const windows: NativeAgentAccountUsageWindow[] = [];
-  for (const [slot, fallbackLabel] of [
-    ["primary", "Usage limit"],
-    ["secondary", "Secondary limit"],
-  ] as const) {
-    let parsed: NativeAgentAccountUsageWindow | undefined;
-    for (const source of sources) {
-      const raw = codexWindowRecord(source, slot);
-      if (!raw) continue;
-      const usedPercent = finitePercent(raw.used_percent ?? raw.usedPercent);
-      const windowMinutes =
-        positiveNumber(
-          raw.window_minutes ??
-            raw.windowMinutes ??
-            raw.window_duration_mins ??
-            raw.windowDurationMins,
-        ) ?? windowMinutesFromSeconds(raw.limit_window_seconds ?? raw.limitWindowSeconds);
-      const resetsAt =
-        isoReset(raw.resets_at ?? raw.resetsAt ?? raw.reset_at ?? raw.resetAt) ??
-        isoResetFromDelta(
-          raw.resets_in_seconds ??
-            raw.resetsInSeconds ??
-            raw.reset_after_seconds ??
-            raw.resetAfterSeconds,
-          now,
-        );
-      if (usedPercent === undefined && resetsAt === undefined) continue;
-      const label =
-        slot === "primary" && limitName !== undefined
-          ? limitName
-          : windowLengthLabel(windowMinutes, fallbackLabel);
-      parsed = {
-        window: slot,
-        label,
-        ...(usedPercent !== undefined ? { usedPercent } : {}),
-        ...(resetsAt !== undefined ? { resetsAt } : {}),
-        ...(windowMinutes !== undefined ? { windowMinutes } : {}),
-      };
-      break;
-    }
-    if (parsed) windows.push(parsed);
-  }
+  if (chosen.primary) windows.push(chosen.primary);
+  if (chosen.secondary) windows.push(chosen.secondary);
   const balance = sources
     .map((source) => nonEmptyString(asRecord(source.credits)?.balance))
     .find((value) => value !== undefined);
   if (balance !== undefined) {
     windows.push({ window: "credits", label: "Credits", creditBalance: balance.slice(0, 64) });
   }
-  const plan = nonEmptyString(
-    body.plan_type ??
-      body.planType ??
-      sources.map((source) => source.plan_type ?? source.planType).find((value) => value != null),
-  );
+  const plan = sources
+    .map((source) => nonEmptyString(source.plan_type) ?? nonEmptyString(source.planType))
+    .find((value) => value !== undefined);
   return { windows, ...(plan !== undefined ? { plan } : {}) };
 }
 

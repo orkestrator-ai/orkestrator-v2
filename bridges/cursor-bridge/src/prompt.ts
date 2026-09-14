@@ -89,8 +89,8 @@ export async function dispatchPrompt(
 
   const promptSequence = state.promptSequence;
   const diagnostics = createRunDiagnostics(state);
-  const run = await agent
-    .send(
+  const send = () =>
+    agent.send(
       { text, ...(images.length > 0 ? { images } : {}) },
       {
         // Sent every turn rather than only at attach. The composer selection can
@@ -114,11 +114,11 @@ export async function dispatchPrompt(
         },
         ...(input.requestId ? { idempotencyKey: input.requestId } : {}),
       },
-    )
-    .catch((error) => {
-      diagnostics?.close("send-failed");
-      throw error;
-    });
+    );
+  const run = await (diagnostics ? diagnostics.follow(send) : send()).catch((error) => {
+    diagnostics?.close("send-failed");
+    throw error;
+  });
   diagnostics?.sent(run.id);
 
   if (input.userMessageId) {

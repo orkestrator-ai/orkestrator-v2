@@ -914,7 +914,9 @@ describe("useNativeAgentSession sync-v1 client budgets", () => {
   });
 
   test("clears transcriptRefreshing when an establishing read is skipped", async () => {
-    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection([message("m1")]));
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(SESSION_KEY, projection([message("m1")]));
     let releaseAdopt: (() => void) | undefined;
     adoptNativeAgentSessionMock.mockImplementation(
       () =>

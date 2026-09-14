@@ -1334,14 +1334,11 @@ export function TerminalContainer({
         (type === "grok" && launchModeOverride !== "cli") ||
         (type === "pi" &&
           (launchModeOverride === "native" || (!launchModeOverride && piMode === "native")));
+      // Lock only when the tab is already committed to a provider: an opening
+      // prompt, a review session, or a resume. A create-dialog model is a
+      // preselect on the unassigned composer, not a lock.
       const prelockNativePlatform = Boolean(
-        options?.initialPrompt ||
-        options?.isReviewTab ||
-        options?.resumeSessionId ||
-        options?.initialAgentModel ||
-        options?.initialReasoningEffort ||
-        options?.initialConversationMode ||
-        options?.initialFastMode !== undefined,
+        options?.initialPrompt || options?.isReviewTab || options?.resumeSessionId,
       );
 
       // Check if we should create an opencode-native tab instead

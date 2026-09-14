@@ -18,7 +18,11 @@ import {
 } from "@/lib/backend";
 import { useProjectStore } from "@/stores";
 import { cn } from "@/lib/utils";
-import { isSystemUsageFresh, SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
+import {
+  isSystemUsageFresh,
+  SYSTEM_USAGE_STALE_AFTER_MS,
+  SystemUsagePanel,
+} from "./AgentInfoButton.panels";
 
 /** Cadence for the always-mounted title-bar meters. */
 export const SYSTEM_USAGE_POLL_INTERVAL_MS = 5_000;
@@ -54,6 +58,84 @@ export function formatProcessRamKb(rssKb: number): string {
   return Number.isInteger(gigabytes) ? `${gigabytes} GB` : `${gigabytes.toFixed(1)} GB`;
 }
 
+/** Summed process CPU for ranking an environment group. */
+export function environmentProcessGroupCpu(group: EnvironmentProcessGroup): number {
+  return typeof group.totalCpuPercent === "number"
+    ? group.totalCpuPercent
+    : group.processes.reduce((total, process) => total + process.cpuPercent, 0);
+}
+
+/** Summed process RSS for an environment group total. */
+export function environmentProcessGroupRamKb(group: EnvironmentProcessGroup): number {
+  return typeof group.totalRssKb === "number"
+    ? group.totalRssKb
+    : group.processes.reduce((total, process) => total + process.rssKb, 0);
+}
+
+/** Selected process count, including rows omitted by snapshot bounds. */
+export function environmentProcessGroupCount(group: EnvironmentProcessGroup): number {
+  return typeof group.processCount === "number" ? group.processCount : group.processes.length;
+}
+
+/** Highest-CPU environments first; name then id break ties so the open-time order is stable. */
+export function sortEnvironmentProcessGroupsByCpu(
+  groups: readonly EnvironmentProcessGroup[],
+): EnvironmentProcessGroup[] {
+  return [...groups].sort((left, right) => {
+    const cpuDelta = environmentProcessGroupCpu(right) - environmentProcessGroupCpu(left);
+    if (cpuDelta !== 0) return cpuDelta;
+    const nameDelta = left.environmentName.localeCompare(right.environmentName);
+    if (nameDelta !== 0) return nameDelta;
+    return left.environmentId.localeCompare(right.environmentId);
+  });
+}
+
+/**
+ * Keep the order captured when the panel first received environments.
+ * Later polls update the same rows in place; newcomers append by current CPU.
+ * A poll that returns a subset still consults `frozenIds` so a later full
+ * snapshot can restore the original open-time ranking.
+ */
+export function orderEnvironmentProcessGroups(
+  groups: readonly EnvironmentProcessGroup[],
+  frozenIds: readonly string[] | null,
+): EnvironmentProcessGroup[] {
+  if (groups.length === 0) return [];
+  if (frozenIds === null || frozenIds.length === 0) {
+    return sortEnvironmentProcessGroupsByCpu(groups);
+  }
+  const remaining = new Map(groups.map((group) => [group.environmentId, group]));
+  const ordered: EnvironmentProcessGroup[] = [];
+  for (const id of frozenIds) {
+    const group = remaining.get(id);
+    if (!group) continue;
+    ordered.push(group);
+    remaining.delete(id);
+  }
+  if (remaining.size > 0) {
+    ordered.push(...sortEnvironmentProcessGroupsByCpu([...remaining.values()]));
+  }
+  return ordered;
+}
+
+/** Grow-only id list: seed from the first ranking, then append newcomers. */
+export function mergeFrozenEnvironmentIds(
+  frozenIds: readonly string[],
+  groups: readonly EnvironmentProcessGroup[],
+): string[] {
+  if (groups.length === 0) return [...frozenIds];
+  if (frozenIds.length === 0) {
+    return sortEnvironmentProcessGroupsByCpu(groups).map((group) => group.environmentId);
+  }
+  const seen = new Set(frozenIds);
+  const newcomers = groups.filter((group) => !seen.has(group.environmentId));
+  if (newcomers.length === 0) return [...frozenIds];
+  return [
+    ...frozenIds,
+    ...sortEnvironmentProcessGroupsByCpu(newcomers).map((group) => group.environmentId),
+  ];
+}
+
 interface UsageMetric {
   key: string;
   label: string;
@@ -65,9 +147,14 @@ interface UsageMetric {
  * Compact CPU/RAM/GPU/disk readouts for the desktop title bar.
  *
  * Clicking any meter opens a popover that lists child processes for each
- * running environment, grouped by environment, with live CPU and RAM. Host
- * meters keep polling whether the panel is open; `isSystemUsageFresh` is the
- * same staleness rule the agent-information popover uses.
+ * running environment, grouped by environment, with live CPU and RAM.
+ * The same host CPU/RAM/GPU/disk readings from the title bar are repeated
+ * under the Process usage title, in the header above the divider. Each
+ * environment shows summed CPU and RAM on the right, under its process
+ * count and above its table. Environments are ranked by total CPU when the
+ * panel first loads and then stay in that order while it remains open.
+ * Host meters keep polling whether the panel is open; `isSystemUsageFresh`
+ * is the same staleness rule the agent-information popover uses.
  */
 export function SystemUsageIndicator({ className }: { className?: string }) {
   const [usage, setUsage] = useState<SystemUsageSnapshot | null>(null);
@@ -228,22 +315,29 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
             : "pointer-events-none invisible scale-95 opacity-0",
         )}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border/60 px-4 py-3.5">
-          <div className="min-w-0">
-            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
-              Environments
+        <header className="border-b border-border/60 px-4 py-3.5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/70">
+                Environments
+              </div>
+              <h2 className="mt-1 truncate text-sm font-semibold text-foreground">Process usage</h2>
             </div>
-            <h2 className="mt-1 truncate text-sm font-semibold text-foreground">Process usage</h2>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="-mr-1 -mt-1 h-7 w-7 shrink-0 text-muted-foreground"
+              onClick={close}
+              aria-label="Close environment process usage"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="-mr-1 -mt-1 h-7 w-7 text-muted-foreground"
-            onClick={close}
-            aria-label="Close environment process usage"
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
+          {open ? (
+            <div className="mt-3">
+              <SystemUsagePanel usage={usage} checkedAt={checkedAt} heading={false} />
+            </div>
+          ) : null}
         </header>
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
           {open ? <EnvironmentProcessPanel /> : null}
@@ -256,6 +350,7 @@ export function SystemUsageIndicator({ className }: { className?: string }) {
 function EnvironmentProcessPanel() {
   const [snapshot, setSnapshot] = useState<EnvironmentProcessUsageSnapshot | null>(null);
   const [checkedAt, setCheckedAt] = useState(() => Date.now());
+  const [frozenIds, setFrozenIds] = useState<string[]>([]);
   const projects = useProjectStore((state) => state.projects);
 
   useEffect(() => {
@@ -291,7 +386,19 @@ function EnvironmentProcessPanel() {
       ? snapshot
       : null;
   const stale = snapshot !== null && fresh === null;
-  const groups = fresh?.environments ?? snapshot?.environments ?? [];
+  const rawGroups = fresh?.environments ?? snapshot?.environments ?? [];
+  const groups = orderEnvironmentProcessGroups(rawGroups, frozenIds);
+
+  useEffect(() => {
+    const nextGroups = snapshot?.environments ?? [];
+    if (nextGroups.length === 0) return;
+    setFrozenIds((current) => {
+      const next = mergeFrozenEnvironmentIds(current, nextGroups);
+      return next.length === current.length && next.every((id, index) => id === current[index])
+        ? current
+        : next;
+    });
+  }, [snapshot]);
 
   if (snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading processes…</p>;
@@ -337,6 +444,9 @@ function EnvironmentProcessGroupList({
   const subtitle = [projectName, group.environmentType === "local" ? "local" : "container"]
     .filter(Boolean)
     .join(" · ");
+  const totalCpu = formatPercent(environmentProcessGroupCpu(group));
+  const totalRam = formatProcessRamKb(environmentProcessGroupRamKb(group));
+  const processCount = environmentProcessGroupCount(group);
   return (
     <section aria-label={`${group.environmentName} processes`}>
       <div className="flex items-baseline justify-between gap-2">
@@ -344,16 +454,24 @@ function EnvironmentProcessGroupList({
           {group.environmentName}
         </h3>
         <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-          {group.processes.length}
+          {processCount}
         </span>
       </div>
       {subtitle ? (
         <p className="mt-0.5 truncate text-[10px] text-muted-foreground/60">{subtitle}</p>
       ) : null}
-      {group.processes.length === 0 ? (
+      {processCount === 0 ? (
         <p className="mt-2 text-xs text-muted-foreground">No processes</p>
       ) : (
         <div className="mt-2 space-y-1">
+          <div
+            className="flex items-center gap-2 text-[10px] font-mono tabular-nums text-muted-foreground/70"
+            aria-label={`${group.environmentName} total usage: ${totalCpu} CPU, ${totalRam} RAM`}
+          >
+            <span className="min-w-0 flex-1" />
+            <span className="w-10 text-right">{totalCpu}</span>
+            <span className="w-14 text-right">{totalRam}</span>
+          </div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/60">
             <span className="min-w-0 flex-1">Process</span>
             <span className="w-10 text-right">CPU</span>

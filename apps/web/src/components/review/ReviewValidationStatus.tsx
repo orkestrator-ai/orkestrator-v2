@@ -342,6 +342,22 @@ export function ReviewValidationStatus({
           );
         })}
       </ul>
+      {((run.environmentChanges && run.environmentChanges.length > 0) ||
+        (run.environmentChangesOmitted ?? 0) > 0) && (
+        <details className="mt-3 text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none">environment state changed</summary>
+          <ul aria-label="Files changed since the snapshot" className="mt-1.5 space-y-1 font-mono">
+            {(run.environmentChanges ?? []).map((file) => (
+              <li key={file} className="break-all">
+                {file}
+              </li>
+            ))}
+            {(run.environmentChangesOmitted ?? 0) > 0 && (
+              <li>and {run.environmentChangesOmitted} more</li>
+            )}
+          </ul>
+        </details>
+      )}
       {notes.length > 0 && (
         <details className="mt-3 rounded-md border border-border/45 bg-background/30 px-3 py-2 text-foreground">
           <summary className="cursor-pointer select-none text-xs font-medium">Notes</summary>

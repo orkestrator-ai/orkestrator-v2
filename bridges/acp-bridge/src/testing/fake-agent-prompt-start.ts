@@ -1270,7 +1270,8 @@ export function handlePromptStart(message: JsonObject): boolean {
       const taskParams = {
         toolCallId: "cursor-task-1",
         description: "Summarize two docs",
-        prompt: "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md. Return one line each.",
+        prompt:
+          "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md. Return one line each.",
         subagentType: "explore",
         model: "composer-2.5",
         agentId: "bc-abc123",

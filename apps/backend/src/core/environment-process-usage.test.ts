@@ -2,15 +2,20 @@ import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import {
+  boundSnapshot,
   collectDescendantPids,
   commandTouchesWorktree,
   environmentRootPids,
   MAX_CONCURRENT_CONTAINER_PROBES,
   MAX_PROCESSES_PER_ENVIRONMENT,
+  MAX_SNAPSHOT_PROCESSES,
+  mapWithConcurrency,
   parsePsUsageLines,
   readEnvironmentProcessUsage,
   sanitizeProcessCommand,
   selectLocalProcesses,
+  summarizeListedProcesses,
+  type EnvironmentProcessGroup,
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
 
@@ -234,13 +239,30 @@ describe("environment process usage", () => {
       const cpu = (index + 1).toFixed(1);
       return ` ${100 + index}  1  ${cpu}  1.0  100 bun /tmp/local/worker-${index}`;
     });
+    const listed = parsePsUsageLines(rows.join("\n"));
     const selected = selectLocalProcesses(
-      parsePsUsageLines(rows.join("\n")),
+      listed,
       environment({ id: "busy", name: "busy", worktreePath: "/tmp/local" }),
     );
     expect(selected).toHaveLength(MAX_PROCESSES_PER_ENVIRONMENT);
     expect(selected[0]?.cpuPercent).toBe(MAX_PROCESSES_PER_ENVIRONMENT + 12);
     expect(selected.at(-1)?.cpuPercent).toBe(13);
+
+    const summary = summarizeListedProcesses(listed);
+    const extraCpu = Array.from({ length: 12 }, (_, index) => index + 1).reduce(
+      (total, cpu) => total + cpu,
+      0,
+    );
+    expect(summary.processCount).toBe(MAX_PROCESSES_PER_ENVIRONMENT + 12);
+    expect(summary.truncated).toBe(true);
+    expect(summary.processes).toHaveLength(MAX_PROCESSES_PER_ENVIRONMENT);
+    expect(summary.totalCpuPercent).toBeGreaterThan(
+      summary.processes.reduce((total, process) => total + process.cpuPercent, 0),
+    );
+    expect(summary.totalCpuPercent).toBe(
+      summary.processes.reduce((total, process) => total + process.cpuPercent, 0) + extraCpu,
+    );
+    expect(summary.totalRssKb).toBe((MAX_PROCESSES_PER_ENVIRONMENT + 12) * 100);
   });
 
   test("samples running containers and one shared host listing for local environments", async () => {
@@ -313,6 +335,24 @@ describe("environment process usage", () => {
       },
     ]);
     expect(snapshot.environments[2]?.processes).toEqual([]);
+    expect(snapshot.environments[0]).toMatchObject({
+      totalCpuPercent: 2,
+      totalRssKb: 100,
+      processCount: 1,
+      truncated: false,
+    });
+    expect(snapshot.environments[1]).toMatchObject({
+      totalCpuPercent: 11,
+      totalRssKb: 800,
+      processCount: 1,
+      truncated: false,
+    });
+    expect(snapshot.environments[2]).toMatchObject({
+      totalCpuPercent: 0,
+      totalRssKb: 0,
+      processCount: 0,
+      truncated: false,
+    });
     expect(execute).toHaveBeenCalledTimes(2);
     expect(execute).toHaveBeenCalledWith("ps", ["-axo", "pid=,ppid=,pcpu=,pmem=,rss=,args="], {
       timeoutMs: 2_000,
@@ -339,21 +379,30 @@ describe("environment process usage", () => {
       };
     });
 
-    const snapshot = await readEnvironmentProcessUsage(
-      Array.from({ length: 12 }, (_, index) =>
-        environment({
-          id: `ctr-${index}`,
-          name: `box-${index}`,
-          environmentType: "containerized",
-          containerId: `ctr-${index}`,
-        }),
-      ),
-      { platform: "linux", now: () => 0, runCommand: execute },
+    const environments = Array.from({ length: 12 }, (_, index) =>
+      environment({
+        id: `ctr-${index}`,
+        name: `box-${index}`,
+        environmentType: "containerized",
+        containerId: `ctr-${index}`,
+      }),
     );
+    const snapshot = await readEnvironmentProcessUsage(environments, {
+      platform: "linux",
+      now: () => 0,
+      runCommand: execute,
+    });
 
     expect(peak).toBe(MAX_CONCURRENT_CONTAINER_PROBES);
     expect(execute).toHaveBeenCalledTimes(12);
     expect(JSON.stringify(snapshot).length).toBeLessThan(64_000);
+    expect(snapshot.environments).toHaveLength(environments.length);
+    expect(snapshot.environments.map((group) => group.environmentId)).toEqual(
+      environments.map((item) => item.id),
+    );
+    expect(snapshot.environments.map((group) => group.processes[0]?.pid)).toEqual(
+      environments.map((_, index) => index),
+    );
     expect(snapshot.environments.some((group) => group.processes.length > 0)).toBe(true);
     for (const group of snapshot.environments) {
       for (const process of group.processes) {
@@ -384,6 +433,126 @@ describe("environment process usage", () => {
     );
     expect(snapshot.environments).toHaveLength(2);
     expect(snapshot.environments.every((group) => group.processes.length === 0)).toBe(true);
+    expect(snapshot.environments.every((group) => group.processCount === 0)).toBe(true);
     expect(snapshot.truncated).toBe(false);
+  });
+
+  test("keeps full-set totals when a snapshot drops rows past the process cap", async () => {
+    const overflow = 5;
+    const listedCount = MAX_PROCESSES_PER_ENVIRONMENT + overflow;
+    const execute = mock(async (command: string) => {
+      if (command !== "docker") throw new Error(`unexpected ${command}`);
+      const rows = Array.from({ length: listedCount }, (_, index) => {
+        const cpu = (index + 1).toFixed(1);
+        return ` ${100 + index}  1  ${cpu}  1.0  250 bun /work/worker-${index}`;
+      });
+      return { stdout: `${rows.join("\n")}\n` };
+    });
+
+    const snapshot = await readEnvironmentProcessUsage(
+      [
+        environment({
+          id: "heavy",
+          name: "heavy",
+          environmentType: "containerized",
+          containerId: "ctr-heavy",
+        }),
+      ],
+      { platform: "linux", now: () => 0, runCommand: execute },
+    );
+
+    const group = snapshot.environments[0]!;
+    expect(group.processes).toHaveLength(MAX_PROCESSES_PER_ENVIRONMENT);
+    expect(group.processCount).toBe(listedCount);
+    expect(group.truncated).toBe(true);
+    expect(snapshot.truncated).toBe(true);
+    expect(group.totalCpuPercent).toBe(
+      Array.from({ length: listedCount }, (_, index) => index + 1).reduce(
+        (total, cpu) => total + cpu,
+        0,
+      ),
+    );
+    expect(group.totalRssKb).toBe(listedCount * 250);
+    expect(group.processes.reduce((total, process) => total + process.cpuPercent, 0)).toBe(
+      group.totalCpuPercent -
+        Array.from({ length: overflow }, (_, index) => index + 1).reduce(
+          (total, cpu) => total + cpu,
+          0,
+        ),
+    );
+  });
+
+  test("preserves precomputed totals when boundSnapshot clips displayed rows", () => {
+    const processRow = (pid: number) => ({
+      pid,
+      name: "node",
+      command: "node",
+      cpuPercent: 2,
+      ramPercent: 1,
+      rssKb: 100,
+    });
+    const group = (id: string, count: number): EnvironmentProcessGroup => ({
+      environmentId: id,
+      environmentName: id,
+      projectId: "project-1",
+      environmentType: "containerized",
+      processes: Array.from({ length: count }, (_, index) => processRow(index + 1)),
+      totalCpuPercent: 400,
+      totalRssKb: 80_000,
+      processCount: 80,
+      truncated: true,
+    });
+    const environmentCount = Math.ceil((MAX_SNAPSHOT_PROCESSES + 40) / 40);
+    const bounded = boundSnapshot(
+      Array.from({ length: environmentCount }, (_, index) => group(`env-${index}`, 40)),
+    );
+
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.environments.reduce((total, item) => total + item.processes.length, 0)).toBe(
+      MAX_SNAPSHOT_PROCESSES,
+    );
+    expect(bounded.environments.every((item) => item.totalCpuPercent === 400)).toBe(true);
+    expect(bounded.environments.every((item) => item.totalRssKb === 80_000)).toBe(true);
+    expect(bounded.environments.every((item) => item.processCount === 80)).toBe(true);
+    expect(bounded.environments.some((item) => item.processes.length < 40)).toBe(true);
+    expect(bounded.environments.every((item) => item.truncated)).toBe(true);
+  });
+});
+
+describe("mapWithConcurrency", () => {
+  test("returns an empty array without calling the mapper", async () => {
+    const mapper = mock(async () => {
+      throw new Error("mapper should not run");
+    });
+    await expect(mapWithConcurrency([], 4, mapper)).resolves.toEqual([]);
+    expect(mapper).not.toHaveBeenCalled();
+  });
+
+  test("maps a single item when concurrency exceeds the list", async () => {
+    const mapper = mock(async (item: number) => item * 2);
+    await expect(mapWithConcurrency([7], 8, mapper)).resolves.toEqual([14]);
+    expect(mapper).toHaveBeenCalledTimes(1);
+  });
+
+  test("clamps worker count to items.length and writes every slot in order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const items = [
+      { id: "slow", delayMs: 15 },
+      { id: "fast", delayMs: 0 },
+      { id: "mid", delayMs: 5 },
+    ] as const;
+    const results = await mapWithConcurrency(items, 16, async (item) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, item.delayMs));
+      inFlight -= 1;
+      return item.id.toUpperCase();
+    });
+
+    expect(peak).toBe(items.length);
+    expect(results).toHaveLength(items.length);
+    expect(results).toEqual(["SLOW", "FAST", "MID"]);
+    expect(results.every((value) => value !== undefined)).toBe(true);
   });
 });

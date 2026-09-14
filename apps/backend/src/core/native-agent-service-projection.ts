@@ -72,6 +72,7 @@ import {
 } from "./native-agent-composer-selection.js";
 import {
   createNativeAgentDisplayTail,
+  displayTailRecoveryWindow,
   NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS,
 } from "./native-agent-display-tails.js";
 import {
@@ -436,6 +437,37 @@ function normalizeInteractionKinds(value: unknown): AgentInteractionKind[] | und
   return [...new Set(kinds)];
 }
 
+function isNormalizedProgressiveMessage(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const message = value as Record<string, unknown>;
+  const role = message.role;
+  return (
+    typeof message.id === "string" &&
+    (role === "user" || role === "assistant" || role === "system") &&
+    typeof message.content === "string" &&
+    Array.isArray(message.parts) &&
+    typeof message.createdAt === "string"
+  );
+}
+
+function normalizedProgressiveMessages(value: unknown): unknown[] | null {
+  if (!Array.isArray(value) || !value.every(isNormalizedProgressiveMessage)) return null;
+  return value;
+}
+
+function progressiveHydrationToken(snapshot: ProviderTranscriptSnapshot): string {
+  if (snapshot.sourceToken) return snapshot.sourceToken;
+  const first = snapshot.messages[0] as { id?: unknown } | undefined;
+  const last = snapshot.messages.at(-1) as { id?: unknown } | undefined;
+  return [
+    snapshot.revision ?? "",
+    snapshot.complete === false ? "0" : "1",
+    snapshot.messages.length,
+    typeof first?.id === "string" ? first.id : "",
+    typeof last?.id === "string" ? last.id : "",
+  ].join(":");
+}
+
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<
@@ -481,6 +513,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     string,
     { input: NativeAgentProgressiveInput; value: NativeAgentTranscriptView }
   >();
+  private readonly progressiveHydrations = new Map<
+    string,
+    {
+      sourceToken: string;
+      snapshot?: ProviderTranscriptSnapshot;
+      promise?: Promise<void>;
+    }
+  >();
+  private readonly progressiveHydrationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly progressiveMetrics = new ProgressiveReadMetrics();
 
   /**
@@ -517,8 +558,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     for (const timer of this.displayTailWriteTimers.values()) clearTimeout(timer);
     this.displayTailWriteTimers.clear();
     this.pendingDisplayTails.clear();
+    for (const timer of this.progressiveHydrationTimers.values()) clearTimeout(timer);
+    this.progressiveHydrationTimers.clear();
     await Promise.allSettled(this.progressiveReads.values());
     await Promise.allSettled(this.progressiveTrailing.values());
+    await Promise.allSettled(
+      Array.from(this.progressiveHydrations.values(), (entry) => entry.promise).filter(
+        (promise): promise is Promise<void> => promise !== undefined,
+      ),
+    );
+    this.progressiveHydrations.clear();
     this.progressiveReads.clear();
     this.progressiveTranscriptCache.clear();
     this.progressiveSourceTokens.clear();
@@ -1323,6 +1372,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const pending = this.pendingDisplayTails.get(sessionKey);
     this.pendingDisplayTails.delete(sessionKey);
     if (!pending) return;
+    const messageWindow = displayTailRecoveryWindow(pending.value.messageWindow);
     const tail = createNativeAgentDisplayTail({
       environmentId: pending.input.environmentId,
       agent: pending.input.agent,
@@ -1331,6 +1381,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       historyEpoch: pending.value.historyEpoch,
       ...(pending.value.title ? { title: pending.value.title } : {}),
       messages: pending.value.messages,
+      historyComplete: pending.value.historyComplete,
+      ...(messageWindow ? { messageWindow } : {}),
       updatedAt: new Date(this.now()).toISOString(),
     });
     if (!tail) return;
@@ -1350,15 +1402,229 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     }
   }
 
+  /**
+   * A live preview that still fits the window is not "older history".
+   *
+   * Providers report `complete: false` for a hydration hole as well as for a
+   * genuine remainder. Treating the flag alone as pageable hid the first
+   * prompt behind "Load earlier messages" on a two-row transcript. If the
+   * preview has not filled the live window, recover the bounded remainder in
+   * the background and keep the preview available until that read settles.
+   */
+  private resolveProgressiveSnapshot(
+    key: string,
+    snapshot: ProviderTranscriptSnapshot,
+  ): ProviderTranscriptSnapshot {
+    if (snapshot.complete !== false) return snapshot;
+    const cached = this.progressiveHydrations.get(key);
+    if (cached && cached.sourceToken === progressiveHydrationToken(snapshot) && cached.snapshot) {
+      return cached.snapshot;
+    }
+    return snapshot;
+  }
+
+  private progressivePreviewFillsWindow(
+    snapshot: ProviderTranscriptSnapshot,
+    liveWindow: { messages: number; targetBytes: number },
+  ): boolean {
+    if (snapshot.messages.length >= liveWindow.messages) return true;
+    return Buffer.byteLength(JSON.stringify(snapshot.messages)) >= liveWindow.targetBytes;
+  }
+
+  private scheduleIncompleteProgressiveHydration(
+    input: NativeAgentTranscriptUpdateInput,
+    key: string,
+    provider: NativeAgentRuntimeProvider,
+    sessionId: string,
+    snapshot: ProviderTranscriptSnapshot,
+    initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
+  ): void {
+    if (snapshot.complete !== false) return;
+    if (this.progressivePreviewFillsWindow(snapshot, input.liveWindow)) return;
+    const sourceToken = progressiveHydrationToken(snapshot);
+    const existing = this.progressiveHydrations.get(key);
+    if (existing && existing.sourceToken === sourceToken) return;
+    const previousTimer = this.progressiveHydrationTimers.get(key);
+    if (previousTimer) clearTimeout(previousTimer);
+    const entry: {
+      sourceToken: string;
+      snapshot?: ProviderTranscriptSnapshot;
+      promise?: Promise<void>;
+    } = { sourceToken };
+    this.progressiveHydrations.set(key, entry);
+    const timer = setTimeout(() => {
+      if (this.progressiveHydrationTimers.get(key) === timer) {
+        this.progressiveHydrationTimers.delete(key);
+      }
+      if (this.stopped) return;
+      const promise = this.fillIncompleteProgressiveSnapshot(
+        provider,
+        sessionId,
+        snapshot,
+        input.liveWindow,
+      )
+        .then((hydrated) => {
+          if (this.stopped) return;
+          const current = this.progressiveHydrations.get(key);
+          if (!current || current.sourceToken !== sourceToken) return;
+          current.snapshot = hydrated;
+          if (hydrated === snapshot) return;
+          this.commitProgressiveTranscript(
+            key,
+            input,
+            this.projectProgressiveTranscript(
+              input,
+              key,
+              hydrated,
+              sessionId,
+              initialPromptPresentation,
+            ),
+          );
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          const current = this.progressiveHydrations.get(key);
+          if (current?.promise === promise) current.promise = undefined;
+        });
+      entry.promise = promise;
+    }, 0);
+    this.progressiveHydrationTimers.set(key, timer);
+  }
+
+  private async fillIncompleteProgressiveSnapshot(
+    provider: NativeAgentRuntimeProvider,
+    sessionId: string,
+    snapshot: ProviderTranscriptSnapshot,
+    liveWindow: { messages: number; targetBytes: number },
+  ): Promise<ProviderTranscriptSnapshot> {
+    let fuller: unknown;
+    try {
+      fuller = await provider.messages(sessionId, { limit: liveWindow.messages });
+    } catch {
+      return snapshot;
+    }
+    const normalized = normalizedProgressiveMessages(fuller);
+    if (!normalized || normalized.length <= snapshot.messages.length) return snapshot;
+    return {
+      ...snapshot,
+      messages: normalized,
+      complete: normalized.length < liveWindow.messages,
+      freshness: "current",
+    };
+  }
+
+  private projectProgressiveTranscript(
+    input: NativeAgentTranscriptUpdateInput,
+    key: string,
+    snapshot: ProviderTranscriptSnapshot,
+    providerSessionId: string,
+    initialPromptPresentation: PersistedNativeAgentSession["initialPromptPresentation"],
+  ): NativeAgentTranscriptView {
+    const previous = this.progressiveTranscriptCache.get(key);
+    const sourceGeneration =
+      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      `in-process:${input.agent}`;
+    const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
+    const normalized = this.projectionMessages(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      snapshot.messages,
+      input.liveWindow.messages,
+      NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
+      initialPromptPresentation,
+    );
+    const bounded = this.boundedProjectedMessages(
+      normalized.messages,
+      input.liveWindow.messages,
+      input.liveWindow.targetBytes,
+    );
+    const localPageable =
+      bounded.window.canLoadEarlier === true ||
+      (normalized.window.canLoadEarlier === true && normalized.window.truncationReason !== "bytes");
+    // A provider tail that already fills the live window cannot produce a
+    // local count slice, so incompleteness itself is the remainder signal.
+    const pageable =
+      localPageable ||
+      (snapshot.complete === false && bounded.messages.length >= input.liveWindow.messages);
+    const truncated =
+      Boolean(bounded.window.truncated || normalized.window.truncated) ||
+      snapshot.complete === false;
+    const complete = !pageable && snapshot.complete !== false;
+    const historyEpoch =
+      snapshot.historyEpoch ??
+      (previous?.value.identity.providerSessionId === providerSessionId
+        ? previous.value.historyEpoch
+        : randomUUID());
+    const historyCursor = this.transcriptHistoryCursor(
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      bounded.messages,
+      historyEpoch,
+      providerSessionId,
+    );
+    return {
+      identity,
+      freshness:
+        bounded.messages.length === 0 && complete
+          ? "empty"
+          : snapshot.freshness === "cached"
+            ? "cached"
+            : "current",
+      messages: bounded.messages,
+      messageWindow: {
+        ...bounded.window,
+        truncated,
+        canLoadEarlier: pageable,
+      },
+      ...(snapshot.title ? { title: snapshot.title } : {}),
+      ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
+      ...(historyCursor ? { historyCursor } : {}),
+      historyEpoch,
+      historyComplete: complete,
+    };
+  }
+
+  private commitProgressiveTranscript(
+    key: string,
+    input: NativeAgentTranscriptUpdateInput,
+    value: NativeAgentTranscriptView,
+  ): string {
+    const observed = this.progressiveTranscriptCache.get(key);
+    if (observed?.value === value) return observed.token;
+    const token = createHash("sha256")
+      .update(
+        JSON.stringify([
+          value.identity,
+          value.historyEpoch,
+          value.providerRevision,
+          this.progressiveSourceTokens.get(key),
+          value.messages,
+        ]),
+      )
+      .digest("base64url")
+      .slice(0, 43);
+    const current = this.progressiveTranscriptCache.get(key);
+    if (!current || current.token !== token) {
+      const bytes = Buffer.byteLength(JSON.stringify(value));
+      if (current) this.progressiveTranscriptBytes -= current.bytes;
+      this.progressiveTranscriptCache.delete(key);
+      this.progressiveTranscriptCache.set(key, {
+        token,
+        sourceToken: this.progressiveSourceTokens.get(key),
+        value,
+        bytes,
+      });
+      this.progressiveTranscriptBytes += bytes;
+      this.trimProgressiveTranscriptCache();
+      this.scheduleDisplayTailPersist(input, value);
+    }
+    return token;
+  }
+
   private async readProgressiveTranscript(
     input: NativeAgentTranscriptUpdateInput,
     key: string,
   ): Promise<NativeAgentTranscriptView | null> {
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return null;
-    const providerGeneration =
-      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
-      `in-process:${input.agent}`;
     const previous = this.progressiveTranscriptCache.get(key);
     const providerResult = resolved.provider.transcriptSnapshot
       ? await resolved.provider.transcriptSnapshot(resolved.session.providerSessionId, {
@@ -1401,66 +1667,23 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       this.progressiveSourceTokens.set(key, providerResult.sourceToken);
       return previous.value;
     }
-    const snapshot: ProviderTranscriptSnapshot = providerResult;
-    if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
-    // The common identity must be identical across independently delivered
-    // domains. Bridge/source generations remain bound into the transcript's
-    // source token; the backend connection generation is the shared fence.
-    const sourceGeneration = providerGeneration;
-    const identity = this.progressiveIdentity(
+    const snapshot = this.resolveProgressiveSnapshot(key, providerResult);
+    this.scheduleIncompleteProgressiveHydration(
       input,
+      key,
+      resolved.provider,
       resolved.session.providerSessionId,
-      sourceGeneration,
-    );
-    const normalized = this.projectionMessages(
-      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-      snapshot.messages,
-      input.liveWindow.messages,
-      NATIVE_SYNC_MAX_SNAPSHOT_BYTES,
+      providerResult,
       resolved.session.initialPromptPresentation,
     );
-    const bounded = this.boundedProjectedMessages(
-      normalized.messages,
-      input.liveWindow.messages,
-      input.liveWindow.targetBytes,
-    );
-    const complete = snapshot.complete !== false && !normalized.window.truncated;
-    const historyEpoch =
-      snapshot.historyEpoch ??
-      (previous?.value.identity.providerSessionId === resolved.session.providerSessionId
-        ? previous.value.historyEpoch
-        : randomUUID());
-    const historyCursor = this.transcriptHistoryCursor(
-      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-      bounded.messages,
-      historyEpoch,
+    if (snapshot.sourceToken) this.progressiveSourceTokens.set(key, snapshot.sourceToken);
+    return this.projectProgressiveTranscript(
+      input,
+      key,
+      snapshot,
       resolved.session.providerSessionId,
+      resolved.session.initialPromptPresentation,
     );
-    const value: NativeAgentTranscriptView = {
-      identity,
-      freshness:
-        bounded.messages.length === 0 && complete
-          ? "empty"
-          : snapshot.freshness === "cached"
-            ? "cached"
-            : "current",
-      messages: bounded.messages,
-      messageWindow: {
-        ...bounded.window,
-        // The provider may already have cut history before this window was
-        // bounded. Preserve that gap so the tab exposes transcript recovery.
-        // Part-only byte cuts are not pageable: a larger limit returns the
-        // same live head with the same omitted leading parts.
-        truncated: !complete || bounded.window.truncated,
-        canLoadEarlier: !complete || bounded.window.canLoadEarlier === true,
-      },
-      ...(snapshot.title ? { title: snapshot.title } : {}),
-      ...(snapshot.revision === undefined ? {} : { providerRevision: snapshot.revision }),
-      ...(historyCursor ? { historyCursor } : {}),
-      historyEpoch,
-      historyComplete: complete,
-    };
-    return value;
   }
 
   async getTranscriptUpdate(
@@ -1482,38 +1705,6 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const epoch = this.projectionEpochs.get(sessionKey) ?? 0;
     const startedAt = this.now();
     const cached = this.progressiveTranscriptCache.get(key);
-    const commit = (value: NativeAgentTranscriptView): string => {
-      const observed = this.progressiveTranscriptCache.get(key);
-      if (observed?.value === value) return observed.token;
-      const token = createHash("sha256")
-        .update(
-          JSON.stringify([
-            value.identity,
-            value.historyEpoch,
-            value.providerRevision,
-            this.progressiveSourceTokens.get(key),
-            value.messages,
-          ]),
-        )
-        .digest("base64url")
-        .slice(0, 43);
-      const current = this.progressiveTranscriptCache.get(key);
-      if (!current || current.token !== token) {
-        const bytes = Buffer.byteLength(JSON.stringify(value));
-        if (current) this.progressiveTranscriptBytes -= current.bytes;
-        this.progressiveTranscriptCache.delete(key);
-        this.progressiveTranscriptCache.set(key, {
-          token,
-          sourceToken: this.progressiveSourceTokens.get(key),
-          value,
-          bytes,
-        });
-        this.progressiveTranscriptBytes += bytes;
-        this.trimProgressiveTranscriptCache();
-        this.scheduleDisplayTailPersist(input, value);
-      }
-      return token;
-    };
     const publish = async (): Promise<NativeAgentTranscriptView | null> => {
       const value = await this.progressiveReadCovering(
         key,
@@ -1523,12 +1714,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         () => this.readProgressiveTranscript(input, key),
       );
       if (!value) return null;
-      commit(value);
+      this.commitProgressiveTranscript(key, input, value);
       return value;
     };
     if (!cached && !input.forceSnapshot) {
       const persisted = await this.storage.getNativeAgentDisplayTail(sessionKey).catch(() => null);
       if (persisted && persisted.logicalSessionKey === input.logicalSessionKey) {
+        const historyComplete = persisted.historyComplete === true;
+        const messageWindow = displayTailRecoveryWindow(persisted.messageWindow);
         const value: NativeAgentTranscriptView = {
           identity: this.progressiveIdentity(
             input,
@@ -1539,10 +1732,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
           messages: persisted.messages,
           historyEpoch: persisted.historyEpoch,
-          historyComplete: false,
+          // v1 tails and any write that omitted remainder metadata cannot
+          // prove the start of history. Claim complete only when persisted.
+          historyComplete,
+          ...(messageWindow ? { messageWindow } : {}),
           ...(persisted.title ? { title: persisted.title } : {}),
         };
-        const token = commit(value);
+        const token = this.commitProgressiveTranscript(key, input, value);
         void publish().catch(() => undefined);
         this.recordProgressiveMetric("transcript", startedAt, "persisted", "cached");
         return { viewVersion: 1, status: "snapshot", token, value };
@@ -2761,6 +2957,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (entry) this.progressiveTranscriptBytes -= entry.bytes;
       this.progressiveTranscriptCache.delete(candidate);
       this.progressiveSourceTokens.delete(candidate);
+    }
+    for (const candidate of Array.from(this.progressiveHydrations.keys())) {
+      if (!candidate.startsWith(progressivePrefix)) continue;
+      const timer = this.progressiveHydrationTimers.get(candidate);
+      if (timer) clearTimeout(timer);
+      this.progressiveHydrationTimers.delete(candidate);
+      this.progressiveHydrations.delete(candidate);
     }
     for (const candidate of Array.from(this.progressiveStateCache.keys())) {
       if (candidate.startsWith(progressivePrefix)) this.progressiveStateCache.delete(candidate);

@@ -860,9 +860,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         live.messages,
       );
       const keptLocalHead =
-        displayLive.length > 0 &&
-        live.messages.length > 0 &&
-        displayLive[0] !== live.messages[0];
+        displayLive.length > 0 && live.messages.length > 0 && displayLive[0] !== live.messages[0];
       const omittedParts = live.messageWindow?.omittedParts ?? 0;
       /*
        * A part-trimmed live head sits at the start of the overlapping row. If
@@ -1062,9 +1060,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           : -1;
       const displayLive = preferCompleteLiveHead(current?.messages, value.messages);
       const keptLocalHead =
-        displayLive.length > 0 &&
-        value.messages.length > 0 &&
-        displayLive[0] !== value.messages[0];
+        displayLive.length > 0 && value.messages.length > 0 && displayLive[0] !== value.messages[0];
       const omittedParts = value.messageWindow?.omittedParts ?? 0;
       const partTruncatedHead =
         omittedParts > 0 ||
@@ -1082,8 +1078,7 @@ export function useNativeAgentSession<TMessage = unknown>({
        * timeline if we keep the prefix. Keep the prefix only when this client
        * already holds the fuller row; otherwise collapse to the contiguous tail.
        */
-      const collapsedForPartTruncation =
-        partTruncatedHead && !keptLocalHead && firstLiveIndex > 0;
+      const collapsedForPartTruncation = partTruncatedHead && !keptLocalHead && firstLiveIndex > 0;
       let retained =
         current &&
         !identityChanged &&
@@ -1582,11 +1577,7 @@ export function useNativeAgentSession<TMessage = unknown>({
               ) {
                 const merged = applyNativeAgentTranscriptDelta(current, update.delta);
                 if (merged) {
-                  applyProgressiveTranscript(
-                    merged,
-                    update.token,
-                    update.delta.deletedMessageIds,
-                  );
+                  applyProgressiveTranscript(merged, update.token, update.delta.deletedMessageIds);
                   return "applied";
                 }
               }
@@ -1598,10 +1589,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             if (update.status === "unchanged") {
               const previousAvailability = transcriptAvailabilityRef.current;
               const hasLocalView = lastTranscriptViewRef.current != null;
-              const hasBody = hasUsableTranscriptBody(
-                projectionRef.current,
-                previousAvailability,
-              );
+              const hasBody = hasUsableTranscriptBody(projectionRef.current, previousAvailability);
               if (!hasLocalView && !hasBody) {
                 progressiveTranscriptTokenRef.current = undefined;
                 lastTranscriptViewRef.current = null;
@@ -1654,8 +1642,7 @@ export function useNativeAgentSession<TMessage = unknown>({
               if (!stillCurrent()) return;
               let result = applyTranscriptUpdate(
                 update,
-                progressiveTranscriptTokenRef.current !== undefined &&
-                  update.status !== "snapshot",
+                progressiveTranscriptTokenRef.current !== undefined && update.status !== "snapshot",
               );
               if (result === "retry-snapshot") {
                 setTranscriptRefreshing(true);

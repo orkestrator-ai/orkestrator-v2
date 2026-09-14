@@ -10,8 +10,24 @@ import {
 
 const liveWindow = { messages: 100, targetBytes: 512 * 1024 } as const;
 
+function progressiveMessage(id: string, content = id) {
+  return {
+    id,
+    role: "assistant" as const,
+    content,
+    parts: [] as unknown[],
+    createdAt: "2026-09-09T00:00:00.000Z",
+  };
+}
+
+function progressiveMessages(count: number, prefix = "m") {
+  return Array.from({ length: count }, (_, index) =>
+    progressiveMessage(`${prefix}${index}`, `${prefix}${index}`),
+  );
+}
+
 describe("native agent progressive remainder", () => {
-  test("keeps provider-trimmed history reachable when the preview fits the backend window", async () => {
+  test("shows a provider-trimmed first prompt when the full turn still fits", async () => {
     const prompt = {
       id: "prompt",
       role: "user",
@@ -26,10 +42,9 @@ describe("native agent progressive remainder", () => {
       parts: [{ type: "text", text: "Earlier response activity" }],
       createdAt: "2026-09-09T00:01:00.000Z",
     };
-    // The provider has already trimmed the prompt and older response parts to
-    // fit the preview it serves before hydration finishes, and says so with
-    // `complete: false`. The surviving message needs no further backend
-    // trimming, so nothing local reports the gap.
+    // The live preview omitted the prompt and reported `complete: false`
+    // before hydration finished. One prompt plus one reply still fits the
+    // window, so the remainder must be inlined rather than hidden.
     const stub = createProviderStub("claude", {
       transcriptSnapshot: async () => ({
         messages: [{ ...response, parts: [] }],
@@ -54,27 +69,85 @@ describe("native agent progressive remainder", () => {
         });
         expect(preview.status).toBe("snapshot");
         if (preview.status !== "snapshot") throw new Error("expected snapshot");
-        expect(preview.value.messages).toHaveLength(1);
-        expect(preview.value.historyComplete).toBe(false);
-        // The tab gates its recovery header on truncated, not canLoadEarlier.
-        expect(preview.value.messageWindow).toMatchObject({
-          truncated: true,
-          canLoadEarlier: true,
+        expect(preview.value.messages).toMatchObject([{ id: "response" }]);
+        await waitForCondition(async () => {
+          const next = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          return next.status === "snapshot" && next.value.messages.length === 2;
         });
-        // No local byte/count cut occurred; don't invent a truncation reason.
-        expect(preview.value.messageWindow?.truncationReason).toBeUndefined();
-
-        // This is the authoritative read used by "Load earlier messages".
-        const recovered = await service.getProjectionUpdate({
+        const hydrated = await service.getTranscriptUpdate({
           ...identity,
-          syncVersion: 1,
+          viewVersion: 1,
           liveWindow,
           forceSnapshot: true,
         });
-        expect(recovered.status).toBe("snapshot");
-        if (recovered.status !== "snapshot") throw new Error("expected snapshot");
-        expect(recovered.projection.messages).toMatchObject([prompt, response]);
-        expect(recovered.historyComplete).toBe(true);
+        expect(hydrated.status).toBe("snapshot");
+        if (hydrated.status !== "snapshot") throw new Error("expected snapshot");
+        expect(hydrated.value.messages).toMatchObject([prompt, { id: "response" }]);
+        expect(hydrated.value.historyComplete).toBe(true);
+        expect(hydrated.value.messageWindow).toMatchObject({
+          truncated: false,
+          canLoadEarlier: false,
+        });
+      },
+    );
+  });
+
+  test("does not offer to load earlier when an incomplete preview has no remainder", async () => {
+    const response = {
+      id: "response",
+      role: "assistant",
+      content: "Latest update",
+      parts: [],
+      createdAt: "2026-09-09T00:01:00.000Z",
+    };
+    const messages = mock(async () => [response]);
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [response],
+        complete: false,
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-no-remainder-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-no-remainder",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(1);
+        expect(preview.value.historyComplete).toBe(false);
+        expect(preview.value.messageWindow?.canLoadEarlier).toBe(false);
+        expect(preview.value.messageWindow?.truncated).toBe(true);
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const settled = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(settled.status).toBe("snapshot");
+        if (settled.status !== "snapshot") throw new Error("expected snapshot");
+        expect(settled.value.historyComplete).toBe(false);
+        expect(settled.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: false,
+        });
       },
     );
   });
@@ -276,6 +349,7 @@ describe("native agent progressive remainder", () => {
         if (cached.status !== "snapshot") throw new Error("expected snapshot");
         expect(cached.value.freshness).toBe("cached");
         expect(cached.value.messages[0]).toMatchObject({ content: "preview" });
+        expect(cached.value.historyComplete).toBe(true);
       },
     );
   });
@@ -595,6 +669,458 @@ describe("native agent progressive remainder", () => {
           usedTokens: 50_000,
           maximumTokens: 200_000,
           percentage: 25,
+        });
+      },
+    );
+  });
+});
+
+describe("native agent progressive remainder recovery", () => {
+  test("keeps a provider-truncated live-window tail pageable", async () => {
+    const tail = progressiveMessages(liveWindow.messages);
+    const older = progressiveMessage("older", "earlier history");
+    const messages = mock(async () => [older, ...tail]);
+    const stub = createProviderStub("claude", {
+      transcriptSnapshot: async () => ({
+        messages: tail,
+        complete: false,
+        sourceToken: "source-full",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-full-tail-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:progressive-full-tail",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(liveWindow.messages);
+        expect(preview.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: true,
+        });
+        expect(preview.value.historyComplete).toBe(false);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(messages).toHaveBeenCalledTimes(0);
+      },
+    );
+  });
+
+  test("keeps recovery when messages() returns exactly the live-window tail", async () => {
+    const previewRows = progressiveMessages(40, "preview");
+    const recovered = progressiveMessages(liveWindow.messages, "bridge");
+    const messages = mock(async () => recovered);
+    const stub = createProviderStub("claude", {
+      transcriptSnapshot: async () => ({
+        messages: previewRows,
+        complete: false,
+        sourceToken: "source-bridge",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-bridge-limit-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:progressive-bridge-limit",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(40);
+        await waitForCondition(async () => {
+          const next = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          return next.status === "snapshot" && next.value.messages.length === liveWindow.messages;
+        });
+        const hydrated = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(hydrated.status).toBe("snapshot");
+        if (hydrated.status !== "snapshot") throw new Error("expected snapshot");
+        expect(hydrated.value.messages).toHaveLength(liveWindow.messages);
+        expect(hydrated.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: true,
+        });
+        expect(hydrated.value.historyComplete).toBe(false);
+      },
+    );
+  });
+
+  test("returns the incomplete preview before a deferred messages() recovery", async () => {
+    const prompt = {
+      id: "prompt",
+      role: "user" as const,
+      content: "Original request",
+      parts: [],
+      createdAt: "2026-09-09T00:00:00.000Z",
+    };
+    const response = progressiveMessage("response", "Latest update");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const messages = mock(async () => {
+      await held;
+      return [prompt, response];
+    });
+    const stub = createProviderStub("claude", {
+      transcriptSnapshot: async () => ({
+        messages: [response],
+        complete: false,
+        sourceToken: "source-deferred",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-deferred-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:progressive-deferred",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toMatchObject([{ id: "response" }]);
+        expect(messages).toHaveBeenCalledTimes(0);
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const stillPreview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(stillPreview.status).toBe("snapshot");
+        if (stillPreview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(stillPreview.value.messages).toHaveLength(1);
+        release();
+        await waitForCondition(async () => {
+          const next = await service.getTranscriptUpdate({
+            ...identity,
+            viewVersion: 1,
+            liveWindow,
+            forceSnapshot: true,
+          });
+          return next.status === "snapshot" && next.value.messages.length === 2;
+        });
+      },
+    );
+  });
+
+  test("calls messages() at most once per source-token change", async () => {
+    let sourceToken = "source-1";
+    const messages = mock(async () => [progressiveMessage("response", "Latest update")]);
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [progressiveMessage("response", "Latest update")],
+        complete: false,
+        sourceToken,
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-once-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-once",
+        };
+        await service.ensureSession(identity);
+        await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(messages).toHaveBeenCalledTimes(1);
+        sourceToken = "source-2";
+        await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        await waitForCondition(() => messages.mock.calls.length === 2);
+        expect(messages).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  test("does not attach a Codex thread while reading an incomplete preview", async () => {
+    let attached = false;
+    const messages = mock(async () => {
+      attached = true;
+      return progressiveMessages(50, "codex");
+    });
+    const stub = createProviderStub("codex", {
+      transcriptSnapshot: async () => ({
+        messages: progressiveMessages(50, "codex"),
+        complete: false,
+        sourceToken: "source-codex",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-codex-notouch-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:progressive-codex-notouch",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toHaveLength(50);
+        expect(attached).toBe(false);
+        expect(messages).toHaveBeenCalledTimes(0);
+      },
+    );
+  });
+
+  test("keeps a rejected messages() preview retryable", async () => {
+    const messages = mock(async () => {
+      throw new Error("recovery failed");
+    });
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [progressiveMessage("response", "Latest update")],
+        complete: false,
+        sourceToken: "source-throw",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-throw-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-throw",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const settled = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(settled.status).toBe("snapshot");
+        if (settled.status !== "snapshot") throw new Error("expected snapshot");
+        expect(settled.value.messages).toHaveLength(1);
+        expect(settled.value.historyComplete).toBe(false);
+        expect(settled.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: false,
+        });
+      },
+    );
+  });
+
+  test("does not stamp completeness from a non-array messages() fallback", async () => {
+    const messages = mock(async () => ({ not: "an array" }) as unknown as unknown[]);
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => ({
+        messages: [progressiveMessage("response", "Latest update")],
+        complete: false,
+        sourceToken: "source-nonarray",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-nonarray-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-nonarray",
+        };
+        await service.ensureSession(identity);
+        await service.getTranscriptUpdate({ ...identity, viewVersion: 1, liveWindow });
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const settled = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(settled.status).toBe("snapshot");
+        if (settled.status !== "snapshot") throw new Error("expected snapshot");
+        expect(settled.value.historyComplete).toBe(false);
+        expect(settled.value.messageWindow?.truncated).toBe(true);
+      },
+    );
+  });
+
+  test("ignores raw OpenCode envelopes instead of installing them as display rows", async () => {
+    const normalized = [progressiveMessage("kept", "normalized")];
+    const raw = [
+      ...Array.from({ length: liveWindow.messages }, (_, index) => ({
+        info: { id: `raw-${index}`, role: "assistant", time: { created: 0 } },
+        parts: [],
+      })),
+      { parts: [] },
+    ];
+    const messages = mock(async () => raw);
+    const stub = createProviderStub("opencode", {
+      transcriptSnapshot: async () => ({
+        messages: normalized,
+        complete: false,
+        sourceToken: "source-opencode",
+        freshness: "current" as const,
+      }),
+      messages,
+    });
+    await withService(
+      { prefix: "orkestrator-progressive-opencode-raw-", provider: async () => stub.provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:progressive-opencode-raw",
+        };
+        await service.ensureSession(identity);
+        const preview = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(preview.status).toBe("snapshot");
+        if (preview.status !== "snapshot") throw new Error("expected snapshot");
+        expect(preview.value.messages).toMatchObject([{ id: "kept", content: "normalized" }]);
+        await waitForCondition(() => messages.mock.calls.length === 1);
+        const settled = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+          forceSnapshot: true,
+        });
+        expect(settled.status).toBe("snapshot");
+        if (settled.status !== "snapshot") throw new Error("expected snapshot");
+        expect(settled.value.messages).toMatchObject([{ id: "kept" }]);
+        expect(settled.value.historyComplete).toBe(false);
+        expect(settled.value.messageWindow?.truncated).toBe(true);
+      },
+    );
+  });
+
+  test("restores an incomplete persisted tail when the provider refresh fails", async () => {
+    const tail = progressiveMessages(liveWindow.messages);
+    let failing = false;
+    const stub = createProviderStub("cursor", {
+      transcriptSnapshot: async () => {
+        if (failing) throw new Error("provider refresh failed");
+        return {
+          messages: tail,
+          complete: false,
+          sourceToken: "source-persist",
+          freshness: "current" as const,
+        };
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-persist-incomplete-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "cursor" as const,
+          logicalSessionKey: "env-env-1:progressive-persist-incomplete",
+        };
+        await service.ensureSession(identity);
+        const first = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(first.status).toBe("snapshot");
+        if (first.status !== "snapshot") throw new Error("expected snapshot");
+        expect(first.value.historyComplete).toBe(false);
+        const sessionKey = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        await internals(service).flushDisplayTailPersist(sessionKey);
+        const persisted = await storage.getNativeAgentDisplayTail(sessionKey);
+        expect(persisted?.historyComplete).toBe(false);
+        expect(persisted?.messageWindow?.canLoadEarlier).toBe(true);
+        internals(service).progressiveTranscriptCache.clear();
+        failing = true;
+        const cached = await service.getTranscriptUpdate({
+          ...identity,
+          viewVersion: 1,
+          liveWindow,
+        });
+        expect(cached.status).toBe("snapshot");
+        if (cached.status !== "snapshot") throw new Error("expected snapshot");
+        expect(cached.value.freshness).toBe("cached");
+        expect(cached.value.historyComplete).toBe(false);
+        expect(cached.value.messageWindow).toMatchObject({
+          truncated: true,
+          canLoadEarlier: true,
         });
       },
     );

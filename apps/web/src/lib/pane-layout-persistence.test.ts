@@ -130,6 +130,7 @@ describe("pane layout persistence", () => {
         type: "agent-native",
         initialPrompt: "do not persist",
         agentHandoffId: "handoff-1",
+        initialAgentPlatform: "codex",
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
         initialExecutionProfileId: "plan",
@@ -149,6 +150,7 @@ describe("pane layout persistence", () => {
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
     expect(JSON.stringify(persisted)).toContain('"agentHandoffId":"handoff-1"');
+    expect(JSON.stringify(persisted)).toContain('"initialAgentPlatform":"codex"');
     expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
     expect(JSON.stringify(persisted)).toContain('"initialExecutionProfileId":"plan"');
@@ -169,6 +171,7 @@ describe("pane layout persistence", () => {
     const rehydratedTab = (
       rehydrated!.root as unknown as { tabs: Array<Record<string, unknown>> }
     ).tabs.find((tab) => tab.id === "native");
+    expect(rehydratedTab?.initialAgentPlatform).toBe("codex");
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
     expect(rehydratedTab?.initialExecutionProfileId).toBe("plan");
@@ -179,6 +182,7 @@ describe("pane layout persistence", () => {
     store.clearTabInitialAgentOptions("native", "env-1");
     await waitForTimers();
     const consumed = save.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(consumed)).not.toContain("initialAgentPlatform");
     expect(JSON.stringify(consumed)).not.toContain("initialAgentModel");
     expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
     expect(JSON.stringify(consumed)).not.toContain("initialExecutionProfileId");

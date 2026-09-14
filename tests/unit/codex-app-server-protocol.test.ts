@@ -1,7 +1,7 @@
 import { afterAll, describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { homedir, platform } from "node:os";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir, platform, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   EXPECTED_PROTOCOL_OUTPUT_DIR,
@@ -39,7 +39,9 @@ afterAll(async () => {
 });
 
 async function temporaryDirectory(prefix: string): Promise<string> {
-  const directory = await mkdtemp(join(import.meta.dir, prefix));
+  // Keep fixtures out of `tests/unit`. In-tree `.protocol-*` directories are
+  // visible to oxfmt, oxlint, git status, and sibling document scans.
+  const directory = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   temporaryDirectories.push(directory);
   return directory;
 }

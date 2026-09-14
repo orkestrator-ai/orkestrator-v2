@@ -164,9 +164,229 @@ describe("codexPlanWindows", () => {
     ]);
   });
 
+  test("maps ChatGPT's /codex/usage window spelling so settings refresh shows weekly", () => {
+    const { windows, plan } = codexPlanWindows(
+      {
+        plan_type: "plus",
+        rate_limit: {
+          primary_window: {
+            used_percent: 42,
+            limit_window_seconds: 604_800,
+            reset_after_seconds: 3_600,
+            reset_at: 1_779_826_837,
+          },
+          secondary_window: {
+            used_percent: 7,
+            limit_window_seconds: 18_000,
+            reset_at: 1_758_000_000,
+          },
+        },
+        credits: { balance: "$0" },
+      },
+      Date.UTC(2026, 8, 11, 18, 0, 0),
+    );
+    expect(plan).toBe("plus");
+    expect(windows).toEqual([
+      {
+        window: "primary",
+        label: "Weekly limit",
+        usedPercent: 42,
+        resetsAt: new Date(1_779_826_837_000).toISOString(),
+        windowMinutes: 10_080,
+      },
+      {
+        window: "secondary",
+        label: "5-hour limit",
+        usedPercent: 7,
+        resetsAt: new Date(1_758_000_000_000).toISOString(),
+        windowMinutes: 300,
+      },
+      { window: "credits", label: "Credits", creditBalance: "$0" },
+    ]);
+  });
+
+  test("prefers HTTP windows when rate_limits is present but empty of slots", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limits: { credits: { balance: "$0" } },
+        rate_limit: {
+          primary_window: { used_percent: 18, limit_window_seconds: 604_800 },
+        },
+      },
+      0,
+    );
+    expect(windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(windows[0]?.usedPercent).toBe(18);
+  });
+
   test("returns nothing for a payload with no windows", () => {
     expect(codexPlanWindows({ rate_limits: {} }, 0).windows).toEqual([]);
     expect(codexPlanWindows(undefined, 0).windows).toEqual([]);
+  });
+
+  test("prefers a complete rateLimitsByLimitId.codex snapshot over rate_limits", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limits_by_limit_id: {
+          codex: {
+            limitName: "Codex",
+            primary: { usedPercent: 56, windowDurationMins: 300 },
+            secondary: { usedPercent: 20, windowDurationMins: 10_080 },
+          },
+        },
+        rate_limits: {
+          limit_name: "Plus",
+          primary: { used_percent: 25, window_minutes: 300 },
+          secondary: { used_percent: 18, window_minutes: 10_080 },
+        },
+      },
+      0,
+    );
+    expect(windows).toEqual([
+      { window: "primary", label: "Codex", usedPercent: 56, windowMinutes: 300 },
+      { window: "secondary", label: "Weekly limit", usedPercent: 20, windowMinutes: 10_080 },
+    ]);
+  });
+
+  test("keeps both slots on one snapshot when by-limit-id secondary is null", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rateLimitsByLimitId: {
+          codex: {
+            limitName: "Codex",
+            primary: { usedPercent: 56, windowDurationMins: 300 },
+            secondary: null,
+          },
+        },
+        rateLimits: {
+          limitName: "Pro",
+          primary: { usedPercent: 12, windowDurationMins: 10_080 },
+          secondary: { usedPercent: 34, windowDurationMins: 300 },
+        },
+      },
+      0,
+    );
+    expect(windows).toEqual([
+      { window: "primary", label: "Pro", usedPercent: 12, windowMinutes: 10_080 },
+      { window: "secondary", label: "5-hour limit", usedPercent: 34, windowMinutes: 300 },
+    ]);
+  });
+
+  test("falls through when rateLimitsByLimitId has no codex key", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rateLimitsByLimitId: {
+          review: {
+            limitName: "Review",
+            primary: { usedPercent: 78, windowDurationMins: 10_080 },
+          },
+        },
+        rate_limits: { primary: { used_percent: 25, window_minutes: 300 } },
+      },
+      0,
+    );
+    expect(windows).toEqual([
+      { window: "primary", label: "5-hour limit", usedPercent: 25, windowMinutes: 300 },
+    ]);
+  });
+
+  test("does not compose complementary slots from two snapshots", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limits: { primary: { used_percent: 12, window_minutes: 10_080 } },
+        rate_limit: {
+          secondary_window: { used_percent: 34, limit_window_seconds: 18_000 },
+        },
+      },
+      0,
+    );
+    expect(windows).toEqual([
+      { window: "primary", label: "Weekly limit", usedPercent: 12, windowMinutes: 10_080 },
+    ]);
+  });
+
+  test("ignores top-level slots when a nested rate_limit is populated", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limit: {
+          primary_window: { used_percent: 42, limit_window_seconds: 604_800 },
+        },
+        primary: { used_percent: 99, window_minutes: 300 },
+        secondary: { used_percent: 1, window_minutes: 1_440 },
+      },
+      0,
+    );
+    expect(windows).toEqual([
+      { window: "primary", label: "Weekly limit", usedPercent: 42, windowMinutes: 10_080 },
+    ]);
+  });
+
+  test("skips a non-string credits balance or plan type in favor of a later source", () => {
+    const { windows, plan } = codexPlanWindows(
+      {
+        rate_limits: {
+          credits: { balance: 12 },
+          plan_type: 1,
+          primary: { used_percent: 9, window_minutes: 300 },
+        },
+        credits: { balance: "$3.50" },
+        planType: "plus",
+      },
+      0,
+    );
+    expect(plan).toBe("plus");
+    expect(windows).toEqual([
+      { window: "primary", label: "5-hour limit", usedPercent: 9, windowMinutes: 300 },
+      { window: "credits", label: "Credits", creditBalance: "$3.50" },
+    ]);
+  });
+
+  test("uses reset_after_seconds when no absolute reset is present", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 18,
+            limit_window_seconds: 604_800,
+            reset_after_seconds: 3_600,
+          },
+        },
+      },
+      Date.UTC(2026, 8, 11, 18, 0, 0),
+    );
+    expect(windows).toEqual([
+      {
+        window: "primary",
+        label: "Weekly limit",
+        usedPercent: 18,
+        resetsAt: "2026-09-11T19:00:00.000Z",
+        windowMinutes: 10_080,
+      },
+    ]);
+  });
+
+  test("accepts camelCase window length, delta reset, and primaryWindow slot", () => {
+    const { windows } = codexPlanWindows(
+      {
+        rateLimit: {
+          primaryWindow: {
+            usedPercent: 22,
+            limitWindowSeconds: 18_000,
+            resetAfterSeconds: 120,
+          },
+        },
+      },
+      Date.UTC(2026, 8, 11, 18, 0, 0),
+    );
+    expect(windows).toEqual([
+      {
+        window: "primary",
+        label: "5-hour limit",
+        usedPercent: 22,
+        resetsAt: "2026-09-11T18:02:00.000Z",
+        windowMinutes: 300,
+      },
+    ]);
   });
 });
 
@@ -329,6 +549,30 @@ describe("createPlanUsageReader", () => {
     const snapshot = await reader(contextWithGlobal(), "claude");
     expect(snapshot.status).toBe("unavailable");
     expect(snapshot.message).toMatch(/Sign in again/);
+  });
+
+  test("a forced Codex refresh maps the ChatGPT usage payload's weekly window", async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({
+        rate_limit: {
+          primary_window: {
+            used_percent: 18,
+            limit_window_seconds: 604_800,
+            reset_at: 1_779_826_837,
+          },
+        },
+        credits: { balance: "$0" },
+      })) as unknown as typeof fetch;
+    const auth = JSON.stringify({ tokens: { access_token: tokenExpiringAt(2_000_000_000) } });
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => 1_700_000_000_000,
+      credentials: { codex: async () => auth },
+    });
+    const snapshot = await reader(contextWithGlobal(), "codex", { force: true });
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["Weekly limit", "Credits"]);
+    expect(snapshot.windows[0]?.usedPercent).toBe(18);
   });
 
   test("reads Codex usage with the account its stored token names", async () => {

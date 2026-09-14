@@ -60,6 +60,16 @@ Still not enforced anywhere, by nature:
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
 
+Cursor 1.0.31 also has a Bun-export diagnostic seam patch registered in root
+`patchedDependencies`. Keep the pin, patch filename, registration, and lockfile
+aligned. The appended export references the SDK's minified stall-detector and
+execution-controller bindings: simply renaming the patch on upgrade is not
+sufficient. Re-identify those bindings and verify the controller still awaits
+each response write before advancing its execution iterator. Run the Cursor
+SDK diagnostics tests and version-drift test, then build/vendor the bridge and
+verify the packaged Bun import exposes `__orkestratorDiagnosticsV1`. Do not
+enable raw SDK logs as a substitute for the bounded observer.
+
 ## How binaries reach a running environment
 
 There are three delivery paths. An upgrade is incomplete until every applicable

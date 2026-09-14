@@ -144,6 +144,7 @@
     }
   },
   "patchedDependencies": {
-    "@opencode-ai/sdk@1.18.29": "patches/@opencode-ai%2Fsdk@1.18.29.patch"
+    "@opencode-ai/sdk@1.18.29": "patches/@opencode-ai%2Fsdk@1.18.29.patch",
+    "@cursor/sdk@1.0.31": "patches/@cursor%2Fsdk@1.0.31.patch"
   }
 }

@@ -26,7 +26,12 @@ function harness() {
     advance: (ms: number) => {
       now += ms;
     },
-    last: () => JSON.parse(lines.at(-1)!.slice("[bridge-diagnostics] ".length)),
+    last: () =>
+      JSON.parse(
+        lines
+          .findLast((line) => !line.includes('"event":"sdk-'))!
+          .slice("[bridge-diagnostics] ".length),
+      ),
   };
 }
 
@@ -72,7 +77,7 @@ describe("Cursor stall diagnostics", () => {
       const before = h.lines.length;
       h.advance(90_000);
       h.diagnostics.report("heartbeat");
-      expect(h.lines.length).toBe(before + 1);
+      expect(h.lines.length).toBe(before + 2);
       expect(h.last()).toMatchObject({
         phase: "following",
         lastDeltaAgoMs: 90_000,

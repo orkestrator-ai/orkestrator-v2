@@ -27,7 +27,7 @@ Refreshed 2026-09-12 against the current tree.
 | [review-preparation.md](architecture/review-preparation.md) | Living | Multi-review pipeline; queue wait is 30 minutes. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Living | Shared bridge debug logging. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Living | Cursor usage mapping. |
-| [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | 2026-09-09 stall incident. Current logging is in `bridge-diagnostics.md`. |
+| [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical | September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |
 | [platform-inconsistencies.md](architecture/platform-inconsistencies.md) | Historical | 2026-08-16 inventory plus a 2026-09-11 current-state note. Not a backlog. |
 
 ## Development

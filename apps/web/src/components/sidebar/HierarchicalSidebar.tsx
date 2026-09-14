@@ -64,6 +64,7 @@ import { useUIStore } from "@/stores";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, EnvironmentType, Project } from "@/types";
+import { ProjectSearchBar } from "./ProjectSearchBar";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import {
   DropdownMenu,
@@ -826,6 +827,36 @@ export function HierarchicalSidebar() {
     ],
   );
 
+  const revealProject = useCallback(
+    (projectId: string) => {
+      setProjectCollapsed(projectId, false);
+      const project = projectsById.get(projectId);
+      if (project?.folder) {
+        setProjectFolderCollapsed(project.folder, false);
+      }
+    },
+    [projectsById, setProjectCollapsed, setProjectFolderCollapsed],
+  );
+
+  const handleSearchSelectProject = useCallback(
+    (projectId: string) => {
+      revealProject(projectId);
+      selectProject(projectId);
+    },
+    [revealProject, selectProject],
+  );
+
+  const handleSearchSelectEnvironment = useCallback(
+    (environmentId: string) => {
+      const environment = allEnvironments.find((entry) => entry.id === environmentId);
+      if (environment) {
+        revealProject(environment.projectId);
+      }
+      handleSelectEnvironment(environmentId);
+    },
+    [allEnvironments, handleSelectEnvironment, revealProject],
+  );
+
   // Bulk action handlers
   const handleStopSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
@@ -1075,6 +1106,13 @@ export function HierarchicalSidebar() {
           </>
         )}
       </div>
+
+      <ProjectSearchBar
+        projects={projects}
+        environments={allEnvironments}
+        onSelectProject={handleSearchSelectProject}
+        onSelectEnvironment={handleSearchSelectEnvironment}
+      />
 
       {/* Projects List */}
       <div className="min-h-0 flex-1 overflow-y-auto">

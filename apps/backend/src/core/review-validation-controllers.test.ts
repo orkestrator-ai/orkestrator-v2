@@ -6,6 +6,10 @@ import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  SYSTEM_INSTRUCTIONS_FRAME_OPEN,
+} from "@orkestrator/protocol/review-evidence-frames";
+import {
   reviewValidationDiscoveryPrompt,
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
@@ -115,6 +119,8 @@ test("discovery avoids a duplicate build when the full test stage already builds
   const prompt = reviewValidationDiscoveryPrompt("main");
   expect(prompt).toContain("if the full test stage already runs the production build");
   expect(prompt).toContain("omit a separate build command instead of repeating it");
+  expect(prompt.startsWith(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBe(true);
+  expect(prompt).toContain(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
 });
 
 test("manual discovery hands off once; a replacement controller seals completed background evidence", async () => {

@@ -10,9 +10,11 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
+  isReviewValidationDiscoveryPrompt,
   parseCoordinatorDelegatedPrompt,
   stripSystemInstructions,
   type ReviewEvidenceFrameDisplayContract,
@@ -73,6 +75,12 @@ function generatedReviewInstructionPresentation(source: string): UserPromptPrese
   // either form back to the short user-facing sentence.
   return generatedPrompts.includes(source.trim())
     ? { displayText: MULTI_REVIEW_ADDRESS_USER_INSTRUCTION, evidencePayload: null }
+    : null;
+}
+
+function reviewPackagePreparationPresentation(source: string): UserPromptPresentation | null {
+  return isReviewValidationDiscoveryPrompt(source)
+    ? { displayText: REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION, evidencePayload: null }
     : null;
 }
 
@@ -205,10 +213,20 @@ export function userPromptPresentation(
       ? withCoordinatorDelegationNotice(generatedReviewInstruction)
       : generatedReviewInstruction;
   }
+  const reviewPackagePreparation = reviewPackagePreparationPresentation(displaySource);
+  if (reviewPackagePreparation !== null) {
+    return delegation
+      ? withCoordinatorDelegationNotice(reviewPackagePreparation)
+      : reviewPackagePreparation;
+  }
   // Backend producers wrap their provider-only guidance in a
   // system-instructions frame. Once it is removed, whatever remains is exactly
   // what the user wrote, so it is shown without any structural reconstruction.
   const strippedSystemInstructions = stripSystemInstructions(displaySource);
+  const strippedPreparation = reviewPackagePreparationPresentation(strippedSystemInstructions);
+  if (strippedPreparation !== null) {
+    return delegation ? withCoordinatorDelegationNotice(strippedPreparation) : strippedPreparation;
+  }
   const evidenceSource =
     strippedSystemInstructions === displaySource ? displaySource : strippedSystemInstructions;
   // Try the evidence contracts against the stripped prompt too: a producer that

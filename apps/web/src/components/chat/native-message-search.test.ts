@@ -6,7 +6,12 @@ import {
   COORDINATOR_DELEGATION_OMISSION_TEXT,
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 
 describe("markdownToAgentSearchText", () => {
@@ -68,6 +73,44 @@ describe("getNativeMessageSearchText", () => {
     expect(text).toContain("Implement the visible feature.");
     expect(text).not.toContain("hidden-project");
     expect(text).not.toContain("hidden-coordinator");
+  });
+
+  test("indexes only the kickoff sentence of a review-package discovery prompt", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+    )}`;
+    const message: NativeMessage = {
+      id: "user-discovery",
+      role: "user",
+      content: source,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [{ type: "text", content: source }],
+    };
+
+    const text = getNativeMessageSearchText(message);
+
+    expect(text).toContain(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(text).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX);
+    expect(text).not.toContain("Usually one batched inventory read");
+    expect(text).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE);
+  });
+
+  test("keeps a genuine user request that quotes the discovery phrases searchable", () => {
+    const source = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}
+
+Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} in the docs.`;
+    const message: NativeMessage = {
+      id: "user-quoted-discovery",
+      role: "user",
+      content: source,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      parts: [{ type: "text", content: source }],
+    };
+
+    const text = getNativeMessageSearchText(message);
+
+    expect(text).toContain("Please also rewrite the README");
+    expect(text).toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE);
   });
 
   test("indexes the visible excerpt and comment of a transcript reference", () => {

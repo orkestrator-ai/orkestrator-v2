@@ -6,7 +6,11 @@ import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   createCoordinatorDelegatedPrompt,
+  wrapSystemInstructions,
   type UserPromptPresentationKind,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { TerminalProvider } from "@/contexts";
@@ -865,6 +869,22 @@ describe("NativeMessage task list rendering", () => {
       expect(mockWriteText).toHaveBeenCalledWith("First part\n\nSecond part");
       expect(toastSuccessMock).toHaveBeenCalledWith("copied");
     });
+  });
+
+  test("shows only the kickoff sentence for a review-package discovery prompt", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main", then discover its validation plan.\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+    )}`;
+    const message = makeMessage([{ type: "text", content: source }], {
+      role: "user",
+      id: "user-discovery",
+    });
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION)).toBeTruthy();
+    expect(document.body.textContent).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX);
+    expect(document.body.textContent).not.toContain("Usually one batched inventory read");
   });
 
   test("long-press copies the full source of a filtered delegated user prompt", async () => {

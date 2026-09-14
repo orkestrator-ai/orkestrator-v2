@@ -9,6 +9,11 @@ import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
   MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
+  REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
+  REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
+  SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
@@ -351,6 +356,70 @@ describe("userPromptDisplayText", () => {
       kind: "json",
       value: { issues: [{ title: "Older format" }] },
     });
+  });
+
+  test("hides an unwrapped review-package discovery prompt", () => {
+    const source = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(`${source}\n`)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+  });
+
+  test("shows only the kickoff sentence after a framed discovery prompt", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+    )}`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain(REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX);
+  });
+
+  test("keeps a genuine user request that quotes the discovery phrases", () => {
+    const source = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}
+
+Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} in the docs.`;
+
+    expect(userPromptDisplayText(source)).toBe(source);
+    expect(userPromptDisplayText(source)).toContain("Please also rewrite the README");
+  });
+
+  test("hides a damaged framed discovery prompt when the branch closed the frame early", () => {
+    const damaged = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}${JSON.stringify(`x${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}y`)}${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read\nProduce at most 32 commands\n${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}`;
+
+    expect(userPromptDisplayText(damaged)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(damaged)).not.toContain("Produce at most 32 commands");
+  });
+
+  test("hides a framed discovery prompt whose branch contains the close marker", () => {
+    const source = `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+      `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}${JSON.stringify(`x${SYSTEM_INSTRUCTIONS_FRAME_CLOSE}y`)}${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+    )}`;
+
+    expect(userPromptDisplayText(source)).toBe(REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION);
+    expect(userPromptDisplayText(source)).not.toContain("Usually one batched inventory read");
+  });
+
+  test("hides a coordinator-delegated framed discovery prompt", () => {
+    const source = delegatedPrompt(
+      `${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}\n\n${wrapSystemInstructions(
+        `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
+      )}`,
+    );
+
+    expect(userPromptDisplayText(source, COORDINATOR_DELEGATION_PRESENTATION)).toBe(
+      `${COORDINATOR_DELEGATION_OMISSION_TEXT}\n\n${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}`,
+    );
+  });
+
+  test("hides a coordinator-delegated unwrapped discovery prompt after stripping frames", () => {
+    const legacy = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
+    const source = delegatedPrompt(
+      `${wrapSystemInstructions("Provider-only policy.")}\n\n${legacy}`,
+    );
+
+    expect(userPromptDisplayText(source, COORDINATOR_DELEGATION_PRESENTATION)).toBe(
+      `${COORDINATOR_DELEGATION_OMISSION_TEXT}\n\n${REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION}`,
+    );
   });
 
   test("tolerates echo drift around generated review guidance", () => {

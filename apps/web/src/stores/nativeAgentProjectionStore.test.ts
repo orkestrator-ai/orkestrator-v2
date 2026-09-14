@@ -162,7 +162,9 @@ describe("native agent projection history cache", () => {
     store.setProjection("session-a", projection("a", [{ id: "m" }]));
     store.setProjection("session-a", null);
 
-    expect(useNativeAgentProjectionStore.getState().progressiveCaches.get("session-a")?.transcriptToken).toBeUndefined();
+    expect(
+      useNativeAgentProjectionStore.getState().progressiveCaches.get("session-a")?.transcriptToken,
+    ).toBeUndefined();
   });
 
   test("releases the eviction counter once nothing is left to compare against", () => {

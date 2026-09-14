@@ -460,7 +460,8 @@ describe("AgentNativeTab progressive controller", () => {
       .setProjection(identity.logicalSessionKey, seedProjection([]));
     seedTranscriptCache("unavailable");
     transcriptUpdates = [
-      async () => ({ viewVersion: 1, status: "missing" }) satisfies NativeAgentTranscriptUpdate<TestMessage>,
+      async () =>
+        ({ viewVersion: 1, status: "missing" }) satisfies NativeAgentTranscriptUpdate<TestMessage>,
     ];
     stateUpdates = [async () => stateSnapshot("state-1")];
 

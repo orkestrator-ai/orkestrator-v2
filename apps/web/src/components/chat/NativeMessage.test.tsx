@@ -3777,7 +3777,11 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("8 tool uses") === null).toBe(true);
     expect(screen.queryByText("0 tools") === null).toBe(true);
     expect(screen.queryByText("0 updates") === null).toBe(true);
-    expect(screen.getByText("Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Read docs/development/upgrade-agents.md and docs/development/flaky-tests.md.",
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /summarize two docs/i }));
     expect(screen.getByText("Type")).toBeTruthy();

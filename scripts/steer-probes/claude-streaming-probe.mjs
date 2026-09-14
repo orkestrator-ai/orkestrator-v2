@@ -113,8 +113,7 @@ async function runVariant(priority) {
         message.event?.type === "content_block_delta"
       ) {
         inject();
-      }
-      else if (message.type === "user") {
+      } else if (message.type === "user") {
         events.push({ type: "user", uuid: message.uuid, replay: message.isReplay === true });
       } else if (message.type === "result") {
         events.push({ type: "result", subtype: message.subtype, result: message.result });

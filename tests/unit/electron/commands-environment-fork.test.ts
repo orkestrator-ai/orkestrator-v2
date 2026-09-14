@@ -261,9 +261,7 @@ describe("fork_environment", () => {
     )) as Environment;
 
     expect(forked.networkAccessMode).toBe("full");
-    expect(forked.portMappings).toEqual([
-      { hostPort: 4173, containerPort: 5173, protocol: "tcp" },
-    ]);
+    expect(forked.portMappings).toEqual([{ hostPort: 4173, containerPort: 5173, protocol: "tcp" }]);
     expect(forked.allowedDomains).toEqual(["example.test"]);
     expect(forked.buildPipelineId).toBe("pipeline-source");
     expect(forked.entryPort).toBe(4173);

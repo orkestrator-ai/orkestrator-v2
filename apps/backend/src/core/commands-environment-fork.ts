@@ -116,9 +116,7 @@ function unpublishedContainerForkError(): Error {
 }
 
 function couldNotVerifyPublishedError(detail: string): Error {
-  return new Error(
-    `Could not verify that the current commit is published to a remote. ${detail}`,
-  );
+  return new Error(`Could not verify that the current commit is published to a remote. ${detail}`);
 }
 
 function lsRemoteHasCommit(stdout: string, commit: string): boolean {

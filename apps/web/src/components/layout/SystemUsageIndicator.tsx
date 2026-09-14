@@ -456,6 +456,7 @@ function EnvironmentProcessGroupList({
         </h3>
         <div
           className="flex shrink-0 items-baseline gap-2 font-mono text-[10px] tabular-nums text-muted-foreground/70"
+          role="group"
           aria-label={`${group.environmentName} total usage: ${totalCpu} CPU, ${totalRam} RAM`}
         >
           <span className="w-10 text-right">{totalCpu}</span>

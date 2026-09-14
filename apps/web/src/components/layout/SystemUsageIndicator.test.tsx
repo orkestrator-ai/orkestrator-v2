@@ -242,7 +242,9 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getByLabelText("title-bar-layout total usage: 18% CPU, 117 MB RAM")).toBeTruthy();
     expect(screen.getByLabelText("review-box processes")).toBeTruthy();
     expect(screen.getByText("No processes")).toBeTruthy();
-    expect(screen.getByLabelText("review-box total usage: 0% CPU, 0 MB RAM")).toBeTruthy();
+    expect(
+      screen.getByRole("group", { name: "review-box total usage: 0% CPU, 0 MB RAM" }),
+    ).toBeTruthy();
     expect(screen.queryByText("Process (0)") === null).toBe(true);
   });
 
@@ -285,7 +287,9 @@ describe("SystemUsageIndicator", () => {
     render(<SystemUsageIndicator />);
     openPanel();
     const section = await waitFor(() => screen.getByLabelText("busy-box processes"));
-    const totals = within(section).getByLabelText("busy-box total usage: 20% CPU, 117 MB RAM");
+    const totals = within(section).getByRole("group", {
+      name: "busy-box total usage: 20% CPU, 117 MB RAM",
+    });
     expect(section.textContent?.indexOf("busy-box") ?? -1).toBeLessThan(
       section.textContent?.indexOf("20%") ?? -1,
     );
@@ -819,11 +823,15 @@ describe("SystemUsageIndicator", () => {
     expect(listedEnvironmentNames()).toEqual(["heavy-box", "light-box"]);
     expect(screen.getByText("List truncated")).toBeTruthy();
     const heavy = screen.getByLabelText("heavy-box processes");
-    expect(within(heavy).getByLabelText("heavy-box total usage: 100% CPU, 50 MB RAM")).toBeTruthy();
+    expect(
+      within(heavy).getByRole("group", { name: "heavy-box total usage: 100% CPU, 50 MB RAM" }),
+    ).toBeTruthy();
     expect(within(heavy).getByText("Process (50)")).toBeTruthy();
     expect(within(heavy).getAllByRole("listitem")).toHaveLength(40);
     const light = screen.getByLabelText("light-box processes");
-    expect(within(light).getByLabelText("light-box total usage: 90% CPU, 88 MB RAM")).toBeTruthy();
+    expect(
+      within(light).getByRole("group", { name: "light-box total usage: 90% CPU, 88 MB RAM" }),
+    ).toBeTruthy();
     expect(within(light).getAllByRole("listitem")).toHaveLength(3);
   });
 

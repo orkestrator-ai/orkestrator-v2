@@ -145,14 +145,21 @@ export function AppShell({ children }: AppShellProps) {
               overlapping the title.
             */}
             <div
-              className="ml-auto flex shrink-0 items-center gap-1"
+              className="ml-auto flex shrink-0 items-center"
               data-testid="desktop-agent-info-slot"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
               <SystemUsageIndicator />
-              <AgentMailButton />
-              <AgentInfoButton activeTab={activeTab} />
+              <span
+                aria-hidden="true"
+                data-testid="title-bar-usage-separator"
+                className="mx-2 h-3 w-px self-center bg-border/50"
+              />
+              <div className="flex items-center gap-1">
+                <AgentMailButton />
+                <AgentInfoButton activeTab={activeTab} />
+              </div>
             </div>
           </div>
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">

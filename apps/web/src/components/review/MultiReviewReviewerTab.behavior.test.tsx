@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   type MultiReviewReviewerTranscript,
@@ -653,6 +653,91 @@ describe("MultiReviewReviewerTab", () => {
       window.setInterval = originalSetInterval;
     }
     expect(delays).toContain(REFRESH_INTERVAL_MS);
+  });
+
+  test("shows elapsed thinking status only while the reviewer is running", async () => {
+    const startedAt = "2026-09-14T22:00:00.000Z";
+    const dateNowSpy = spyOn(Date, "now").mockReturnValue(Date.parse(startedAt) + 65_000);
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
+      agent: "claude",
+      model: "opus",
+      status: "running",
+      startedAt,
+      messages: [
+        {
+          id: "progress",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: startedAt,
+          parts: [{ type: "text", content: "Inspecting the changed files" }],
+        },
+      ],
+    };
+    const loadTranscript = mock(async () => running);
+
+    try {
+      render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      const indicator = await screen.findByRole("status");
+      expect(indicator.textContent).toBe("Claude is thinking...");
+      expect(screen.getByText("1m 5s")).toBeTruthy();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  test("hides the thinking status once the reviewer completes", async () => {
+    const loadTranscript = mock(async () => ({
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      workflowPhase: "ready" as const,
+      agent: "claude" as const,
+      model: "opus",
+      status: "completed" as const,
+      startedAt: "2026-09-14T22:00:00.000Z",
+      completedAt: "2026-09-14T22:01:05.000Z",
+      report,
+      messages: [
+        {
+          id: "progress",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: "2026-09-14T22:00:10.000Z",
+          parts: [{ type: "text", content: "Inspecting the changed files" }],
+        },
+      ],
+    }));
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
+    expect(screen.queryByText("Claude is thinking...") === null).toBe(true);
+    expect(screen.queryByRole("status") === null).toBe(true);
   });
 });
 

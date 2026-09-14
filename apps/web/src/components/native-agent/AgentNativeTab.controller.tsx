@@ -453,6 +453,7 @@ export function SharedNativeAgentController({
     [isDispatching, sessionKey, updateDraft],
   );
   const clearTabInitialPrompt = usePaneLayoutStore((state) => state.clearTabInitialPrompt);
+  const consumeTabAgentHandoff = usePaneLayoutStore((state) => state.consumeTabAgentHandoff);
   const clearTabAgentHandoff = usePaneLayoutStore((state) => state.clearTabAgentHandoff);
   const fileSearch = useFileSearch(
     data.containerId,
@@ -1191,7 +1192,7 @@ export function SharedNativeAgentController({
           setOptimisticPrompt(null);
           clearDraft(sessionKey);
           discardProvisionalDraft();
-          if (agentHandoffId) clearTabAgentHandoff(tabId, data.environmentId);
+          if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
         const outcome = await send(prompt, options);
@@ -1202,7 +1203,7 @@ export function SharedNativeAgentController({
           transcriptConfirmedRequestIdRef.current = null;
           clearDraft(sessionKey);
           discardProvisionalDraft();
-          if (agentHandoffId) clearTabAgentHandoff(tabId, data.environmentId);
+          if (agentHandoffId) consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
@@ -1256,7 +1257,7 @@ export function SharedNativeAgentController({
       composer?.promptSuggestionsEnabled,
       canQueue,
       agentHandoffId,
-      clearTabAgentHandoff,
+      consumeTabAgentHandoff,
       data.environmentId,
       discardProvisionalDraft,
       draft.attachments,
@@ -2101,6 +2102,7 @@ export function SharedNativeAgentController({
             fetchSessions={fetchResumableSessions}
             onResume={(providerSessionId) => {
               setResumeDialogOpen(false);
+              const sourceSessionId = projection?.sessionId;
               void resume(providerSessionId, {
                 modelId: composer?.selectedModelId,
                 reasoningId: composer?.selectedReasoningId,
@@ -2111,6 +2113,9 @@ export function SharedNativeAgentController({
                 promptSuggestions: composer?.promptSuggestionsEnabled,
               })
                 .then(() => {
+                  if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+                    clearTabAgentHandoff(tabId, data.environmentId);
+                  }
                   clearPersistedVirtuosoState(sessionKey);
                   scrollToBottom();
                 })

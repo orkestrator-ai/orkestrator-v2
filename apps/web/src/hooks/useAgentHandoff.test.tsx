@@ -529,6 +529,50 @@ describe("useAgentHandoff", () => {
     }
   });
 
+  test("keeps imported history after consume and does not re-arm pending history", async () => {
+    const snapshot = handoff("handoff-consumed-live", {
+      destinationProvider: "cursor",
+      messages: [
+        message("source-1", "user", "Investigate the layout"),
+        message("source-2", "assistant", "I found three concrete gaps"),
+      ],
+    });
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result, rerender } = renderHook(
+      ({
+        providerMessages,
+        consumedHandoffId,
+      }: {
+        providerMessages: NativeMessage[];
+        consumedHandoffId?: string;
+      }) => useAgentHandoff(snapshot.id, "cursor", "env-1", providerMessages, consumedHandoffId),
+      {
+        initialProps: {
+          providerMessages: [] as NativeMessage[],
+          consumedHandoffId: undefined as string | undefined,
+        },
+      },
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
+    expect(result.current.displayMessages.map((row) => row.content)).toEqual([
+      "Investigate the layout",
+      "I found three concrete gaps",
+      expect.stringContaining("Continued in Cursor from Claude"),
+    ]);
+
+    rerender({ providerMessages: [], consumedHandoffId: snapshot.id });
+
+    expect(result.current.pendingHistory).toBeUndefined();
+    expect(result.current.displayMessages.map((row) => row.content)).toEqual([
+      "Investigate the layout",
+      "I found three concrete gaps",
+      expect.stringContaining("Continued in Cursor from Claude"),
+    ]);
+  });
+
   test("hides a consumed carrier whose snapshot has already been deleted", async () => {
     const snapshot = handoff("handoff-consumed");
     const bootstrap: NativeMessage = {

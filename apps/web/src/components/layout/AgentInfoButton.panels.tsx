@@ -88,19 +88,26 @@ export function isSystemUsageFresh(
 export function SystemUsagePanel({
   usage,
   checkedAt,
+  heading = true,
 }: {
   usage: SystemUsageSnapshot | null;
   checkedAt: number;
+  heading?: boolean;
 }) {
   const freshUsage = isSystemUsageFresh(usage, checkedAt) ? usage : null;
   const stale = usage !== null && freshUsage === null;
   return (
-    <section className="mb-4 border-b border-border/60 pb-4" aria-label="System usage">
-      <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-        <span>System</span>
-        {stale ? <span role="status">Data unavailable</span> : null}
-      </div>
-      <div className="mt-2 grid grid-cols-4 gap-1.5">
+    <section
+      className={heading ? "mb-4 border-b border-border/60 pb-4" : undefined}
+      aria-label="System usage"
+    >
+      {heading || stale ? (
+        <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+          {heading ? <span>System</span> : null}
+          {stale ? <span role="status">Data unavailable</span> : null}
+        </div>
+      ) : null}
+      <div className={heading || stale ? "mt-2 grid grid-cols-4 gap-1.5" : "grid grid-cols-4 gap-1.5"}>
         <SystemMetric
           icon={Cpu}
           label="Central processing unit (CPU) usage"

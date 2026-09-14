@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import { useProjectStore } from "@/stores";
 import { SYSTEM_USAGE_STALE_AFTER_MS } from "./AgentInfoButton.panels";
+import type { EnvironmentProcessGroup } from "@/lib/backend";
 import {
   ENVIRONMENT_PROCESS_POLL_INTERVAL_MS,
   SYSTEM_USAGE_POLL_INTERVAL_MS,
   SystemUsageIndicator,
+  environmentProcessGroupCpu,
+  environmentProcessGroupRamKb,
   formatProcessRamKb,
+  orderEnvironmentProcessGroups,
   sanitizeProcessCommand,
+  sortEnvironmentProcessGroupsByCpu,
 } from "./SystemUsageIndicator";
 
 const nativeInvokeMock = nativeInvoke as ReturnType<typeof mock>;
@@ -67,6 +72,38 @@ function popover(): HTMLElement {
 
 function openPanel() {
   fireEvent.click(screen.getByRole("button", { name: "Open environment process usage" }));
+}
+
+function processGroup(
+  environmentId: string,
+  environmentName: string,
+  cpuPercent: number,
+): EnvironmentProcessGroup {
+  return {
+    environmentId,
+    environmentName,
+    projectId: "project-1",
+    environmentType: "local",
+    processes:
+      cpuPercent === 0
+        ? []
+        : [
+            {
+              pid: 11,
+              name: "node",
+              command: "node",
+              cpuPercent,
+              ramPercent: 1,
+              rssKb: 10,
+            },
+          ],
+  };
+}
+
+function listedEnvironmentNames(): string[] {
+  return screen
+    .getAllByLabelText(/ processes$/)
+    .map((section) => section.getAttribute("aria-label")?.replace(/ processes$/, "") ?? "");
 }
 
 describe("SystemUsageIndicator", () => {
@@ -182,10 +219,99 @@ describe("SystemUsageIndicator", () => {
     expect(screen.getByText("RAM")).toBeTruthy();
     expect(screen.getByText("orkestrator-v2 · local")).toBeTruthy();
     expect(screen.getByText("node")).toBeTruthy();
-    expect(screen.getByText("18%")).toBeTruthy();
-    expect(screen.getByText("117 MB")).toBeTruthy();
+    expect(screen.getAllByText("18%")).toHaveLength(2);
+    expect(screen.getAllByText("117 MB")).toHaveLength(2);
+    expect(
+      screen.getByLabelText("title-bar-layout total usage: 18% CPU, 117 MB RAM"),
+    ).toBeTruthy();
     expect(screen.getByLabelText("review-box processes")).toBeTruthy();
     expect(screen.getByText("No processes")).toBeTruthy();
+    expect(screen.queryByLabelText(/review-box total usage/)).toBeNull();
+  });
+
+  test("shows summed CPU and RAM on the right above each environment table", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command === "get_environment_process_usage") {
+        return processSnapshot({
+          environments: [
+            {
+              environmentId: "env-busy",
+              environmentName: "busy-box",
+              projectId: "project-1",
+              environmentType: "local",
+              processes: [
+                {
+                  pid: 11,
+                  name: "node",
+                  command: "node",
+                  cpuPercent: 12.4,
+                  ramPercent: 2,
+                  rssKb: 80_000,
+                },
+                {
+                  pid: 12,
+                  name: "bun",
+                  command: "bun",
+                  cpuPercent: 7.6,
+                  ramPercent: 1,
+                  rssKb: 40_000,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      return undefined;
+    });
+
+    render(<SystemUsageIndicator />);
+    openPanel();
+    const section = await waitFor(() => screen.getByLabelText("busy-box processes"));
+    const totals = within(section).getByLabelText("busy-box total usage: 20% CPU, 117 MB RAM");
+    expect(section.textContent?.indexOf("20%") ?? -1).toBeLessThan(
+      section.textContent?.indexOf("Process") ?? -1,
+    );
+    expect(section.textContent?.indexOf("2") ?? -1).toBeLessThan(
+      section.textContent?.indexOf("20%") ?? -1,
+    );
+    expect(totals.textContent).toContain("20%");
+    expect(totals.textContent).toContain("117 MB");
+    expect(within(section).getByText("12%")).toBeTruthy();
+    expect(within(section).getByText("8%")).toBeTruthy();
+    expect(within(section).getByText("78 MB")).toBeTruthy();
+    expect(within(section).getByText("39 MB")).toBeTruthy();
+  });
+
+  test("repeats host CPU, RAM, GPU and disk readings under the process panel title", async () => {
+    render(<SystemUsageIndicator />);
+    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
+    expect(screen.queryByRole("region", { name: "System usage" })).toBeNull();
+
+    openPanel();
+    const dialog = screen.getByRole("dialog", { name: "Environment process usage" });
+    const system = await waitFor(() => screen.getByRole("region", { name: "System usage" }));
+    const metrics = Array.from(system.querySelectorAll("button"));
+    expect(metrics.map((metric) => metric.textContent)).toEqual(["12%", "48%", "—", "63%"]);
+    expect(screen.queryByText("System")).toBeNull();
+    expect(dialog.querySelector("header")?.contains(system)).toBe(true);
+    expect(dialog.textContent?.indexOf("Process usage") ?? -1).toBeLessThan(
+      dialog.textContent?.indexOf("12%") ?? -1,
+    );
+    expect(
+      screen.getByRole("button", { name: "Central processing unit (CPU) usage: 12%" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Random-access memory (RAM) usage: 48%" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Graphics processing unit (GPU) usage: —" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disk storage usage: 63%" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("title-bar-layout processes")).toBeTruthy());
+    expect(dialog.textContent?.indexOf("12%") ?? -1).toBeLessThan(
+      dialog.textContent?.indexOf("title-bar-layout") ?? -1,
+    );
   });
 
   test("closes from a second click, the backdrop, Escape, and the header button", async () => {
@@ -349,7 +475,7 @@ describe("SystemUsageIndicator", () => {
       expect(screen.getByRole("status").textContent).toContain("Data unavailable"),
     );
     expect(screen.getByText("node")).toBeTruthy();
-    expect(screen.getByText("117 MB")).toBeTruthy();
+    expect(screen.getAllByText("117 MB")).toHaveLength(2);
   });
 
   test("tears the meter poll down on unmount and pauses while the document is hidden", async () => {
@@ -425,5 +551,178 @@ describe("SystemUsageIndicator", () => {
     render(<SystemUsageIndicator />);
     openPanel();
     await waitFor(() => expect(screen.getByText("No running environment processes")).toBeTruthy());
+  });
+
+  test("sorts environments by CPU when the panel opens and keeps that order while open", async () => {
+    let processCalls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command !== "get_environment_process_usage") return undefined;
+      processCalls += 1;
+      const firstOpen = processCalls === 1;
+      return processSnapshot({
+        environments: [
+          processGroup("env-low", "quiet-box", firstOpen ? 4 : 91),
+          processGroup("env-high", "busy-box", firstOpen ? 62 : 3),
+          processGroup("env-mid", "warm-box", firstOpen ? 18 : 40),
+        ],
+      });
+    });
+
+    const timers: Array<() => unknown> = [];
+    const originalSetTimeout = window.setTimeout;
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
+        timers.push(() => handler());
+        return 8_000 + timers.length;
+      }
+      return originalSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout;
+
+    try {
+      render(<SystemUsageIndicator />);
+      await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
+
+      openPanel();
+      await waitFor(() => expect(screen.getByLabelText("busy-box processes")).toBeTruthy());
+      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
+      expect(screen.getAllByText("62%").length).toBeGreaterThan(0);
+
+      await act(async () => {
+        timers.shift()?.();
+      });
+      await waitFor(() => expect(screen.getAllByText("91%").length).toBeGreaterThan(0));
+      expect(listedEnvironmentNames()).toEqual(["busy-box", "warm-box", "quiet-box"]);
+      expect(screen.getAllByText("3%").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("40%").length).toBeGreaterThan(0);
+    } finally {
+      window.setTimeout = originalSetTimeout;
+    }
+  });
+
+  test("re-sorts environments by CPU the next time the panel opens", async () => {
+    let processCalls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command !== "get_environment_process_usage") return undefined;
+      processCalls += 1;
+      return processSnapshot({
+        environments: [
+          processGroup("env-alpha", "alpha-box", processCalls === 1 ? 80 : 5),
+          processGroup("env-beta", "beta-box", processCalls === 1 ? 10 : 70),
+        ],
+      });
+    });
+
+    render(<SystemUsageIndicator />);
+    await waitFor(() => expect(screen.getByLabelText("Disk storage usage: 63%")).toBeTruthy());
+
+    openPanel();
+    await waitFor(() => expect(screen.getByLabelText("alpha-box processes")).toBeTruthy());
+    expect(listedEnvironmentNames()).toEqual(["alpha-box", "beta-box"]);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Close environment process usage" })[0]!);
+    expect(isPopoverOpen()).toBe(false);
+
+    openPanel();
+    await waitFor(() => expect(screen.getAllByText("70%").length).toBeGreaterThan(0));
+    expect(listedEnvironmentNames()).toEqual(["beta-box", "alpha-box"]);
+  });
+
+  test("appends environments that appear after the panel is already open", async () => {
+    let processCalls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_system_usage") return usageSnapshot();
+      if (command !== "get_environment_process_usage") return undefined;
+      processCalls += 1;
+      const environments = [
+        processGroup("env-high", "busy-box", 20),
+        processGroup("env-low", "quiet-box", 2),
+      ];
+      if (processCalls > 1) {
+        environments.push(processGroup("env-new-hot", "new-hot-box", 95));
+        environments.push(processGroup("env-new-cool", "new-cool-box", 8));
+      }
+      return processSnapshot({ environments });
+    });
+
+    const timers: Array<() => unknown> = [];
+    const originalSetTimeout = window.setTimeout;
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === ENVIRONMENT_PROCESS_POLL_INTERVAL_MS && typeof handler === "function") {
+        timers.push(() => handler());
+        return 8_000 + timers.length;
+      }
+      return originalSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout;
+
+    try {
+      render(<SystemUsageIndicator />);
+      openPanel();
+      await waitFor(() => expect(listedEnvironmentNames()).toEqual(["busy-box", "quiet-box"]));
+
+      await act(async () => {
+        timers.shift()?.();
+      });
+      await waitFor(() => expect(screen.getByLabelText("new-hot-box processes")).toBeTruthy());
+      expect(listedEnvironmentNames()).toEqual([
+        "busy-box",
+        "quiet-box",
+        "new-hot-box",
+        "new-cool-box",
+      ]);
+    } finally {
+      window.setTimeout = originalSetTimeout;
+    }
+  });
+});
+
+describe("environment process group order", () => {
+  test("ranks groups by summed CPU and uses name then id for ties", () => {
+    const busy = processGroup("env-b", "busy-box", 12);
+    busy.processes.push({
+      pid: 12,
+      name: "bun",
+      command: "bun",
+      cpuPercent: 8,
+      ramPercent: 1,
+      rssKb: 10,
+    });
+    const tiedLater = processGroup("env-z", "same-name", 5);
+    const tiedEarlier = processGroup("env-a", "same-name", 5);
+    const quiet = processGroup("env-q", "quiet-box", 0);
+
+    expect(environmentProcessGroupCpu(busy)).toBe(20);
+    expect(environmentProcessGroupRamKb(busy)).toBe(20);
+    expect(environmentProcessGroupRamKb(quiet)).toBe(0);
+    expect(
+      sortEnvironmentProcessGroupsByCpu([quiet, tiedLater, busy, tiedEarlier]).map(
+        (group) => group.environmentId,
+      ),
+    ).toEqual(["env-b", "env-a", "env-z", "env-q"]);
+  });
+
+  test("freezes the first ranking and appends later arrivals by current CPU", () => {
+    const first = [
+      processGroup("env-low", "quiet-box", 1),
+      processGroup("env-high", "busy-box", 40),
+    ];
+    const opened = orderEnvironmentProcessGroups(first, null);
+    expect(opened.map((group) => group.environmentId)).toEqual(["env-high", "env-low"]);
+
+    const refreshed = orderEnvironmentProcessGroups(
+      [
+        processGroup("env-low", "quiet-box", 90),
+        processGroup("env-high", "busy-box", 2),
+        processGroup("env-new", "new-box", 50),
+      ],
+      opened.map((group) => group.environmentId),
+    );
+    expect(refreshed.map((group) => group.environmentId)).toEqual([
+      "env-high",
+      "env-low",
+      "env-new",
+    ]);
+    expect(environmentProcessGroupCpu(refreshed[1]!)).toBe(90);
   });
 });
